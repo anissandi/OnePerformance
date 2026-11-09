@@ -46,6 +46,6 @@ jobs:
             echo "Secrets SUPABASE_ACCESS_TOKEN / SUPABASE_PROJECT_ID belum diatur di GitHub Settings -> Secrets -> Actions"
             exit 1
           fi
-          supabase link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
-          supabase db push --remote --include-all
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
+          supabase db push --remote --include-all --yes
           supabase functions deploy make-server-74dadec6 --project-ref "$SUPABASE_PROJECT_ID" --no-verify-jwt
