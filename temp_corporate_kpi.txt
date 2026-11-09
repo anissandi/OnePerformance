@@ -1,0 +1,60 @@
+// This is a temporary file with the new CORPORATE_KPI data
+const CORPORATE_KPI: KPISetting[] = [
+  // A. Kinerja K3L Terintegrasi (SMK3 / HSE) - 15%
+  {
+    id: "c1a", no: "1a", section: "A", perspektif: "Proses",
+    kpi: "Fatality Accident",
+    satuan: "Kasus /bulan", formula: "Jumlah", bobot: "5%",
+    definisi: "Jumlah kecelakaan kerja yang mengakibatkan kematian pekerja",
+    source: "Laporan Komite K3", baseline2025: "1", target2026: "0", polaritas: "Minimize",
+    detailFormula: "Jumlah kasus kecelakaan kerja (RSUP IND + RSUP PKB + ASD + RSTM + GHS)", keterangan: "",
+  },
+  {
+    id: "c1b", no: "1b", section: "A", perspektif: "Proses",
+    kpi: "Lost Time Injury",
+    satuan: "Hari /bulan", formula: "Rata-Rata", bobot: "4%",
+    definisi: "Cedera akibat kecelakaan kerja yang menyebabkan pekerja tidak dapat bekerja setidaknya satu shift penuh setelah kejadian tersebut",
+    source: "Laporan Komite K3", baseline2025: "5.873", target2026: "6.948", polaritas: "Minimize",
+    detailFormula: "Jumlah hari hilang akibat LTI (RSUP IND + RSUP PKB + ASD + RSTM + GHS)", keterangan: "",
+  },
+  {
+    id: "c1c", no: "1c", section: "A", perspektif: "Proses",
+    kpi: "Fire Accident",
+    satuan: "Kasus /bulan", formula: "Jumlah", bobot: "2%",
+    definisi: "Jumlah kebakaran bangunan",
+    source: "Laporan Komite K3", baseline2025: "0", target2026: "0", polaritas: "Minimize",
+    detailFormula: "Jumlah kasus kebakaran bangunan (RSUP IND + RSUP PKB + ASD + RSTM + GHS)", keterangan: "",
+  },
+  {
+    id: "c1d", no: "1d", section: "A", perspektif: "Proses",
+    kpi: "Karhutla",
+    satuan: "Kasus /bulan", formula: "Jumlah", bobot: "2%",
+    definisi: "Jumlah kebakaran hutan",
+    source: "Laporan Komite K3", baseline2025: "0", target2026: "0", polaritas: "Minimize",
+    detailFormula: "Jumlah kasus kebakaran hutan (RSUP PKB + ASD + RSTM + GHS)", keterangan: "",
+  },
+  {
+    id: "c1e", no: "1e", section: "A", perspektif: "Proses",
+    kpi: "Proper Result",
+    satuan: "% /Kategori", formula: "Nilai Akhir", bobot: "2%",
+    definisi: "hasil penilaian PROPER (Program Penilaian Peringkat Kinerja Perusahaan dalam Pengelolaan Lingkungan Hidup) yang dikeluarkan oleh Kementerian Lingkungan Hidup dan Kehutanan (KLHK).",
+    source: "Laporan LH", baseline2025: "Biru", target2026: "Biru", polaritas: "Maximize",
+    detailFormula: "Pencapaian nilai PROPER di RSUP perkebunan + RSTM + GHS\\n*Pencapaian: Biru (100%), Merah (75%), Hitam (0%)", keterangan: "",
+  },
+  {
+    id: "c1f", no: "1f", section: "A", perspektif: "Proses",
+    kpi: "GHG Reduction",
+    satuan: "tonCo2-eq /bulan", formula: "Rata-Rata", bobot: "0%",
+    definisi: "Pengurangan emisi gas rumah kaca yang diukur sebagai indikator kinerja organisasi",
+    source: "Laporan Komite Energy", baseline2025: "230.973", target2026: "219.652", polaritas: "Minimize",
+    detailFormula: "Jumlah Emisi Gas Rumah Kaca (Boiler Biomasa + PLTD + PLTU + Dapur Arang + Alat Berat + Freon)", keterangan: "",
+  },
+  {
+    id: "c1g", no: "1g", section: "A", perspektif: "Proses",
+    kpi: "SIMATAG - 0.4m Report",
+    satuan: "% /bulan", formula: "Rata-rata", bobot: "0%",
+    definisi: "Tingkat kepatuhan unit kerja dalam menyusun dan menyampaikan laporan pemantauan muka air tanah gambut dengan ambang batas 0,4 meter sesuai standar format dan jadwal yang ditetapkan.",
+    source: "Laporan LH", baseline2025: "100%", target2026: "100%", polaritas: "Minimize",
+    detailFormula: "Rata-rata pencapaian tingkat kepatuhan laporan RSUP Perkebunan + RSTM + GHS", keterangan: "",
+  },
+];

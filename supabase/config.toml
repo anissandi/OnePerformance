@@ -1,0 +1,6 @@
+project_id = "pa-simulasi"
+
+[functions.make-server-74dadec6]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/server/index.tsx"

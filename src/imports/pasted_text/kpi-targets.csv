@@ -1,0 +1,76 @@
+No	Perspektif	KPI	Satuan	Formula Setahun	Bobot	Definisi	Source	Baseline 2025	Target 2026	Polaritas	Detail Formula	Keterangan	Baseline	Jan-26	Feb-26	Total 2026
+A.	Objective KPI				20%											
+1	Finansial	Net Profit (dalam miliar)	Rp Miliar /bulan	Jumlah	10%	Laba Bersih Perusahaan setelah dikurangi pengeluaraan biaya, bunga dan pajak RSUP Group	Laporan Keuangan RSUP Industry	687	750	Maximize	"Jumlah laba bersih perusahaan
+
+*Pencapaian = Realisasi / Target"					
+2	Proses	Fatality Accident	Kasus /bulan	Jumlah	10%	Jumlah kecelakaan kerja yang mengakibatkan kematian pekerja	Laporan Komite K3	1	0	Minimize	= Jumlah kasus Kecelaaan kerja yang menyebabkan kematian (RSUP IND + RSUP PKB + ASD + RSTM + GHS)					
+B.	Functional KPI				80%											
+3	Finansial	"HPP Produksi Energy:
+a. Listrik (target: 1.920 Rp/kwh)
+b. Steam (target : 294 Rp/kg)"	% /bulan	Rata-Rata	20%	Upaya sistematis untuk menekan biaya bahan baku, tenaga kerja, overhead, dan distribusi agar harga pokok produksi tetap rendah, margin keuntungan terjaga, dan daya saing produk meningkat	Laporan Keuangan RSUP Industry	100%	100%	Minimize	= (Realisasi pencapaian listrik + Realisasi pencapaian steam) / 2	"Baseline:
+Listrik: 1,799.77
+Steam: 273.99"	Biaya Listrik			
+													Target Biaya			
+													Pencapaian HPP Listrik			
+													Biaya Steam			
+													Target Biaya			
+													Pencapaian HPP Steam			
+													Pencapaian Total			
+													Score Total			
+4a	Proses	"Efisiensi pemakaian energi dan material:
+a. Bahan Bakar - Produksi Steam  (Target: 3,22 kg steam/kg bb)
+b. Bahan Bakar - Produksi Listrik (Target: 0,64 kwh/kg bb)
+c. Konsumsi HCL - Proses Demineralisasi (Target: 0,23Kg/M3 air /bulan)
+d. Konsumsi NaOH - Proses Demineralisasi (Target: 0,11Kg/M3 air /bulan)"	% /bulan	Rata-Rata	20%	Meningkatkan rata-rata efisiensi dalam pemakaian energi dan material berlebih	Laporan PWP	97%	100%	Maximize	"= (Realisasi penggunaan bahan bakar produksi steam + Realisasi penggunaan bahan bakar produksi listrik + Realisasi penggunaan HCL + Realisasi penggunaan NaOH) / 4
+
+*Pemakaian bahan bakar (produksi steam) = kg steam/kg bahan bakar (batubara + tempurung)
+**Pemakaian bahan bakar (produksi listrik) = kWh/kg bahan bakar (batubara+ tempurung)
+***Penggunaan HCL = Total HCL (kg) / Volume air (m3)
+****Penggunaan NaOH = Total NaOH (kg)/Volume air (m3)"	"Baseline:
+Steam:
+Listrik:
+HCL:
+NaOH:"	Actual Eff Steam			
+													Target Eff Steam			
+													Pencapaian Eff Steam			
+													Actual Eff  Listrik			
+													Target Eff Listrik			
+													Pencapaian Listrik			
+													Actual HCL			
+													Target HCL			
+													Pencapaian HCL			
+													Actual NaOH			
+													Target NaOH			
+													Pencapaian NaOH			
+													Pencapaian Total			
+													Score Total			
+4b		"Pencapaian Index Produktivitas Karyawan:
+a. Karyawan Power Plant (PWP) - Steam (Target: 22,43 ton steam/orang)
+b. Karyawan Power Plant (PWP) - Listrik (Target: 2.999 kwh/orang)"	% /bulan	Rata-Rata	15%	Meningkatkan produktivitas dengan menggunakan kapasitas maksimum sumberdaya dan output bulanan	Laporan PWP	198%	100%	Maximize	"= (Index produktivitas karyawan PWP - Steam + Index produktivitas karyawan PWP - Listrik) / 2
+
+* Indeks Produtivitas = Total output pekerjaan / Jumlah manday"	"Baseline:
+Steam: 22.3
+Listrik: 2,830"	Actual IP Steam			
+													Target IP Steam			
+													Pencapaian IP Steam			
+													Actual IP Listrik			
+													Target IP Listrik			
+													Pencapaian IP Listrik			
+													Pencapaian Total			
+													Score Total			
+5a	Environment, Health & Safety	Pencapaian Kinerja Terintegrasi: LTI	hari/ tahun	Nilai Akhir	5%	Rata-rata nilai parameter keselamatan, kesehatan kerja, keamanan pangan, mutu dan lingkungan	Laporan Komite K3	17	17	Maximize	Nilai poin LTI		Actual LTI			
+													Target LTI			
+													Pencapaian			
+													Score			
+5b		Regulatory Compliance - Audit Eksternal 	temuan / tahun	Nilai Akhir	5%	Memenuhi kepatuhan organisasi terhadap regulasi, perizinan, dan persyaratan hukum yang berlaku	Laporan QA	0	0	Maximize	Jumlah temuan yang terdapat pada audit eksternal dept PWP (NC)		Actual			
+													Target			
+													Pencapaian			
+													Score			
+6	Customer	Meminimalisasi Risiko Proses Jumlah Kasus Turbin Trip	kasus / bulan	Jumlah	10%	Meminimalisir tingkat risiko untuk seluruh proses yang berada pada scope pekerjaan Dept PWP dan memiliki dampak yang cukup signifikan terhadap relasi	Laporan PWP	2	2	Minimize	Total kejadian turbin trip per tahun		Actual			
+													Target			
+													Pencapaian			
+													Score			
+7	Learning & Growth	Hard & Softskill Training	Jumlah	Nilai Akhir	5%	Mengukur sejauh mana organisasi menjadi tempat kerja yang diminati, dengan menciptakan lingkungan kerja yang mendukung keterlibatan karyawan, pengembangan kompetensi, dan daya tarik bagi talenta industri.	Laporan HRD	25	25	Maximize	Jumlah pelaksanaan Hard & Softskill Training di dept BLR		Actual			
+													Target			
+													Pencapaian			
+													Score			

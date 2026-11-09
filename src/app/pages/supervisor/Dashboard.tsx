@@ -1,0 +1,888 @@
+import React, { useState, useMemo } from "react";
+import { useRouteTab } from "../../utils/useRouteTab";
+import { KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking } from "../employee/KPIPage";
+import { ArrowRight, TrendingUp, Lightbulb, ClipboardList, FolderKanban, Target, Clock, CheckCircle2, Search, AlertTriangle, LayoutDashboard, ClipboardCheck, Star, X } from "lucide-react";
+import {
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+} from "recharts";
+import { useNavigate } from "react-router";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Module = "KPI" | "SMART Goals" | "Appraisal Form" | "Project" | "RCA";
+type ActionType = "Approve" | "Complete Assessment" | "Review & Validate";
+
+interface PendingItem {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  position: string;
+  unit: string;
+  division: string;
+  module: Module;
+  submissionType: string;
+  actionNeeded: ActionType;
+  submittedDate: string;
+  notes: string;
+  urgent: boolean;
+}
+
+// ─── Data ─────────────────────────────────────────────────────────────────────
+
+const PENDING_ITEMS: PendingItem[] = [
+  { id: "pr-01", employeeId: "E002", employeeName: "Siti Rahayu",   position: "Staff Pengembangan SDM",   unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "KPI",            submissionType: "KPI Setting — Submission",                   actionNeeded: "Approve",             submittedDate: "2026-01-28", notes: "8 KPI indicators submitted. Total bobot: 100%.",                                              urgent: false },
+  { id: "pr-02", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "KPI",            submissionType: "KPI Measurement — Mid-Year",                    actionNeeded: "Review & Validate",   submittedDate: "2026-05-20", notes: "Avg. achievement 65%. 3 KPI below 80% — RCA incomplete.",                                     urgent: true  },
+  { id: "pr-03", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "KPI",            submissionType: "KPI Measurement — Mid-Year",                    actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "Avg. achievement 73%. 2 RCA items not yet completed.",                                         urgent: true  },
+  { id: "pr-04", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "KPI",            submissionType: "KPI Measurement — Mid-Year",                    actionNeeded: "Review & Validate",   submittedDate: "2026-05-15", notes: "Avg. achievement 55%. 3 RCA items incomplete. Requires immediate attention.",                  urgent: true  },
+  { id: "pr-05", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "SMART Goals",    submissionType: "SMART Goals — Draft Review",                 actionNeeded: "Review & Validate",   submittedDate: "2026-05-20", notes: "1 of 3 goals with evidence. Completion 33%. Needs guidance.",                                  urgent: false },
+  { id: "pr-06", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "SMART Goals",    submissionType: "SMART Goals — Draft Review",                 actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "2 of 3 goals with evidence. Completion 67%.",                                                  urgent: false },
+  { id: "pr-07", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "SMART Goals",    submissionType: "SMART Goals — Draft Review",                 actionNeeded: "Review & Validate",   submittedDate: "2026-05-15", notes: "0 of 2 goals with evidence. Completion 0%. Action required.",                                  urgent: true  },
+  { id: "pr-08", employeeId: "E002", employeeName: "Siti Rahayu",   position: "Staff Pengembangan SDM",   unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-28", notes: "Employee self-assessment done (avg. 3.8). Awaiting your supervisor assessment.",               urgent: false },
+  { id: "pr-09", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-20", notes: "Employee self-assessment in progress. Supervisor assessment not yet started.",                  urgent: false },
+  { id: "pr-10", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-25", notes: "Employee self-assessment done (avg. 3.5). Awaiting your supervisor assessment.",               urgent: false },
+  { id: "pr-11", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-15", notes: "Self-assessment in progress. Supervisor assessment not yet started.",                         urgent: false },
+  { id: "pr-12", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "Project",        submissionType: "Project Registration — Draft Approval",      actionNeeded: "Approve",             submittedDate: "2026-05-20", notes: "1 project: Campaign Media Sosial Q2 2026 (SS). Status: At Risk — progress 30%.",               urgent: true  },
+  { id: "pr-13", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "Project",        submissionType: "Project Measurement — Review",                  actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "1 project: Peningkatan Kualitas Pupuk Organik. Status: At Risk — progress 25%.",               urgent: true  },
+  { id: "pr-14", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "Project",        submissionType: "Project Registration — Draft Approval",      actionNeeded: "Approve",             submittedDate: "2026-05-15", notes: "1 project: Digitalisasi Arsip Kepegawaian (SS). Status: Not Started.",                        urgent: false },
+  { id: "pr-15", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "RCA",            submissionType: "Root Cause Analysis — Validation",           actionNeeded: "Review & Validate",   submittedDate: "2026-05-20", notes: "3 RCA items required. Only 1 completed. 2 action plans pending.",                              urgent: true  },
+  { id: "pr-16", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "RCA",            submissionType: "Root Cause Analysis — Validation",           actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "2 RCA items required. None completed. Requires immediate follow-up.",                          urgent: true  },
+  { id: "pr-17", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "RCA",            submissionType: "Root Cause Analysis — Validation",           actionNeeded: "Review & Validate",   submittedDate: "2026-05-15", notes: "3 RCA items required. None completed. Critical — avg. achievement 55%.",                      urgent: true  },
+];
+
+const MODULE_META: Record<Module, { icon: React.ElementType; color: string; bg: string; border: string }> = {
+  "KPI":            { icon: TrendingUp,    color: "text-blue-700",  bg: "bg-blue-50",  border: "border-blue-200"  },
+  "SMART Goals":    { icon: Lightbulb,     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200" },
+  "Appraisal Form": { icon: ClipboardList, color: "text-green-700", bg: "bg-green-50", border: "border-green-200" },
+  "Project":        { icon: FolderKanban,  color: "text-teal-700",  bg: "bg-teal-50",  border: "border-teal-200"  },
+  "RCA":            { icon: Target,        color: "text-rose-700",  bg: "bg-rose-50",  border: "border-rose-200"  },
+};
+
+const ACTION_STYLE: Record<ActionType, string> = {
+  "Approve":             "bg-[#1A284F] hover:bg-[#131d3b] text-white",
+  "Complete Assessment": "bg-green-700 hover:bg-green-800 text-white",
+  "Review & Validate":   "bg-amber-600 hover:bg-amber-700 text-white",
+};
+
+type TabFilter = "All" | Module;
+
+const TEAM_MEMBERS = [...new Set(PENDING_ITEMS.map((p) => p.employeeId))].length;
+
+// ─── Approval Dashboard ───────────────────────────────────────────────────────
+
+// Top-5 oldest IDs — used to mark urgent regardless of data flag
+const TOP5_OLDEST_IDS = new Set(
+  [...PENDING_ITEMS]
+    .sort((a, b) => a.submittedDate.localeCompare(b.submittedDate))
+    .slice(0, 5)
+    .map(i => i.id)
+);
+
+function formatDate(iso: string) {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+// Map module → Approvals route with the right tab
+const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
+  "KPI":            "/supervisor/appraisals?tab=check-in",
+  "SMART Goals":    "/supervisor/appraisals?tab=check-in",
+  "Appraisal Form": "/supervisor/appraisals?tab=check-in",
+  "Project":        "/supervisor/appraisals?tab=check-in",
+  "RCA":            "/supervisor/appraisals?tab=setting",
+};
+
+function ApprovalDashboard() {
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<TabFilter>("All");
+  const [search, setSearch]       = useState("");
+  const [urgentOnly, setUrgentOnly] = useState(false);
+
+  const filtered = PENDING_ITEMS.filter((item) => {
+    if (activeTab !== "All" && item.module !== activeTab) return false;
+    if (search && !item.employeeName.toLowerCase().includes(search.toLowerCase()) && !item.submissionType.toLowerCase().includes(search.toLowerCase())) return false;
+    if (urgentOnly && !TOP5_OLDEST_IDS.has(item.id)) return false;
+    return true;
+  }).sort((a, b) => a.submittedDate.localeCompare(b.submittedDate));
+
+  const urgentCount = TOP5_OLDEST_IDS.size;
+  const byModule = (m: Module) => PENDING_ITEMS.filter((p) => p.module === m).length;
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="rounded-2xl border border-gray-100 px-5 py-4 bg-[#1A284F]/5">
+          <p className="text-xs text-gray-500 mb-1">Total Pending</p>
+          <p className="text-2xl font-bold text-[#1A284F]">{PENDING_ITEMS.length}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">{TEAM_MEMBERS} team members</p>
+        </div>
+        <div className="rounded-2xl border border-gray-100 px-5 py-4 bg-rose-50">
+          <p className="text-xs text-gray-500 mb-1">Urgent</p>
+          <p className="text-2xl font-bold text-rose-700">{urgentCount}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">requires immediate action</p>
+        </div>
+        <div className="rounded-2xl border border-gray-100 px-5 py-4 bg-amber-50">
+          <p className="text-xs text-gray-500 mb-1">Assessments Due</p>
+          <p className="text-2xl font-bold text-amber-700">{byModule("Appraisal Form")}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">supervisor assessment pending</p>
+        </div>
+        <div className="rounded-2xl border border-gray-100 px-5 py-4 bg-green-50">
+          <p className="text-xs text-gray-500 mb-1">Approvals Needed</p>
+          <p className="text-2xl font-bold text-green-700">{PENDING_ITEMS.filter((p) => p.actionNeeded === "Approve").length}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">KPI & project submissions</p>
+        </div>
+      </div>
+
+      {/* Infographics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-5 flex flex-col gap-3 h-48">
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Distribution by Module</p>
+          <div className="flex items-center gap-3 flex-1 min-h-0">
+            <div style={{ width: 110, height: 110, flexShrink: 0 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={[
+                    { name: "KPI",            value: byModule("KPI")            },
+                    { name: "SMART Goals",    value: byModule("SMART Goals")    },
+                    { name: "Appraisal Form", value: byModule("Appraisal Form") },
+                    { name: "Project",        value: byModule("Project")        },
+                    { name: "RCA",            value: byModule("RCA")            },
+                  ]} cx="50%" cy="50%" innerRadius={30} outerRadius={48} dataKey="value" strokeWidth={2}>
+                    {["#1A284F","#d97706","#15803d","#0f766e","#be123c"].map((c, i) => (
+                      <Cell key={`mod-cell-${i}`} fill={c} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v: number, n: string) => [v, n]} contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb" }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-col justify-center gap-1.5 flex-1 min-w-0">
+              {(["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"] as Module[]).map((m, i) => {
+                const colors = ["#1A284F","#d97706","#15803d","#0f766e","#be123c"];
+                const pct = Math.round((byModule(m) / PENDING_ITEMS.length) * 100);
+                return (
+                  <div key={m} className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: colors[i] }} />
+                    <span className="text-[10px] text-gray-600 truncate flex-1">{m}</span>
+                    <span className="text-[10px] font-bold text-gray-700">{byModule(m)}</span>
+                    <span className="text-[10px] text-gray-400">({pct}%)</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-5 flex flex-col gap-3 h-48">
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Action Required Breakdown</p>
+          <div className="flex flex-col justify-center gap-3 flex-1">
+            {(["Approve", "Complete Assessment", "Review & Validate"] as ActionType[]).map((a) => {
+              const count = PENDING_ITEMS.filter((p) => p.actionNeeded === a).length;
+              const pct = Math.round((count / PENDING_ITEMS.length) * 100);
+              const barColor   = a === "Approve" ? "bg-[#1A284F]" : a === "Complete Assessment" ? "bg-green-600" : "bg-amber-500";
+              const labelColor = a === "Approve" ? "text-[#1A284F]" : a === "Complete Assessment" ? "text-green-700" : "text-amber-700";
+              return (
+                <div key={a} className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <span className={`text-[11px] font-semibold ${labelColor}`}>{a}</span>
+                    <span className="text-[11px] font-bold text-gray-700">{count} <span className="text-gray-400 font-normal">({pct}%)</span></span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                    <div className={`${barColor} h-2 rounded-full`} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Module pills */}
+      <div className="flex flex-wrap gap-3">
+        {(["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"] as Module[]).map((m) => {
+          const meta = MODULE_META[m];
+          const Icon = meta.icon;
+          return (
+            <button
+              key={m}
+              onClick={() => setActiveTab(activeTab === m ? "All" : m)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                activeTab === m ? `${meta.bg} ${meta.color} ${meta.border}` : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {m}
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === m ? "bg-white/60" : "bg-gray-100 text-gray-600"}`}>
+                {byModule(m)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap gap-3 items-center bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+        <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+          <Search className="w-4 h-4 text-gray-400 shrink-0" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search employee or submission type..."
+            className="text-sm outline-none bg-transparent flex-1 text-gray-700 placeholder-gray-400" />
+        </div>
+        <button onClick={() => setUrgentOnly(!urgentOnly)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${urgentOnly ? "bg-rose-50 border-rose-200 text-rose-700" : "border-gray-200 text-gray-500 hover:bg-gray-50"}`}>
+          <AlertTriangle className="w-3.5 h-3.5" />
+          Urgent Only
+        </button>
+        <span className="ml-auto text-xs text-gray-400">{filtered.length} items shown</span>
+      </div>
+
+      {/* Items list */}
+      <div className="flex flex-col gap-3">
+        {filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-2xl border border-dashed border-gray-300">
+            <CheckCircle2 className="w-10 h-10 text-gray-300 mb-3" />
+            <p className="text-sm font-semibold text-gray-400 mb-1">No pending items</p>
+            <p className="text-xs text-gray-400">All caught up! Try adjusting the filter.</p>
+          </div>
+        ) : filtered.map((item) => {
+          const meta    = MODULE_META[item.module];
+          const Icon    = meta.icon;
+          const btnCls  = ACTION_STYLE[item.actionNeeded];
+          const isUrgent = TOP5_OLDEST_IDS.has(item.id);
+          return (
+            <div key={item.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden hover:shadow-md transition-all ${isUrgent ? "border-rose-200" : "border-gray-200"}`}>
+              {isUrgent && (
+                <div className="flex items-center gap-1.5 px-5 py-1.5 bg-rose-50 border-b border-rose-100">
+                  <AlertTriangle className="w-3 h-3 text-rose-500" />
+                  <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wide">Urgent — Immediate Action Required</span>
+                </div>
+              )}
+              <div className="px-5 py-4 flex items-center gap-5 flex-wrap">
+                <div className={`flex-shrink-0 flex items-center justify-center w-11 h-11 rounded-xl ${meta.bg} ${meta.border} border`}>
+                  <Icon className={`w-5 h-5 ${meta.color}`} />
+                </div>
+                <div className="flex flex-col min-w-[160px]">
+                  <p className="text-sm font-bold text-gray-800">{item.employeeName}</p>
+                  <p className="text-xs text-gray-400">{item.position}</p>
+                  <p className="text-[11px] text-gray-400">{item.unit}</p>
+                </div>
+                <div className="flex flex-col flex-1 min-w-[180px]">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${meta.bg} ${meta.color}`}>{item.module}</span>
+                  </div>
+                  <p className="text-sm font-semibold text-gray-700">{item.submissionType}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{item.notes}</p>
+                </div>
+                <div className="flex flex-col items-end gap-2 ml-auto shrink-0">
+                  <div className="flex items-center gap-1.5 text-xs text-gray-400">
+                    <Clock className="w-3 h-3" />
+                    {formatDate(item.submittedDate)}
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${
+                    item.actionNeeded === "Approve" ? "bg-[#1A284F]/5 text-[#1A284F] border-[#1A284F]/20"
+                    : item.actionNeeded === "Complete Assessment" ? "bg-green-50 text-green-700 border-green-200"
+                    : "bg-amber-50 text-amber-700 border-amber-200"
+                  }`}>{item.actionNeeded}</span>
+                  <button
+                    onClick={() => navigate(MODULE_APPROVAL_ROUTE[item.module])}
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${btnCls}`}
+                  >
+                    {item.actionNeeded === "Complete Assessment" ? "Fill Assessment" : "Review"}
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── My Dashboard (employee view for supervisor) ──────────────────────────────
+
+
+type ApprovalStatus = "Not Started" | "Submitted" | "On Progress" | "Done";
+
+interface MonthProgress { month: string; status: ApprovalStatus; }
+
+interface ModuleMilestone {
+  label: string;
+  icon: React.ElementType;
+  status: ApprovalStatus;
+  months?: MonthProgress[];
+  navTo?: string;
+}
+
+
+const STATUS_STYLE: Record<ApprovalStatus, { node: string; badge: string; label: string; line: string }> = {
+  "Done":        { node: "bg-green-500 shadow-green-200", badge: "bg-green-50 text-green-700 border-green-200",  label: "text-green-700", line: "bg-green-400" },
+  "On Progress": { node: "bg-amber-500 shadow-amber-200", badge: "bg-amber-50 text-amber-700 border-amber-200",  label: "text-amber-700", line: "bg-amber-400" },
+  "Submitted":   { node: "bg-blue-500 shadow-blue-200",   badge: "bg-blue-50 text-blue-700 border-blue-200",     label: "text-blue-700",  line: "bg-blue-400"  },
+  "Not Started": { node: "bg-gray-300 shadow-gray-100",   badge: "bg-gray-50 text-gray-500 border-gray-200",     label: "text-gray-400",  line: "bg-gray-200"  },
+};
+
+
+const STAGE_ORDER: ApprovalStatus[] = ["Not Started", "Submitted", "On Progress", "Done"];
+
+
+const STAGE_BAR_COLOR: Record<ApprovalStatus, string> = {
+  "Not Started": "bg-gray-200",
+  "Submitted":   "bg-blue-500",
+  "On Progress": "bg-amber-400",
+  "Done":        "bg-green-500",
+};
+
+const STAGE_TEXT_COLOR: Record<ApprovalStatus, string> = {
+  "Not Started": "text-gray-400",
+  "Submitted":   "text-blue-600",
+  "On Progress": "text-amber-600",
+  "Done":        "text-green-600",
+};
+
+const MODULE_MILESTONE_ICONS: Record<string, React.ElementType> = {
+  "KPI (Setting)":          TrendingUp,
+  "SMART Goals (Setting)":  Lightbulb,
+  "KPI (Tracking)":         TrendingUp,
+  "SMART Goals (Tracking)": Lightbulb,
+  "Appraisal Form":         ClipboardList,
+  "Project OJS":            FolderKanban,
+  "Managerial Skill":       Star,
+};
+
+const MODULE_ROUTES: Record<string, string> = {
+  "KPI (Setting)":          "/supervisor/setting/kpi",
+  "SMART Goals (Setting)":  "/supervisor/setting/smart-goals",
+  "KPI (Tracking)":         "/supervisor/measurement/kpi-tracking",
+  "SMART Goals (Tracking)": "/supervisor/measurement/smart-goals",
+  "Appraisal Form":         "/supervisor/measurement/appraisal-form",
+  "Project OJS":            "/supervisor/measurement/project-outside",
+  "Managerial Skill":       "/supervisor/measurement/managerial-skill",
+};
+
+function approvalToMilestoneStatus(mod: ModuleApprovalData): ApprovalStatus {
+  if (mod.overallStatus === "Approved") return "Done";
+  if (mod.overallStatus === "Pending")  return "Not Started";
+  const firstInProg = mod.steps.findIndex(s => s.status === "in_progress");
+  return firstInProg === 0 ? "Submitted" : "On Progress";
+}
+
+function stepFillPct(mod: ModuleApprovalData): number {
+  if (mod.overallStatus === "Approved") return 100;
+  if (mod.overallStatus === "Pending")  return 0;
+  const completed = mod.steps.filter(s => s.status === "completed").length;
+  const total     = mod.steps.length;
+  const inProg    = mod.steps.findIndex(s => s.status === "in_progress");
+  return Math.round(((completed + (inProg >= 0 ? 0.4 : 0)) / total) * 100);
+}
+
+function MilestoneProgress() {
+  const navigate = useNavigate();
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
+      {/* Header */}
+      <div className="mb-6">
+        <h3 className="font-semibold text-base text-gray-900">Approval Progress by Module</h3>
+        <p className="text-xs text-gray-400 mt-0.5">Current cycle — 2026 Performance Appraisal</p>
+      </div>
+
+      {/* Module rows — derived from MODULE_APPROVALS */}
+      <div className="flex flex-col gap-4">
+        {MODULE_APPROVALS.map((mod) => {
+          const Icon    = MODULE_MILESTONE_ICONS[mod.module] ?? ClipboardList;
+          const status  = approvalToMilestoneStatus(mod);
+          const fillPct = stepFillPct(mod);
+          const pending = mod.steps.find(s => s.status === "in_progress");
+
+          return (
+            <div key={mod.module} className="flex flex-col gap-1.5">
+              {/* Row header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 border ${STATUS_STYLE[status].badge}`}>
+                    <Icon className="w-3 h-3" />
+                  </div>
+                  <span className="text-xs font-semibold text-gray-700">{mod.module}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {pending && (
+                    <span className="text-[10px] text-gray-400 font-medium">
+                      Pending: <span className="font-semibold text-gray-600">{pending.label}</span>
+                    </span>
+                  )}
+                  <span className={`text-[11px] font-semibold ${STAGE_TEXT_COLOR[status]}`}>{status}</span>
+                  <button
+                    onClick={() => navigate(MODULE_ROUTES[mod.module] ?? "/supervisor/appraisals")}
+                    className="text-[10px] font-semibold text-[#1A284F] hover:underline flex items-center gap-0.5"
+                  >
+                    View <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              <div className="relative h-2.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${STAGE_BAR_COLOR[status]}`}
+                  style={{ width: `${fillPct}%` }}
+                />
+              </div>
+
+              {/* Step labels below bar */}
+              <div className="flex justify-between mt-0.5">
+                {mod.steps.map((step) => {
+                  const isDone = step.status === "completed";
+                  const isCur  = step.status === "in_progress";
+                  return (
+                    <span
+                      key={step.label}
+                      className={`text-[9px] font-semibold ${
+                        isCur  ? STAGE_TEXT_COLOR["On Progress"] :
+                        isDone ? "text-gray-400" :
+                        "text-gray-300"
+                      }`}
+                    >
+                      {step.label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 flex-wrap mt-5 pt-4 border-t border-gray-100">
+        {STAGE_ORDER.map((stage) => (
+          <span key={stage} className={`inline-flex items-center gap-1.5 text-[10px] font-semibold ${STAGE_TEXT_COLOR[stage]}`}>
+            <span className={`w-2.5 h-2.5 rounded-full ${STAGE_BAR_COLOR[stage]} shrink-0`} />
+            {stage}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const CYCLE_STEPS = [
+  { label: "Setting",                          date: "Quarter 1",                         dateRange: "01 Feb - 31 Mar",    status: "Completed"   as const },
+  { label: "Measurement",                      date: "Quarter 2 - Quarter 4",             dateRange: "10 Apr - 16 Nov",    status: "On Progress" as const },
+  { label: "Performance Evaluation & Analysis",date: "Quarter 4",                         dateRange: "17 Nov - 16 Jan",    status: "Not Started" as const },
+  { label: "Year end Performance Dialogue",    date: "Quarter 4 - Quarter 1 (next year)", dateRange: "17 Jan - 16 Feb",    status: "Not Started" as const },
+];
+
+const CYCLE_STEP_STYLE: Record<string, string> = {
+  "Completed":   "bg-green-500 text-white",
+  "On Progress": "bg-[#EEDDBB] text-[#1A284F]",
+  "Not Started": "bg-gray-100 text-gray-400",
+};
+
+const CYCLE_LABEL_STYLE: Record<string, string> = {
+  "Completed":   "text-green-600",
+  "On Progress": "text-[#1A284F] font-bold",
+  "Not Started": "text-gray-400",
+};
+
+function CurrentCycleBanner() {
+  const activeStep = CYCLE_STEPS.find((s) => s.status === "On Progress");
+  const phaseLabel = activeStep ? `${activeStep.label} Phase` : "On Progress";
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-8 py-6 flex flex-col gap-5">
+      {/* Row 1 — cycle name */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-3 h-3 rounded-full bg-[#1A284F]" />
+          <span className="text-sm font-bold text-[#1A284F] uppercase tracking-widest">
+            2026 Performance Appraisal
+          </span>
+        </div>
+        <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-bold border border-blue-100 whitespace-nowrap">
+          {phaseLabel}
+        </span>
+      </div>
+
+      {/* Row 2 — steps in a single line */}
+      <div className="flex items-center gap-3">
+        {CYCLE_STEPS.map((step, i) => (
+          <React.Fragment key={step.label}>
+            {i > 0 && (
+              <div className={`h-0.5 flex-1 min-w-[24px] rounded-full ${step.status === "Not Started" ? "bg-gray-200" : "bg-green-400"}`} />
+            )}
+            <div className="flex items-center gap-3 shrink-0">
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${CYCLE_STEP_STYLE[step.status]}`}>
+                {step.status === "Completed" ? "✓" : i + 1}
+              </div>
+              <div className="flex flex-col leading-none gap-0.5">
+                <span className={`text-sm font-semibold whitespace-nowrap ${CYCLE_LABEL_STYLE[step.status]}`}>{step.label}</span>
+                <span className="text-xs text-gray-400 whitespace-nowrap">{step.date}</span>
+                <span className="text-[10px] text-gray-400 whitespace-nowrap">{step.dateRange}</span>
+              </div>
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Appraisal Summary Cards ──────────────────────────────────────────────────
+
+const MY_APPRAISAL_SUMMARY = {
+  currentScore: 80.9,
+  currentGrade: "A",
+  modulesApproved: 2,
+  modulesTotal: 7,
+  lastUpdated: "15/06/2026",
+  yearEnd: "Dec 2026",
+  status: "In Progress" as const,
+};
+
+type ApprovalStepStatus = "completed" | "in_progress" | "pending";
+
+interface ApprovalStep {
+  label: string;
+  description: string;
+  status: ApprovalStepStatus;
+}
+
+interface ModuleApprovalData {
+  module: string;
+  overallStatus: "Approved" | "Pending" | "In Progress";
+  steps: ApprovalStep[];
+}
+
+const MODULE_APPROVALS: ModuleApprovalData[] = [
+  {
+    module: "KPI (Setting)",
+    overallStatus: "Approved",
+    steps: [
+      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed" },
+      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "completed" },
+      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "completed" },
+      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "completed" },
+    ],
+  },
+  {
+    module: "SMART Goals (Setting)",
+    overallStatus: "Approved",
+    steps: [
+      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed" },
+      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "completed" },
+      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "completed" },
+      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "completed" },
+    ],
+  },
+  {
+    module: "KPI (Tracking)",
+    overallStatus: "In Progress",
+    steps: [
+      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed"   },
+      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "completed"   },
+      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "in_progress" },
+      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "pending"     },
+    ],
+  },
+  {
+    module: "SMART Goals (Tracking)",
+    overallStatus: "In Progress",
+    steps: [
+      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed"   },
+      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "in_progress" },
+      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "pending"     },
+      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "pending"     },
+    ],
+  },
+  {
+    module: "Appraisal Form",
+    overallStatus: "Pending",
+    steps: [
+      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
+      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
+    ],
+  },
+  {
+    module: "Project OJS",
+    overallStatus: "Pending",
+    steps: [
+      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
+      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
+    ],
+  },
+  {
+    module: "Managerial Skill",
+    overallStatus: "Pending",
+    steps: [
+      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
+      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
+    ],
+  },
+];
+
+function ModuleApprovalPopup({ onClose }: { onClose: () => void }) {
+  const [selected, setSelected] = useState(0);
+  const mod = MODULE_APPROVALS[selected];
+
+  const statusBadgeClass = (s: ModuleApprovalData["overallStatus"]) => {
+    if (s === "Approved")    return "bg-green-100 text-green-700 border-green-200";
+    if (s === "In Progress") return "bg-yellow-100 text-yellow-800 border-yellow-200";
+    return "bg-gray-100 text-gray-500 border-gray-200";
+  };
+
+  const stepCircle = (status: ApprovalStepStatus, index: number) => {
+    if (status === "completed")
+      return <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center shrink-0"><CheckCircle2 className="w-4 h-4 text-white" /></div>;
+    if (status === "in_progress")
+      return <div className="w-8 h-8 rounded-full bg-orange-400 flex items-center justify-center shrink-0 text-white text-xs font-bold">{index + 1}</div>;
+    return <div className="w-8 h-8 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center shrink-0 text-gray-400 text-xs font-bold">{index + 1}</div>;
+  };
+
+  const stepRowClass = (status: ApprovalStepStatus) => {
+    if (status === "completed")   return "bg-green-50 border border-green-100";
+    if (status === "in_progress") return "bg-yellow-50 border border-yellow-200";
+    return "bg-white border border-gray-100";
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-5 pt-5 pb-3 border-b border-gray-100">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <span className={`text-[10px] font-bold uppercase tracking-widest ${
+                mod.overallStatus === "Approved" ? "text-green-600" :
+                mod.overallStatus === "In Progress" ? "text-orange-500" : "text-gray-400"
+              }`}>
+                {mod.overallStatus === "Approved" ? "Approved" :
+                 mod.overallStatus === "In Progress" ? "Pending Approval" : "Not Started"}
+              </span>
+              <h3 className="text-lg font-bold text-gray-900 mt-0.5">{mod.module}</h3>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors mt-0.5 shrink-0">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Module tabs */}
+          <div className="flex gap-1.5 mt-3 flex-wrap">
+            {MODULE_APPROVALS.map((m, i) => (
+              <button
+                key={m.module}
+                onClick={() => setSelected(i)}
+                className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                  selected === i
+                    ? "bg-[#1A284F] text-white border-[#1A284F]"
+                    : "bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                {m.module}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Steps */}
+        <div className="px-5 py-4 flex flex-col gap-2">
+          {mod.steps.map((step, i) => (
+            <div key={step.label} className="relative">
+              {/* Connector line */}
+              {i < mod.steps.length - 1 && (
+                <div className="absolute left-4 top-8 w-px h-[calc(100%+8px)] bg-gray-200 z-0" />
+              )}
+              <div className={`relative z-10 flex items-start gap-3 rounded-xl px-3 py-3 ${stepRowClass(step.status)}`}>
+                {stepCircle(step.status, i)}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-bold text-gray-800">{step.label}</span>
+                    {step.status === "in_progress" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-200 text-yellow-800 border border-yellow-300 shrink-0">
+                        In Progress
+                      </span>
+                    )}
+                    {step.status === "completed" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200 shrink-0">
+                        Done
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">{step.description}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer summary */}
+        <div className="px-5 pb-5">
+          <div className={`text-[11px] font-semibold text-center py-2 rounded-lg border ${statusBadgeClass(mod.overallStatus)}`}>
+            {mod.overallStatus === "Approved"
+              ? "All steps completed — Module Approved"
+              : mod.overallStatus === "In Progress"
+              ? "Approval in progress"
+              : "Awaiting approver review"}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function scoreToGrade(s: number) {
+  if (s >= 90) return "A+"; if (s >= 80) return "A"; if (s >= 70) return "B";
+  if (s >= 60) return "C"; if (s >= 50) return "D"; return "E";
+}
+
+function AppraisalSummaryCards() {
+  const [showPopup, setShowPopup] = useState(false);
+  const navigate = useNavigate();
+
+  const liveKPI = useMemo(() => {
+    const { months, cellsMap } = loadKPITracking();
+    const total = KPI_ITEMS.reduce((sum, k) => {
+      const ach = computeKPIAchievement(k, cellsMap, months);
+      if (ach === null) return sum;
+      return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
+    }, 0);
+    return total > 0 ? parseFloat(total.toFixed(1)) : null;
+  }, []);
+
+  // Supervisor weights: KPI 40%, SMART 15%, Appraisal 15%, Project 15%, Managerial 10%, Interview 5%
+  const kpiScore = liveKPI ?? 98;
+  const currentScore = parseFloat((kpiScore * 0.40 + 92 * 0.15 + 95 * 0.15 + 91 * 0.15 + 0 * 0.10 + 0 * 0.05).toFixed(1));
+  const currentGrade = scoreToGrade(currentScore);
+  const modulesApproved = MODULE_APPROVALS.filter(m => m.overallStatus === "Approved").length;
+  const modulesTotal = MODULE_APPROVALS.length;
+  const s = { ...MY_APPRAISAL_SUMMARY, currentScore, currentGrade, modulesApproved, modulesTotal };
+  const pending = s.modulesTotal - s.modulesApproved;
+
+  return (
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Current Score */}
+        <button onClick={() => navigate("/supervisor/profile")}
+          className="bg-[#1A284F] rounded-xl p-3.5 flex flex-col gap-1 text-left hover:bg-[#243869] active:scale-95 transition-all cursor-pointer">
+          <span className="text-[9px] font-bold uppercase tracking-widest text-blue-300">Current Score</span>
+          <span className="text-2xl font-extrabold text-white leading-none">{s.currentScore}</span>
+          <span className="text-[10px] text-blue-200 mt-0.5">Appraisal 2026</span>
+        </button>
+
+        {/* Current Grade */}
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3.5 flex flex-col gap-1">
+          <span className="text-[9px] font-bold uppercase tracking-widest text-yellow-600">Current Grade</span>
+          <span className="text-2xl font-extrabold text-emerald-600 leading-none">{s.currentGrade}</span>
+          <span className="flex items-center gap-1 text-[10px] text-yellow-600 font-semibold mt-0.5">
+            <Clock className="w-3 h-3" />
+            {s.status}
+          </span>
+        </div>
+
+        {/* Modules Approved */}
+        <div className="bg-blue-50 border border-blue-100 rounded-xl p-3.5 flex flex-col gap-1">
+          <span className="text-[9px] font-bold uppercase tracking-widest text-blue-400">Modules Approved</span>
+          <div className="flex items-baseline gap-0.5 leading-none">
+            <span className="text-2xl font-extrabold text-[#1A284F]">{s.modulesApproved}</span>
+            <span className="text-base font-semibold text-gray-400">/{s.modulesTotal}</span>
+          </div>
+          <button
+            onClick={() => setShowPopup(true)}
+            className="text-[10px] text-blue-600 font-semibold mt-0.5 text-left hover:underline"
+          >
+            {pending} pending — Details
+          </button>
+        </div>
+
+        {/* Last Updated */}
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3.5 flex flex-col gap-1">
+          <span className="text-[9px] font-bold uppercase tracking-widest text-yellow-600">Last Updated</span>
+          <span className="text-lg font-extrabold text-gray-900 leading-none mt-0.5">{s.lastUpdated}</span>
+          <span className="text-[10px] text-orange-500 font-semibold mt-0.5">Year-end: {s.yearEnd}</span>
+        </div>
+      </div>
+
+      {showPopup && <ModuleApprovalPopup onClose={() => setShowPopup(false)} />}
+    </>
+  );
+}
+
+function MyDashboard() {
+  const navigate = useNavigate();
+
+  return (
+    <div className="flex flex-col gap-8">
+      <CurrentCycleBanner />
+
+      <AppraisalSummaryCards />
+
+      <MilestoneProgress />
+
+      <div className="bg-[#1A284F] text-white rounded-2xl p-6 relative overflow-hidden">
+        <div className="relative z-10 flex items-start justify-between gap-6">
+          <div className="flex-1">
+            <h3 className="font-semibold text-lg mb-1">Performance Appraisal Feedback</h3>
+            <p className="text-blue-100 text-sm mb-4">Feedback received from your Approver on your appraisal submission.</p>
+            <div className="flex items-center gap-3 flex-wrap mb-5">
+              {[
+                { label: "KPI",         icon: TrendingUp, color: "bg-blue-400/20 text-blue-100 border-blue-300/30 hover:bg-blue-400/30",   to: "/supervisor/measurement/kpi-tracking"          },
+                { label: "SMART Goals", icon: Lightbulb,  color: "bg-amber-400/20 text-amber-100 border-amber-300/30 hover:bg-amber-400/30", to: "/supervisor/measurement/smart-goals" },
+              ].map(({ label, icon: Icon, color, to }) => (
+                <button key={label} onClick={() => navigate(to)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors cursor-pointer ${color}`}>
+                  <Icon className="w-3.5 h-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Target className="w-28 h-28 text-white/5 shrink-0" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
+type DashTab = "approval" | "my";
+
+export function SupervisorDashboard() {
+  const [activeTab, setActiveTab] = useRouteTab<DashTab>(["my", "approval"], "my", { base: "/supervisor/dashboard" });
+
+  const TABS: { key: DashTab; label: string; icon: React.ElementType }[] = [
+    { key: "my",       label: "My Dashboard",        icon: LayoutDashboard  },
+    { key: "approval", label: "Approval Dashboard", icon: ClipboardCheck   },
+  ];
+
+  return (
+    <div className="w-full flex flex-col gap-6">
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-gray-100">
+        {TABS.map(({ key, label, icon: Icon }) => {
+          const isActive = activeTab === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold rounded-t-xl border-b-2 transition-colors ${
+                isActive
+                  ? "border-[#1A284F] text-[#1A284F] bg-white"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab === "approval" ? <ApprovalDashboard /> : <MyDashboard />}
+    </div>
+  );
+}
