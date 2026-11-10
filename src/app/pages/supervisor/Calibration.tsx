@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
 import { AlertTriangle, Eye, X, FileText, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { loadPersistedState } from "../../services/supabaseClient";
 
 // ─── Seeded helpers (mirrors CalibrationAdjustment) ───────────────────────────
 
@@ -87,16 +89,44 @@ interface TeamMember {
   projectOutside: number;
 }
 
-const TEAM_MEMBERS: TeamMember[] = [
-  { no: 1, idEmployee: "E010", name: "Siti Rahayu",  department: "Sumber Daya Manusia", position: "Pengawas",      currentScore: 87.9, proposedScore: 87.9, currentGrade: "A",  proposedGrade: "A",  status: "No Change", notes: "",                                     evidence: "",                        kpi: 88, smartGoals: 85, appraisalForm: 90, managerialSkill: 86,  projectOutside: 80 },
-  { no: 2, idEmployee: "E012", name: "Budi Hartono", department: "Sumber Daya Manusia", position: "Operasional",   currentScore: 82.3, proposedScore: 82.3, currentGrade: "A",  proposedGrade: "A",  status: "No Change", notes: "",                                     evidence: "",                        kpi: 83, smartGoals: 80, appraisalForm: 82, managerialSkill: null, projectOutside: 78 },
-  { no: 3, idEmployee: "E015", name: "Dewi Kusuma",  department: "Umum & Administrasi", position: "Operasional",   currentScore: 76.5, proposedScore: 76.5, currentGrade: "B",  proposedGrade: "B",  status: "No Change", notes: "",                                     evidence: "",                        kpi: 77, smartGoals: 74, appraisalForm: 76, managerialSkill: null, projectOutside: 72 },
-  { no: 4, idEmployee: "E018", name: "Rizal Fauzi",  department: "Umum & Administrasi", position: "Operasional",   currentScore: 71.2, proposedScore: 71.2, currentGrade: "B",  proposedGrade: "B",  status: "No Change", notes: "",                                     evidence: "",                        kpi: 72, smartGoals: 70, appraisalForm: 71, managerialSkill: null, projectOutside: 68 },
-  { no: 5, idEmployee: "E021", name: "Mega Purnama", department: "Sumber Daya Manusia", position: "Operasional",   currentScore: 65.8, proposedScore: 65.8, currentGrade: "C",  proposedGrade: "C",  status: "No Change", notes: "",                                     evidence: "",                        kpi: 66, smartGoals: 63, appraisalForm: 67, managerialSkill: null, projectOutside: 62 },
-  { no: 6, idEmployee: "E024", name: "Andi Pratama", department: "Sumber Daya Manusia", position: "Kepala Bagian", currentScore: 91.4, proposedScore: 93.2, currentGrade: "A",  proposedGrade: "A+", status: "Upgraded",  notes: "Exceptional project delivery",         evidence: "Project Completion Report", kpi: 92, smartGoals: 90, appraisalForm: 93, managerialSkill: 91,  projectOutside: 88 },
-  { no: 7, idEmployee: "E027", name: "Kartini Dewi", department: "Umum & Administrasi", position: "Operasional",   currentScore: 68.3, proposedScore: 71.5, currentGrade: "C",  proposedGrade: "B",  status: "Upgraded",  notes: "Significant improvement vs last year",  evidence: "Appraisal Form 2026",     kpi: 69, smartGoals: 66, appraisalForm: 70, managerialSkill: null, projectOutside: 65 },
-  { no: 8, idEmployee: "E031", name: "Wahyu Utomo",  department: "Umum & Administrasi", position: "Operasional",   currentScore: 55.1, proposedScore: 55.1, currentGrade: "D",  proposedGrade: "D",  status: "No Change", notes: "",                                     evidence: "",                        kpi: 55, smartGoals: 53, appraisalForm: 56, managerialSkill: null, projectOutside: 50 },
-];
+function buildLiveSupervisorTeamMembers(): TeamMember[] {
+  const liveEmps = getLiveTransactionalEmployees();
+  const adjScores = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
+  const adjComments = loadPersistedState<Record<string, string>>("pa_calibration_adj_comments_v1", {});
+  return liveEmps.map((e, idx) => {
+    const currScore = e.totalScore;
+    const propScore = adjScores[e.id] ?? adjScores[`emp-${e.id}`] ?? currScore;
+    const cg = currScore > 0 ? gradeFromScore(currScore).grade : "E";
+    const pg = propScore > 0 ? gradeFromScore(propScore).grade : "E";
+    return {
+      no: idx + 1,
+      idEmployee: e.id,
+      name: e.fullName,
+      department: e.department,
+      position: e.position,
+      currentScore: currScore,
+      proposedScore: propScore,
+      currentGrade: cg,
+      proposedGrade: pg,
+      status: propScore > currScore ? "Upgraded" : "No Change",
+      notes: adjComments[e.id] ?? adjComments[`emp-${e.id}`] ?? "",
+      evidence: "",
+      kpi: e.kpi.score,
+      smartGoals: e.smartGoals.score,
+      appraisalForm: Math.round((e.formA.score + e.formB.score + e.formC.score) / 3),
+      managerialSkill: e.managerialSkill ? e.managerialSkill.score : null,
+      projectOutside: e.project.score,
+    };
+  });
+}
+
+const TEAM_MEMBERS: TeamMember[] = new Proxy([] as TeamMember[], {
+  get(_target, prop, receiver) {
+    const list = buildLiveSupervisorTeamMembers();
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
 // ─── Employee Detail Card (matches AppraisalDetailCard from CalibrationAdjustment) ──
 

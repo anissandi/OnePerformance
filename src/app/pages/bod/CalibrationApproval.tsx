@@ -4,6 +4,8 @@ import {
   Building2, Search,
 } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { loadManagedUsers } from "../../store/authStore";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 
 // ─── Seeded helpers ────────────────────────────────────────────────────────────
 
@@ -34,11 +36,11 @@ type CompanyUnit = {
 };
 
 const COMPANY_UNITS: CompanyUnit[] = [
-  { id: "1", name: "PT RSUP (Industry)",          code: "RSUP-IND", totalHC: 220, submittedBy: "Anisa Rahmawati (HR Manager)", submittedAt: "15 January 2027, 09:42 WIB" },
-  { id: "2", name: "PT RSUP (Perkebunan)",         code: "RSUP-PKB", totalHC: 185, submittedBy: "Budi Santoso (HR Manager)",    submittedAt: "15 January 2027, 10:15 WIB" },
-  { id: "3", name: "PT RSTM",                      code: "RSTM",     totalHC: 142, submittedBy: "Citra Dewi (HR Manager)",     submittedAt: "16 January 2027, 08:30 WIB" },
-  { id: "4", name: "PT GHS",                       code: "GHS",      totalHC: 98,  submittedBy: "Dian Pratama (HR Manager)",   submittedAt: "16 January 2027, 11:00 WIB" },
-  { id: "5", name: "ASD",                          code: "ASD",      totalHC: 67,  submittedBy: "Eko Wahyudi (HR Manager)",    submittedAt: "17 January 2027, 09:00 WIB" },
+  { id: "1", name: "PT RSUP (Industry)",   code: "RSUP-IND", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "2", name: "PT RSUP (Perkebunan)", code: "RSUP-PKB", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "3", name: "PT RSTM",              code: "RSTM",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "4", name: "PT GHS",               code: "GHS",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "5", name: "ASD",                  code: "ASD",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
 ];
 
 // ─── Seeded grade distribution per unit ──────────────────────────────────────
@@ -102,7 +104,42 @@ type EmpRow = {
   justification: string;
 };
 
-function generateEmployees(unitId: string, totalHC: number): EmpRow[] {
+function generateEmployees(unitId: string, _totalHC: number): EmpRow[] {
+  const unitDef = COMPANY_UNITS.find((u) => u.id === unitId);
+  const unitName = unitDef?.name ?? "";
+  const liveEmps = getLiveTransactionalEmployees().filter((e) => !unitName || e.companyUnit === unitName);
+  const adjScores = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
+  const adjComments = loadPersistedState<Record<string, string>>("pa_calibration_adj_comments_v1", {});
+
+  return liveEmps.map((e) => {
+    const score = e.totalScore;
+    const { grade: cg, color: cc } = gradeFromScore(score);
+    const pScore = adjScores[e.id] ?? adjScores[`emp-${e.id}`] ?? score;
+    const { grade: pg, color: pc } = gradeFromScore(pScore);
+    const statusVal: EmpRow["status"] =
+      GRADE_ORDER.indexOf(pg) > GRADE_ORDER.indexOf(cg)
+        ? "Upgraded"
+        : GRADE_ORDER.indexOf(pg) < GRADE_ORDER.indexOf(cg)
+        ? "Downgraded"
+        : "No Change";
+    return {
+      id: e.id,
+      name: e.fullName,
+      division: e.division,
+      department: e.department,
+      position: e.position,
+      currentScore: score,
+      currentGrade: cg,
+      currentColor: cc,
+      proposedScore: pScore,
+      proposedGrade: pg,
+      proposedColor: pc,
+      status: statusVal,
+      justification: adjComments[e.id] ?? adjComments[`emp-${e.id}`] ?? "",
+    };
+  });
+}
+function _unusedGenerateEmployees(unitId: string, totalHC: number): EmpRow[] {
   const rows: EmpRow[] = [];
   const divs = DIV_NAMES;
 
@@ -350,11 +387,21 @@ export function BODCalibrationApproval() {
     return () => window.removeEventListener("pa-db-hydrated", onHydrated);
   }, []);
 
-  const unit   = COMPANY_UNITS.find(u => u.id === selectedUnitId)!;
+  const baseUnit = COMPANY_UNITS.find(u => u.id === selectedUnitId)!;
+  const liveUnitCount = loadManagedUsers().filter((u) => u.status === "Active" && u.company === baseUnit.name).length;
+  const unit: CompanyUnit = { ...baseUnit, totalHC: liveUnitCount };
   const status = statusMap[selectedUnitId] ?? "pending";
 
-  const gradeDist  = useMemo(() => getGradeDist(selectedUnitId, unit.totalHC), [selectedUnitId]);
-  const employees  = useMemo(() => generateEmployees(selectedUnitId, unit.totalHC), [selectedUnitId]);
+  const employees  = useMemo(() => generateEmployees(selectedUnitId, unit.totalHC), [selectedUnitId, unit.totalHC, statusMap]);
+  const gradeDist  = useMemo(() => {
+    const defaultProps = [0.05, 0.15, 0.40, 0.25, 0.10, 0.05];
+    return GRADE_KEYS.map((grade, i) => {
+      const setting = Math.round(unit.totalHC * defaultProps[i]);
+      const aktual = employees.filter((e) => e.currentGrade === grade && e.currentScore > 0).length;
+      const proposed = employees.filter((e) => e.proposedGrade === grade && e.proposedScore > 0).length;
+      return { grade, color: GRADE_COLORS[grade], setting, aktual, proposed };
+    });
+  }, [unit.totalHC, employees]);
   const divSummary = useMemo(() => getDivisionSummary(employees), [employees]);
 
   const gradeChanges = useMemo(() => employees.filter(e => e.status !== "No Change"), [employees]);

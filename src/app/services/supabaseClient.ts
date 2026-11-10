@@ -831,6 +831,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       projectRecords,
       rolePermissions,
       menuConfigs,
+      openLocks,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
@@ -845,6 +846,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_project_records", "select=*"),
       restSelect("pa_role_permissions", "select=*"),
       restSelect("pa_menu_configs", "select=*&id=eq.default&limit=1"),
+      restSelect("pa_open_lock_requests", "select=*&order=updated_at.desc"),
     ]);
     if (
       users.length > 0 ||
@@ -870,6 +872,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         projectRecords,
         rolePermissions,
         menuConfig: (menuConfigs[0] as { menus?: unknown } | undefined)?.menus ?? null,
+        openLocks,
       };
     }
 
@@ -1122,6 +1125,32 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       localStorage.setItem("pa_menu_configs_v1", JSON.stringify(data.menuConfig));
     }
 
+    // 14. Hydrate Open Lock requests if present
+    const openLocks = data.openLocks as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(openLocks) && openLocks.length > 0) {
+      const mappedLocks = openLocks.map((r) => ({
+        id: String(r.id ?? ""),
+        employeeId: String(r.employee_id ?? ""),
+        employeeName: String(r.employee_name ?? ""),
+        nip: String(r.employee_id ?? ""),
+        divisi: String(r.divisi ?? ""),
+        departemen: String(r.departemen ?? ""),
+        bagian: String(r.bagian ?? ""),
+        posisi: String(r.posisi ?? ""),
+        module: String(r.module ?? "KPI Tracking"),
+        period: String(r.period ?? "2026"),
+        originalDeadline: String(r.original_deadline ?? "2026-06-30"),
+        submittedAt: String(r.submitted_at ?? new Date().toISOString()),
+        reason: String(r.reason ?? ""),
+        status: (r.status as "pending" | "approved" | "rejected") ?? "pending",
+        approvedUntil: r.approved_until ? String(r.approved_until) : undefined,
+        approvedAt: r.approved_at ? String(r.approved_at) : undefined,
+        approvalNote: r.approval_note ? String(r.approval_note) : undefined,
+        rejectedAt: r.rejected_at ? String(r.rejected_at) : undefined,
+      }));
+      localStorage.setItem("pa_open_lock_requests_v1", JSON.stringify(mappedLocks));
+    }
+
     window.dispatchEvent(new Event("pa-db-hydrated"));
     window.dispatchEvent(new Event("pa-auth-updated"));
     window.dispatchEvent(new Event("appraisal-updated"));
@@ -1168,6 +1197,15 @@ export async function replaceAllBackendUsersAndResetForTrial(
     "pa_project_icf_excel_v1",
     "pa_interview_schedules_v1",
     "year_end_workflow_2026",
+    "pa_open_lock_requests_v1",
+    "pa_mgmt_override_rows_v1",
+    "pa_mi_supervisor_assessments_v1",
+    "pa_mi_penilai1_scores_v1",
+    "pa_mi_results_by_emp_v1",
+    "pa_calibration_adj_scores_v1",
+    "pa_calibration_adj_comments_v1",
+    "pa_bod_cal_status_map_v1",
+    "pa_bod_cal_approved_at_v1",
   ];
 
   if (resetTransactions) {

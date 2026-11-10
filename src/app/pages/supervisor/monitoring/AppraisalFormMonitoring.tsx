@@ -21,7 +21,8 @@ const DEPARTMENT_MAP: Record<string, string> = {
   E011: "Dept. Pengembangan SDM",
 };
 
-const AF_DATA: AFRecord[] = [
+const AF_DATA: AFRecord[] = [];
+const _UNUSED_AF_DATA: AFRecord[] = [
   {
     employeeId: "E002",
     selfAssessmentStatus: "Selesai", supervisorAssessmentStatus: "Dalam Proses",

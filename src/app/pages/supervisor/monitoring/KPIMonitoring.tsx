@@ -280,7 +280,8 @@ const CELLS_E011: CellMap = {
 
 // ─── Records ───────────────────────────────────────────────────────────────────
 
-const KPI_DATA: KPIRecord[] = [
+const KPI_DATA: KPIRecord[] = [];
+const _UNUSED_KPI_DATA: KPIRecord[] = [
   {
     employeeId:"E002", totalKPI:8, submittedKPI:8, avgAchievement:98,
     rcaRequired:2, rcaCompleted:2,
@@ -991,16 +992,16 @@ export function SupervisorMonitoringKPI() {
         avgAchievement: 0,
         rcaRequired: 0,
         rcaCompleted: 0,
-        lastUpdated: "—",
-        items: [],
+        kpiDefs: [],
         cells: {},
-        rcas: [],
+        rcaClosedSet: new Set<string>(),
+        rcaItems: [],
       },
     }))
     .filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()) || emp.id.toLowerCase().includes(search.toLowerCase()));
 
-  const totalSubmitted = KPI_DATA.filter((k) => k.submittedKPI === k.totalKPI).length;
-  const avgAch         = Math.round(KPI_DATA.reduce((s, k) => s + k.avgAchievement, 0) / KPI_DATA.length);
+  const totalSubmitted = KPI_DATA.filter((k) => k.totalKPI > 0 && k.submittedKPI === k.totalKPI).length;
+  const avgAch         = KPI_DATA.length ? Math.round(KPI_DATA.reduce((s, k) => s + k.avgAchievement, 0) / KPI_DATA.length) : 0;
   const rcaPending     = KPI_DATA.reduce((s, k) => s + (k.rcaRequired - k.rcaCompleted), 0);
 
   return (

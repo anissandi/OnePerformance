@@ -27,7 +27,8 @@ const MOCK_GOALS: SmartGoal[] = [
   { id: 3, label: "Goal 3", specific: "Mengembangkan dashboard laporan keuangan real-time", measurable: "Dashboard live dengan latency < 5 menit", attainable: "Integrasi ERP dan BI tool yang ada", relevant: "Mendukung keputusan manajemen berbasis data", timely: "Go-live Agustus 2026", target: "Dashboard live", actionPlans: [{ id: 1, description: "Requirement gathering dengan finance" }, { id: 2, description: "Desain ERD dan skema data" }, { id: 3, description: "Development & UAT" }, { id: 4, description: "Deployment & training user" }] },
 ];
 
-const SG_DATA: SGRecord[] = [
+const SG_DATA: SGRecord[] = [];
+const _UNUSED_SG_DATA: SGRecord[] = [
   { employeeId: "E001", totalGoals: 5, totalAPs: 14, completedAPs: 14, completionPercent: 100, settingStatus: "Validated",        measurementStatus: "Validated",          lastUpdated: "2026-05-30", goals: MOCK_GOALS },
   { employeeId: "E002", totalGoals: 3, totalAPs: 8,  completedAPs: 8,  completionPercent: 100, settingStatus: "Validated",        measurementStatus: "Pending-Assessment", lastUpdated: "2026-05-28", goals: MOCK_GOALS.slice(0, 2) },
   { employeeId: "E003", totalGoals: 4, totalAPs: 11, completedAPs: 11, completionPercent: 100, settingStatus: "Validated",        measurementStatus: "Validated",          lastUpdated: "2026-05-31", goals: MOCK_GOALS },

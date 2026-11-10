@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { MessageSquare, CheckCircle2, Calendar, X, Eye, Building2, ClipboardEdit, Save, AlertCircle, Info } from "lucide-react";
 import { getEntries, subscribe, type ScheduleEntry } from "../interviewScheduleStore";
 import { NAME_TO_EMP_ID, setPenilai1Score } from "../managementInterviewScoreStore";
+import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
+import { loadManagedUsers } from "../../../store/authStore";
 
 const TEAM_UNIT = "PT. RSUP (Industri)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
@@ -64,8 +66,12 @@ const PARTICIPANT_META: Record<string, { position: string; division: string }> =
   "Siti Rahayu":  { position: "Manager Divisi", division: "Logistik & Material" },
 };
 
-// ── Persistent assessment store ────────────────────────────────────────────────
-const savedAssessments: Record<string, ParticipantScore[]> = {};
+// ── Persistent assessment store (synced to Supabase backend) ──────────────────
+const MI_SUP_ASSESSMENTS_KEY = "pa_mi_supervisor_assessments_v1";
+const savedAssessments: Record<string, ParticipantScore[]> = loadPersistedState(
+  MI_SUP_ASSESSMENTS_KEY,
+  {},
+);
 
 // ── Indicator popover ─────────────────────────────────────────────────────────
 function IndicatorPopover({ aspect, onClose }: { aspect: typeof ASPECTS[number]; onClose: () => void }) {
@@ -328,9 +334,22 @@ function AssessmentModal({ entry, onClose }: { entry: ScheduleEntry; onClose: ()
 
   function handleConfirm() {
     savedAssessments[entry.id] = scores.map(s => ({ ...s, aspectScores: [...s.aspectScores] }));
+    savePersistedState(MI_SUP_ASSESSMENTS_KEY, savedAssessments, {
+      kind: "kv-state",
+      stateKey: MI_SUP_ASSESSMENTS_KEY,
+      stateValue: savedAssessments,
+      audit: {
+        action: "Update",
+        module: "Management Interview",
+        subModule: "Interview Assessment",
+        description: `Submitted Management Interview assessment for schedule ${entry.id}`,
+      },
+    });
+    const managedUsers = loadManagedUsers();
     // Write Score Penilai 1 to shared store for each participant
     scores.forEach(ps => {
-      const empId = NAME_TO_EMP_ID[ps.name];
+      const matchedUser = managedUsers.find((u) => u.name.toLowerCase() === ps.name.toLowerCase());
+      const empId = matchedUser?.employeeId ?? NAME_TO_EMP_ID[ps.name];
       if (!empId) return;
       const filled = ps.aspectScores.filter((s): s is number => s !== null);
       if (filled.length === 0) return;

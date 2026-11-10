@@ -9,6 +9,8 @@ import { applyYearEndScorePolicy, isYearEndInactive } from "../shared/yearEndWor
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { loadManagedUsers } from "../../store/authStore";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -248,7 +250,56 @@ const MI_LINKED_EMPLOYEES: Employee[] = [
   },
 ];
 
-const ALL_EMPLOYEES: Employee[] = [...generateEmployees(), ...MI_LINKED_EMPLOYEES];
+function buildLiveCalibrationEmployees(): Employee[] {
+  const users = loadManagedUsers().filter((u) => u.status === "Active");
+  const liveEmps = getLiveTransactionalEmployees();
+  return users.map((u, idx) => {
+    const live = liveEmps.find((e) => e.id.toLowerCase() === u.employeeId.toLowerCase());
+    const matchedBagian = BAGIAN_DEFS.find(([, , bName]) => u.bagian && bName.toLowerCase() === u.bagian.toLowerCase()) ?? BAGIAN_DEFS[idx % BAGIAN_DEFS.length];
+    const bagianId = matchedBagian[0];
+    const deptId = matchedBagian[1];
+    const divisiId = DEPT_DEFS.find(([dId]) => dId === deptId)?.[1] ?? "div1";
+    const grouping = u.groupings || "Operasional";
+    const level: EmpLevel =
+      grouping === "Ka./Wa.Ka.Div ke atas"
+        ? "Kepala Divisi"
+        : grouping === "Ka./Wa.Ka.Dept"
+        ? "Kepala Departemen"
+        : grouping === "Ka./Wa.Ka.Bagian"
+        ? "Kepala Bagian"
+        : grouping === "Ka./Wa.Ka.Seksi"
+        ? "Pengawas"
+        : "Operasional";
+    const hasMgr = level === "Kepala Divisi" || level === "Kepala Departemen" || level === "Kepala Bagian" || level === "Pengawas";
+    const hasIntv = level === "Kepala Divisi";
+    return {
+      id: `emp-${u.employeeId}`,
+      employeeId: u.employeeId,
+      name: u.name,
+      nip: u.regNo || u.employeeId,
+      level,
+      bagianId,
+      departemenenId: deptId,
+      divisiId,
+      base: {
+        kpi: live?.kpi.score ?? 0,
+        smartGoals: live?.smartGoals.score ?? 0,
+        appraisalForm: live ? Math.round((live.formA.score + live.formB.score + live.formC.score) / 3) : 0,
+        managerialSkill: hasMgr ? (live?.managerialSkill?.score ?? 0) : null,
+        managementInterview: hasIntv ? (live?.managementInterview?.score ?? null) : null,
+        projectOutsideJobScope: live?.project.score ?? 0,
+      },
+    };
+  });
+}
+
+const ALL_EMPLOYEES: Employee[] = new Proxy([] as Employee[], {
+  get(_target, prop, receiver) {
+    const list = buildLiveCalibrationEmployees();
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
 const makeUnit = (id: string, name: string, code: string, industry: string): CompanyUnit => ({
   id, name, code, industry,

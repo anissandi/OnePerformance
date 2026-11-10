@@ -39,7 +39,8 @@ const MOCK_GOALS_E011: SmartGoal[] = [
   { id: 2, label: "Goal 2", specific: "Digitalisasi arsip kepegawaian", measurable: "100% dokumen terdigitalisasi sebelum Q4 2026", attainable: "Scanner dan storage cloud tersedia", relevant: "Memudahkan akses dokumen HR", timely: "Selesai September 2026", target: "100% dokumen digital", actionPlans: [{ id: 1, description: "Inventarisasi dokumen fisik" }, { id: 2, description: "Proses scanning & upload" }] },
 ];
 
-const SG_DATA: SGRecord[] = [
+const SG_DATA: SGRecord[] = [];
+const _UNUSED_SG_DATA: SGRecord[] = [
   { employeeId: "E002", totalGoals: 3, totalAPs: 8,  completedAPs: 8,  completionPercent: 100, settingStatus: "Validated", measurementStatus: "Pending-Assessment", lastUpdated: "2026-05-28", goals: MOCK_GOALS_E002 },
   { employeeId: "E011", totalGoals: 2, totalAPs: 5,  completedAPs: 0,  completionPercent: 0,   settingStatus: "Draft",     measurementStatus: "Pending-Assessment", lastUpdated: "2026-05-15", goals: MOCK_GOALS_E011 },
 ];

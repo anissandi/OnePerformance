@@ -71,32 +71,19 @@ const SLOT_RECS: MIRecommendation[] = [
 ];
 
 function buildSeededResult(employeeId: string): MIEmployeeResult {
-  const base = h16(employeeId);
-  // 2 or 3 assessors completed by default
-  const completedSlots = 2 + (base % 2);
-
   return {
     employeeId,
     schedulePeriod: "15–17 January 2027",
-    penilai: BOD_ASSESSORS.map((a) => {
-      const isCompleted = a.slot <= completedSlots;
-      const scores: Record<number, number> = {};
-      if (isCompleted) {
-        MI_CRITERIA.forEach((c) => {
-          scores[c.id] = seededCriterionScore(employeeId, a.slot, c.id);
-        });
-      }
-      return {
-        slot: a.slot,
-        penilaiName: a.name,
-        penilaiRole: a.role,
-        scores,
-        recommendation: isCompleted ? SLOT_RECS[a.slot - 1] : "",
-        notes: isCompleted ? "Penilaian telah diselesaikan." : "",
-        date: isCompleted ? SLOT_DATES[a.slot - 1] : "—",
-        status: isCompleted ? "Completed" : "Pending",
-      };
-    }),
+    penilai: BOD_ASSESSORS.map((a) => ({
+      slot: a.slot,
+      penilaiName: a.name,
+      penilaiRole: a.role,
+      scores: {},
+      recommendation: "",
+      notes: "",
+      date: "—",
+      status: "Pending",
+    })),
   };
 }
 

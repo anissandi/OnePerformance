@@ -5,6 +5,8 @@ import { useNavigate } from "react-router";
 import { loadYearEndState, saveYearEndState, canProceedToInterview } from "../shared/yearEndWorkflowStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
+import { loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
+import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 
 type ModuleStatus = "complete" | "incomplete" | "pending" | "na";
 type OverallStatus = "Complete" | "Incomplete" | "Pending";
@@ -25,7 +27,31 @@ interface Employee {
   overall: OverallStatus;
 }
 
-const employees: Employee[] = [
+function buildImportedVerificationEmployees(): Employee[] {
+  return loadManagedUsers()
+    .filter((u) => u.status === "Active")
+    .map((u) => {
+      const allowed = resolveUserAllowedModules(u);
+      const hasMs = allowed.includes("Managerial Skill");
+      const hasIdf = allowed.includes("Inter-Departement Feedback");
+      return {
+        id: u.employeeId,
+        name: u.name,
+        unit: u.company,
+        division: u.division,
+        department: u.department,
+        position: u.position,
+        kpi: "incomplete",
+        smartGoals: "incomplete",
+        appraisalForm: "incomplete",
+        managerialSkill: hasMs ? "incomplete" : "na",
+        projectOJS: "incomplete",
+        interDept: hasIdf ? "incomplete" : "na",
+        overall: "Incomplete",
+      };
+    });
+}
+const _UNUSED_STATIC_EMPLOYEES: Employee[] = [
   {
     id: "E001", name: "Drs. Hendra Wijaya",
     unit: "PT RSUP (Industry)", division: "Divisi Operasional", department: "Dept. Produksi",
@@ -113,12 +139,6 @@ const employees: Employee[] = [
 ];
 
 
-// ─── Filter option lists ───────────────────────────────────────────────────────
-
-const unitOptions     = ["All", ...Array.from(new Set(employees.map((e) => e.unit)))];
-const divisionOptions = ["All", ...Array.from(new Set(employees.map((e) => e.division)))];
-const deptOptions     = ["All", ...Array.from(new Set(employees.map((e) => e.department)))];
-const positionOptions = ["All", ...Array.from(new Set(employees.map((e) => e.position)))];
 const statusOptions   = ["All", "Complete", "Incomplete", "Pending", "Inactivated", "Ignored"] as const;
 
 // ─── Shared UI ─────────────────────────────────────────────────────────────────
@@ -220,33 +240,52 @@ export function YearEndVerification() {
   const navigate = useNavigate();
   const [workflow, setWorkflow] = useState(loadWorkflowRecords);
   const [feedback, setFeedback] = useState(loadFeedbackSubmissions);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const refresh = () => { setWorkflow(loadWorkflowRecords()); setFeedback(loadFeedbackSubmissions()); };
+    const refresh = () => {
+      setWorkflow(loadWorkflowRecords());
+      setFeedback(loadFeedbackSubmissions());
+      setTick((t) => t + 1);
+    };
     window.addEventListener("appraisal-updated", refresh);
     window.addEventListener("feedback-updated", refresh);
+    window.addEventListener("pa-auth-updated", refresh);
+    window.addEventListener("pa-employees-imported", refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
     window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener("appraisal-updated", refresh);
       window.removeEventListener("feedback-updated", refresh);
+      window.removeEventListener("pa-auth-updated", refresh);
+      window.removeEventListener("pa-employees-imported", refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
       window.removeEventListener("storage", refresh);
     };
   }, []);
-  const currentEmployees = useMemo(() => employees.map((employee) => {
+  const currentEmployees = useMemo(() => {
+    const baseList = buildImportedVerificationEmployees();
+    const projectsByEmp = loadAllIcfProjectsByEmployee();
+    return baseList.map((employee) => {
     const updated = { ...employee };
-    const modules = { "SMART Goals": "smartGoals", "Appraisal Form": "appraisalForm", "Managerial Skill": "managerialSkill" } as const;
+    const modules = { "KPI": "kpi", "SMART Goals": "smartGoals", "Appraisal Form": "appraisalForm", "Managerial Skill": "managerialSkill", "Project": "projectOJS" } as const;
     for (const [module, field] of Object.entries(modules)) {
+      if (updated[field] === "na") continue;
       const record = workflow.find((item) => item.employeeId === normalizeEmployeeId(employee.id) && item.module === module && item.phase === "measurement" && item.year === "2026");
       if (record) {
         const decision = record.decisions.approver2?.status;
         updated[field] = decision === "Approved" || decision?.startsWith("Assessed") ? "complete" : "pending";
       }
     }
+    if (updated.projectOJS === "incomplete" && (projectsByEmp[normalizeEmployeeId(employee.id)]?.rows?.length || projectsByEmp[employee.id]?.rows?.length)) {
+      updated.projectOJS = "pending";
+    }
     const received = feedback.find((entry) => normalizeEmployeeId(entry.row.employeeId) === normalizeEmployeeId(employee.id));
-    if (received) updated.interDept = received.followUps.approver1?.length && received.followUps.approver2?.length ? "complete" : "pending";
+    if (received && updated.interDept !== "na") updated.interDept = received.followUps.approver1?.length && received.followUps.approver2?.length ? "complete" : "pending";
     const statuses = [updated.kpi, updated.smartGoals, updated.appraisalForm, updated.managerialSkill, updated.projectOJS, updated.interDept];
     updated.overall = statuses.includes("incomplete") ? "Incomplete" : statuses.includes("pending") ? "Pending" : "Complete";
     return updated;
-  }), [workflow, feedback]);
+  });
+  }, [workflow, feedback, tick]);
   useEffect(() => {
     const completion = Object.fromEntries(currentEmployees.map((employee) => [normalizeEmployeeId(employee.id), { kpi: employee.kpi === "complete", smartGoals: employee.smartGoals === "complete", appraisalForm: employee.appraisalForm === "complete", managerialSkill: employee.managerialSkill === "complete", projectOutsideJobScope: employee.projectOJS === "complete" }]));
     saveYearEndState({ ...loadYearEndState(), reminded: [...remindedSet], inactive: [...inactiveSet], ignored: [...ignoredSet], completion });
@@ -256,7 +295,12 @@ export function YearEndVerification() {
   const INCOMPLETE = currentEmployees.filter((employee) => employee.overall === "Incomplete" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
   const PENDING_REVIEW = currentEmployees.filter((employee) => employee.overall === "Pending" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
   const handled = currentEmployees.filter((employee) => employee.overall === "Complete" || inactiveSet.has(employee.id) || ignoredSet.has(employee.id)).length;
-  const READINESS_PCT = Math.round(handled / TOTAL_EMPLOYEES * 100);
+  const READINESS_PCT = TOTAL_EMPLOYEES > 0 ? Math.round((handled / TOTAL_EMPLOYEES) * 100) : 0;
+
+  const unitOptions     = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.unit)))], [currentEmployees]);
+  const divisionOptions = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.division)))], [currentEmployees]);
+  const deptOptions     = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.department)))], [currentEmployees]);
+  const positionOptions = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.position)))], [currentEmployees]);
 
   type ModalState =
     | { type: "reminder_one"; id: string; name: string }

@@ -14,7 +14,8 @@ interface MSRecord {
   lastUpdated: string;
 }
 
-const MS_DATA: MSRecord[] = [
+const MS_DATA: MSRecord[] = [];
+const _UNUSED_MS_DATA: MSRecord[] = [
   {
     employeeId: "E001", selfStatus: "Selesai", supervisorStatus: "Selesai", lastUpdated: "2026-05-30",
     items: [

@@ -23,7 +23,8 @@ interface ProjRecord {
   projectScore:   number | null;
 }
 
-const PROJ_DATA: ProjRecord[] = [
+const PROJ_DATA: ProjRecord[] = [];
+const _UNUSED_PROJ_DATA: ProjRecord[] = [
   { employeeId: "E001", scope: "QCC", role: "Team Leader", title: "Reduksi Downtime Mesin Boiler",       detail: "Pengurangan downtime mesin boiler melalui preventive maintenance dan perbaikan SOP operasional.",         startDate: "2026-01-15", finishDate: "2026-06-30", progressStatus: "In Progress", projectScore: 75   },
   { employeeId: "E002", scope: "SS",  role: "Ideator",     title: "Peningkatan Proses Rekrutmen Digital", detail: "Digitalisasi alur rekrutmen dari seleksi hingga onboarding untuk meningkatkan efisiensi waktu proses.", startDate: "2026-02-01", finishDate: "2026-07-31", progressStatus: "In Progress", projectScore: null },
   { employeeId: "E003", scope: "QCP", role: "Member",      title: "Efisiensi Proses Laporan Keuangan",    detail: "Optimalisasi pembuatan laporan keuangan bulanan menggunakan sistem otomasi dan template standar.",        startDate: "2026-01-10", finishDate: "2026-06-30", progressStatus: "Done",        projectScore: 90   },

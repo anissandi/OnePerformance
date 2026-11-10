@@ -26,7 +26,8 @@ const INTERVIEWERS: [string, string, string, string] = [
 // PT RSUP (Industry): E002, E011, E013, E014 → Dijadwalkan
 // All others → Belum Dijadwalkan
 
-const MI_DATA: MIRecord[] = [
+const MI_DATA: MIRecord[] = [];
+const _UNUSED_MI_DATA: MIRecord[] = [
   // ── PT RSUP (Industry) — Scheduled ───────────────────────────────────────
   {
     employeeId: "E002", scheduledDate: "2026-07-15",

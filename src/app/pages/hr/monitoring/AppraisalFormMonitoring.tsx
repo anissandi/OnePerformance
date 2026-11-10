@@ -18,7 +18,8 @@ interface AFRecord {
   lastUpdated: string;
 }
 
-const AF_DATA: AFRecord[] = [
+const AF_DATA: AFRecord[] = [];
+const _UNUSED_AF_DATA: AFRecord[] = [
   {
     employeeId: "E001",
     selfAssessmentStatus: "Selesai", supervisorAssessmentStatus: "Selesai",

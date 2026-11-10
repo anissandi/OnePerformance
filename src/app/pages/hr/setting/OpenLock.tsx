@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DatePickerID } from "../../../components/DatePickerID";
 import { X, CheckCircle2, XCircle, LockOpen, Lock, ChevronDown, Search, Clock, AlertCircle, Filter } from "lucide-react";
-import { syncToSupabase } from "../../../services/supabaseClient";
+import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,9 +29,8 @@ interface OpenLockRequest {
   rejectedAt?: string;
 }
 
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-
-const MOCK_REQUESTS: OpenLockRequest[] = [
+const MOCK_REQUESTS: OpenLockRequest[] = [];
+const _UNUSED_MOCK_REQUESTS: OpenLockRequest[] = [
   // ── KPI Tracking — Pending ──
   {
     id: "ol1", employeeId: "e1", employeeName: "Ahmad Fauzi Ramadhan", nip: "2019041001",
@@ -592,11 +591,21 @@ function RequestTable({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function OpenLockPage() {
-  const [requests, setRequests] = useState<OpenLockRequest[]>(MOCK_REQUESTS);
+  const [requests, setRequests] = useState<OpenLockRequest[]>(() =>
+    loadPersistedState<OpenLockRequest[]>("pa_open_lock_requests_v1", MOCK_REQUESTS),
+  );
   const [activeTab, setActiveTab] = useRouteTab<"pending" | "history">(["pending", "history"], "pending");
   const [approveTarget, setApproveTarget] = useState<OpenLockRequest | null>(null);
   const [detailTarget, setDetailTarget] = useState<OpenLockRequest | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onHydrated = () => {
+      setRequests(loadPersistedState<OpenLockRequest[]>("pa_open_lock_requests_v1", []));
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
 
   // Filters
   const [searchQ, setSearchQ] = useState("");
@@ -625,52 +634,60 @@ export function OpenLockPage() {
   const displayRows     = activeTab === "pending" ? filteredPending : filteredHistory;
 
   function handleApprove(id: string, until: string, note: string) {
-    setRequests(prev => prev.map(r => {
-      if (r.id !== id) return r;
-      const updated: OpenLockRequest = {
-        ...r,
-        status: "approved",
-        approvedUntil: until,
-        approvedAt: new Date().toISOString(),
-        approvalNote: note || undefined,
-      };
-      void syncToSupabase({
+    setRequests(prev => {
+      let changedReq: OpenLockRequest | undefined;
+      const next = prev.map(r => {
+        if (r.id !== id) return r;
+        changedReq = {
+          ...r,
+          status: "approved",
+          approvedUntil: until,
+          approvedAt: new Date().toISOString(),
+          approvalNote: note || undefined,
+        };
+        return changedReq;
+      });
+      savePersistedState("pa_open_lock_requests_v1", next, changedReq ? {
         kind: "open-lock",
-        request: updated,
+        request: changedReq,
         audit: {
           action: "Approve",
-          module: updated.module,
+          module: changedReq.module,
           subModule: "Open Lock",
-          description: `Approved Open Lock for ${updated.employeeName} (${updated.module} · ${updated.period}) until ${until}`,
+          description: `Approved Open Lock for ${changedReq.employeeName} (${changedReq.module} · ${changedReq.period}) until ${until}`,
         },
-      });
-      return updated;
-    }));
+      } : undefined);
+      return next;
+    });
     setApproveTarget(null);
     setSuccess("Open lock disetujui. Karyawan kini dapat mengisi modul hingga tanggal yang ditentukan.");
   }
 
   function handleReject(id: string, note: string) {
-    setRequests(prev => prev.map(r => {
-      if (r.id !== id) return r;
-      const updated: OpenLockRequest = {
-        ...r,
-        status: "rejected",
-        rejectedAt: new Date().toISOString(),
-        approvalNote: note,
-      };
-      void syncToSupabase({
+    setRequests(prev => {
+      let changedReq: OpenLockRequest | undefined;
+      const next = prev.map(r => {
+        if (r.id !== id) return r;
+        changedReq = {
+          ...r,
+          status: "rejected",
+          rejectedAt: new Date().toISOString(),
+          approvalNote: note,
+        };
+        return changedReq;
+      });
+      savePersistedState("pa_open_lock_requests_v1", next, changedReq ? {
         kind: "open-lock",
-        request: updated,
+        request: changedReq,
         audit: {
           action: "Reject",
-          module: updated.module,
+          module: changedReq.module,
           subModule: "Open Lock",
-          description: `Rejected Open Lock for ${updated.employeeName} (${updated.module} · ${updated.period}): ${note}`,
+          description: `Rejected Open Lock for ${changedReq.employeeName} (${changedReq.module} · ${changedReq.period}): ${note}`,
         },
-      });
-      return updated;
-    }));
+      } : undefined);
+      return next;
+    });
     setApproveTarget(null);
     setSuccess("Request ditolak dan catatan alasan telah disimpan.");
   }

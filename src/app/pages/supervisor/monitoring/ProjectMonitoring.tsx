@@ -30,7 +30,8 @@ const DEPARTMENT_MAP: Record<string, string> = {
   E011: "Dept. Pengembangan SDM",
 };
 
-const PROJ_DATA: ProjRecord[] = [
+const PROJ_DATA: ProjRecord[] = [];
+const _UNUSED_PROJ_DATA: ProjRecord[] = [
   { employeeId: "E002", scope: "SS", role: "Ideator", title: "Peningkatan Proses Rekrutmen Digital", detail: "Digitalisasi alur rekrutmen dari seleksi hingga onboarding untuk meningkatkan efisiensi waktu proses.", startDate: "2026-02-01", finishDate: "2026-07-31", progressStatus: "In Progress", projectScore: null },
   { employeeId: "E011", scope: "SS", role: "Ideator", title: "Digitalisasi Arsip Kepegawaian",       detail: "Konversi arsip fisik kepegawaian ke sistem digital untuk mempermudah akses dan pengelolaan dokumen.",  startDate: "2026-04-01", finishDate: "2026-09-30", progressStatus: "Submitted",   projectScore: null },
 ];

@@ -7,16 +7,7 @@ import { Input } from "../../components/ui/input";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import { toast } from "sonner";
 
-const INITIAL_DATA = [
-  { id: "01", name: "Sarah Johnson", role: "Analyst 1", division: "iQx/ITD/IMG", status: "Approved", date: "2026-02-05" },
-  { id: "02", name: "Sarah Johnson", role: "Analyst 2", division: "FMDQD/DOD/CIG", status: "Approved", date: "2026-02-05" },
-  { id: "03", name: "Sarah Johnson", role: "Analyst 3", division: "iQx/EMD/BUG", status: "Approved", date: "2026-02-05" },
-  { id: "04", name: "Sarah Johnson", role: "Associate 1", division: "FMDQG/MCD/EBG", status: "Approved", date: "2026-02-05" },
-  { id: "05", name: "Sarah Johnson", role: "Associate 2", division: "iQx/EMD/BUG", status: "Approved", date: "2026-02-05" },
-  { id: "06", name: "Sarah Johnson", role: "Associate 3", division: "FMDQG/MCD/EBG", status: "Approved", date: "2026-02-05" },
-  { id: "07", name: "Sarah Johnson", role: "Associate 3", division: "iQx/EMD/BUG", status: "Approved", date: "2026-02-05" },
-  { id: "08", name: "Sarah Johnson", role: "Analyst 1", division: "FMDQG/MCD/EBG", status: "Approved", date: "2026-02-05" },
-];
+const INITIAL_DATA: Array<{ id: string; name: string; role: string; division: string; status: string; date: string }> = [];
 
 export function HRManagementOverride() {
   const [activeTab, setActiveTab] = useRouteTab(["Reviewer Delegation", "Audit Trail"], "Reviewer Delegation");
