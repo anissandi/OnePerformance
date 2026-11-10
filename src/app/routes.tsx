@@ -4,16 +4,12 @@ import { AppLayout } from "./components/Layout"
 import { AnalyticsDashboard } from "./pages/hr/AnalyticsDashboard"
 import { HRApprovals } from "./pages/hr/Approvals"
 import { HRModuleActivation } from "./pages/hr/ModuleActivation"
-import { HRGoalOversight } from "./pages/hr/GoalOversight"
-import { HRMidYearCheckIn } from "./pages/hr/MidYearCheckIn"
-import { HRMidYearCheckInDetails } from "./pages/hr/MidYearCheckInDetails"
 import { HRManagementOverride } from "./pages/hr/ManagementOverride"
 import { AppraisalForm } from "./pages/employee/AppraisalForm"
 import { SMARTGoalsPage } from "./pages/employee/SMARTGoals"
 import { KPIPage } from "./pages/employee/KPIPage"
 import { RCAPage } from "./pages/employee/RCAPage"
 import { SupervisorDashboard } from "./pages/supervisor/Dashboard"
-import { SettingKPIPage } from "./pages/employee/SettingKPIPage"
 import { ProjectOutsidePage } from "./pages/employee/ProjectOutsidePage"
 import { ProjectOutsideCombinedPage } from "./pages/shared/ProjectOutsideCombinedPage"
 import { DocumentsPage } from "./pages/shared/DocumentsPage"
@@ -22,7 +18,6 @@ import { HRApprovalManagement } from "./pages/hr/ApprovalManagement"
 import { HRSettingKPIPage } from "./pages/hr/setting/KPISetting"
 import { OpenLockPage } from "./pages/hr/setting/OpenLock"
 import { ScoresCalibration } from "./pages/hr/ScoresCalibration"
-import { CalibrationPage } from "./pages/hr/Calibration"
 import { CalibrationSetting } from "./pages/hr/CalibrationSetting"
 import { CalibrationAdjustment } from "./pages/hr/CalibrationAdjustment"
 import { HRMonitoringKPI } from "./pages/hr/monitoring/KPIMonitoring"
@@ -164,9 +159,6 @@ export const router = createBrowserRouter([
         Component: SupervisorMonitoringManagementInterview,
       },
       { path: "modules", Component: HRModuleActivation },
-      { path: "appraisals/goals", Component: HRGoalOversight },
-      { path: "appraisals/mid-year", Component: HRMidYearCheckIn },
-      { path: "appraisals/mid-year/:id", Component: HRMidYearCheckInDetails },
       { path: "override", Component: HRManagementOverride },
       { path: "override/:tab", Component: HRManagementOverride },
       { path: "monitoring/kpi", Component: HRMonitoringKPI },

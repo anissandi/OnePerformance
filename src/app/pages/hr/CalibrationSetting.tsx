@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { toast } from "sonner";
-import { Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send, CheckCircle2, Clock, X } from "lucide-react";
+import { Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send, CheckCircle2, Clock, X, RefreshCw, Users } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { loadManagedUsers } from "../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,6 +102,61 @@ function gradeCalcs(hc: number, grades: CalibrationGrade[]) {
   return grades.map(g => hc > 0 ? Math.round(hc * (parseFloat(g.proporsi) || 0) / 100) : 0);
 }
 
+/**
+ * Bagian III Poin 3:
+ * Otomatis mendistribusikan data karyawan yang sudah diimpor sesuai kuota
+ * per masing-masing Divisi, Departement, dan Bagian pada unit usaha terkait.
+ */
+function applyImportedEmployeesDistribution(unit: CompanyUnit): CompanyUnit {
+  const unitUsers = loadManagedUsers().filter(
+    (u) => u.company === unit.name && u.status === "Active",
+  );
+  if (unitUsers.length === 0) return unit;
+
+  const matchText = (a: string, b: string) => {
+    const na = a.trim().toLowerCase();
+    const nb = b.trim().toLowerCase();
+    return na === nb || na.includes(nb) || nb.includes(na);
+  };
+
+  const nextBagian = unit.bagianProportions.map((b) => {
+    const parentDept = unit.departemenenProportions.find((d) => d.id === b.departemenenId);
+    const count = unitUsers.filter((u) => {
+      if (u.bagian && matchText(u.bagian, b.bagian)) return true;
+      if (!u.bagian && parentDept && matchText(u.department, parentDept.departemen)) {
+        const siblings = unit.bagianProportions.filter((x) => x.departemenenId === parentDept.id);
+        return siblings[0]?.id === b.id;
+      }
+      return false;
+    }).length;
+    return { ...b, hc: count > 0 ? count : b.hc };
+  });
+
+  const nextDept = unit.departemenenProportions.map((d) => {
+    const directCount = unitUsers.filter((u) => matchText(u.department, d.departemen)).length;
+    const sumBagian = nextBagian
+      .filter((b) => b.departemenenId === d.id)
+      .reduce((s, b) => s + b.hc, 0);
+    const hc = Math.max(directCount, sumBagian, d.hc);
+    return { ...d, hc };
+  });
+
+  const nextDiv = unit.divisionProportions.map((div) => {
+    const directCount = unitUsers.filter((u) => matchText(u.division, div.divisi)).length;
+    const sumDept = nextDept
+      .filter((d) => d.divisiId === div.id)
+      .reduce((s, d) => s + d.hc, 0);
+    const hc = Math.max(directCount, sumDept, div.hc);
+    return { ...div, hc };
+  });
+
+  return {
+    ...unit,
+    divisionProportions: nextDiv,
+    departemenenProportions: nextDept,
+    bagianProportions: nextBagian,
+  };
+}
 // ─── Calibration Panel ────────────────────────────────────────────────────────
 
 function CalibrationPanel({
@@ -449,6 +505,19 @@ function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfi
         <div className="flex items-center gap-2">
           {hcTab === "start" && !unit.beginningHC && pageMode === "edit" && (
             <>
+              <button
+                type="button"
+                onClick={() => {
+                  const synced = applyImportedEmployeesDistribution(unit);
+                  onUpdate(synced);
+                  toast.success(`Data karyawan terimpor pada ${unit.name} berhasil didistribusikan ke Divisi, Departement, dan Bagian.`);
+                }}
+                className="flex items-center gap-2 px-3.5 py-2.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-xl text-xs font-semibold hover:bg-blue-100 transition-colors"
+                title="Hitung otomatis HC & distribusi kuota Grade per Divisi, Departement, dan Bagian dari data karyawan yang diimpor"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Sync dari Data Karyawan
+              </button>
               {editMode && (
                 <button onClick={() => { onCancelEdit?.(); setEditMode(false); }}
                   className="px-4 py-2 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">
@@ -622,8 +691,11 @@ export function CalibrationSetting() {
   const [companyUnits, setCompanyUnits] = useState<CompanyUnit[]>(() => {
     try {
       const saved = localStorage.getItem("calibration_hc_settings_2026") ?? localStorage.getItem("calibration_submitted_units");
-      return saved ? JSON.parse(saved) : defaultCompanyUnits;
-    } catch { return defaultCompanyUnits; }
+      const base: CompanyUnit[] = saved ? JSON.parse(saved) : defaultCompanyUnits;
+      return base.map((u) => applyImportedEmployeesDistribution(u));
+    } catch {
+      return defaultCompanyUnits.map((u) => applyImportedEmployeesDistribution(u));
+    }
   });
   const [selectedUnit, setSelectedUnit] = useState<CompanyUnit | null>(null);
   const [pageMode, setPageMode] = useState<PageMode>("edit");
@@ -634,11 +706,22 @@ export function CalibrationSetting() {
       const saved = loadPersistedState<CompanyUnit[] | null>("calibration_hc_settings_2026", null)
         ?? loadPersistedState<CompanyUnit[] | null>("calibration_submitted_units", null);
       if (Array.isArray(saved) && saved.length > 0) {
-        setCompanyUnits(saved);
+        setCompanyUnits(saved.map((u) => applyImportedEmployeesDistribution(u)));
       }
     };
+    const onEmployeesImported = () => {
+      setCompanyUnits((prev) => {
+        const next = prev.map((u) => applyImportedEmployeesDistribution(u));
+        savePersistedState("calibration_hc_settings_2026", next);
+        return next;
+      });
+    };
     window.addEventListener("pa-db-hydrated", onHydrated);
-    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+    window.addEventListener("pa-employees-imported", onEmployeesImported);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onHydrated);
+      window.removeEventListener("pa-employees-imported", onEmployeesImported);
+    };
   }, []);
 
   const updateUnit = (updated: CompanyUnit) => {
@@ -754,6 +837,10 @@ export function CalibrationSetting() {
                     <div>
                       <p className="text-xs font-medium text-gray-700 truncate max-w-[120px]">{unit.industry}</p>
                       <span className="inline-block mt-0.5 font-mono text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{unit.code}</span>
+                      <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                        <Users className="w-2.5 h-2.5" />
+                        HC: {unit.divisionProportions.reduce((s, d) => s + d.hc, 0)}
+                      </span>
                     </div>
                     <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors shrink-0" />
                   </div>

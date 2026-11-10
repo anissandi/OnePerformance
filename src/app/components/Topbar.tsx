@@ -49,8 +49,6 @@ const HR_ITEMS: SearchItem[] = [
   { label: "Appraisal Summary", path: "/hr/summary", category: "Main" },
   { label: "Documents", path: "/hr/documents", category: "Main" },
   { label: "Profile", path: "/hr/profile", category: "Main" },
-  { label: "Goal Oversight", path: "/hr/appraisals/goals", category: "Appraisals" },
-  { label: "Mid-Year Check-In", path: "/hr/appraisals/mid-year", category: "Appraisals" },
   { label: "KPI Monitoring", path: "/hr/monitoring/kpi", category: "Monitoring" },
   { label: "SMART Goals Monitoring", path: "/hr/monitoring/smart-goals", category: "Monitoring" },
   { label: "Appraisal Form Monitoring", path: "/hr/monitoring/appraisal-form", category: "Monitoring" },

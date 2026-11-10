@@ -30,18 +30,27 @@ export type AppraisalModuleName =
 
 export interface ManagedUser {
   id: string;
+  no?: string;
+  regNo?: string;
   name: string;
   employeeId: string;
   position: string;
   company: string;
   division: string;
   department: string;
+  bagian?: string;
+  joinDate?: string;
+  telegramNo?: string;
   grade: string;
   role: AppUserRole;
   groupings: string;
   status: "Active" | "Inactive";
   lastLogin: string;
   email: string;
+  regNoAp1?: string;
+  regNoAp2?: string;
+  isHrUnitChecker?: boolean;
+  isHrIcfValidator?: boolean;
 }
 
 export interface ManagedGroupRule {
@@ -63,26 +72,146 @@ export const COMPANY_UNIT_LOCATIONS = [
   { code: "ASD",   unitId: "ASD",  company: "ASD",                         fullName: "PT. Agrisambu" },
 ] as const;
 
+export const RSUP_GROUP_COMPANIES = [
+  "PT RSUP (Industry)",
+  "PT RSUP (Perkebunan)",
+  "PT RSTM",
+  "PT GHS",
+  "ASD",
+] as const;
+
 export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
-  { id: "1",  name: "Ahmad Fauzi",         employeeId: "E001", position: "Kepala Departemen Produksi",     company: "PT Pulau Sambu (Guntung)",    division: "Divisi Produksi & Operasional", department: "Produksi",    grade: "Grade 8",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Dept",        status: "Active", lastLogin: "2026-06-09 08:14", email: "ahmad.fauzi@sambugroup.com" },
-  { id: "2",  name: "Siti Rahayu",         employeeId: "E002", position: "Staff Pengembangan SDM",         company: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    department: "HR",          grade: "Grade 5",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-08 13:45", email: "siti.rahayu@sambugroup.com" },
-  { id: "3",  name: "Budi Santoso",        employeeId: "E003", position: "Kepala Bagian Keuangan",         company: "PT RSTM",                     division: "Divisi Keuangan & Akuntansi",   department: "Keuangan",    grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-08 17:32", email: "budi.santoso@sambugroup.com" },
-  { id: "4",  name: "Diana Kusuma",        employeeId: "E004", position: "Staff Pemasaran",                company: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  department: "Marketing",   grade: "Grade 4",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-07 09:10", email: "diana.kusuma@sambugroup.com" },
-  { id: "5",  name: "Eko Prasetyo",        employeeId: "E005", position: "Supervisor Teknologi Informasi", company: "PT Pulau Sambu (Jakarta)",    division: "Divisi Teknologi Informasi",    department: "IT",          grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 07:58", email: "eko.prasetyo@sambugroup.com" },
-  { id: "6",  name: "Fajar Hidayat",       employeeId: "E006", position: "Kepala Seksi Operasional",       company: "PT RSUP (Perkebunan)",        division: "Divisi Perkebunan",             department: "Operasional", grade: "Grade 6",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Seksi",       status: "Active", lastLogin: "2026-06-06 10:30", email: "fajar.hidayat@sambugroup.com" },
-  { id: "7",  name: "Gita Permata",        employeeId: "E007", position: "Staff Keuangan",                 company: "PT Pulau Sambu (Kuala Enok)", division: "Divisi Keuangan & SDM",         department: "Keuangan",    grade: "Grade 4",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-05-20 11:45", email: "gita.permata@sambugroup.com" },
-  { id: "8",  name: "Hendra Wijaya",       employeeId: "E008", position: "Kepala Divisi Operasional",      company: "PT RSUP (Industry)",          division: "Divisi Operasional",            department: "Operasional", grade: "Grade 9",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Div ke atas", status: "Active", lastLogin: "2026-06-09 14:22", email: "hendra.wijaya@sambugroup.com" },
-  { id: "9",  name: "Indah Lestari",       employeeId: "E009", position: "Staff Agronomi",                 company: "PT RSUP (Perkebunan)",        division: "Divisi Perkebunan",             department: "Agronomi",    grade: "Grade 5",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-05 08:20", email: "indah.lestari@sambugroup.com" },
-  { id: "10", name: "Joko Susanto",        employeeId: "E010", position: "Kepala Bagian Teknik",           company: "PT GHS",                      division: "Divisi Operasional",            department: "Teknik",      grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-07 16:00", email: "joko.susanto@sambugroup.com" },
-  { id: "11", name: "Kartini Dewi",        employeeId: "E011", position: "Staff Rekrutmen",                company: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    department: "HR",          grade: "Grade 4",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-10 08:00", email: "kartini.dewi@sambugroup.com" },
-  { id: "12", name: "Lukman Hakim",        employeeId: "E012", position: "Supervisor Quality Control",     company: "PT Pulau Sambu (Guntung)",    division: "Divisi Produksi & Operasional", department: "QC",          grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 06:55", email: "lukman.hakim@sambugroup.com" },
-  { id: "13", name: "Anis Sandi",          employeeId: "E013", position: "HR Strategic Specialist",        company: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    department: "HR",          grade: "Grade 6",  role: "Administrator", groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:00", email: "anis.sandi@sambugroup.com" },
-  { id: "14", name: "Ananta Nirmala",      employeeId: "E014", position: "Supervisor HR Unit",             company: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    department: "HR",          grade: "Grade 6",  role: "HR Unit",       groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:15", email: "hr.unit.ind@sambugroup.com" },
-  { id: "15", name: "Mario Sesman",        employeeId: "E015", position: "HR ICF Specialist",              company: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    department: "HR",          grade: "Grade 6",  role: "HR ICF",        groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:20", email: "mario.sesman@sambugroup.com" },
-  { id: "16", name: "Ir. Bambang Sutrisno",employeeId: "E016", position: "Direktur Operasional",           company: "PT RSUP (Industry)",          division: "Direktorat Operasional",        department: "Direksi",     grade: "Grade 10", role: "Director",      groupings: "Ka./Wa.Ka.Div ke atas", status: "Active", lastLogin: "2026-06-10 09:30", email: "bambang.sutrisno@sambugroup.com" },
-  { id: "17", name: "Surya Abimanyu",      employeeId: "E017", position: "Board of Directors",             company: "PT RSUP (Industry)",          division: "Board of Directors",            department: "BOD",         grade: "Grade 11", role: "BOD",           groupings: "Ka./Wa.Ka.Div ke atas", status: "Active", lastLogin: "2026-06-10 09:40", email: "surya.abimanyu@sambugroup.com" },
-  { id: "18", name: "Wahyu Nugroho",       employeeId: "E018", position: "Kepala Bagian Operasional",      company: "ASD",                         division: "Divisi Operasional",            department: "Operasional", grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:50", email: "wahyu.nugroho@sambugroup.com" },
+  { id: "1",  no: "1",  regNo: "REG-001", name: "Ahmad Fauzi",          employeeId: "E001", position: "Kepala Departemen Produksi",     company: "PT Pulau Sambu (Guntung)",    division: "Divisi Produksi & Operasional", department: "Produksi",              bagian: "Proses Kelapa A",      joinDate: "2016-03-15", telegramNo: "+628117001001", grade: "Grade 8",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Dept",        status: "Active", lastLogin: "2026-06-09 08:14", email: "ahmad.fauzi@sambugroup.com",      regNoAp1: "REG-008", regNoAp2: "REG-016" },
+  { id: "2",  no: "2",  regNo: "REG-002", name: "Siti Rahayu",          employeeId: "E002", position: "Staff Pengembangan SDM",         company: "PT RSUP (Industry)",          division: "Staff Management",              department: "Sumber Daya Manusia",   bagian: "Pengembangan SDM",     joinDate: "2021-07-01", telegramNo: "+628117001002", grade: "Grade 5",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-08 13:45", email: "siti.rahayu@sambugroup.com",      regNoAp1: "REG-014", regNoAp2: "REG-008" },
+  { id: "3",  no: "3",  regNo: "REG-003", name: "Budi Santoso",         employeeId: "E003", position: "Kepala Bagian Keuangan",         company: "PT RSTM",                     division: "Finance & Accounting",          department: "Keuangan",              bagian: "Treasury",             joinDate: "2018-01-10", telegramNo: "+628117001003", grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-08 17:32", email: "budi.santoso@sambugroup.com",     regNoAp1: "REG-008", regNoAp2: "REG-016" },
+  { id: "4",  no: "4",  regNo: "REG-004", name: "Diana Kusuma",         employeeId: "E004", position: "Staff Pemasaran",                company: "PT GHS",                      division: "Generals",                      department: "Umum & Administrasi",   bagian: "Administrasi Umum",    joinDate: "2022-04-12", telegramNo: "+628117001004", grade: "Grade 4",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-07 09:10", email: "diana.kusuma@sambugroup.com",     regNoAp1: "REG-010", regNoAp2: "REG-008" },
+  { id: "5",  no: "5",  regNo: "REG-005", name: "Eko Prasetyo",         employeeId: "E005", position: "Supervisor Teknologi Informasi", company: "PT Pulau Sambu (Jakarta)",    division: "Generals",                      department: "Teknologi Informasi",   bagian: "Infrastruktur IT",     joinDate: "2019-09-01", telegramNo: "+628117001005", grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 07:58", email: "eko.prasetyo@sambugroup.com",     regNoAp1: "REG-008", regNoAp2: "REG-016" },
+  { id: "6",  no: "6",  regNo: "REG-006", name: "Fajar Hidayat",        employeeId: "E006", position: "Kepala Seksi Operasional",       company: "PT RSUP (Perkebunan)",        division: "Coconut Production",            department: "Produksi Kelapa A",     bagian: "Proses Kelapa A",      joinDate: "2020-02-17", telegramNo: "+628117001006", grade: "Grade 6",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Seksi",       status: "Active", lastLogin: "2026-06-06 10:30", email: "fajar.hidayat@sambugroup.com",    regNoAp1: "REG-008", regNoAp2: "REG-016" },
+  { id: "7",  no: "7",  regNo: "REG-007", name: "Gita Permata",         employeeId: "E007", position: "Staff Keuangan",                 company: "PT Pulau Sambu (Kuala Enok)", division: "Finance & Accounting",          department: "Keuangan",              bagian: "Anggaran",             joinDate: "2023-01-09", telegramNo: "+628117001007", grade: "Grade 4",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-05-20 11:45", email: "gita.permata@sambugroup.com",     regNoAp1: "REG-003", regNoAp2: "REG-008" },
+  { id: "8",  no: "8",  regNo: "REG-008", name: "Hendra Wijaya",        employeeId: "E008", position: "Kepala Divisi Operasional",      company: "PT RSUP (Industry)",          division: "Coconut Production",            department: "Produksi Kelapa A",     bagian: "Proses Kelapa A",      joinDate: "2014-06-01", telegramNo: "+628117001008", grade: "Grade 9",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Div ke atas", status: "Active", lastLogin: "2026-06-09 14:22", email: "hendra.wijaya@sambugroup.com",    regNoAp1: "REG-016", regNoAp2: "REG-017" },
+  { id: "9",  no: "9",  regNo: "REG-009", name: "Indah Lestari",        employeeId: "E009", position: "Staff Agronomi",                 company: "PT RSUP (Perkebunan)",        division: "Coconut Production",            department: "Produksi Kelapa B",     bagian: "Proses Kelapa B",      joinDate: "2021-11-03", telegramNo: "+628117001009", grade: "Grade 5",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-05 08:20", email: "indah.lestari@sambugroup.com",    regNoAp1: "REG-006", regNoAp2: "REG-008" },
+  { id: "10", no: "10", regNo: "REG-010", name: "Joko Susanto",         employeeId: "E010", position: "Kepala Bagian Teknik",           company: "PT GHS",                      division: "Utility & Supports",            department: "Maintenance",           bagian: "Mechanical",           joinDate: "2017-08-21", telegramNo: "+628117001010", grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-07 16:00", email: "joko.susanto@sambugroup.com",     regNoAp1: "REG-008", regNoAp2: "REG-016" },
+  { id: "11", no: "11", regNo: "REG-011", name: "Kartini Dewi",         employeeId: "E011", position: "Staff Rekrutmen",                company: "PT RSUP (Industry)",          division: "Staff Management",              department: "Sumber Daya Manusia",   bagian: "Rekrutmen & Seleksi",  joinDate: "2022-05-16", telegramNo: "+628117001011", grade: "Grade 4",  role: "Employee",      groupings: "Operasional",           status: "Active", lastLogin: "2026-06-10 08:00", email: "kartini.dewi@sambugroup.com",     regNoAp1: "REG-014", regNoAp2: "REG-008" },
+  { id: "12", no: "12", regNo: "REG-012", name: "Lukman Hakim",         employeeId: "E012", position: "Supervisor Quality Control",     company: "PT Pulau Sambu (Guntung)",    division: "Quality Management",            department: "Quality Control",       bagian: "Inspeksi QC",          joinDate: "2018-10-15", telegramNo: "+628117001012", grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 06:55", email: "lukman.hakim@sambugroup.com",     regNoAp1: "REG-001", regNoAp2: "REG-008" },
+  { id: "13", no: "13", regNo: "REG-013", name: "Anis Sandi",           employeeId: "E013", position: "HR Strategic Specialist",        company: "PT RSUP (Industry)",          division: "Staff Management",              department: "Sumber Daya Manusia",   bagian: "Pengembangan SDM",     joinDate: "2017-04-03", telegramNo: "+628117001013", grade: "Grade 6",  role: "Administrator", groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:00", email: "anis.sandi@sambugroup.com",       regNoAp1: "REG-008", regNoAp2: "REG-016", isHrIcfValidator: true },
+  { id: "14", no: "14", regNo: "REG-014", name: "Ananta Nirmala",       employeeId: "E014", position: "Supervisor HR Unit",             company: "PT RSUP (Industry)",          division: "Staff Management",              department: "Sumber Daya Manusia",   bagian: "Rekrutmen & Seleksi",  joinDate: "2018-06-11", telegramNo: "+628117001014", grade: "Grade 6",  role: "HR Unit",       groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:15", email: "hr.unit.ind@sambugroup.com",      regNoAp1: "REG-008", regNoAp2: "REG-016", isHrUnitChecker: true },
+  { id: "15", no: "15", regNo: "REG-015", name: "Mario Sesman",         employeeId: "E015", position: "HR ICF Specialist",              company: "PT RSUP (Industry)",          division: "Staff Management",              department: "Sumber Daya Manusia",   bagian: "Pengembangan SDM",     joinDate: "2016-11-20", telegramNo: "+628117001015", grade: "Grade 6",  role: "HR ICF",        groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:20", email: "mario.sesman@sambugroup.com",     regNoAp1: "REG-008", regNoAp2: "REG-016", isHrIcfValidator: true },
+  { id: "16", no: "16", regNo: "REG-016", name: "Ir. Bambang Sutrisno", employeeId: "E016", position: "Direktur Operasional",           company: "PT RSUP (Industry)",          division: "Staff Management",              department: "Sumber Daya Manusia",   bagian: "Pengembangan SDM",     joinDate: "2012-01-05", telegramNo: "+628117001016", grade: "Grade 10", role: "Director",      groupings: "Ka./Wa.Ka.Div ke atas", status: "Active", lastLogin: "2026-06-10 09:30", email: "bambang.sutrisno@sambugroup.com", regNoAp1: "REG-017", regNoAp2: "REG-017" },
+  { id: "17", no: "17", regNo: "REG-017", name: "Surya Abimanyu",       employeeId: "E017", position: "Board of Directors",             company: "PT RSUP (Industry)",          division: "Staff Management",              department: "Sumber Daya Manusia",   bagian: "Pengembangan SDM",     joinDate: "2010-01-01", telegramNo: "+628117001017", grade: "Grade 11", role: "BOD",           groupings: "Ka./Wa.Ka.Div ke atas", status: "Active", lastLogin: "2026-06-10 09:40", email: "surya.abimanyu@sambugroup.com",   regNoAp1: "",        regNoAp2: "" },
+  { id: "18", no: "18", regNo: "REG-018", name: "Wahyu Nugroho",        employeeId: "E018", position: "Kepala Bagian Operasional",      company: "ASD",                         division: "Coconut Production",            department: "Produksi Kelapa A",     bagian: "Proses Kelapa A",      joinDate: "2019-03-14", telegramNo: "+628117001018", grade: "Grade 7",  role: "Supervisor",    groupings: "Ka./Wa.Ka.Bagian",      status: "Active", lastLogin: "2026-06-10 09:50", email: "wahyu.nugroho@sambugroup.com",    regNoAp1: "REG-008", regNoAp2: "REG-016" },
 ];
+
+export function inferGroupingFromPosition(position: string): UserGrouping {
+  const p = position.toLowerCase();
+  if (/direktur|director|bod|gm|general manager|koordinator|divisi/i.test(p)) {
+    return "Ka./Wa.Ka.Div ke atas";
+  }
+  if (/departemen|dept/i.test(p)) {
+    return "Ka./Wa.Ka.Dept";
+  }
+  if (/bagian|supervisor/i.test(p)) {
+    return "Ka./Wa.Ka.Bagian";
+  }
+  if (/seksi|shift|pengawas/i.test(p)) {
+    return "Ka./Wa.Ka.Seksi";
+  }
+  return "Operasional";
+}
+
+export function isAdminOrHrIcfRole(role: AppUserRole): boolean {
+  return role === "Administrator" || role === "HR ICF" || role === "HR Admin";
+}
+
+export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers()): boolean {
+  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director" || user.role === "HR Unit" || user.role === "Supervisor") {
+    return true;
+  }
+  const reg = (user.regNo ?? "").trim().toLowerCase();
+  const emp = user.employeeId.trim().toLowerCase();
+  if (!reg && !emp) return false;
+  return allUsers.some((u) => {
+    const ap1 = (u.regNoAp1 ?? "").trim().toLowerCase();
+    const ap2 = (u.regNoAp2 ?? "").trim().toLowerCase();
+    return (reg && (ap1 === reg || ap2 === reg)) || (emp && (ap1 === emp || ap2 === emp));
+  });
+}
+
+export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadManagedUsers()): ManagedUser[] {
+  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director") {
+    return allUsers;
+  }
+  if (user.role === "HR Unit") {
+    return allUsers.filter((u) => u.company === user.company);
+  }
+  const reg = (user.regNo ?? "").trim().toLowerCase();
+  const emp = user.employeeId.trim().toLowerCase();
+  const directMatches = allUsers.filter((u) => {
+    if (u.employeeId === user.employeeId) return true;
+    const ap1 = (u.regNoAp1 ?? "").trim().toLowerCase();
+    const ap2 = (u.regNoAp2 ?? "").trim().toLowerCase();
+    if (reg && (ap1 === reg || ap2 === reg)) return true;
+    if (emp && (ap1 === emp || ap2 === emp)) return true;
+    return false;
+  });
+  if (directMatches.length > 1) return directMatches;
+  if (user.role === "Supervisor") {
+    return allUsers.filter(
+      (u) =>
+        u.employeeId === user.employeeId ||
+        (u.company === user.company && (u.division === user.division || u.department === user.department)),
+    );
+  }
+  return allUsers.filter((u) => u.employeeId === user.employeeId);
+}
+
+export function canUserAccessEmployeeData(
+  viewer: ManagedUser,
+  targetEmployeeIdOrName: string,
+  allUsers = loadManagedUsers(),
+): boolean {
+  if (isAdminOrHrIcfRole(viewer.role) || viewer.role === "BOD" || viewer.role === "Director") {
+    return true;
+  }
+  const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
+  const viewerNum = viewer.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+  if (
+    viewer.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+    viewer.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+    (q && viewerNum === q)
+  ) {
+    return true;
+  }
+  const allowed = getAuthorizedSubordinates(viewer, allUsers);
+  return allowed.some((u) => {
+    const uNum = u.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+    return (
+      u.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      u.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      (q && uNum === q)
+    );
+  });
+}
+
+/**
+ * Bagian XII Poin 2:
+ * HR Unit yang ditunjuk sebagai Checker tidak bisa melakukan Checker pada pengajuan
+ * KPI & SMART Goals miliknya sendiri sehingga langsung masuk ke Approval 1 dst.
+ */
+export function shouldBypassCheckerForSubmission(
+  submitterEmployeeId: string,
+  allUsers = loadManagedUsers(),
+): boolean {
+  const clean = submitterEmployeeId.trim().toLowerCase().replace(/^emp-?0*/i, "");
+  const found = allUsers.find((u) => {
+    const uClean = u.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+    return (
+      u.employeeId.toLowerCase() === submitterEmployeeId.trim().toLowerCase() ||
+      (clean && uClean === clean)
+    );
+  });
+  if (!found) return false;
+  return found.role === "HR Unit" || Boolean(found.isHrUnitChecker);
+}
 
 export function defaultAllowedModulesForGrouping(group: string): AppraisalModuleName[] {
   const normalized = group.trim();

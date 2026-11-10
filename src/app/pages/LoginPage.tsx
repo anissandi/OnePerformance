@@ -32,6 +32,11 @@ export function LoginPage() {
   const unitUsers = loadManagedUsers().filter(
     (u) => u.company === selectedLoc.company && u.status === "Active",
   );
+  const matchedEmployee = loadManagedUsers().find(
+    (u) =>
+      u.employeeId.toLowerCase() === employeeId.trim().toLowerCase() ||
+      (u.regNo ?? "").toLowerCase() === employeeId.trim().toLowerCase(),
+  );
 
   function handleSendOtp() {
     if (!employeeId.trim()) return;
@@ -177,10 +182,22 @@ export function LoginPage() {
             />
             {otpSent && (
               <p className="text-xs text-gray-400 mt-1.5">
-                OTP code has been sent to your Telegram / Email.
+                OTP dikirim ke Telegram ({matchedEmployee?.telegramNo || "terdaftar"}) & Email ({matchedEmployee?.email || "terdaftar"}).
               </p>
             )}
           </div>
+
+          {matchedEmployee && !otpSent && (
+            <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50/70 px-3.5 py-2.5 text-[11px] text-gray-700 space-y-0.5">
+              <div className="font-semibold text-[#1A284F]">
+                {matchedEmployee.name} ({matchedEmployee.regNo || matchedEmployee.employeeId})
+              </div>
+              <div className="text-gray-600">
+                No Telegram: <span className="font-mono font-medium">{matchedEmployee.telegramNo || "—"}</span> · Corporate Email:{" "}
+                <span className="font-medium">{matchedEmployee.email || "—"}</span>
+              </div>
+            </div>
+          )}
 
           {/* Button — switches between Send OTP and Login */}
           {!otpSent ? (

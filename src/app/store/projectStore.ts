@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { ProjectExcelRow } from "../../../supabase/functions/server/shared/projectWorkflow";
+import type { ProjectExcelRow } from "../utils/projectExcelUtils";
 import { normalizeEmployeeId, submitWorkflowModule, workflowRowStatus, registerWorkflowRows } from "../pages/shared/appraisalWorkflowStore";
 import type { ApprovalRow, ReviewerRole } from "../components/ReviewDrawer";
 import type { ParsedExternalProjectRow } from "../utils/projectExcelUtils";

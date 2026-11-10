@@ -35,7 +35,7 @@ export function loadEvidenceFiles(): StoredEvidenceFile[] {
 
 export function clearEvidenceFiles(): void {
   try {
-    localStorage.removeItem(KEY);
+    savePersistedState(KEY, []);
   } catch {
     // ignore
   }

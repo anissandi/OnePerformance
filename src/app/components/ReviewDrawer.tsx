@@ -2179,4 +2179,4 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
   );
 }
 import { loadIcfProjectRows } from "../store/projectStore";
-import { PROJECT_EXCEL_HEADERS } from "../../../supabase/functions/server/shared/projectWorkflow";
+import { PROJECT_EXCEL_HEADERS } from "../utils/projectExcelUtils";

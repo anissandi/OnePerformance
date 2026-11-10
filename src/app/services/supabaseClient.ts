@@ -80,27 +80,56 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       "state_key",
     );
   } else if (kind === "user-upsert" && payload.user) {
-    const u = payload.user as Record<string, string>;
-    ok = await restUpsert(
-      "pa_users",
-      {
-        employee_id: u.employeeId,
-        name: u.name,
-        email: u.email,
-        position: u.position,
-        company: u.company,
-        unit_id: u.unitId ?? "IND",
-        division: u.division,
-        department: u.department,
-        grade: u.grade ?? "Grade 5",
-        role: u.role || "Employee",
-        groupings: u.groupings,
-        status: u.status ?? "Active",
-        last_login: u.lastLogin ?? "",
-        updated_at: now,
-      },
-      "employee_id",
-    );
+    const u = payload.user as Record<string, unknown>;
+    const fullRow = {
+      employee_id: String(u.employeeId ?? ""),
+      no: String(u.no ?? ""),
+      reg_no: String(u.regNo ?? ""),
+      name: String(u.name ?? ""),
+      email: String(u.email ?? ""),
+      position: String(u.position ?? ""),
+      company: String(u.company ?? ""),
+      unit_id: String(u.unitId ?? "IND"),
+      division: String(u.division ?? ""),
+      department: String(u.department ?? ""),
+      bagian: String(u.bagian ?? ""),
+      join_date: String(u.joinDate ?? ""),
+      telegram_no: String(u.telegramNo ?? ""),
+      grade: String(u.grade ?? "Grade 5"),
+      role: String(u.role || "Employee"),
+      groupings: String(u.groupings ?? "Operasional"),
+      status: String(u.status ?? "Active"),
+      last_login: String(u.lastLogin ?? ""),
+      reg_no_ap1: String(u.regNoAp1 ?? ""),
+      reg_no_ap2: String(u.regNoAp2 ?? ""),
+      is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
+      is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+      updated_at: now,
+    };
+    ok = await restUpsert("pa_users", fullRow, "employee_id");
+    if (!ok) {
+      // Fallback if 202611030001 alter table migration has not been run yet
+      ok = await restUpsert(
+        "pa_users",
+        {
+          employee_id: fullRow.employee_id,
+          name: fullRow.name,
+          email: fullRow.email,
+          position: fullRow.position,
+          company: fullRow.company,
+          unit_id: fullRow.unit_id,
+          division: fullRow.division,
+          department: fullRow.department,
+          grade: fullRow.grade,
+          role: fullRow.role,
+          groupings: fullRow.groupings,
+          status: fullRow.status,
+          last_login: fullRow.last_login,
+          updated_at: now,
+        },
+        "employee_id",
+      );
+    }
   } else if (kind === "user-delete" && payload.employeeId) {
     try {
       const res = await fetch(
@@ -855,7 +884,27 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
 
 export async function hydrateAllStoresFromSupabase(): Promise<void> {
   const data = await fetchBootstrapFromSupabase();
-  if (!data) return;
+  if (!data) {
+    // If backend tables exist but are still empty on first connection, seed current users to backend
+    try {
+      const probe = await fetch(`${SUPABASE_REST_BASE}/pa_users?select=employee_id&limit=1`, {
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      });
+      if (probe.ok) {
+        const existing = await probe.json();
+        if (Array.isArray(existing) && existing.length === 0) {
+          const localUsersRaw = localStorage.getItem("pa_managed_users_v1");
+          const localUsers: Array<Record<string, unknown>> = localUsersRaw ? JSON.parse(localUsersRaw) : [];
+          for (const u of localUsers) {
+            await syncDirectToPostgrest({ kind: "user-upsert", user: u });
+          }
+        }
+      }
+    } catch {
+      // ignore probe errors
+    }
+    return;
+  }
 
   try {
     // 1. Hydrate generic KV states first
@@ -869,22 +918,31 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     }
 
     // 2. Hydrate users if available in DB
-    const users = data.users as Array<Record<string, string>> | undefined;
+    const users = data.users as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(users) && users.length > 0) {
       const mapped = users.map((u, idx) => ({
         id: String(idx + 1),
-        name: u.name,
-        employeeId: u.employee_id,
-        position: u.position,
-        company: u.company,
-        division: u.division,
-        department: u.department,
-        grade: u.grade || "Grade 5",
-        role: u.role,
-        groupings: u.groupings,
-        status: u.status || "Active",
-        lastLogin: u.last_login || "",
-        email: u.email,
+        no: String(u.no ?? idx + 1),
+        regNo: String(u.reg_no ?? `REG-${String(idx + 1).padStart(3, "0")}`),
+        name: String(u.name ?? ""),
+        employeeId: String(u.employee_id ?? ""),
+        position: String(u.position ?? ""),
+        company: String(u.company ?? ""),
+        division: String(u.division ?? ""),
+        department: String(u.department ?? ""),
+        bagian: String(u.bagian ?? ""),
+        joinDate: String(u.join_date ?? ""),
+        telegramNo: String(u.telegram_no ?? ""),
+        grade: String(u.grade || "Grade 5"),
+        role: String(u.role ?? "Employee"),
+        groupings: String(u.groupings ?? "Operasional"),
+        status: String(u.status || "Active"),
+        lastLogin: String(u.last_login || ""),
+        email: String(u.email ?? ""),
+        regNoAp1: String(u.reg_no_ap1 ?? ""),
+        regNoAp2: String(u.reg_no_ap2 ?? ""),
+        isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
+        isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
       }));
       localStorage.setItem("pa_managed_users_v1", JSON.stringify(mapped));
     }
@@ -1050,4 +1108,84 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
   } catch {
     // ignore hydration errors
   }
+}
+
+/**
+ * Mengganti seluruh data karyawan dummy di Backend Supabase & state lokal dengan data hasil Import Excel,
+ * serta opsional mereset data transaksi dummy agar siap digunakan untuk Trial End-to-End dari awal.
+ */
+export async function replaceAllBackendUsersAndResetForTrial(
+  importedUsers: Array<Record<string, unknown>>,
+  resetTransactions = true,
+): Promise<void> {
+  const TRANSACTIONAL_KEYS = [
+    "appraisal_workflow_v1",
+    "appraisal_row_aliases_v1",
+    "sg_approvals_overrides",
+    "all_assessments_v2",
+    "kpi_tracking_v1",
+    "kpi_tracking_submit_v1_employee",
+    "kpi_tracking_submit_v1_supervisor",
+    "kpi_tracking_submit_v1_staff",
+    "kpi_approval_comments",
+    "kpi_evidence_files",
+    "kpi_monthly_notes",
+    "kpi_rca_submissions",
+    "rca_approval_decisions_v1",
+    "smart_goals_v1",
+    "smart_goals_checkin_v1",
+    "smart_goals_approvals_v1",
+    "appraisal_form_self_v1",
+    "appraisal_form_approver_v1",
+    "ms_self_v1",
+    "ms_approver_v1",
+    "inter_department_feedback_workflows_v2",
+    "pa_project_icf_by_emp_v1",
+    "pa_project_icf_excel_v1",
+    "pa_interview_schedules_v1",
+    "year_end_workflow_2026",
+  ];
+
+  if (resetTransactions) {
+    for (const key of TRANSACTIONAL_KEYS) {
+      localStorage.removeItem(key);
+    }
+    localStorage.setItem("pa_trial_mode_clean_v1", "true");
+    savePersistedState("pa_trial_mode_clean_v1", true);
+  }
+
+  // Save new imported users as authoritative state
+  savePersistedState("pa_managed_users_v1", importedUsers);
+
+  try {
+    // Clear old users in Supabase pa_users table then upsert imported users
+    await fetch(`${SUPABASE_REST_BASE}/pa_users?employee_id=neq.__NONE__`, {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    });
+    for (const u of importedUsers) {
+      await syncDirectToPostgrest({ kind: "user-upsert", user: u });
+    }
+    if (resetTransactions) {
+      for (const key of TRANSACTIONAL_KEYS) {
+        await fetch(`${SUPABASE_REST_BASE}/pa_kv_state?state_key=eq.${encodeURIComponent(key)}`, {
+          method: "DELETE",
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+        });
+      }
+    }
+  } catch {
+    // Ignore network errors if offline
+  }
+
+  window.dispatchEvent(new Event("pa-auth-updated"));
+  window.dispatchEvent(new Event("pa-employees-imported"));
+  window.dispatchEvent(new Event("appraisal-updated"));
+  window.dispatchEvent(new Event("feedback-updated"));
 }

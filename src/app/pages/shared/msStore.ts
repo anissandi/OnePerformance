@@ -1,5 +1,6 @@
 import { submitWorkflowModule, loadWorkflowRecords } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
+import { getActiveUser } from "../../store/authStore";
 const SELF_KEY     = "ms_self_ratings_v1";
 const APPROVER_KEY = "ms_approver_ratings_v1";
 
@@ -13,10 +14,11 @@ export interface MSSelfRatings {
 
 export function saveMSSelfRatings(data: MSSelfRatings): void {
   try {
-    localStorage.removeItem(APPROVER_KEY);
+    const activeUser = getActiveUser();
+    savePersistedState(APPROVER_KEY, []);
     savePersistedState(SELF_KEY, data, {
       kind: "managerial-skill",
-      employeeId: "E002",
+      employeeId: activeUser.employeeId,
       period: "2026",
       selfRatings: data,
       approverRatings: [],
@@ -25,10 +27,10 @@ export function saveMSSelfRatings(data: MSSelfRatings): void {
         action: "Create",
         module: "Performance Appraisal",
         subModule: "Managerial Skill",
-        description: "Submitted Managerial Skill Self-Assessment",
+        description: `Submitted Managerial Skill Self-Assessment by ${activeUser.name} (${activeUser.employeeId})`,
       },
     });
-    submitWorkflowModule("Managerial Skill");
+    submitWorkflowModule("Managerial Skill", "measurement", new Date().toLocaleDateString("id-ID"), activeUser.employeeId);
   } catch { /* ignore */ }
 }
 

@@ -12,6 +12,7 @@ import { applyOverrides, saveOverride } from "../shared/approvalsStore";
 import { saveRCAApprovalDecision } from "../shared/rcaApprovalStore";
 import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
 import { projectApprovalRows } from "../../store/projectStore";
+import { canUserAccessEmployeeData, shouldBypassCheckerForSubmission, useAuthStore } from "../../store/authStore";
 
 const TEAM_UNIT = "PT RSUP (Industry)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
@@ -67,10 +68,32 @@ type MainTab = "checkin" | "setting";
 export function SupervisorApprovals() {
   const location = useLocation();
   const { tab } = useParams();
+  const { activeUser } = useAuthStore();
   const mainTab: MainTab = /\/setting(\/|$)/.test(location.pathname) ? "setting" : "checkin";
   const moduleTypes = mainTab === "checkin" ? CHECKIN_FILTER_OPTIONS.approvalType : SETTING_FILTER_OPTIONS.approvalType;
   const routeType = moduleTypes.find((type) => tabSlug(type) === tab);
   const moduleBase = routeBase(location.pathname, routeType ? tab : undefined);
+
+  const filterByScopeAndSelfCheckerRule = (rows: ApprovalRow[]): ApprovalRow[] => {
+    return rows.filter((row) => {
+      // Bagian XII Poin 2: HR Unit Checker tidak bisa melakukan Checker pada pengajuan KPI & SMART Goals miliknya sendiri
+      if (
+        (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) &&
+        (row.type === "KPI" || row.type === "SMART Goals") &&
+        (row.employeeId.toLowerCase().replace(/^emp-?0*/i, "") === activeUser.employeeId.toLowerCase().replace(/^e0*/i, "") ||
+          row.name.toLowerCase() === activeUser.name.toLowerCase()) &&
+        shouldBypassCheckerForSubmission(activeUser.employeeId)
+      ) {
+        return false;
+      }
+      // Bagian I Poin 4: Hanya melihat data karyawan di dalam wewenang approval-nya
+      return (
+        canUserAccessEmployeeData(activeUser, row.employeeId) ||
+        canUserAccessEmployeeData(activeUser, row.name) ||
+        row.companyUnit === activeUser.company
+      );
+    });
+  };
 
   const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => [...applyOverrides(BASE_CHECKIN), ...projectApprovalRows("approver1"), ...feedbackApprovalRows("approver1").filter((row) => row.companyUnit === TEAM_UNIT && row.division === TEAM_DIV)]);
   useEffect(() => {
@@ -110,9 +133,9 @@ export function SupervisorApprovals() {
       </div>
       <ModuleRouteNav base={moduleBase} modules={moduleTypes} label="Modul approval" />
       {mainTab === "checkin" ? (
-        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={checkinData} onDataChange={setCheckinData} filterOptions={CHECKIN_FILTER_OPTIONS} reviewerRole="approver1" isSetting={false} />
+        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(checkinData)} onDataChange={setCheckinData} filterOptions={CHECKIN_FILTER_OPTIONS} reviewerRole="approver1" isSetting={false} />
       ) : (
-        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={settingData} onDataChange={setSettingData} filterOptions={SETTING_FILTER_OPTIONS} reviewerRole="approver1" isSetting={true} />
+        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(settingData)} onDataChange={setSettingData} filterOptions={SETTING_FILTER_OPTIONS} reviewerRole="approver1" isSetting={true} />
       )}
     </div>
   );

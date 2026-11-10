@@ -12,7 +12,8 @@ import { saveRCASubmission, loadRCASubmissions } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
-import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { getActiveUser } from "../../store/authStore";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -439,9 +440,9 @@ function loadSubmitState(): { submitted: boolean; submittedDate: string } {
 
 function saveSubmitState(submitted: boolean, submittedDate: string): void {
   try {
-    localStorage.setItem(
+    savePersistedState(
       `${KPI_SUBMIT_KEY}_${getRolePrefix()}`,
-      JSON.stringify({ submitted, submittedDate })
+      { submitted, submittedDate },
     );
   } catch { /* ignore */ }
 }
@@ -452,7 +453,25 @@ export interface KPITrackingSnapshot {
 }
 
 export function saveKPITracking(data: KPITrackingSnapshot): void {
-  try { localStorage.setItem(KPI_STORE_KEY, JSON.stringify(data)); } catch { /* ignore */ }
+  try {
+    const activeUser = getActiveUser();
+    savePersistedState(KPI_STORE_KEY, data, {
+      kind: "kpi-tracking",
+      docKey: `${activeUser.employeeId}:2026`,
+      employeeId: activeUser.employeeId,
+      period: "2026",
+      months: data.months,
+      cellsMap: data.cellsMap,
+      monthlyNotes: loadMonthlyNotes(),
+      comments: loadAllKPIComments(),
+      audit: {
+        action: "Update",
+        module: "KPI",
+        subModule: "KPI Tracking",
+        description: `Updated KPI Tracking realization for ${activeUser.name} (${activeUser.employeeId})`,
+      },
+    });
+  } catch { /* ignore */ }
 }
 
 export function loadKPITracking(): KPITrackingSnapshot {

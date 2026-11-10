@@ -1,5 +1,6 @@
 import { submitWorkflowModule, loadWorkflowRecords } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
+import { getActiveUser } from "../../store/authStore";
 const SELF_KEY     = "af_self_ratings_v1";
 const APPROVER_KEY = "af_approver_ratings_v1";
 
@@ -18,10 +19,11 @@ export interface StoredAppraisalSelf {
 
 export function saveAppraisalSelf(data: StoredAppraisalSelf): void {
   try {
-    localStorage.removeItem(APPROVER_KEY);
+    const activeUser = getActiveUser();
+    savePersistedState(APPROVER_KEY, []);
     savePersistedState(SELF_KEY, data, {
       kind: "appraisal-form",
-      employeeId: "E002",
+      employeeId: activeUser.employeeId,
       period: "2026",
       selfRatings: data,
       approverRatings: [],
@@ -30,10 +32,10 @@ export function saveAppraisalSelf(data: StoredAppraisalSelf): void {
         action: "Create",
         module: "Performance Appraisal",
         subModule: "Appraisal Form",
-        description: "Submitted Appraisal Form Self-Assessment (Form A, B, C)",
+        description: `Submitted Appraisal Form Self-Assessment (Form A, B, C) by ${activeUser.name} (${activeUser.employeeId})`,
       },
     });
-    submitWorkflowModule("Appraisal Form");
+    submitWorkflowModule("Appraisal Form", "measurement", new Date().toLocaleDateString("id-ID"), activeUser.employeeId);
   } catch { /* ignore */ }
 }
 

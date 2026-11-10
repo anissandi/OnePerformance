@@ -4,9 +4,57 @@ import { DatePickerID } from "../../components/DatePickerID";
 import { createPortal } from "react-dom";
 import {
   ChevronDown, Calendar, Lock, CheckCircle2, TrendingUp, Lightbulb,
-  ClipboardList, Briefcase, FolderKanban, MessageSquare, X, Check,
+  ClipboardList, Briefcase, FolderKanban, MessageSquare, X, Check, ShieldCheck, Layers,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "../../components/ui/dialog";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+
+export interface KpiHierarchyValidationChecklist {
+  kpiGroupValidated: boolean;
+  allowParallelKpiUnit: boolean;
+  kpiUnitAndDirectorValidated: boolean;
+  allowParallelKpiGm: boolean;
+  kpiGmValidated: boolean;
+  allowParallelKpiDivision: boolean;
+  kpiDivisionValidated: boolean;
+  allowParallelKpiDepartmentBelow: boolean;
+}
+
+export const DEFAULT_KPI_VALIDATION_CHECKLIST: KpiHierarchyValidationChecklist = {
+  kpiGroupValidated: true,
+  allowParallelKpiUnit: true,
+  kpiUnitAndDirectorValidated: true,
+  allowParallelKpiGm: true,
+  kpiGmValidated: true,
+  allowParallelKpiDivision: true,
+  kpiDivisionValidated: true,
+  allowParallelKpiDepartmentBelow: true,
+};
+
+export function loadKpiValidationChecklist(year = "2026"): KpiHierarchyValidationChecklist {
+  return {
+    ...DEFAULT_KPI_VALIDATION_CHECKLIST,
+    ...loadPersistedState<Partial<KpiHierarchyValidationChecklist>>(
+      `pa_kpi_validation_checklist_${year}`,
+      DEFAULT_KPI_VALIDATION_CHECKLIST,
+    ),
+  };
+}
+
+export function saveKpiValidationChecklist(year: string, next: KpiHierarchyValidationChecklist): void {
+  savePersistedState(`pa_kpi_validation_checklist_${year}`, next, {
+    kind: "kv-state",
+    stateKey: `pa_kpi_validation_checklist_${year}`,
+    stateValue: next,
+    audit: {
+      action: "Update",
+      module: "Module Activation",
+      subModule: "KPI Hierarchy & Parallel Checklist",
+      description: `Updated KPI Hierarchy Validation & Parallel Creation Checklist (${year})`,
+    },
+  });
+  window.dispatchEvent(new Event("pa-module-activation-updated"));
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -489,8 +537,12 @@ export function HRModuleActivation() {
   };
   const [year, setYear] = useState("2026");
   const [modules, setModules] = useState<Module[]>(() => loadModules("2026"));
+  const [kpiChecklist, setKpiChecklist] = useState<KpiHierarchyValidationChecklist>(() =>
+    loadKpiValidationChecklist("2026"),
+  );
   useEffect(() => {
     setModules(loadModules(year));
+    setKpiChecklist(loadKpiValidationChecklist(year));
   }, [year]);
 
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -512,7 +564,38 @@ export function HRModuleActivation() {
         backlogMonths: value.backlogMonths, backlogEndDate: value.backlogEndDate }];
     }));
     localStorage.setItem(`pa_module_activation_${year}`, JSON.stringify(settings));
+    savePersistedState(`pa_module_activation_${year}`, settings, {
+      kind: "module-window",
+      window: {
+        unitId: "ALL",
+        moduleId: id,
+        active: updated.active,
+        startDate: updated.startDate,
+        endDate: updated.endDate,
+        activationFor: updated.activationFor,
+        extra: {
+          dateLockPerMonth: updated.dateLockPerMonth,
+          backlogMonths: updated.backlogMonths,
+          backlogEndDate: updated.backlogEndDate,
+        },
+      },
+      audit: {
+        action: "Update",
+        module: "Module Activation",
+        subModule: updated.label,
+        description: `Updated module activation ${updated.label} (${year}): active=${updated.active}, ${updated.startDate} to ${updated.endDate}`,
+      },
+    });
+    window.dispatchEvent(new Event("pa-module-activation-updated"));
     setModules((prev) => prev.map((module) => module.id === id ? updated : module));
+  };
+
+  const toggleKpiChecklist = (key: keyof KpiHierarchyValidationChecklist) => {
+    setKpiChecklist((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      saveKpiValidationChecklist(year, next);
+      return next;
+    });
   };
 
   const handleActivateClick = (id: string) => {
@@ -577,6 +660,96 @@ export function HRModuleActivation() {
             onDeactivateClick={handleDeactivateClick}
           />
         ))}
+      </div>
+
+      {/* ── Bagian IV & V: Checklist Validasi Berjenjang & Mode Paralel KPI ── */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-[#1A284F]/[0.04] to-transparent flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#1A284F] text-white flex items-center justify-center shrink-0">
+              <Layers className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-[#1A284F]">
+                Checklist Validasi Berjenjang & Mode Pembuatan KPI Paralel ({year})
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Aturan Bagian IV & V: Mengatur urutan validasi pembuatan KPI Business (KPI Group & KPI Unit) dan KPI Individu (Direktur → GM → Divisi → Departemen ke bawah), dilengkapi checklist mode paralel khusus tahun ini.
+              </p>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            Tersinkron ke KPI Business & KPI Individu
+          </span>
+        </div>
+
+        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {[
+            {
+              step: "1. KPI Group → KPI Unit & KPI Individu Direktur",
+              desc: "KPI Group RSUP Group dibuat oleh Direktur Operasional PT RSUP (Industry). KPI Unit (GM PT RSUP Perkebunan, PT RSTM, PT GHS, ASD) & KPI Individu Direktur hanya bisa dibuat jika KPI Group sudah Validated atau Checklist Paralel aktif.",
+              validatedKey: "kpiGroupValidated" as const,
+              validatedLabel: "Status KPI Group: Validated",
+              parallelKey: "allowParallelKpiUnit" as const,
+              parallelLabel: "Izinkan Pembuatan KPI Unit & Direktur Paralel (Khusus Tahun Ini)",
+            },
+            {
+              step: "2. KPI Unit & KPI Direktur → KPI Individu Level GM",
+              desc: "KPI Individu level GM hanya bisa dibuat jika KPI Unit & KPI Individu level Direktur sudah berstatus Validated atau Checklist Paralel diaktifkan.",
+              validatedKey: "kpiUnitAndDirectorValidated" as const,
+              validatedLabel: "Status KPI Unit & KPI Individu Direktur: Validated",
+              parallelKey: "allowParallelKpiGm" as const,
+              parallelLabel: "Izinkan Pembuatan KPI Individu Level GM Paralel (Khusus Tahun Ini)",
+            },
+            {
+              step: "3. KPI Individu GM → KPI Individu Level Divisi",
+              desc: "KPI Individu level Divisi hanya bisa dibuat jika KPI Individu level GM sudah berstatus Validated atau Checklist Paralel diaktifkan.",
+              validatedKey: "kpiGmValidated" as const,
+              validatedLabel: "Status KPI Individu Level GM: Validated",
+              parallelKey: "allowParallelKpiDivision" as const,
+              parallelLabel: "Izinkan Pembuatan KPI Individu Level Divisi Paralel (Khusus Tahun Ini)",
+            },
+            {
+              step: "4. KPI Individu Divisi → KPI Individu Level Departemen ke Bawah",
+              desc: "KPI Individu level Departemen ke bawah hanya bisa dibuat jika KPI Individu level Divisi sudah berstatus Validated atau Checklist Paralel diaktifkan.",
+              validatedKey: "kpiDivisionValidated" as const,
+              validatedLabel: "Status KPI Individu Level Divisi: Validated",
+              parallelKey: "allowParallelKpiDepartmentBelow" as const,
+              parallelLabel: "Izinkan Pembuatan KPI Level Departemen ke Bawah Paralel (Khusus Tahun Ini)",
+            },
+          ].map((item) => (
+            <div
+              key={item.step}
+              className="rounded-xl border border-gray-200 p-4 bg-slate-50/50 flex flex-col justify-between gap-3"
+            >
+              <div>
+                <h3 className="text-sm font-bold text-[#1A284F]">{item.step}</h3>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">{item.desc}</p>
+              </div>
+              <div className="pt-2 border-t border-gray-200/80 flex flex-col gap-2">
+                <label className="flex items-center gap-2.5 text-xs font-medium text-gray-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={kpiChecklist[item.validatedKey]}
+                    onChange={() => toggleKpiChecklist(item.validatedKey)}
+                    className="h-4 w-4 rounded accent-[#1A284F]"
+                  />
+                  <span>{item.validatedLabel}</span>
+                </label>
+                <label className="flex items-center gap-2.5 text-xs font-semibold text-blue-800 cursor-pointer bg-blue-50/80 px-2.5 py-1.5 rounded-lg border border-blue-100">
+                  <input
+                    type="checkbox"
+                    checked={kpiChecklist[item.parallelKey]}
+                    onChange={() => toggleKpiChecklist(item.parallelKey)}
+                    className="h-4 w-4 rounded accent-blue-700"
+                  />
+                  <span>{item.parallelLabel}</span>
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Confirm dialog */}

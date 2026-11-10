@@ -4,6 +4,7 @@ import { saveAppraisalApprover } from "./appraisalFormStore";
 import { saveMSApproverEntry } from "./msStore";
 import { upsertApprovalDecision } from "./smartGoalsStore";
 import { savePersistedState } from "../../services/supabaseClient";
+import { loadManagedUsers } from "../../store/authStore";
 
 const KEY = "sg_approvals_overrides";
 
@@ -36,7 +37,7 @@ export function saveAssessment(
     savePersistedState(ASSESSMENT_KEY, nextList);
     saveWorkflowAssessment(rowNo, approverRole, ratings, comments, assessedDate);
     const alias = workflowAlias(rowNo);
-    if (alias?.employeeId === "EMP-002" && alias.phase === "measurement") {
+    if (alias && alias.phase === "measurement") {
       const level = approverRole === "approver1" ? 1 : 2;
       const approverName = level === 1 ? "Supervisor" : "HR Admin";
       if (type === "Managerial Skill") {
@@ -102,10 +103,10 @@ export function saveOverride(no: string, status: string, approvalDate: string): 
     savePersistedState(KEY, [...existing, { no, status, approvalDate }]);
     saveWorkflowDecision(no, status, approvalDate);
     const alias = workflowAlias(no);
-    if (alias?.employeeId === "EMP-002" && alias.module === "SMART Goals" && alias.phase === "measurement") {
+    if (alias && alias.module === "SMART Goals" && alias.phase === "measurement") {
       const assessment = loadAssessment(no, alias.role);
       const values = Object.values(assessment?.ratings ?? {});
-      upsertApprovalDecision({ employeeId: "EMP002", approverLevel: alias.role === "approver1" ? 1 : 2, approverName: alias.role === "approver1" ? "Supervisor" : "HR Admin", approverRole: alias.role, status: status === "Revision" ? "Needs Revision" : "Approved", feedback: assessment?.comments["0"] ?? "", score: values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : "", reviewedDate: approvalDate });
+      upsertApprovalDecision({ employeeId: alias.employeeId.replace(/-/g, ""), approverLevel: alias.role === "approver1" ? 1 : 2, approverName: alias.role === "approver1" ? "Supervisor" : "HR Admin", approverRole: alias.role, status: status === "Revision" ? "Needs Revision" : "Approved", feedback: assessment?.comments["0"] ?? "", score: values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : "", reviewedDate: approvalDate });
     }
   } catch {
     // ignore
@@ -114,12 +115,53 @@ export function saveOverride(no: string, status: string, approvalDate: string): 
 
 export function applyOverrides(rows: ApprovalRow[], role: "approver1" | "approver2" = "approver1"): ApprovalRow[] {
   const phase = /^(?:H?ST)-/.test(rows[0]?.no ?? "") ? "setting" : "measurement";
-  const expanded = [...rows];
+  const isCleanTrial = localStorage.getItem("pa_trial_mode_clean_v1") === "true";
+  const managedUsers = loadManagedUsers();
+  const baseRows = isCleanTrial
+    ? rows.filter((row) =>
+        managedUsers.some(
+          (u) =>
+            normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(row.employeeId) ||
+            u.name.toLowerCase() === row.name.toLowerCase(),
+        ),
+      )
+    : rows;
+  const expanded = [...baseRows];
   for (const record of loadWorkflowRecords()) {
     if (record.phase !== phase || record.year !== "2026") continue;
-    const employee = rows.find((row) => normalizeEmployeeId(row.employeeId) === record.employeeId);
-    if (!employee || expanded.some((row) => normalizeEmployeeId(row.employeeId) === record.employeeId && row.type === record.module)) continue;
-    expanded.push({ ...employee, no: `${role === "approver2" ? "H" : ""}${phase === "setting" ? "ST" : "CI"}-LIVE-${record.employeeId}-${record.module}`, type: record.module, submittedDate: record.submittedDate, status: "Pending", approvalDate: "-", editRequestReason: undefined, editRequestDate: undefined });
+    if (expanded.some((row) => normalizeEmployeeId(row.employeeId) === record.employeeId && row.type === record.module)) continue;
+    const existingRow = rows.find((row) => normalizeEmployeeId(row.employeeId) === record.employeeId);
+    const managedUser = managedUsers.find(
+      (u) => normalizeEmployeeId(u.employeeId) === record.employeeId || u.employeeId.toLowerCase() === record.employeeId.toLowerCase(),
+    );
+    const templateRow: ApprovalRow | null = existingRow
+      ? existingRow
+      : managedUser
+      ? {
+          no: `${role === "approver2" ? "H" : ""}${phase === "setting" ? "ST" : "CI"}-LIVE-${record.employeeId}-${record.module}`,
+          employeeId: managedUser.employeeId,
+          name: managedUser.name,
+          position: managedUser.position,
+          department: managedUser.department,
+          division: managedUser.division,
+          companyUnit: managedUser.company,
+          type: record.module,
+          submittedDate: record.submittedDate,
+          approvalDate: "-",
+          status: "Pending",
+        }
+      : null;
+    if (!templateRow) continue;
+    expanded.push({
+      ...templateRow,
+      no: `${role === "approver2" ? "H" : ""}${phase === "setting" ? "ST" : "CI"}-LIVE-${record.employeeId}-${record.module}`,
+      type: record.module,
+      submittedDate: record.submittedDate,
+      status: "Pending",
+      approvalDate: "-",
+      editRequestReason: undefined,
+      editRequestDate: undefined,
+    });
   }
   rows = expanded;
   registerWorkflowRows(rows, role);

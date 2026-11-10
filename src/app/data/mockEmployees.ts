@@ -1,5 +1,6 @@
 import { TrendingUp, Lightbulb, ClipboardList, Briefcase, FolderKanban, MessageSquare } from "lucide-react";
 import React from "react";
+import { loadManagedUsers } from "../store/authStore";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export interface ScoreGrade { score: number; grade: string; }
@@ -355,7 +356,39 @@ const MI_EMPLOYEES: Employee[] = [
   buildMIEmployee("MI-E014", "Dian Permana", 79, 77, 78, 75, 74, "Keuangan",            "Finance & Accounting", "PT RSUP (Perkebunan)"),
 ];
 
-export const mockEmployees: Employee[] = [...buildMockEmployees(), ...MI_EMPLOYEES];
+function buildImportedManagedEmployees(): Employee[] {
+  try {
+    const users = loadManagedUsers();
+    return users.map((u, idx) =>
+      buildMIEmployee(
+        u.employeeId,
+        u.name,
+        82 - (idx % 6),
+        80 - (idx % 5),
+        81 - (idx % 4),
+        79 - (idx % 5),
+        78 - (idx % 5),
+        u.department,
+        u.division,
+        u.company,
+      ),
+    );
+  } catch {
+    return [];
+  }
+}
+
+export const mockEmployees: Employee[] = (() => {
+  const isCleanTrial = typeof localStorage !== "undefined" && localStorage.getItem("pa_trial_mode_clean_v1") === "true";
+  const imported = buildImportedManagedEmployees();
+  if (isCleanTrial && imported.length > 0) {
+    return imported;
+  }
+  const generated = [...buildMockEmployees(), ...MI_EMPLOYEES];
+  const existingIds = new Set(generated.map((e) => e.id.toLowerCase()));
+  const extra = imported.filter((e) => !existingIds.has(e.id.toLowerCase()));
+  return [...extra, ...generated];
+})();
 
 // ── Helper: get module-specific score & grade for an employee ──────────────────
 export function getModuleScoreGrade(emp: Employee, module: string): { score: number; grade: string } | null {

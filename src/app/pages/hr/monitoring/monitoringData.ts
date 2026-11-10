@@ -1,5 +1,7 @@
 // Shared mock data for all HR Monitoring pages
 
+import { loadManagedUsers } from "../../../store/authStore";
+
 export interface MonitoringEmployee {
   id: string;
   name: string;
@@ -10,7 +12,7 @@ export interface MonitoringEmployee {
   isSupervisor: boolean;
 }
 
-export const EMPLOYEES: MonitoringEmployee[] = [
+const FALLBACK_EMPLOYEES: MonitoringEmployee[] = [
   { id: "E001", name: "Ahmad Fauzi",    position: "Manager Divisi Produksi & Operasional", division: "Divisi Produksi & Operasional", unit: "PT Pulau Sambu (Guntung)",    grade: "Grade 8",  isSupervisor: true  },
   { id: "E002", name: "Siti Rahayu",    position: "Manager Divisi Sumber Daya Manusia",    division: "Divisi Sumber Daya Manusia",    unit: "PT RSUP (Industry)",          grade: "Grade 5",  isSupervisor: false },
   { id: "E003", name: "Budi Santoso",   position: "Manager Divisi Keuangan & Akuntansi",   division: "Divisi Keuangan & Akuntansi",   unit: "PT RSTM",                     grade: "Grade 7",  isSupervisor: true  },
@@ -26,6 +28,24 @@ export const EMPLOYEES: MonitoringEmployee[] = [
   { id: "E013", name: "Rini Susanti",   position: "Manager Divisi Sumber Daya Manusia",    division: "Divisi Sumber Daya Manusia",    unit: "PT RSUP (Industry)",          grade: "Grade 6",  isSupervisor: false },
   { id: "E014", name: "Dian Permana",   position: "Manager Divisi Sumber Daya Manusia",    division: "Divisi Sumber Daya Manusia",    unit: "PT RSUP (Industry)",          grade: "Grade 5",  isSupervisor: false },
 ];
+
+export function getMonitoringEmployees(): MonitoringEmployee[] {
+  const users = loadManagedUsers();
+  if (users.length > 0) {
+    return users.map((u) => ({
+      id: u.employeeId,
+      name: u.name,
+      position: u.position,
+      division: u.division,
+      unit: u.company,
+      grade: u.grade || "Grade 5",
+      isSupervisor: u.role === "Supervisor" || u.role === "Director" || u.groupings !== "Operasional",
+    }));
+  }
+  return FALLBACK_EMPLOYEES;
+}
+
+export const EMPLOYEES: MonitoringEmployee[] = getMonitoringEmployees();
 
 export const COMPANY_UNITS = [
   "PT RSUP (Industry)",

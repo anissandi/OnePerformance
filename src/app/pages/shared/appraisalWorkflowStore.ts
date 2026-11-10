@@ -1,5 +1,6 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
 import { savePersistedState } from "../../services/supabaseClient";
+import { getActiveUser, shouldBypassCheckerForSubmission } from "../../store/authStore";
 
 export const MOCK_EMPLOYEE_ID = "EMP-002";
 const KEY = "appraisal_workflow_v1";
@@ -76,9 +77,32 @@ function write(record: WorkflowRecord) {
     },
   });
 }
-export function submitWorkflowModule(module: string, phase: WorkflowRecord["phase"] = "measurement", date = new Date().toLocaleDateString("id-ID"), employeeId = MOCK_EMPLOYEE_ID) {
+export function submitWorkflowModule(
+  module: string,
+  phase: WorkflowRecord["phase"] = "measurement",
+  date = new Date().toLocaleDateString("id-ID"),
+  employeeId = getActiveUser().employeeId || MOCK_EMPLOYEE_ID,
+) {
   const key = keyFor(employeeId, module, phase);
-  write({ key, employeeId: normalizeEmployeeId(employeeId), module, phase, year: "2026", submittedDate: date, decisions: {}, assessments: {} });
+  const bypassChecker =
+    (module === "KPI" || module === "SMART Goals") &&
+    shouldBypassCheckerForSubmission(employeeId);
+  const initialDecisions: WorkflowRecord["decisions"] = bypassChecker
+    ? {
+        // Bagian XII Poin 2: HR Unit tidak bisa melakukan Checker pada pengajuan KPI & SMART Goals miliknya sendiri
+        // sehingga langsung masuk ke Approval 1 dst.
+      }
+    : {};
+  write({
+    key,
+    employeeId: normalizeEmployeeId(employeeId),
+    module,
+    phase,
+    year: "2026",
+    submittedDate: date,
+    decisions: initialDecisions,
+    assessments: {},
+  });
 }
 export function saveWorkflowDecision(no: string, status: string, date: string) {
   const alias = workflowAlias(no);

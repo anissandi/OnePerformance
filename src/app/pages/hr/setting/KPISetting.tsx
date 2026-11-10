@@ -1,6 +1,14 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
-import { CheckCircle2, X, RotateCcw, Download, FileSearch } from "lucide-react";
+import { CheckCircle2, X, RotateCcw, Download, FileSearch, Copy, UserCheck, ShieldCheck, Layers } from "lucide-react";
+import { toast } from "sonner";
+import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
+import { loadManagedUsers, RSUP_GROUP_COMPANIES } from "../../../store/authStore";
+import {
+  loadKpiValidationChecklist,
+  saveKpiValidationChecklist,
+  type KpiHierarchyValidationChecklist,
+} from "../ModuleActivation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -506,22 +514,158 @@ export function HRSettingKPIPage() {
   const [companyUnit, setCompanyUnit] = useState("PT RSUP (Industry)");
   const [selectedYear, setSelectedYear] = useState(CURRENT_YEAR);
   const [kpiTab, setKpiTab] = useRouteTab<"group" | "gm">(["group", "gm"], "group");
+  const [checklist, setChecklist] = useState<KpiHierarchyValidationChecklist>(() =>
+    loadKpiValidationChecklist(String(CURRENT_YEAR)),
+  );
+  const [unitKpiByCompany, setUnitKpiByCompany] = useState<Record<string, KPISetting[]>>(() =>
+    loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_unit_by_company_2026", {
+      "PT RSUP (Industry)": GM_KPI,
+      "PT RSUP (Perkebunan)": CORPORATE_KPI.filter((k) => Boolean(k.gmVgmPerkebunan)).map((k, idx) => ({
+        ...k,
+        id: `pkb-${k.id}`,
+        no: String(idx + 1),
+        scope: "RSUP Perkebunan",
+      })),
+      "PT RSTM": CORPORATE_KPI.filter((k) => Boolean(k.gmRstm)).map((k, idx) => ({
+        ...k,
+        id: `rstm-${k.id}`,
+        no: String(idx + 1),
+        scope: "PT RSTM",
+      })),
+      "PT GHS": CORPORATE_KPI.filter((k) => Boolean(k.gmGhs)).map((k, idx) => ({
+        ...k,
+        id: `ghs-${k.id}`,
+        no: String(idx + 1),
+        scope: "PT GHS",
+      })),
+      "ASD": CORPORATE_KPI.filter((k) => Boolean(k.gmAsd)).map((k, idx) => ({
+        ...k,
+        id: `asd-${k.id}`,
+        no: String(idx + 1),
+        scope: "ASD",
+      })),
+    }),
+  );
+  const [trackingAssigneeByKey, setTrackingAssigneeByKey] = useState<Record<string, string>>(() =>
+    loadPersistedState<Record<string, string>>("pa_kpi_business_tracking_pic_2026", {
+      "group::PT RSUP (Industry)": "E013 · Anis Sandi (HR Strategic Specialist)",
+      "gm::PT RSUP (Industry)": "E014 · Ananta Nirmala (HR Unit)",
+      "gm::PT RSUP (Perkebunan)": "E006 · Fajar Hidayat",
+      "gm::PT RSTM": "E003 · Budi Santoso",
+      "gm::PT GHS": "E010 · Joko Susanto",
+      "gm::ASD": "E018 · Wahyu Nugroho",
+    }),
+  );
+  const [validationMap, setValidationMap] = useState<Record<string, ApprovalStatus>>(() =>
+    loadPersistedState<Record<string, ApprovalStatus>>("pa_kpi_business_validation_2026", {
+      "group::PT RSUP (Industry)": "approved",
+      "gm::PT RSUP (Industry)": "approved",
+    }),
+  );
+
+  useEffect(() => {
+    const onSync = () => setChecklist(loadKpiValidationChecklist(String(selectedYear)));
+    window.addEventListener("pa-module-activation-updated", onSync);
+    window.addEventListener("pa-db-hydrated", onSync);
+    return () => {
+      window.removeEventListener("pa-module-activation-updated", onSync);
+      window.removeEventListener("pa-db-hydrated", onSync);
+    };
+  }, [selectedYear]);
 
   const handleCompanyUnitChange = (unit: string) => {
     setCompanyUnit(unit);
     if (unit !== "PT RSUP (Industry)") setKpiTab("gm");
   };
-  const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus>("pending");
+  const currentKey = `${kpiTab}::${companyUnit}`;
+  const approvalStatus: ApprovalStatus = validationMap[currentKey] ?? "pending";
+  const setApprovalStatus = (status: ApprovalStatus) => {
+    setValidationMap((prev) => {
+      const next = { ...prev, [currentKey]: status };
+      savePersistedState("pa_kpi_business_validation_2026", next, {
+        kind: "kv-state",
+        stateKey: "pa_kpi_business_validation_2026",
+        stateValue: next,
+      });
+      return next;
+    });
+  };
   const [pendingAction, setPendingAction] = useState<"approve" | "revision" | null>(null);
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [showCancelValidate, setShowCancelValidate] = useState(false);
 
+  const currentUnitItems = unitKpiByCompany[companyUnit] ?? GM_KPI;
+  const isRsupGroupUnit = (RSUP_GROUP_COMPANIES as readonly string[]).includes(companyUnit);
+  const canCreateOrEditKpiUnit = checklist.kpiGroupValidated || checklist.allowParallelKpiUnit;
+
+  const handleAdoptFromKpiGroup = () => {
+    if (!canCreateOrEditKpiUnit) {
+      toast.error("KPI Unit belum dapat dibuat karena KPI Group belum berstatus Validated dan mode paralel di /hr/modules tidak aktif.");
+      return;
+    }
+    const adopted = CORPORATE_KPI.map((k, idx) => ({
+      ...k,
+      id: `${companyUnit}-adopted-${k.id}`,
+      no: String(idx + 1),
+      scope: companyUnit,
+    }));
+    setUnitKpiByCompany((prev) => {
+      const next = { ...prev, [companyUnit]: adopted };
+      savePersistedState("pa_kpi_unit_by_company_2026", next, {
+        kind: "kv-state",
+        stateKey: "pa_kpi_unit_by_company_2026",
+        stateValue: next,
+        audit: {
+          action: "Update",
+          module: "KPI Business",
+          subModule: "KPI Unit",
+          description: `GM ${companyUnit} mengambil dan menyesuaikan ${adopted.length} indikator dari KPI Group`,
+        },
+      });
+      return next;
+    });
+    toast.success(`${adopted.length} indikator KPI Group berhasil diambil ke KPI Unit ${companyUnit} untuk disesuaikan oleh GM.`);
+  };
+
   const handleValidate = () => {
     setApprovalStatus("approved");
+    if (kpiTab === "group") {
+      const nextChecklist = { ...checklist, kpiGroupValidated: true };
+      setChecklist(nextChecklist);
+      saveKpiValidationChecklist(String(selectedYear), nextChecklist);
+    }
+    // Bagian IV Poin 10: KPI dengan status Validated otomatis ter-create di Measurement -> KPI Tracking
+    const sourceItems = kpiTab === "group" ? items : currentUnitItems;
+    const existingTracking = loadPersistedState<Record<string, unknown>>("pa_validated_kpi_tracking_items_2026", {});
+    const nextTracking = {
+      ...existingTracking,
+      [currentKey]: {
+        type: kpiTab === "group" ? "KPI Group" : "KPI Unit",
+        companyUnit,
+        year: selectedYear,
+        validatedAt: new Date().toISOString(),
+        trackingPic: trackingAssigneeByKey[currentKey] ?? "",
+        cascadingEnabled: true,
+        items: sourceItems,
+      },
+    };
+    savePersistedState("pa_validated_kpi_tracking_items_2026", nextTracking, {
+      kind: "kv-state",
+      stateKey: "pa_validated_kpi_tracking_items_2026",
+      stateValue: nextTracking,
+      audit: {
+        action: "Validate",
+        module: "KPI Business",
+        subModule: kpiTab === "group" ? "KPI Group" : "KPI Unit",
+        description: `Validated ${kpiTab === "group" ? "KPI Group" : "KPI Unit"} (${companyUnit}) & auto-created in Measurement -> KPI Tracking`,
+      },
+    });
     setPendingAction(null);
-    setSuccessMessage(`KPI ${kpiTab === "group" ? "Group" : "Unit"} has been validated successfully.`);
+    setSuccessMessage(
+      `KPI ${kpiTab === "group" ? "Group" : "Unit"} (${companyUnit}) berhasil berstatus Validated dan otomatis ter-create di Measurement -> KPI Tracking.`,
+    );
     setShowSuccess(true);
   };
 
@@ -621,10 +765,53 @@ export function HRSettingKPIPage() {
             {statusBadge()}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-[#1A284F]/5 rounded-lg">
               <span className="text-xs font-bold text-[#1A284F]">Total KPI:</span>
-              <span className="text-sm font-bold text-[#1A284F]">{items.length}</span>
+              <span className="text-sm font-bold text-[#1A284F]">
+                {kpiTab === "group" ? items.length : currentUnitItems.length}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs text-[#1A284F]">
+              <UserCheck className="w-3.5 h-3.5 text-blue-600" />
+              <span className="font-semibold">Penyusun:</span>
+              <span>
+                {kpiTab === "group"
+                  ? "Direktur Operasional — PT RSUP (Industry)"
+                  : `General Manager (GM) — ${companyUnit}`}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 border border-gray-200 rounded-lg text-xs">
+              <span className="font-semibold text-gray-600">PIC Tracking (Allowed by Admin/HR ICF):</span>
+              <select
+                value={trackingAssigneeByKey[currentKey] ?? ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setTrackingAssigneeByKey((prev) => {
+                    const next = { ...prev, [currentKey]: val };
+                    savePersistedState("pa_kpi_business_tracking_pic_2026", next);
+                    return next;
+                  });
+                }}
+                className="bg-transparent font-medium text-[#1A284F] focus:outline-none"
+              >
+                <option value="">— Pilih PIC Tracking —</option>
+                {loadManagedUsers().map((u) => (
+                  <option key={u.employeeId} value={`${u.employeeId} · ${u.name} (${u.position})`}>
+                    {u.employeeId} · {u.name} ({u.company})
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {kpiTab === "gm" && isRsupGroupUnit && (
+              <button
+                type="button"
+                onClick={handleAdoptFromKpiGroup}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border border-blue-200 bg-blue-50 text-[#1A284F] hover:bg-blue-100 transition-colors"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Ambil Indikator dari KPI Group
+              </button>
+            )}
             {approvalStatus === "approved" ? (
               <button onClick={() => setShowCancelValidate(true)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-red-400 text-red-600 hover:bg-red-50 transition-colors">
@@ -651,14 +838,43 @@ export function HRSettingKPIPage() {
 
         {kpiTab === "group" && companyUnit === "PT RSUP (Industry)" && selectedYear === CURRENT_YEAR ? (
           <>
-            <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
-              <svg className="w-4 h-4 mt-0.5 shrink-0 text-amber-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" /></svg>
-              <span><span className="font-semibold">Note:</span> KPI Business are available only to Heads of Division and higher-level management.</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 shrink-0 text-amber-600" />
+                <span>
+                  <strong>RSUP Group:</strong> PT RSUP (Industry), PT RSUP (Perkebunan), PT RSTM, PT GHS, dan ASD. Nilai Tracking KPI Group mendukung <strong>Cascading</strong> otomatis dari indikator turunan KPI Unit.
+                </span>
+              </div>
+              <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Status Validated otomatis ter-create ke Measurement → KPI Tracking
+              </span>
             </div>
             <BusinessKPITable items={items} />
           </>
-        ) : kpiTab === "gm" && companyUnit === "PT RSUP (Industry)" && selectedYear === CURRENT_YEAR ? (
-          <GMKPITable items={GM_KPI} />
+        ) : kpiTab === "gm" && isRsupGroupUnit && selectedYear === CURRENT_YEAR ? (
+          canCreateOrEditKpiUnit ? (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-blue-50/70 border border-blue-200 rounded-lg text-xs text-[#1A284F]">
+                <span>
+                  <strong>KPI Unit ({companyUnit}):</strong> Disusun oleh GM {companyUnit}, dapat mengambil indikator dari KPI Group dan disesuaikan dengan target unit usaha.
+                </span>
+                <span className="font-semibold text-emerald-700">
+                  {checklist.kpiGroupValidated ? "KPI Group: Validated" : "Mode Paralel Aktif (/hr/modules)"}
+                </span>
+              </div>
+              <GMKPITable items={currentUnitItems} />
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 rounded-xl border border-amber-200 bg-amber-50/50 text-center px-6">
+              <p className="text-sm font-bold text-amber-900">
+                KPI Unit {companyUnit} Belum Dapat Dibuat
+              </p>
+              <p className="text-xs text-amber-800 max-w-lg">
+                Sesuai aturan Bagian IV Poin 6, KPI Unit hanya bisa dibuat jika KPI Group sudah berstatus Validated atau Checklist Mode Paralel diaktifkan di menu <strong>/hr/modules</strong>.
+              </p>
+            </div>
+          )
         ) : (
           <div className="flex flex-col items-center justify-center gap-3 py-20 rounded-xl border border-dashed border-gray-200 bg-gray-50/50">
             <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">

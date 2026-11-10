@@ -1,15 +1,17 @@
 import type { SmartGoal } from "../employee/SMARTGoals";
 import { submitWorkflowModule } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
+import { getActiveUser } from "../../store/authStore";
 
 const STORAGE_KEY = "sg_submitted_smart_goals";
 const CHECKIN_KEY = "sg_checkin_entries_v1";
 
 export function saveSubmittedGoals(goals: SmartGoal[]): void {
   try {
+    const activeUser = getActiveUser();
     savePersistedState(STORAGE_KEY, goals, {
       kind: "smart-goals",
-      employeeId: "E002",
+      employeeId: activeUser.employeeId,
       period: "2026",
       goals,
       checkinEntries: loadCheckInEntries(),
@@ -19,10 +21,10 @@ export function saveSubmittedGoals(goals: SmartGoal[]): void {
         action: "Create",
         module: "SMART Goals",
         subModule: "SMART Goals Setting",
-        description: `Submitted ${goals.length} SMART Goals for approval`,
+        description: `Submitted ${goals.length} SMART Goals for approval by ${activeUser.name} (${activeUser.employeeId})`,
       },
     });
-    submitWorkflowModule("SMART Goals", "setting");
+    submitWorkflowModule("SMART Goals", "setting", new Date().toLocaleDateString("id-ID"), activeUser.employeeId);
   } catch {
     // ignore storage errors
   }
@@ -40,7 +42,7 @@ export function loadSubmittedGoals(): SmartGoal[] | null {
 
 export function clearSubmittedGoals(): void {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    savePersistedState(STORAGE_KEY, []);
   } catch {
     // ignore
   }

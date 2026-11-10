@@ -4,33 +4,17 @@ import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT } from 
 import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight } from "lucide-react";
 import {
   defaultAllowedModulesForGrouping,
-  DEFAULT_MANAGED_USERS,
   loadManagedUsers,
   loadUnitGroupRules,
   saveManagedUsers,
   saveUnitGroupRules,
+  type ManagedUser,
 } from "../../../store/authStore";
 
 type Role = "Employee" | "Supervisor" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "";
 type Status = "Active" | "Inactive";
 
-interface User {
-  id: string;
-  name: string;
-  employeeId: string;
-  position: string;
-  company: string;
-  division: string;
-  department: string;
-  grade: string;
-  role: Role;
-  groupings: string;
-  status: Status;
-  lastLogin: string;
-  email: string;
-}
-
-const USERS: User[] = DEFAULT_MANAGED_USERS;
+type User = ManagedUser;
 
 const ROLES: Role[] = ["Employee", "Supervisor", "HR Unit", "HR ICF", "Director", "BOD", "Administrator"];
 const COMPANIES = [
@@ -60,6 +44,7 @@ const ROLE_BADGE: Record<string, string> = {
   "HR Unit":       "bg-purple-50 text-purple-700",
   "HR ICF":        "bg-amber-50 text-amber-700",
   "Director":      "bg-rose-50 text-rose-700",
+  "BOD":           "bg-red-50 text-red-700",
   "Administrator": "bg-slate-100 text-slate-700",
 };
 
@@ -97,10 +82,16 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
 
         <div className="p-6 grid grid-cols-2 gap-4">
           {[
+            { label: "Reg No", value: user.regNo || "—" },
             { label: "Email", value: user.email },
+            { label: "No Telegram", value: user.telegramNo || "—" },
+            { label: "Joindate", value: user.joinDate || "—" },
             { label: "Company", value: user.company },
             { label: "Division", value: user.division },
             { label: "Department", value: user.department },
+            { label: "Bagian", value: user.bagian || "—" },
+            { label: "Reg No AP1 (Approval 1)", value: user.regNoAp1 || "—" },
+            { label: "Reg No AP2 (Approval 2)", value: user.regNoAp2 || "—" },
             { label: "Role", value: <RoleBadge role={user.role} /> },
             { label: "Groupings", value: user.groupings },
             { label: "Status", value: <StatusBadge status={user.status} /> },
@@ -125,9 +116,10 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
 function EditModal({ user, onClose, onSave }: { user: User | null; onClose: () => void; onSave: (u: User) => void }) {
   const isNew = !user || !user.name;
   const [form, setForm] = useState<User>(user ?? {
-    id: String(Date.now()), name: "", employeeId: "", position: "", company: COMPANIES[0],
-    division: "", department: "", grade: "", role: "Employee",
-    groupings: GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "",
+    id: String(Date.now()), regNo: "", name: "", employeeId: "", position: "", company: COMPANIES[0],
+    division: "", department: "", bagian: "", joinDate: "", telegramNo: "", grade: "Grade 5", role: "Employee",
+    groupings: GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "", regNoAp1: "", regNoAp2: "",
+    isHrUnitChecker: false, isHrIcfValidator: false,
   });
 
   function f(key: keyof User, val: string) { setForm(p => ({ ...p, [key]: val })); }
@@ -143,16 +135,22 @@ function EditModal({ user, onClose, onSave }: { user: User | null; onClose: () =
         <div className="overflow-y-auto p-6 grid grid-cols-2 gap-4">
           {[
             { label: "Full Name", key: "name" as keyof User, type: "text" },
+            { label: "Reg No", key: "regNo" as keyof User, type: "text" },
             { label: "Employee ID", key: "employeeId" as keyof User, type: "text" },
-            { label: "Email", key: "email" as keyof User, type: "email" },
+            { label: "Corporate Email", key: "email" as keyof User, type: "email" },
+            { label: "No Telegram (OTP)", key: "telegramNo" as keyof User, type: "text" },
+            { label: "Joindate", key: "joinDate" as keyof User, type: "date" },
             { label: "Position / Jabatan", key: "position" as keyof User, type: "text" },
             { label: "Division", key: "division" as keyof User, type: "text" },
             { label: "Department", key: "department" as keyof User, type: "text" },
+            { label: "Bagian", key: "bagian" as keyof User, type: "text" },
+            { label: "Reg No AP1 (Approval 1)", key: "regNoAp1" as keyof User, type: "text" },
+            { label: "Reg No AP2 (Approval 2)", key: "regNoAp2" as keyof User, type: "text" },
           ].map(({ label, key, type }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
               <input type={type} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={form[key] as string} onChange={e => f(key, e.target.value)} />
+                value={(form[key] as string) ?? ""} onChange={e => f(key, e.target.value)} />
             </div>
           ))}
 
@@ -170,11 +168,59 @@ function EditModal({ user, onClose, onSave }: { user: User | null; onClose: () =
             <div key={key}>
               <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
               <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={form[key] as string} onChange={e => f(key, e.target.value)}>
+                value={form[key] as string} onChange={e => {
+                  const v = e.target.value;
+                  setForm(p => ({
+                    ...p,
+                    [key]: v,
+                    ...(key === "role" && v === "HR Unit" ? { isHrUnitChecker: true } : {}),
+                    ...(key === "role" && (v === "HR ICF" || v === "Administrator") ? { isHrIcfValidator: true } : {}),
+                  }));
+                }}>
                 {options.map(o => <option key={o} value={o}>{(labels as Record<string,string>)[o] ?? o}</option>)}
               </select>
             </div>
           ))}
+
+          <div className="col-span-2 rounded-xl border border-gray-200 bg-slate-50/70 p-3.5 space-y-2">
+            <p className="text-xs font-semibold text-[#1A284F]">Setup Fungsi Approval Khusus & Akses Role</p>
+            <div className="flex flex-wrap gap-5 text-xs text-gray-700">
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.isHrUnitChecker || form.role === "HR Unit")}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      isHrUnitChecker: e.target.checked,
+                      role: e.target.checked && p.role === "Employee" ? "HR Unit" : p.role,
+                    }))
+                  }
+                  className="rounded border-gray-300"
+                />
+                <span>
+                  <strong>Approval Check HR Unit Usaha</strong> (Checker KPI & SMART Goals unit usaha; bypass otomatis untuk pengajuan milik sendiri)
+                </span>
+              </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.isHrIcfValidator || form.role === "HR ICF" || form.role === "Administrator")}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      isHrIcfValidator: e.target.checked,
+                      role: e.target.checked && (p.role === "Employee" || !p.role) ? "HR ICF" : p.role,
+                    }))
+                  }
+                  className="rounded border-gray-300"
+                />
+                <span>
+                  <strong>Approval Validate HR ICF</strong> (Role HR ICF memiliki hak akses setara Administrator)
+                </span>
+              </label>
+            </div>
+          </div>
         </div>
 
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100">
@@ -609,7 +655,7 @@ const COMPANY_COLORS = [
   "from-indigo-500 to-indigo-700",
 ];
 
-function CompanyUnitPicker({ onSelect }: { onSelect: (company: string) => void }) {
+function CompanyUnitPicker({ users, onSelect }: { users: User[]; onSelect: (company: string) => void }) {
   const [search, setSearch] = useState("");
   const filtered = COMPANIES.filter(c => c.toLowerCase().includes(search.toLowerCase()));
 
@@ -645,8 +691,8 @@ function CompanyUnitPicker({ onSelect }: { onSelect: (company: string) => void }
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filtered.map((company, idx) => {
-            const userCount = USERS.filter(u => u.company === company).length;
-            const activeCount = USERS.filter(u => u.company === company && u.status === "Active").length;
+            const userCount = users.filter(u => u.company === company).length;
+            const activeCount = users.filter(u => u.company === company && u.status === "Active").length;
             const gradient = COMPANY_COLORS[idx % COMPANY_COLORS.length];
             return (
               <button
@@ -692,8 +738,20 @@ export function UserManagementPage() {
   const [deleteUser, setDeleteUser] = useState<User | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
+  useEffect(() => {
+    const onSync = () => setUsers(loadManagedUsers());
+    window.addEventListener("pa-auth-updated", onSync);
+    window.addEventListener("pa-employees-imported", onSync);
+    window.addEventListener("pa-db-hydrated", onSync);
+    return () => {
+      window.removeEventListener("pa-auth-updated", onSync);
+      window.removeEventListener("pa-employees-imported", onSync);
+      window.removeEventListener("pa-db-hydrated", onSync);
+    };
+  }, []);
+
   if (!selectedCompany) {
-    return <CompanyUnitPicker onSelect={setSelectedCompany} />;
+    return <CompanyUnitPicker users={users} onSelect={setSelectedCompany} />;
   }
 
   const companyUsers = users.filter(u => u.company === selectedCompany);
@@ -851,6 +909,7 @@ export function UserManagementPage() {
               <tr className="border-b border-gray-100 bg-gray-50/60">
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Action</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Employee</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Reg No & AP1/AP2</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Company / Unit</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Division</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Dept</th>
@@ -879,8 +938,15 @@ export function UserManagementPage() {
                       </div>
                       <div>
                         <p className="font-semibold text-gray-800 leading-tight">{user.name}</p>
-                        <p className="text-xs text-gray-400">{user.employeeId} · {user.position}</p>
+                        <p className="text-xs text-gray-400">{user.employeeId} · {user.position}{user.bagian ? ` (${user.bagian})` : ""}</p>
                       </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-xs">
+                    <div className="font-mono font-semibold text-[#1A284F]">{user.regNo || "—"}</div>
+                    <div className="text-[11px] text-gray-400 mt-0.5">
+                      AP1: <span className="text-gray-600 font-medium">{user.regNoAp1 || "—"}</span> · AP2:{" "}
+                      <span className="text-gray-600 font-medium">{user.regNoAp2 || "—"}</span>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs max-w-[160px]">
@@ -893,7 +959,21 @@ export function UserManagementPage() {
                     <span className="inline-flex px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs font-medium">{user.department}</span>
                   </td>
 
-                  <td className="px-4 py-3"><RoleBadge role={user.role} /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col items-start gap-1">
+                      <RoleBadge role={user.role} />
+                      {(user.role === "HR Unit" || user.isHrUnitChecker) && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 font-medium">
+                          Checker HR Unit
+                        </span>
+                      )}
+                      {(user.role === "HR ICF" || user.isHrIcfValidator) && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-medium">
+                          Validate HR ICF (= Admin)
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-4 py-3">
                     <span className="inline-flex px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-xs font-medium">{user.groupings}</span>
                   </td>
