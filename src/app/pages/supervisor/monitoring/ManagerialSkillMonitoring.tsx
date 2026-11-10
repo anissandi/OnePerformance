@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Search, Briefcase, CheckCircle2, AlertCircle, Clock } from "lucide-react";
-import { EMPLOYEES } from "../../hr/monitoring/monitoringData";
+import { SUPERVISOR_TEAM_EMPLOYEES } from "../../hr/monitoring/monitoringData";
 
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
-const TEAM_EMPLOYEES = EMPLOYEES;
+const TEAM_EMPLOYEES = SUPERVISOR_TEAM_EMPLOYEES;
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -171,7 +171,7 @@ export function SupervisorMonitoringManagerialSkill() {
                       <p className="text-sm text-gray-700 whitespace-nowrap">{emp.division}</p>
                     </td>
                     <td className="py-3.5 px-5">
-                      <p className="text-sm text-gray-700 whitespace-nowrap">{DEPARTMENT_MAP[emp.id] ?? "—"}</p>
+                      <p className="text-sm text-gray-700 whitespace-nowrap">{emp.department ?? DEPARTMENT_MAP[emp.id] ?? "—"}</p>
                     </td>
                     <td className="py-3.5 px-5">
                       <p className="text-sm text-gray-700 whitespace-nowrap">{emp.position}</p>

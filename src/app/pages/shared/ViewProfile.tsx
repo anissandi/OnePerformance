@@ -11,6 +11,8 @@ import {
   KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
 } from "../employee/KPIPage";
 import { SUPERVISOR_PROFILE } from "../../store/profileStore";
+import { getActiveUser, resolveUserAllowedModules } from "../../store/authStore";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 
 // ─── User identity (from shared profile store) ─────────────────────────────────
 const USER = SUPERVISOR_PROFILE;
@@ -75,76 +77,65 @@ const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus })[] = [
     id: "m1",
     module: "KPI",
     submissionType: "KPI Tracking — Measurement",
-    completedDate: "2026-05-20",
-    score: 98,
-    grade: "A",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 40,
-    weightedScore: 39.2,
-    status: "approved",
+    weightedScore: 0,
+    status: "pending",
     icon: TrendingUp,
     color: "text-blue-700",
     bg: "bg-blue-50",
     border: "border-blue-200",
-    detail: "8 KPI indicators. Avg. achievement 88%. Submitted and approved by Approver 1.",
-    subResults: [
-      { label: "Recruitment Cycle Time",   score: 95, grade: "A" },
-      { label: "Training Completion Rate", score: 82, grade: "B" },
-      { label: "Employee Retention Rate",  score: 96, grade: "A" },
-      { label: "Headcount Fulfilment",     score: 80, grade: "B" },
-    ],
+    detail: "Belum ada transaksi KPI yang diselesaikan pada periode ini.",
   },
   {
     id: "m2",
     module: "SMART Goals",
     submissionType: "SMART Goals — Measurement",
-    completedDate: "2026-05-21",
-    score: 92,
-    grade: "A",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 15,
-    weightedScore: 13.8,
-    status: "in_review",
+    weightedScore: 0,
+    status: "pending",
     icon: Lightbulb,
     color: "text-amber-700",
     bg: "bg-amber-50",
     border: "border-amber-200",
-    detail: "3 goals submitted with evidence. Currently under review by Approver 2.",
+    detail: "Belum ada transaksi SMART Goals yang diselesaikan pada periode ini.",
   },
   {
     id: "m3",
     module: "Appraisal Form",
     submissionType: "Appraisal Form — Measurement",
-    completedDate: "2026-05-22",
-    score: 95,
-    grade: "A",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 15,
-    weightedScore: 14.25,
-    status: "in_review",
+    weightedScore: 0,
+    status: "pending",
     icon: ClipboardList,
     color: "text-green-700",
     bg: "bg-green-50",
     border: "border-green-200",
-    detail: "Forms A, B & C submitted. Currently under review by supervisor.",
-    subResults: [
-      { label: "Form A", score: 86, grade: "A" },
-      { label: "Form B", score: 83, grade: "B" },
-      { label: "Form C", score: 86, grade: "A" },
-    ],
+    detail: "Belum ada transaksi Appraisal Form yang diselesaikan pada periode ini.",
   },
   {
     id: "m4",
     module: "Project Outside Job Scope",
     submissionType: "Project Measurement",
-    completedDate: "2026-05-23",
-    score: 91,
-    grade: "A",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 15,
-    weightedScore: 13.65,
+    weightedScore: 0,
     status: "pending",
     icon: FolderKanban,
     color: "text-teal-700",
     bg: "bg-teal-50",
     border: "border-teal-200",
-    detail: "Project: Reduksi Downtime Mesin Boiler (QCC). Progress 100%. Pending approval.",
+    detail: "Belum ada transaksi Project Outside Job Scope pada periode ini.",
   },
   {
     id: "m5",
@@ -216,73 +207,42 @@ interface YearRecord {
 
 const YEAR_DATA: Record<number, YearRecord> = {
   2026: {
-    score: 80.9,
-    grade: "A",
+    score: 0,
+    grade: "N/A",
     isFinal: false,
-    lastUpdated: "2026-06-15",
+    lastUpdated: "—",
     modulesApproved: 0,
     modulesTotal: 4,
-    kpiScore: 98,
-    kpiGrade: "A",
-    summaryNotes: [
-      {
-        approver: "Budi Santoso",
-        role: "Approver 1 — Supervisor",
-        date: "2026-06-15",
-        module: "KPI",
-        note: "Pencapaian KPI keseluruhan sangat memuaskan, terutama pada indikator Employee Retention Rate dan Recruitment Cycle Time yang melampaui target. Pertahankan konsistensi ini dan fokuskan perhatian pada peningkatan Training Completion Rate agar dapat mencapai target ≥90% di periode berikutnya.",
-      },
-    ],
+    kpiScore: 0,
+    kpiGrade: "N/A",
+    summaryNotes: [],
   },
   2025: {
-    score: 87.4,
-    grade: "A",
+    score: 0,
+    grade: "N/A",
     isFinal: true,
-    lastUpdated: "2025-12-30",
-    modulesApproved: 4,
+    lastUpdated: "—",
+    modulesApproved: 0,
     modulesTotal: 4,
-    kpiScore: 91,
-    kpiGrade: "A",
-    summaryNotes: [
-      {
-        approver: "Budi Santoso",
-        role: "Approver 1 — Supervisor",
-        date: "2025-12-28",
-        module: "KPI",
-        note: "Kinerja KPI tahun 2025 menunjukkan peningkatan signifikan dibandingkan tahun sebelumnya. Semua indikator utama berhasil memenuhi atau melampaui target yang ditetapkan. Apresiasi atas dedikasi dan konsistensi dalam pelaksanaan program rekrutmen dan pengembangan SDM sepanjang tahun.",
-      },
-      {
-        approver: "Kartika Wijaya",
-        role: "Approver 2 — HR Manager",
-        date: "2025-12-30",
-        module: "KPI",
-        note: "Hasil appraisal tahun 2025 mencerminkan kontribusi nyata terhadap target departemen. Rekomendasikan untuk mengambil peran lebih strategis dalam inisiatif pengembangan kompetensi di tahun mendatang.",
-      },
-    ],
+    kpiScore: 0,
+    kpiGrade: "N/A",
+    summaryNotes: [],
   },
   2024: {
-    score: 79.2,
-    grade: "B",
+    score: 0,
+    grade: "N/A",
     isFinal: true,
-    lastUpdated: "2024-12-28",
-    modulesApproved: 4,
+    lastUpdated: "—",
+    modulesApproved: 0,
     modulesTotal: 4,
-    kpiScore: 84,
-    kpiGrade: "B",
-    summaryNotes: [
-      {
-        approver: "Budi Santoso",
-        role: "Approver 1 — Supervisor",
-        date: "2024-12-26",
-        module: "KPI",
-        note: "Secara keseluruhan kinerja sudah cukup baik, namun beberapa indikator seperti Headcount Fulfilment dan Training Completion Rate masih perlu ditingkatkan. Disarankan untuk menyusun rencana aksi konkret di awal tahun 2025 guna mendorong pencapaian yang lebih optimal.",
-      },
-    ],
+    kpiScore: 0,
+    kpiGrade: "N/A",
+    summaryNotes: [],
   },
 };
 
-const HIST_SCORES_2025: Record<string, number> = { "KPI": 91, "SMART Goals": 89, "Appraisal Form": 90, "Project Outside Job Scope": 86, "Managerial Skill": 0, "Management Interview": 0 };
-const HIST_SCORES_2024: Record<string, number> = { "KPI": 84, "SMART Goals": 82, "Appraisal Form": 85, "Project Outside Job Scope": 78, "Managerial Skill": 0, "Management Interview": 0 };
+const HIST_SCORES_2025: Record<string, number> = {};
+const HIST_SCORES_2024: Record<string, number> = {};
 
 const FINAL_MODULE_RESULTS_2025: (typeof MODULE_RESULTS[0])[] = MODULE_RESULTS.map((m) => {
   const s = HIST_SCORES_2025[m.module] ?? m.score;
@@ -342,12 +302,30 @@ export function ViewProfile() {
 
   // Inject live KPI score into 2026 module results
   const activeModules = useMemo(() => {
+    const activeUser = getActiveUser();
+    const allowed = resolveUserAllowedModules(activeUser);
+    const liveEmp = getLiveTransactionalEmployees().find(
+      (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
+    );
     const base = getModuleResults(selectedYear);
-    if (!isCurrent || liveKPIScore2026 === null) return base;
+    if (!isCurrent) return base;
     return base.map((m) => {
-      if (m.module !== "KPI") return m;
-      const score = liveKPIScore2026;
-      return { ...m, score, weightedScore: parseFloat((score * m.weight / 100).toFixed(2)) };
+      if (m.module === "Managerial Skill" && !allowed.includes("Managerial Skill")) {
+        return { ...m, status: "not_applicable" as const, score: 0, grade: "N/A", weightedScore: 0 };
+      }
+      if (m.module === "Management Interview" && !allowed.includes("Management Interview")) {
+        return { ...m, status: "not_applicable" as const, score: 0, grade: "N/A", weightedScore: 0 };
+      }
+      let score = 0;
+      if (m.module === "KPI") score = liveKPIScore2026 ?? liveEmp?.kpi.score ?? 0;
+      else if (m.module === "SMART Goals") score = liveEmp?.smartGoals.score ?? 0;
+      else if (m.module === "Appraisal Form") score = liveEmp?.formA.score ?? 0;
+      else if (m.module === "Project Outside Job Scope") score = liveEmp?.project.score ?? 0;
+      else if (m.module === "Managerial Skill") score = liveEmp?.managerialSkill?.score ?? 0;
+      else if (m.module === "Management Interview") score = liveEmp?.managementInterview?.score ?? 0;
+      const grade = score === 0 ? "N/A" : score >= 90 ? "A+" : score >= 80 ? "A" : score >= 70 ? "B" : score >= 60 ? "C" : score >= 50 ? "D" : "E";
+      const status: ModuleStatus = score > 0 ? "approved" : "pending";
+      return { ...m, score, grade, status, weightedScore: parseFloat(((score * m.weight) / 100).toFixed(2)) };
     });
   }, [selectedYear, isCurrent, liveKPIScore2026]);
 
@@ -356,6 +334,7 @@ export function ViewProfile() {
 
   // For current year, derive display score/grade from live module scores
   function scoreToGrade(s: number) {
+    if (s <= 0) return "N/A";
     if (s >= 90) return "A+";
     if (s >= 80) return "A";
     if (s >= 70) return "B";

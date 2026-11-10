@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { AlertTriangle, Eye, X, FileText, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadPersistedState } from "../../services/supabaseClient";
+import { getActiveUser, getStrictSubordinateUsers } from "../../store/authStore";
 
 // ─── Seeded helpers (mirrors CalibrationAdjustment) ───────────────────────────
 
@@ -90,7 +91,9 @@ interface TeamMember {
 }
 
 function buildLiveSupervisorTeamMembers(): TeamMember[] {
-  const liveEmps = getLiveTransactionalEmployees();
+  const activeUser = getActiveUser();
+  const allowedIds = new Set(getStrictSubordinateUsers(activeUser).map((u) => u.employeeId.toLowerCase()));
+  const liveEmps = getLiveTransactionalEmployees().filter((e) => allowedIds.has(e.id.toLowerCase()));
   const adjScores = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
   const adjComments = loadPersistedState<Record<string, string>>("pa_calibration_adj_comments_v1", {});
   return liveEmps.map((e, idx) => {

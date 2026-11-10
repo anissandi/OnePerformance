@@ -4,6 +4,7 @@ import {
   Search, Filter, Eye, FileText, Download, AlertCircle,
 } from "lucide-react";
 import { loadFeedbackSubmissions } from "../../shared/interDepartmentFeedbackStore";
+import { getActiveUser, getStrictSubordinateUsers } from "../../../store/authStore";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -37,7 +38,8 @@ interface EmployeeRecord {
   summarySubmitted: boolean;
 }
 
-const DATA: EmployeeRecord[] = [
+const DATA: EmployeeRecord[] = [];
+const _UNUSED_DATA: EmployeeRecord[] = [
   {
     id: "E002", name: "Ahmad Fauzi", unit: "PT RSUP (Industry)",
     division: "Divisi SDM", department: "Dept. Rekrutmen", position: "Staff HR",
@@ -561,7 +563,25 @@ export function SupervisorMonitoringInterDeptFeedback() {
     department: submission.row.department, position: submission.row.position, feedbacks: submission.feedbacks, summaries: submission.summaries,
     approver: { a1: submission.followUps.approver1 ?? [], a2: submission.followUps.approver2 ?? [] }, evaluasi: {}, summarySubmitted: !!submission.summarySubmittedAt,
   }));
-  const records = [...DATA.filter((record) => !workflowRecords.some((workflow) => workflow.id === record.id)), ...workflowRecords];
+  const activeUser = getActiveUser();
+  const subordinateUsers = getStrictSubordinateUsers(activeUser);
+  const subIds = new Set(subordinateUsers.map((u) => u.employeeId.toLowerCase()));
+  const records = subordinateUsers.map((u) => {
+    const found = workflowRecords.find((w) => w.id.toLowerCase() === u.employeeId.toLowerCase());
+    return found ?? {
+      id: u.employeeId,
+      name: u.name,
+      unit: u.company,
+      division: u.division,
+      department: u.department,
+      position: u.position,
+      feedbacks: [],
+      summaries: {},
+      approver: { a1: [], a2: [] },
+      evaluasi: {},
+      summarySubmitted: false,
+    };
+  }).filter((r) => subIds.has(r.id.toLowerCase()));
 
   const filtered = records.filter((r) => {
     const q = search.toLowerCase();

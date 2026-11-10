@@ -266,6 +266,15 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         }),
       };
     }
+    if (link.label === "Calibration" && link.subLinks) {
+      return {
+        ...link,
+        subLinks: link.subLinks.filter((sub) => {
+          if (sub.to.endsWith("/management-interview")) return hasMi;
+          return true;
+        }),
+      };
+    }
     return link;
   });
 

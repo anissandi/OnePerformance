@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { CheckCircle2, Calendar, Users, ArrowRight } from "lucide-react";
+import { loadPersistedState } from "../../services/supabaseClient";
 
 type Role = "hr" | "supervisor" | "employee";
 
@@ -42,7 +43,8 @@ const gradeColors: Record<string, string> = {
   "D": "bg-red-400",
 };
 
-const cycles: CycleData[] = [
+const cycles: CycleData[] = [];
+const _UNUSED_CYCLES: CycleData[] = [
   {
     year: 2025,
     period: "Feb 2025 – Feb 2026",

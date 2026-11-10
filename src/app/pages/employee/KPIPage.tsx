@@ -673,7 +673,8 @@ export const KPI_ITEMS: KPIItem[] = [
 
 // ─── Sample monthly data ──────────────────────────────────────────────────────
 
-export const INITIAL_MONTHS: MonthEntry[] = [
+export const INITIAL_MONTHS: MonthEntry[] = [];
+const _UNUSED_INITIAL_MONTHS: MonthEntry[] = [
   {
     id: "jan26", label: "Jan-26",
     cells: {

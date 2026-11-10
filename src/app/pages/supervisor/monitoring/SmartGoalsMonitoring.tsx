@@ -1,13 +1,13 @@
 import React, { useState, useMemo } from "react";
 import { Search, Lightbulb, CheckCircle2, AlertCircle, Clock, ChevronUp, ChevronDown, Eye, X, Filter, Users, Target, ListChecks, ShieldCheck, BarChart2, TrendingUp } from "lucide-react";
-import { EMPLOYEES } from "../../hr/monitoring/monitoringData";
+import { SUPERVISOR_TEAM_EMPLOYEES } from "../../hr/monitoring/monitoringData";
 
 // ─── Team scope ───────────────────────────────────────────────────────────────
 
 const TEAM_IDS       = ["E002", "E011"];
 const TEAM_UNIT      = "PT. RSUP (Industri)";
 const TEAM_DIV       = "Divisi Sumber Daya Manusia";
-const TEAM_EMPLOYEES = EMPLOYEES;
+const TEAM_EMPLOYEES = SUPERVISOR_TEAM_EMPLOYEES;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

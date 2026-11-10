@@ -9,7 +9,7 @@ import { applyYearEndScorePolicy, isYearEndInactive } from "../shared/yearEndWor
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
-import { loadManagedUsers } from "../../store/authStore";
+import { loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -260,6 +260,7 @@ function buildLiveCalibrationEmployees(): Employee[] {
     const deptId = matchedBagian[1];
     const divisiId = DEPT_DEFS.find(([dId]) => dId === deptId)?.[1] ?? "div1";
     const grouping = u.groupings || "Operasional";
+    const allowedModules = resolveUserAllowedModules(u);
     const level: EmpLevel =
       grouping === "Ka./Wa.Ka.Div ke atas"
         ? "Kepala Divisi"
@@ -270,8 +271,8 @@ function buildLiveCalibrationEmployees(): Employee[] {
         : grouping === "Ka./Wa.Ka.Seksi"
         ? "Pengawas"
         : "Operasional";
-    const hasMgr = level === "Kepala Divisi" || level === "Kepala Departemen" || level === "Kepala Bagian" || level === "Pengawas";
-    const hasIntv = level === "Kepala Divisi";
+    const hasMgr = allowedModules.includes("Managerial Skill");
+    const hasIntv = allowedModules.includes("Management Interview");
     return {
       id: `emp-${u.employeeId}`,
       employeeId: u.employeeId,

@@ -7,6 +7,7 @@ import {
 import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
+import { getActiveUser, getStrictSubordinateUsers } from "../../store/authStore";
 
 type Role = "hr" | "supervisor";
 
@@ -421,9 +422,16 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     else { setSortKey(key); setSortDir("desc"); }
   };
 
+  const activeUser = getActiveUser();
+  const supervisorAllowedIds = new Set(
+    role === "supervisor"
+      ? getStrictSubordinateUsers(activeUser).map((u) => u.employeeId.toLowerCase())
+      : [],
+  );
+
   const filtered = mockEmployees.filter(emp => {
     if (role === "supervisor") {
-      if (!["PT RSUP (Industry)", "PT Pulau Sambu (Jakarta)"].includes(emp.companyUnit)) return false;
+      if (!supervisorAllowedIds.has(emp.id.toLowerCase())) return false;
     }
     if (lockedUnits && !lockedUnits.includes(emp.companyUnit)) return false;
     if (companyUnit !== "All Units"       && emp.companyUnit !== companyUnit) return false;

@@ -112,9 +112,10 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
 
   useEffect(() => subscribeScores(() => forceUpdate(n => n + 1)), []);
 
-  const filteredEmployees = lockedUnits
+  const filteredEmployees = (lockedUnits
     ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit))
-    : EMPLOYEES;
+    : EMPLOYEES
+  ).filter((e) => Boolean(e.hasManagementInterview));
 
   // Merge static MI_DATA with live Score Penilai 1 from BOD assessment
   const mergedMI = MI_DATA.map(rec => {

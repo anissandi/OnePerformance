@@ -164,28 +164,26 @@ export function LoginPage() {
           )}
 
           {/* OTP Code field — revealed after sending */}
-          <div
-            className={`overflow-hidden transition-all duration-300 ${otpSent ? "max-h-24 mb-6 opacity-100" : "max-h-0 mb-0 opacity-0"}`}
-          >
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <KeyRound className="w-4 h-4 text-gray-500" />
-              OTP Code
-            </label>
-            <input
-              ref={otpRef}
-              type="text"
-              value={otpCode}
-              onChange={e => setOtpCode(e.target.value)}
-              placeholder="Enter OTP code"
-              maxLength={6}
-              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]/40 transition-colors tracking-widest font-mono"
-            />
-            {otpSent && (
-              <p className="text-xs text-gray-400 mt-1.5">
-                OTP dikirim ke Telegram ({matchedEmployee?.telegramNo || "terdaftar"}) & Email ({matchedEmployee?.email || "terdaftar"}).
+          {otpSent && (
+            <div className="mb-5">
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                <KeyRound className="w-4 h-4 text-gray-500 shrink-0" />
+                OTP Code
+              </label>
+              <input
+                ref={otpRef}
+                type="text"
+                value={otpCode}
+                onChange={e => setOtpCode(e.target.value)}
+                placeholder="Enter OTP code"
+                maxLength={6}
+                className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]/40 transition-colors tracking-widest font-mono"
+              />
+              <p className="text-xs text-gray-500 mt-1.5 whitespace-nowrap truncate">
+                OTP dikirim ke Telegram atau Email Corporate terdaftar
               </p>
-            )}
-          </div>
+            </div>
+          )}
 
           {matchedEmployee && !otpSent && (
             <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50/70 px-3.5 py-2.5 text-[11px] text-gray-700 space-y-0.5">

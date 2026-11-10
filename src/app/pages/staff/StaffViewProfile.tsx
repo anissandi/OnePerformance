@@ -5,6 +5,8 @@ import {
   KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
 } from "../employee/KPIPage";
 import { STAFF_PROFILE } from "../../store/profileStore";
+import { getActiveUser } from "../../store/authStore";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 
 // ─── User identity (from shared profile store) ─────────────────────────────────
 const USER = STAFF_PROFILE;
@@ -71,76 +73,65 @@ const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus })[] = [
     id: "m1",
     module: "KPI",
     submissionType: "KPI Tracking — Measurement",
-    completedDate: "2026-06-15",
-    score: 94.2,
-    grade: "A",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 50,
-    weightedScore: 47.1,
-    status: "approved",
+    weightedScore: 0,
+    status: "pending",
     icon: TrendingUp,
     color: "text-blue-700",
     bg: "bg-blue-50",
     border: "border-blue-200",
-    detail: "7 KPI indicators. Avg. achievement 94.2%. All KPI submitted and approved.",
-    subResults: [
-      { label: "Kepatuhan Pelaporan Keuangan",  score: 100, grade: "A" },
-      { label: "Efisiensi Penggunaan Anggaran", score: 96,  grade: "A" },
-      { label: "Akurasi Jurnal Akuntansi",      score: 99,  grade: "A" },
-      { label: "Ketepatan Rekonsiliasi Bank",   score: 92,  grade: "A" },
-    ],
+    detail: "Belum ada transaksi KPI yang diselesaikan pada periode ini.",
   },
   {
     id: "m2",
     module: "SMART Goals",
     submissionType: "SMART Goals — Measurement",
-    completedDate: "2026-06-14",
-    score: 87.5,
-    grade: "A",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 20,
-    weightedScore: 17.5,
-    status: "approved",
+    weightedScore: 0,
+    status: "pending",
     icon: Lightbulb,
     color: "text-amber-700",
     bg: "bg-amber-50",
     border: "border-amber-200",
-    detail: "3 SMART goals submitted with evidence and action plans. All approved by supervisor.",
+    detail: "Belum ada transaksi SMART Goals yang diselesaikan pada periode ini.",
   },
   {
     id: "m3",
     module: "Appraisal Form",
     submissionType: "Appraisal Form — Measurement",
-    completedDate: "2026-06-10",
-    score: 80.2,
-    grade: "A",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 15,
-    weightedScore: 12.03,
-    status: "approved",
+    weightedScore: 0,
+    status: "pending",
     icon: ClipboardList,
     color: "text-green-700",
     bg: "bg-green-50",
     border: "border-green-200",
-    detail: "3 appraisal form sections submitted. Self-assessment and supervisor assessment completed.",
-    subResults: [
-      { label: "Core Competency",        score: 84, grade: "A" },
-      { label: "Core Values",            score: 78, grade: "B" },
-      { label: "Learning & Development", score: 79, grade: "B" },
-    ],
+    detail: "Belum ada transaksi Appraisal Form yang diselesaikan pada periode ini.",
   },
   {
     id: "m4",
     module: "Project Outside Job Scope",
     submissionType: "Project Measurement",
-    completedDate: "2026-06-08",
-    score: 75.0,
-    grade: "B",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
     weight: 15,
-    weightedScore: 11.25,
+    weightedScore: 0,
     status: "pending",
     icon: FolderKanban,
     color: "text-teal-700",
     bg: "bg-teal-50",
     border: "border-teal-200",
-    detail: "Project: Implementasi Template Rekonsiliasi Bank Semi-Otomatis (QCC). Progress 75%. Pending supervisor approval.",
+    detail: "Belum ada transaksi Project Outside Job Scope pada periode ini.",
   },
 ];
 
@@ -321,68 +312,37 @@ interface YearRecord {
 
 const YEAR_DATA: Record<number, YearRecord> = {
   2026: {
-    score: 87.9,
-    grade: "A",
+    score: 0,
+    grade: "N/A",
     isFinal: false,
-    lastUpdated: "2026-06-15",
-    modulesApproved: 3,
+    lastUpdated: "—",
+    modulesApproved: 0,
     modulesTotal: 4,
-    kpiScore: 94.2,
-    kpiGrade: "A",
-    summaryNotes: [
-      {
-        approver: "Ahmad Fauzi",
-        role: "Approver 1 — Supervisor",
-        date: "2026-06-15",
-        module: "KPI",
-        note: "Pencapaian KPI sangat baik, terutama dalam kepatuhan pelaporan keuangan dan akurasi jurnal. Template rekonsiliasi bank yang dikembangkan Edward merupakan inisiatif yang sangat berharga bagi departemen. Teruskan konsistensi ini dan tingkatkan pencapaian jam pelatihan agar target 40 JPL tercapai sebelum akhir tahun.",
-      },
-    ],
+    kpiScore: 0,
+    kpiGrade: "N/A",
+    summaryNotes: [],
   },
   2025: {
-    score: 85.3,
-    grade: "A",
+    score: 0,
+    grade: "N/A",
     isFinal: true,
-    lastUpdated: "2025-12-30",
-    modulesApproved: 4,
+    lastUpdated: "—",
+    modulesApproved: 0,
     modulesTotal: 4,
-    kpiScore: 89,
-    kpiGrade: "A",
-    summaryNotes: [
-      {
-        approver: "Ahmad Fauzi",
-        role: "Approver 1 — Supervisor",
-        date: "2025-12-28",
-        module: "KPI",
-        note: "Kinerja Edward tahun 2025 menunjukkan peningkatan yang konsisten dari tahun sebelumnya. Semua indikator KPI keuangan berhasil memenuhi target dengan margin yang baik. Apresiasi atas dedikasi dalam menjaga akurasi laporan keuangan sepanjang tahun.",
-      },
-      {
-        approver: "Dewi Rahayu",
-        role: "Approver 2 — HR Manager",
-        date: "2025-12-30",
-        module: "Overall",
-        note: "Hasil appraisal 2025 mencerminkan komitmen yang kuat terhadap keunggulan dalam bidang keuangan. Rekomendasikan untuk mengambil tanggung jawab yang lebih besar dalam proyek pengembangan sistem keuangan di tahun 2026.",
-      },
-    ],
+    kpiScore: 0,
+    kpiGrade: "N/A",
+    summaryNotes: [],
   },
   2024: {
-    score: 80.7,
-    grade: "A",
+    score: 0,
+    grade: "N/A",
     isFinal: true,
-    lastUpdated: "2024-12-28",
-    modulesApproved: 4,
+    lastUpdated: "—",
+    modulesApproved: 0,
     modulesTotal: 4,
-    kpiScore: 84,
-    kpiGrade: "B",
-    summaryNotes: [
-      {
-        approver: "Ahmad Fauzi",
-        role: "Approver 1 — Supervisor",
-        date: "2024-12-26",
-        module: "KPI",
-        note: "Kinerja keseluruhan cukup baik untuk level staf keuangan. Akurasi jurnal dan kepatuhan pelaporan sudah memenuhi standar. Untuk tahun 2025, disarankan untuk lebih aktif dalam mengikuti pelatihan peningkatan kompetensi agar capaian KPI pengembangan kompetensi bisa optimal.",
-      },
-    ],
+    kpiScore: 0,
+    kpiGrade: "N/A",
+    summaryNotes: [],
   },
 };
 
@@ -434,12 +394,21 @@ export function StaffViewProfile() {
 
   // Inject live KPI score into 2026 module results
   const activeModules = useMemo(() => {
+    const activeUser = getActiveUser();
+    const liveEmp = getLiveTransactionalEmployees().find(
+      (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
+    );
     const base = getModuleResults(selectedYear);
-    if (!isCurrent || liveKPIScore2026 === null) return base;
+    if (!isCurrent) return base;
     return base.map((m) => {
-      if (m.module !== "KPI") return m;
-      const score = liveKPIScore2026;
-      return { ...m, score, weightedScore: parseFloat((score * m.weight / 100).toFixed(2)) };
+      let score = 0;
+      if (m.module === "KPI") score = liveKPIScore2026 ?? liveEmp?.kpi.score ?? 0;
+      else if (m.module === "SMART Goals") score = liveEmp?.smartGoals.score ?? 0;
+      else if (m.module === "Appraisal Form") score = liveEmp?.formA.score ?? 0;
+      else if (m.module === "Project Outside Job Scope") score = liveEmp?.project.score ?? 0;
+      const grade = score === 0 ? "N/A" : score >= 90 ? "A+" : score >= 80 ? "A" : score >= 70 ? "B" : score >= 60 ? "C" : score >= 50 ? "D" : "E";
+      const status: ModuleStatus = score > 0 ? "approved" : "pending";
+      return { ...m, score, grade, status, weightedScore: parseFloat(((score * m.weight) / 100).toFixed(2)) };
     });
   }, [selectedYear, isCurrent, liveKPIScore2026]);
 
@@ -448,6 +417,7 @@ export function StaffViewProfile() {
 
   // For current year, derive display score/grade from live module scores
   function scoreToGrade(s: number) {
+    if (s <= 0) return "N/A";
     if (s >= 90) return "A+";
     if (s >= 80) return "A";
     if (s >= 70) return "B";

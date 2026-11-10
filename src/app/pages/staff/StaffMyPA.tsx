@@ -25,6 +25,7 @@ import { loadRCAApprovalDecisions } from "../shared/rcaApprovalStore";
 import { useProjectStore, SCOPE_BOBOT } from "../../store/projectStore";
 import type { CheckInStatus as ProjectCheckInStatus } from "../../store/projectStore";
 import { STAFF_PROFILE } from "../../store/profileStore";
+import { useAuthStore } from "../../store/authStore";
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
@@ -517,13 +518,18 @@ const APPROVAL_STATUS_CONFIG = {
 };
 
 function ApprovalHistorySection() {
+  const { activeUser, allUsers } = useAuthStore();
   const decisions = React.useMemo(() => loadApprovalDecisions(), []);
   // Filter to employee E002 (the synced employee) or show all if any
-  const myDecisions = decisions.filter((d) => d.employeeId === "E002");
+  const myDecisions = decisions.filter(
+    (d) => d.employeeId.replace(/-/g, "").toLowerCase() === activeUser.employeeId.replace(/-/g, "").toLowerCase(),
+  );
+  const ap1User = allUsers.find((u) => (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase()) || u.employeeId.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase());
+  const ap2User = allUsers.find((u) => (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase()) || u.employeeId.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase());
   // Always show at least the approver slots (filled or pending)
   const approverSlots = [
-    { level: 1, name: "Budi Santoso", role: "Atasan Langsung" },
-    { level: 2, name: "—", role: "HR Manager" },
+    { level: 1, name: ap1User?.name ?? (activeUser.regNoAp1 || "—"), role: "Approver 1" },
+    { level: 2, name: ap2User?.name ?? (activeUser.regNoAp2 || "—"), role: "Approver 2" },
   ];
 
   return (
@@ -651,7 +657,7 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 function SMARTGoalsTab() {
-  const goals: SmartGoal[] = React.useMemo(() => loadSubmittedGoals() ?? SAMPLE_GOALS, []);
+  const goals: SmartGoal[] = React.useMemo(() => loadSubmittedGoals() ?? [], []);
   const checkIns = React.useMemo(() => loadCheckInEntries(), []);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [smartExpanded, setSmartExpanded] = useState<number | null>(null);
@@ -1522,11 +1528,7 @@ export function ProjectOutsideTab() {
 
 // ─── Score Summary Banner (Edward David) ─────────────────────────────────────
 
-const HISTORICAL_SCORES_EDWARD: Record<string, { kpi: number; smart: number; appraisal: number; project: number; overall: number }> = {
-  "2025": { kpi: 89,  smart: 85, appraisal: 78, project: 70, overall: 85.3 },
-  "2024": { kpi: 84,  smart: 80, appraisal: 76, project: 65, overall: 80.7 },
-  "2023": { kpi: 78,  smart: 72, appraisal: 74, project: 60, overall: 75.1 },
-};
+const HISTORICAL_SCORES_EDWARD: Record<string, { kpi: number; smart: number; appraisal: number; project: number; overall: number }> = {};
 
 function getKPIScore2026(): number | null {
   const { months, cellsMap } = loadKPITracking();

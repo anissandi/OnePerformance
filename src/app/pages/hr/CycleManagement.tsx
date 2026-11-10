@@ -33,11 +33,7 @@ const currentPhaseProgress = [
   { label: "Inter-Dept Feedback", pct: 45 },
 ];
 
-const historyData = [
-  { year: 2025, employees: 22, avgScore: 82.4, topGrade: "A" },
-  { year: 2024, employees: 20, avgScore: 79.8, topGrade: "B" },
-  { year: 2023, employees: 18, avgScore: 77.2, topGrade: "B" },
-];
+const historyData: Array<{ year: number; employees: number; avgScore: number; topGrade: string }> = [];
 
 const companyUnits = [
   { label: "PT RSUP Industry", key: "industry" },

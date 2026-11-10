@@ -129,23 +129,27 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   }
   const reg = (user.regNo ?? "").trim().toLowerCase();
   const emp = user.employeeId.trim().toLowerCase();
+  const name = user.name.trim().toLowerCase();
   const directMatches = allUsers.filter((u) => {
     if (u.employeeId === user.employeeId) return true;
     const ap1 = (u.regNoAp1 ?? "").trim().toLowerCase();
     const ap2 = (u.regNoAp2 ?? "").trim().toLowerCase();
     if (reg && (ap1 === reg || ap2 === reg)) return true;
     if (emp && (ap1 === emp || ap2 === emp)) return true;
+    if (name && (ap1 === name || ap2 === name)) return true;
     return false;
   });
-  if (directMatches.length > 1) return directMatches;
-  if (user.role === "Supervisor") {
-    return allUsers.filter(
-      (u) =>
-        u.employeeId === user.employeeId ||
-        (u.company === user.company && (u.division === user.division || u.department === user.department)),
-    );
-  }
-  return allUsers.filter((u) => u.employeeId === user.employeeId);
+  return directMatches;
+}
+
+/**
+ * Mengembalikan daftar bawahan yang berada di dalam kewenangan approval (Reg No AP1 / Reg No AP2)
+ * dari pengguna yang sedang login (tidak termasuk dirinya sendiri).
+ */
+export function getStrictSubordinateUsers(user = getActiveUser(), allUsers = loadManagedUsers()): ManagedUser[] {
+  return getAuthorizedSubordinates(user, allUsers).filter(
+    (u) => u.employeeId.toLowerCase() !== user.employeeId.toLowerCase(),
+  );
 }
 
 export function canUserAccessEmployeeData(

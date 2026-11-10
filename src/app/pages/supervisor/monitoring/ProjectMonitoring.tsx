@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { FolderKanban, CheckCircle2, AlertCircle, Clock, Search, Filter, Download, ShieldCheck, ShieldX, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
-import { EMPLOYEES } from "../../hr/monitoring/monitoringData";
+import { SUPERVISOR_TEAM_EMPLOYEES } from "../../hr/monitoring/monitoringData";
 
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
-const TEAM_EMPLOYEES = EMPLOYEES;
+const TEAM_EMPLOYEES = SUPERVISOR_TEAM_EMPLOYEES;
 
 type ProgressStatus = "Submitted" | "In Progress" | "Done";
 type ProjectScope   = "SS" | "QCC" | "QCP";
@@ -340,7 +340,7 @@ export function SupervisorMonitoringProject() {
                     <td className="py-3 px-3"><p className="text-sm font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p></td>
                     <td className="py-3 px-3"><p className="text-xs text-gray-600 leading-snug whitespace-nowrap">{emp.unit}</p></td>
                     <td className="py-3 px-3"><p className="text-xs text-gray-600 leading-snug whitespace-nowrap">{emp.division}</p></td>
-                    <td className="py-3 px-3"><p className="text-xs text-gray-600 leading-snug whitespace-nowrap">{DEPARTMENT_MAP[emp.id] ?? "—"}</p></td>
+                    <td className="py-3 px-3"><p className="text-xs text-gray-600 leading-snug whitespace-nowrap">{emp.department ?? DEPARTMENT_MAP[emp.id] ?? "—"}</p></td>
                     <td className="py-3 px-3"><p className="text-xs text-gray-600 leading-snug whitespace-nowrap">{emp.position}</p></td>
                     <td className="py-3 px-3 text-center">
                       {rec.scope ? <ScopeBadge scope={rec.scope} /> : <span className="text-xs text-gray-300">—</span>}

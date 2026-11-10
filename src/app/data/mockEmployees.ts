@@ -1,6 +1,6 @@
 import { TrendingUp, Lightbulb, ClipboardList, Briefcase, FolderKanban, MessageSquare } from "lucide-react";
 import React from "react";
-import { loadManagedUsers } from "../store/authStore";
+import { loadManagedUsers, resolveUserAllowedModules } from "../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -146,11 +146,12 @@ export function getLiveTransactionalEmployees(): Employee[] {
       const prjScore = prjRows.length > 0 ? Math.max(...prjRows.map((r) => Number(r.finalScore ?? 0))) : 0;
 
       const grouping = u.groupings || "Operasional";
+      const allowedMods = resolveUserAllowedModules(u);
       const isDivUp = grouping === "Ka./Wa.Ka.Div ke atas";
       const isDept = grouping === "Ka./Wa.Ka.Dept";
       const isBagian = grouping === "Ka./Wa.Ka.Bagian";
-      const hasManagerial = isDivUp || isDept || isBagian;
-      const hasInterview = isDivUp;
+      const hasManagerial = allowedMods.includes("Managerial Skill");
+      const hasInterview = allowedMods.includes("Management Interview");
 
       const wKpi = isDivUp || isDept || isBagian ? 0.4 : 0.5;
       const wSg = isDivUp ? 0.1 : isDept || isBagian ? 0.15 : 0.2;

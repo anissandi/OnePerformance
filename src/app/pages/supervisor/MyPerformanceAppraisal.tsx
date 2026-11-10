@@ -545,11 +545,16 @@ const APPROVAL_STATUS_CONFIG = {
 };
 
 function ApprovalHistorySection() {
+  const { activeUser, allUsers } = useAuthStore();
   const decisions = React.useMemo(() => loadApprovalDecisions(), []);
-  const myDecisions = decisions.filter((d) => d.employeeId === "E002");
+  const myDecisions = decisions.filter(
+    (d) => d.employeeId.replace(/-/g, "").toLowerCase() === activeUser.employeeId.replace(/-/g, "").toLowerCase(),
+  );
+  const ap1User = allUsers.find((u) => (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase()) || u.employeeId.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase());
+  const ap2User = allUsers.find((u) => (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase()) || u.employeeId.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase());
   const approverSlots = [
-    { level: 1, name: "Budi Santoso", role: "Atasan Langsung" },
-    { level: 2, name: "—", role: "HR Manager" },
+    { level: 1, name: ap1User?.name ?? (activeUser.regNoAp1 || "—"), role: "Approver 1" },
+    { level: 2, name: ap2User?.name ?? (activeUser.regNoAp2 || "—"), role: "Approver 2" },
   ];
 
   return (
@@ -671,7 +676,7 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 function SMARTGoalsTab() {
-  const goals: SmartGoal[] = React.useMemo(() => loadSubmittedGoals() ?? SAMPLE_GOALS, []);
+  const goals: SmartGoal[] = React.useMemo(() => loadSubmittedGoals() ?? [], []);
   const checkIns = React.useMemo(() => loadCheckInEntries(), []);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [smartExpanded, setSmartExpanded] = useState<number | null>(null);
@@ -1824,11 +1829,7 @@ function ProjectOutsideTab() {
 
 // ─── Score Summary ────────────────────────────────────────────────────────────
 
-const HISTORICAL_SCORES_SUP: Record<string, { kpi: number; smart: number; appraisal: number; project: number; overall: number }> = {
-  "2025": { kpi: 89, smart: 84, appraisal: 80, project: 75, overall: 86 },
-  "2024": { kpi: 93, smart: 90, appraisal: 87, project: 82, overall: 91 },
-  "2023": { kpi: 81, smart: 77, appraisal: 84, project: 68, overall: 81 },
-};
+const HISTORICAL_SCORES_SUP: Record<string, { kpi: number; smart: number; appraisal: number; project: number; overall: number }> = {};
 
 function getGrade(score: number): { letter: string; color: string; bg: string } {
   if (score >= 90) return { letter: "A+", color: "text-purple-700",  bg: "bg-purple-100"  };
@@ -2217,7 +2218,14 @@ function ManagementInterviewTab() {
 
 // ─── Inter-Dept Feedback Tab ──────────────────────────────────────────────────
 
-const IDF_RECEIVED_FEEDBACKS = [
+const IDF_RECEIVED_FEEDBACKS: Array<{
+  id: string;
+  division: string;
+  companyUnit: string;
+  answers: Record<"q1" | "q2" | "q3" | "q4" | "q5", string>;
+  summaries: Record<"q1" | "q2" | "q3" | "q4" | "q5", string>;
+}> = [];
+const _UNUSED_IDF_RECEIVED_FEEDBACKS = [
   {
     id: "rf1", division: "Finance & Accounting", companyUnit: "PT RSUP (Perkebunan)",
     answers: {
@@ -2287,7 +2295,8 @@ type IDFApproverRow = { [K in typeof IDF_APPROVER_COLS[number]]?: string } & {
   buktiFile?: string;
 };
 
-const IDF_APPROVER_SUBMITTED: Record<"a1" | "a2", IDFApproverRow[]> = {
+const IDF_APPROVER_SUBMITTED: Record<"a1" | "a2", IDFApproverRow[]> = { a1: [], a2: [] };
+const _UNUSED_IDF_APPROVER_SUBMITTED: Record<"a1" | "a2", IDFApproverRow[]> = {
   a1: [
     {
       "Aspek Perbaikan": "Komunikasi lintas departemen",
@@ -2329,6 +2338,20 @@ function InterDeptFeedbackTab() {
 
   // reset collapse when switching tabs
   const switchTab = (idx: number) => { setActiveFbTab(idx); setPanelCollapsed(false); };
+
+  if (!fb) {
+    return (
+      <div className="bg-white rounded-2xl border border-dashed border-gray-200 p-14 flex flex-col items-center justify-center text-center gap-3">
+        <div className="w-12 h-12 rounded-full bg-violet-50 flex items-center justify-center">
+          <ArrowLeftRight className="w-6 h-6 text-violet-500" />
+        </div>
+        <p className="text-sm font-semibold text-gray-600">Belum ada Inter-Department Feedback yang diterima</p>
+        <p className="text-xs text-gray-400 max-w-md">
+          Data ringkasan dan tindak lanjut akan tampil di sini setelah proses nominasi dan pengisian feedback selesai dilakukan pada modul Inter-Department Feedback.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full">
