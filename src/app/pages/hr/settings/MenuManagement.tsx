@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   ChevronRight, GripVertical, Plus, Edit2, Trash2,
   Eye, EyeOff, Save, X, ToggleLeft, ToggleRight, Search, Menu,
 } from "lucide-react";
+import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
 
 type Role = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
 
@@ -223,7 +224,7 @@ function EditMenuModal({ item, isNew, onClose, onSave }: EditMenuModalProps) {
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-2">Visible to Roles</label>
             <div className="flex gap-2 flex-wrap">
-              {(["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor", "Employee"] as Role[]).map(r => (
+              {ALL_ROLES.map(r => (
                 <button
                   key={r} type="button" onClick={() => toggleRole(r)}
                   className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
@@ -360,16 +361,45 @@ function deleteNested(items: MenuItem[], id: string): MenuItem[] {
     .map(m => m.children ? { ...m, children: deleteNested(m.children, id) } : m);
 }
 
+const MENU_CONFIGS_KEY = "pa_menu_configs_v1";
+
 export function MenuManagementPage() {
-  const [menus, setMenus] = useState<MenuItem[]>(deepClone(INITIAL_MENUS));
+  const [menus, setMenus] = useState<MenuItem[]>(() =>
+    loadPersistedState<MenuItem[]>(MENU_CONFIGS_KEY, deepClone(INITIAL_MENUS)),
+  );
   const [editItem, setEditItem] = useState<MenuItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [saved, setSaved] = useState(false);
 
+  useEffect(() => {
+    const onHydrated = () => {
+      setMenus(loadPersistedState<MenuItem[]>(MENU_CONFIGS_KEY, deepClone(INITIAL_MENUS)));
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
+
+  function persistMenus(nextMenus: MenuItem[], description: string) {
+    savePersistedState(MENU_CONFIGS_KEY, nextMenus, {
+      kind: "menu-configs",
+      menus: nextMenus,
+      audit: {
+        action: "Update",
+        module: "HR Settings",
+        subModule: "Menu Management",
+        description,
+      },
+    });
+  }
+
   function toggleVisibility(id: string) {
     setSaved(false);
-    setMenus(prev => updateNested(prev, id, m => ({ ...m, isVisible: !m.isVisible })));
+    setMenus(prev => {
+      const next = updateNested(prev, id, m => ({ ...m, isVisible: !m.isVisible }));
+      persistMenus(next, `Toggled visibility for menu ${id}`);
+      return next;
+    });
   }
 
   function handleEdit(item: MenuItem) {
@@ -378,17 +408,29 @@ export function MenuManagementPage() {
 
   function handleSave(updated: MenuItem) {
     setSaved(false);
-    setMenus(prev => updateNested(prev, updated.id, () => updated));
+    setMenus(prev => {
+      const next = updateNested(prev, updated.id, () => updated);
+      persistMenus(next, `Updated menu item ${updated.label} (${updated.id})`);
+      return next;
+    });
   }
 
   function handleAdd(item: MenuItem) {
     setSaved(false);
-    setMenus(prev => [...prev, item]);
+    setMenus(prev => {
+      const next = [...prev, item];
+      persistMenus(next, `Added new menu item ${item.label} (${item.id})`);
+      return next;
+    });
   }
 
   function handleDelete(id: string) {
     setSaved(false);
-    setMenus(prev => deleteNested(prev, id));
+    setMenus(prev => {
+      const next = deleteNested(prev, id);
+      persistMenus(next, `Deleted menu item ${id}`);
+      return next;
+    });
   }
 
   function matchSearch(item: MenuItem, q: string): boolean {
@@ -447,7 +489,10 @@ export function MenuManagementPage() {
             <Plus size={14} /> Add Menu
           </button>
           <button
-            onClick={() => setSaved(true)}
+            onClick={() => {
+              persistMenus(menus, "Saved Menu Management configuration");
+              setSaved(true);
+            }}
             className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
           >
             <Save size={13} /> Save Changes

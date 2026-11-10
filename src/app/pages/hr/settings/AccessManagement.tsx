@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2 } from "lucide-react";
+import { loadPersistedState, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
 
 type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
 type Role = BuiltinRole | string;
@@ -797,22 +798,58 @@ function IndeterminateCheckbox({ state, onChange }: { state: "all" | "none" | "i
   );
 }
 
-export function AccessManagementPage() {
-  const [roles, setRoles] = useState<Role[]>([...BUILTIN_ROLES]);
-  const [activeRole, setActiveRole] = useState<Role>("Administrator");
-  const [permissions, setPermissions] = useState<Record<Role, RolePermissions>>({
+const ACCESS_ROLES_KEY = "pa_access_roles_v1";
+const ACCESS_PERMS_KEY = "pa_access_permissions_v1";
+
+function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
+  return {
     "Administrator": deepClone(DEFAULT_ADMIN),
+    "BOD":           deepClone(DEFAULT_BOD),
     "Director":      deepClone(DEFAULT_DIRECTOR),
+    "GM":            deepClone(DEFAULT_GM),
     "HR Unit":       deepClone(DEFAULT_HR_UNIT),
     "HR ICF":        deepClone(DEFAULT_HR_ICF),
     "Supervisor":    deepClone(DEFAULT_SUPERVISOR),
     "Employee":      deepClone(DEFAULT_EMPLOYEE),
+  };
+}
+
+export function AccessManagementPage() {
+  const [roles, setRoles] = useState<Role[]>(() => {
+    const saved = loadPersistedState<Role[]>(ACCESS_ROLES_KEY, [...BUILTIN_ROLES]);
+    const merged = [...BUILTIN_ROLES];
+    for (const r of saved) {
+      if (!merged.includes(r as BuiltinRole)) merged.push(r);
+    }
+    return merged;
+  });
+  const [activeRole, setActiveRole] = useState<Role>("Administrator");
+  const [permissions, setPermissions] = useState<Record<Role, RolePermissions>>(() => {
+    const defaults = buildDefaultPermissionsMap();
+    const saved = loadPersistedState<Record<Role, RolePermissions>>(ACCESS_PERMS_KEY, {});
+    return { ...defaults, ...saved };
   });
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["approvals", "pa_monitoring", "calibration", "evidence", "pa_setting", "pa_measurement", "setting"]));
   const [search, setSearch] = useState("");
   const [showSave, setShowSave] = useState(false);
   const [showAddAccess, setShowAddAccess] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const onHydrated = () => {
+      const savedRoles = loadPersistedState<Role[]>(ACCESS_ROLES_KEY, [...BUILTIN_ROLES]);
+      const merged = [...BUILTIN_ROLES];
+      for (const r of savedRoles) {
+        if (!merged.includes(r as BuiltinRole)) merged.push(r);
+      }
+      setRoles(merged);
+      const defaults = buildDefaultPermissionsMap();
+      const savedPerms = loadPersistedState<Record<Role, RolePermissions>>(ACCESS_PERMS_KEY, {});
+      setPermissions({ ...defaults, ...savedPerms });
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
 
   function toggleExpand(id: string) {
     setExpanded(prev => {
@@ -836,15 +873,40 @@ export function AccessManagementPage() {
   function handleReset() {
     setSaved(false);
     const isBuiltin = (BUILTIN_ROLES as string[]).includes(activeRole);
-    setPermissions(prev => ({
-      ...prev,
-      [activeRole]: isBuiltin
-        ? deepClone(BUILTIN_DEFAULTS[activeRole as BuiltinRole])
-        : emptyPermissions(),
-    }));
+    const resetRolePerms = isBuiltin
+      ? deepClone(BUILTIN_DEFAULTS[activeRole as BuiltinRole])
+      : emptyPermissions();
+    setPermissions(prev => {
+      const next = { ...prev, [activeRole]: resetRolePerms };
+      savePersistedState(ACCESS_PERMS_KEY, next, {
+        kind: "role-permissions",
+        role: activeRole,
+        permissions: resetRolePerms,
+        audit: {
+          action: "Update",
+          module: "HR Settings",
+          subModule: "Access Management",
+          description: `Reset access permissions for role ${activeRole} to default`,
+        },
+      });
+      return next;
+    });
   }
 
   function handleSaveConfirm() {
+    const rolePerm = permissions[activeRole] ?? emptyPermissions();
+    savePersistedState(ACCESS_ROLES_KEY, roles);
+    savePersistedState(ACCESS_PERMS_KEY, permissions, {
+      kind: "role-permissions",
+      role: activeRole,
+      permissions: rolePerm,
+      audit: {
+        action: "Update",
+        module: "HR Settings",
+        subModule: "Access Management",
+        description: `Saved access permissions for role ${activeRole}`,
+      },
+    });
     setSaved(true);
   }
 
@@ -870,8 +932,23 @@ export function AccessManagementPage() {
   }
 
   function handleAddRole(name: string) {
-    setRoles(prev => [...prev, name]);
-    setPermissions(prev => ({ ...prev, [name]: emptyPermissions() }));
+    const nextRoles = [...roles, name];
+    const initPerm = emptyPermissions();
+    const nextPerms = { ...permissions, [name]: initPerm };
+    setRoles(nextRoles);
+    setPermissions(nextPerms);
+    savePersistedState(ACCESS_ROLES_KEY, nextRoles);
+    savePersistedState(ACCESS_PERMS_KEY, nextPerms, {
+      kind: "role-permissions",
+      role: name,
+      permissions: initPerm,
+      audit: {
+        action: "Create",
+        module: "HR Settings",
+        subModule: "Access Management",
+        description: `Created custom access role ${name}`,
+      },
+    });
     setActiveRole(name);
     setSaved(false);
   }
@@ -880,10 +957,23 @@ export function AccessManagementPage() {
     const idx = roles.indexOf(role);
     const next = roles.filter(r => r !== role);
     setRoles(next);
+    savePersistedState(ACCESS_ROLES_KEY, next);
     setPermissions(prev => {
       const copy = { ...prev };
       delete copy[role];
+      savePersistedState(ACCESS_PERMS_KEY, copy);
       return copy;
+    });
+    void syncToSupabase({
+      kind: "kv-state",
+      stateKey: ACCESS_ROLES_KEY,
+      stateValue: next,
+      audit: {
+        action: "Delete",
+        module: "HR Settings",
+        subModule: "Access Management",
+        description: `Deleted custom access role ${role}`,
+      },
     });
     setActiveRole(next[Math.min(idx, next.length - 1)]);
     setSaved(false);

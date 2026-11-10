@@ -829,6 +829,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       groupRules,
       scoreWeights,
       projectRecords,
+      rolePermissions,
+      menuConfigs,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
@@ -841,6 +843,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_group_rules", "select=*"),
       restSelect("pa_score_weights", "select=*"),
       restSelect("pa_project_records", "select=*"),
+      restSelect("pa_role_permissions", "select=*"),
+      restSelect("pa_menu_configs", "select=*&id=eq.default&limit=1"),
     ]);
     if (
       users.length > 0 ||
@@ -864,6 +868,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         groupRules,
         scoreWeights,
         projectRecords,
+        rolePermissions,
+        menuConfig: (menuConfigs[0] as { menus?: unknown } | undefined)?.menus ?? null,
       };
     }
 
@@ -1096,6 +1102,24 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         };
       }
       localStorage.setItem("pa_project_icf_by_emp_v1", JSON.stringify(byEmp));
+    }
+
+    // 12. Hydrate Access Management role permissions if present
+    const rolePermissions = data.rolePermissions as Array<{ role?: string; permissions?: unknown }> | undefined;
+    if (Array.isArray(rolePermissions) && rolePermissions.length > 0) {
+      const existingRaw = localStorage.getItem("pa_access_permissions_v1");
+      const map: Record<string, unknown> = existingRaw ? JSON.parse(existingRaw) : {};
+      for (const rp of rolePermissions) {
+        if (rp.role && rp.permissions) {
+          map[String(rp.role)] = rp.permissions;
+        }
+      }
+      localStorage.setItem("pa_access_permissions_v1", JSON.stringify(map));
+    }
+
+    // 13. Hydrate Menu Management configuration if present
+    if (Array.isArray(data.menuConfig) && data.menuConfig.length > 0) {
+      localStorage.setItem("pa_menu_configs_v1", JSON.stringify(data.menuConfig));
     }
 
     window.dispatchEvent(new Event("pa-db-hydrated"));
