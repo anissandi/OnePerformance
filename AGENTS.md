@@ -41,6 +41,12 @@ Seluruh pengembangan dan logika bisnis pada sistem Performance Appraisal (PA) wa
 4. **Wewenang Akses Data Karyawan (Data Visibility & Scope)**:
    - **Level karyawan tanpa approver**: Hanya dapat melihat datanya sendiri.
    - **Level karyawan yang memiliki fungsi approver**: Dapat melihat datanya sendiri dan data karyawan yang berada di dalam wewenangnya, tetapi **tidak bisa** melihat data karyawan di luar wewenangnya.
+   - **Filter Kewenangan Berjenjang (Selain `Reg No AP1` / `Reg No AP2`)**:
+     1. **Level Direktur pada Group**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada Group tersebut. Contoh: **Direktur Operasional RSUP Group** dapat melihat semua unit usaha di **RSUP Group** (`PT RSUP (Industry)`, `PT RSUP (Perkebunan)`, `PT RSTM`, `PT GHS`, `ASD`).
+     2. **Level GM**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada **Unit Usahanya**.
+     3. **Level Divisi**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada semua posisi, bagian, dan departemen di dalam **Divisinya**.
+     4. **Level Departemen**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada semua posisi dan bagian di dalam **Departemennya**.
+     5. **Level Bagian**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada semua posisi di dalam **Bagiannya**.
 5. **Setup Approval Check HR Unit Usaha**:
    - Role **Administrator** melakukan setup untuk **Approval Check HR Unit Usaha** di **User Management** (`/hr/settings/user-management`).
 6. **Setup Approval Request Khusus**:

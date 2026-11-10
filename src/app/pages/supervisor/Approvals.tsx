@@ -12,7 +12,13 @@ import { applyOverrides, saveOverride } from "../shared/approvalsStore";
 import { saveRCAApprovalDecision } from "../shared/rcaApprovalStore";
 import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
 import { projectApprovalRows } from "../../store/projectStore";
-import { canUserAccessEmployeeData, shouldBypassCheckerForSubmission, useAuthStore } from "../../store/authStore";
+import {
+  canUserAccessEmployeeData,
+  getDirectApprovalRoleForTarget,
+  getScopedFilterOptionsForUser,
+  shouldBypassCheckerForSubmission,
+  useAuthStore,
+} from "../../store/authStore";
 
 const TEAM_UNIT = "PT RSUP (Industry)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
@@ -45,6 +51,19 @@ export function SupervisorApprovals() {
   const moduleTypes = mainTab === "checkin" ? CHECKIN_FILTER_OPTIONS.approvalType : SETTING_FILTER_OPTIONS.approvalType;
   const routeType = moduleTypes.find((type) => tabSlug(type) === tab);
   const moduleBase = routeBase(location.pathname, routeType ? tab : undefined);
+  const scopedFilterMeta = getScopedFilterOptionsForUser(activeUser);
+  const dynamicCheckinFilterOpts = {
+    ...CHECKIN_FILTER_OPTIONS,
+    companyUnit: scopedFilterMeta.units.length > 0 ? scopedFilterMeta.units : [activeUser.company],
+    division: scopedFilterMeta.divisions.length > 0 ? scopedFilterMeta.divisions : [activeUser.division],
+    department: scopedFilterMeta.departments.length > 0 ? scopedFilterMeta.departments : [activeUser.department],
+  };
+  const dynamicSettingFilterOpts = {
+    ...SETTING_FILTER_OPTIONS,
+    companyUnit: scopedFilterMeta.units.length > 0 ? scopedFilterMeta.units : [activeUser.company],
+    division: scopedFilterMeta.divisions.length > 0 ? scopedFilterMeta.divisions : [activeUser.division],
+    department: scopedFilterMeta.departments.length > 0 ? scopedFilterMeta.departments : [activeUser.department],
+  };
 
   const filterByScopeAndSelfCheckerRule = (rows: ApprovalRow[]): ApprovalRow[] => {
     return rows.filter((row) => {
@@ -101,13 +120,18 @@ export function SupervisorApprovals() {
         <h1 className="text-3xl font-bold text-[#1A284F]">
           {mainTab === "checkin" ? "Performance Appraisal Measurement" : "Performance Appraisal Setting"}
         </h1>
-        <p className="text-gray-500 mt-1 text-sm">{activeUser.company} · {activeUser.division}</p>
+        <div className="flex flex-wrap items-center gap-2 mt-1">
+          <p className="text-gray-500 text-sm">{activeUser.company} · {activeUser.division}</p>
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-[#1A284F] border border-blue-200">
+            Cakupan Wewenang: {scopedFilterMeta.authorityLabel}
+          </span>
+        </div>
       </div>
       <ModuleRouteNav base={moduleBase} modules={moduleTypes} label="Modul approval" />
       {mainTab === "checkin" ? (
-        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(checkinData)} onDataChange={setCheckinData} filterOptions={CHECKIN_FILTER_OPTIONS} reviewerRole="approver1" isSetting={false} />
+        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(checkinData)} onDataChange={setCheckinData} filterOptions={dynamicCheckinFilterOpts} reviewerRole="approver1" isSetting={false} />
       ) : (
-        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(settingData)} onDataChange={setSettingData} filterOptions={SETTING_FILTER_OPTIONS} reviewerRole="approver1" isSetting={true} />
+        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(settingData)} onDataChange={setSettingData} filterOptions={dynamicSettingFilterOpts} reviewerRole="approver1" isSetting={true} />
       )}
     </div>
   );
@@ -243,6 +267,7 @@ function ApprovalsTable({
   isSetting: boolean;
   initialType?: string;
 }) {
+  const { activeUser } = useAuthStore();
   const [activeTab, setActiveTab]                         = useState("Pending");
   const [search, setSearch]                               = useState("");
   const [selectedCompanyUnits, setSelectedCompanyUnits]   = useState<string[]>([]);
@@ -447,11 +472,29 @@ function ApprovalsTable({
                 <td className="py-4 px-4">
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* Pending tab */}
-                    {activeTab === "Pending" && row.status === "Pending" && (
-                      <button onClick={() => { setReviewRow(row); setReviewFromHistory(false); }} className="p-1 text-[#1A284F] hover:bg-blue-50 rounded" title="Review">
-                        <FileCheck className="w-5 h-5" />
-                      </button>
-                    )}
+                    {activeTab === "Pending" && row.status === "Pending" && (() => {
+                      const rel = getDirectApprovalRoleForTarget(activeUser, row.employeeId);
+                      const isDirectApprover = rel === "ap1" || rel === "ap2" || rel === "checker" || rel === "validator";
+                      return isDirectApprover ? (
+                        <button
+                          onClick={() => { setReviewRow(row); setReviewFromHistory(false); }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-[#1A284F] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg"
+                          title="Review & Approve (Direct Approver)"
+                        >
+                          <FileCheck className="w-4 h-4" />
+                          <span>{rel === "ap1" ? "Approve (AP1)" : rel === "ap2" ? "Approve (AP2)" : rel === "checker" ? "Check (HR Unit)" : "Validate"}</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => { setReviewRow(row); setReviewFromHistory(true); }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded-lg"
+                          title="View Only (Cakupan Hirarki Berjenjang)"
+                        >
+                          <Eye className="w-4 h-4" />
+                          <span>View (Hirarki)</span>
+                        </button>
+                      );
+                    })()}
                     {activeTab === "Pending" && row.status === "Edit Request" && (
                       <button
                         onClick={() => setEditReviewRow(row)}

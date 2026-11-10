@@ -52,6 +52,11 @@ export interface ManagedUser {
   regNoAp2?: string;
   isHrUnitChecker?: boolean;
   isHrIcfValidator?: boolean;
+  /** Cakupan tambahan jika pejabat membawahi >1 Unit / Divisi / Departemen / Bagian */
+  managedUnits?: string[];
+  managedDivisions?: string[];
+  managedDepartments?: string[];
+  managedBagians?: string[];
 }
 
 export interface ManagedGroupRule {
@@ -120,26 +125,155 @@ export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers())
   });
 }
 
+export type HierarchyAuthorityLevel =
+  | "admin"
+  | "bod"
+  | "director_group"
+  | "gm_unit"
+  | "hr_unit"
+  | "division"
+  | "department"
+  | "bagian"
+  | "seksi"
+  | "operational";
+
+const HIERARCHY_RANK: Record<HierarchyAuthorityLevel, number> = {
+  admin: 100,
+  bod: 95,
+  director_group: 90,
+  gm_unit: 80,
+  hr_unit: 75,
+  division: 70,
+  department: 60,
+  bagian: 50,
+  seksi: 40,
+  operational: 10,
+};
+
+export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthorityLevel {
+  if (isAdminOrHrIcfRole(user.role)) return "admin";
+  if (user.role === "BOD" || /\bbod\b|board of director/i.test(user.position)) return "bod";
+  if (user.role === "Director" || /direktur|director|\bcoo\b/i.test(user.position)) return "director_group";
+  if (user.role === "GM" || /\bgm\b|\bvgm\b|general manager|koordinator/i.test(user.position)) return "gm_unit";
+  if (user.role === "HR Unit") return "hr_unit";
+  if (user.groupings === "Ka./Wa.Ka.Div ke atas" || /divisi|division/i.test(user.position)) return "division";
+  if (user.groupings === "Ka./Wa.Ka.Dept" || /departemen|departement|\bdept\b/i.test(user.position)) return "department";
+  if (user.groupings === "Ka./Wa.Ka.Bagian" || /bagian|supervisor/i.test(user.position)) return "bagian";
+  if (user.groupings === "Ka./Wa.Ka.Seksi" || /seksi|shift|pengawas/i.test(user.position)) return "seksi";
+  return "operational";
+}
+
+function normOrgName(val?: string): string {
+  return (val ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Kewenangan Akses Data Berjenjang (Bagian I Poin 4):
+ * Menggabungkan:
+ * 1. Rantai Approval (Reg No AP1 / Reg No AP2, langsung maupun transitif/bertingkat), DAN
+ * 2. Hirarki Jabatan Struktural:
+ *    - Direktur pada Group (mis. RSUP Group: PT RSUP (Industry), PT RSUP (Perkebunan), PT RSTM, PT GHS, ASD)
+ *    - GM pada Unit Usahanya
+ *    - Level Divisi pada seluruh posisi, bagian, dan departemen dalam Divisinya
+ *    - Level Departemen pada seluruh posisi dan bagian dalam Departemennya
+ *    - Level Bagian pada seluruh posisi dalam Bagiannya
+ */
 export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadManagedUsers()): ManagedUser[] {
-  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director") {
+  const level = resolveUserAuthorityLevel(user);
+  if (level === "admin" || level === "bod") {
     return allUsers;
   }
-  if (user.role === "HR Unit" || user.role === "GM") {
-    return allUsers.filter((u) => u.company === user.company);
+
+  const myRank = HIERARCHY_RANK[level];
+  const isRsupMember = (RSUP_GROUP_COMPANIES as readonly string[]).includes(user.company);
+
+  // 1. Collect transitive AP1 / AP2 subordinate chain
+  const transitiveSubIds = new Set<string>();
+  const queue: ManagedUser[] = [user];
+  const visited = new Set<string>([user.employeeId.toLowerCase()]);
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    const reg = (curr.regNo ?? "").trim().toLowerCase();
+    const emp = curr.employeeId.trim().toLowerCase();
+    const nm = curr.name.trim().toLowerCase();
+    for (const cand of allUsers) {
+      const candKey = cand.employeeId.toLowerCase();
+      if (visited.has(candKey)) continue;
+      const ap1 = (cand.regNoAp1 ?? "").trim().toLowerCase();
+      const ap2 = (cand.regNoAp2 ?? "").trim().toLowerCase();
+      const matched =
+        (reg && (ap1 === reg || ap2 === reg)) ||
+        (emp && (ap1 === emp || ap2 === emp)) ||
+        (nm && (ap1 === nm || ap2 === nm));
+      if (matched) {
+        visited.add(candKey);
+        transitiveSubIds.add(candKey);
+        queue.push(cand);
+      }
+    }
   }
-  const reg = (user.regNo ?? "").trim().toLowerCase();
-  const emp = user.employeeId.trim().toLowerCase();
-  const name = user.name.trim().toLowerCase();
-  const directMatches = allUsers.filter((u) => {
-    if (u.employeeId === user.employeeId) return true;
-    const ap1 = (u.regNoAp1 ?? "").trim().toLowerCase();
-    const ap2 = (u.regNoAp2 ?? "").trim().toLowerCase();
-    if (reg && (ap1 === reg || ap2 === reg)) return true;
-    if (emp && (ap1 === emp || ap2 === emp)) return true;
-    if (name && (ap1 === name || ap2 === name)) return true;
+
+  // 2. Collect structural hierarchy scope
+  const allowedUnits = new Set<string>(
+    [user.company, ...(user.managedUnits ?? [])].map(normOrgName).filter(Boolean),
+  );
+  const allowedDivisions = new Set<string>(
+    [user.division, ...(user.managedDivisions ?? [])].map(normOrgName).filter(Boolean),
+  );
+  const allowedDepartments = new Set<string>(
+    [user.department, ...(user.managedDepartments ?? [])].map(normOrgName).filter(Boolean),
+  );
+  const allowedBagians = new Set<string>(
+    [user.bagian ?? "", ...(user.managedBagians ?? [])].map(normOrgName).filter(Boolean),
+  );
+
+  return allUsers.filter((target) => {
+    if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return true;
+    if (transitiveSubIds.has(target.employeeId.toLowerCase())) return true;
+
+    const targetLevel = resolveUserAuthorityLevel(target);
+    const targetRank = HIERARCHY_RANK[targetLevel];
+
+    // 1. Level Direktur pada Group: melihat semua unit dalam Group-nya (contoh: RSUP Group)
+    if (level === "director_group") {
+      if (isRsupMember) {
+        return (RSUP_GROUP_COMPANIES as readonly string[]).includes(target.company) && targetRank <= myRank;
+      }
+      return allowedUnits.has(normOrgName(target.company)) && targetRank <= myRank;
+    }
+
+    // 2. Level GM & HR Unit: melihat semua karyawan pada Unit Usahanya
+    if (level === "gm_unit" || level === "hr_unit") {
+      return allowedUnits.has(normOrgName(target.company)) && targetRank <= myRank;
+    }
+
+    // Pastikan dalam Company Unit yang sama untuk level Divisi ke bawah
+    if (!allowedUnits.has(normOrgName(target.company))) return false;
+    if (targetRank > myRank) return false;
+
+    // 3. Level Divisi: melihat semua posisi, bagian, departemen dalam Divisinya
+    if (level === "division") {
+      return allowedDivisions.has(normOrgName(target.division));
+    }
+
+    // 4. Level Departemen: melihat semua posisi dan bagian dalam Departemennya
+    if (level === "department") {
+      const sameDiv = !user.division || allowedDivisions.has(normOrgName(target.division));
+      return sameDiv && allowedDepartments.has(normOrgName(target.department));
+    }
+
+    // 5. Level Bagian / Seksi: melihat semua posisi dalam Bagiannya
+    if (level === "bagian" || level === "seksi") {
+      const sameDiv = !user.division || allowedDivisions.has(normOrgName(target.division));
+      const sameDept = !user.department || allowedDepartments.has(normOrgName(target.department));
+      if (allowedBagians.size > 0 && target.bagian) {
+        return sameDiv && sameDept && allowedBagians.has(normOrgName(target.bagian));
+      }
+      return sameDiv && sameDept;
+    }
+
     return false;
   });
-  return directMatches;
 }
 
 /**
@@ -152,6 +286,97 @@ export function getStrictSubordinateUsers(user = getActiveUser(), allUsers = loa
   );
 }
 
+export type DirectApprovalRelation = "ap1" | "ap2" | "checker" | "validator" | "view_only";
+
+/**
+ * Membedakan apakah pengguna yang login adalah Approver Langsung (Reg No AP1 / Reg No AP2 / Checker / Validator)
+ * atau hanya memiliki Hak Lihat Berjenjang (View Scope berdasarkan hirarki Direktur/GM/Divisi/Departemen/Bagian).
+ */
+export function getDirectApprovalRoleForTarget(
+  viewer: ManagedUser,
+  targetEmployeeIdOrName: string,
+  allUsers = loadManagedUsers(),
+): DirectApprovalRelation {
+  if (isAdminOrHrIcfRole(viewer.role) || viewer.isHrIcfValidator) {
+    return "validator";
+  }
+  const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
+  const target = allUsers.find((u) => {
+    const uNum = u.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+    return (
+      u.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      u.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      (q && uNum === q)
+    );
+  });
+  if (!target) return "ap1";
+
+  const reg = (viewer.regNo ?? "").trim().toLowerCase();
+  const emp = viewer.employeeId.trim().toLowerCase();
+  const nm = viewer.name.trim().toLowerCase();
+  const ap1 = (target.regNoAp1 ?? "").trim().toLowerCase();
+  const ap2 = (target.regNoAp2 ?? "").trim().toLowerCase();
+
+  if ((reg && ap1 === reg) || (emp && ap1 === emp) || (nm && ap1 === nm)) {
+    return "ap1";
+  }
+  if ((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm)) {
+    return "ap2";
+  }
+  if ((viewer.role === "HR Unit" || viewer.isHrUnitChecker) && viewer.company === target.company) {
+    return "checker";
+  }
+  return "view_only";
+}
+
+export interface ScopedHierarchyFilterOptions {
+  authorityLevel: HierarchyAuthorityLevel;
+  authorityLabel: string;
+  units: string[];
+  divisions: string[];
+  departments: string[];
+  bagians: string[];
+  positions: string[];
+}
+
+/**
+ * Menghasilkan opsi filter bertingkat (Unit -> Divisi -> Departemen -> Bagian -> Posisi)
+ * yang otomatis terkunci/terbatas sesuai kewenangan berjenjang pengguna yang sedang login.
+ */
+export function getScopedFilterOptionsForUser(
+  user = getActiveUser(),
+  allUsers = loadManagedUsers(),
+): ScopedHierarchyFilterOptions {
+  const level = resolveUserAuthorityLevel(user);
+  const subs = getStrictSubordinateUsers(user, allUsers);
+  const pool = subs.length > 0 ? subs : [user];
+
+  const uniq = (arr: (string | undefined)[]) =>
+    Array.from(new Set(arr.map((v) => (v ?? "").trim()).filter(Boolean))).sort();
+
+  const LABEL_BY_LEVEL: Record<HierarchyAuthorityLevel, string> = {
+    admin: "Administrator / HR ICF (Semua Unit Usaha)",
+    bod: "Board of Directors (Semua Unit Group)",
+    director_group: `Level Direktur Group (${(RSUP_GROUP_COMPANIES as readonly string[]).includes(user.company) ? "RSUP Group — 5 Unit Usaha" : user.company})`,
+    gm_unit: `Level GM Unit Usaha (${user.company})`,
+    hr_unit: `HR Unit Usaha (${user.company})`,
+    division: `Level Divisi (${user.division} — ${user.company})`,
+    department: `Level Departemen (${user.department} · ${user.division})`,
+    bagian: `Level Bagian (${user.bagian || user.department} · ${user.department})`,
+    seksi: `Level Seksi (${user.bagian || user.department})`,
+    operational: `Level Individu (${user.name})`,
+  };
+
+  return {
+    authorityLevel: level,
+    authorityLabel: LABEL_BY_LEVEL[level],
+    units: uniq(pool.map((u) => u.company)),
+    divisions: uniq(pool.map((u) => u.division)),
+    departments: uniq(pool.map((u) => u.department)),
+    bagians: uniq(pool.map((u) => u.bagian)),
+    positions: uniq(pool.map((u) => u.position)),
+  };
+}
 export function canUserAccessEmployeeData(
   viewer: ManagedUser,
   targetEmployeeIdOrName: string,

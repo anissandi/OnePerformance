@@ -93,6 +93,9 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
             { label: "Bagian", value: user.bagian || "—" },
             { label: "Reg No AP1 (Approval 1)", value: user.regNoAp1 || "—" },
             { label: "Reg No AP2 (Approval 2)", value: user.regNoAp2 || "—" },
+            { label: "Multi-Divisi (Tambahan)", value: user.managedDivisions?.length ? user.managedDivisions.join(", ") : "—" },
+            { label: "Multi-Departemen (Tambahan)", value: user.managedDepartments?.length ? user.managedDepartments.join(", ") : "—" },
+            { label: "Multi-Bagian (Tambahan)", value: user.managedBagians?.length ? user.managedBagians.join(", ") : "—" },
             { label: "Role", value: <RoleBadge role={user.role} /> },
             { label: "Groupings", value: user.groupings },
             { label: "Status", value: <StatusBadge status={user.status} /> },
@@ -220,6 +223,79 @@ function EditModal({ user, onClose, onSave }: { user: User | null; onClose: () =
                   <strong>Approval Validate HR ICF</strong> (Role HR ICF memiliki hak akses setara Administrator)
                 </span>
               </label>
+            </div>
+          </div>
+
+          <div className="col-span-2 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3.5 space-y-2.5">
+            <div>
+              <p className="text-xs font-semibold text-[#1A284F]">
+                Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian)
+              </p>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                Opsional: Isi dengan pemisah koma (<code>,</code>) apabila pejabat ini membawahi lebih dari 1 Unit Usaha, Divisi, Departemen, atau Bagian.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-medium text-gray-600 mb-1">Unit Usaha Tambahan</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: PT RSUP (Perkebunan), PT RSTM"
+                  value={(form.managedUnits ?? []).join(", ")}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      managedUnits: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                    }))
+                  }
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-gray-600 mb-1">Divisi Tambahan</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Coconut Production, Pineapple Production"
+                  value={(form.managedDivisions ?? []).join(", ")}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      managedDivisions: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                    }))
+                  }
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-gray-600 mb-1">Departemen Tambahan</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Produksi Kelapa A, Produksi Kelapa B"
+                  value={(form.managedDepartments ?? []).join(", ")}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      managedDepartments: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                    }))
+                  }
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-gray-600 mb-1">Bagian Tambahan</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Proses Kelapa A, Packing Kelapa A"
+                  value={(form.managedBagians ?? []).join(", ")}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      managedBagians: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                    }))
+                  }
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
             </div>
           </div>
         </div>

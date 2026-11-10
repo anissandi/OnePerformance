@@ -7,7 +7,7 @@ import {
 import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
-import { getActiveUser, getStrictSubordinateUsers } from "../../store/authStore";
+import { getActiveUser, getScopedFilterOptionsForUser, getStrictSubordinateUsers } from "../../store/authStore";
 
 type Role = "hr" | "supervisor";
 
@@ -423,6 +423,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   };
 
   const activeUser = getActiveUser();
+  const scopedMeta = getScopedFilterOptionsForUser(activeUser);
   const supervisorAllowedIds = new Set(
     role === "supervisor"
       ? getStrictSubordinateUsers(activeUser).map((u) => u.employeeId.toLowerCase())
@@ -463,11 +464,18 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     <div className="w-full flex flex-col gap-6">
       <div>
         <h2 className="text-2xl font-bold text-gray-900 mb-1">Performance Appraisal Summary</h2>
-        <p className="text-sm text-gray-500">
-          {role === "hr"
-            ? "Consolidated appraisal results for all employees with completed approvals"
-            : "Appraisal results for employees under your supervision"}
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm text-gray-500">
+            {role === "hr"
+              ? "Consolidated appraisal results for all employees with completed approvals"
+              : "Appraisal results for employees under your hierarchical & approval authority"}
+          </p>
+          {role === "supervisor" && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-[#1A284F] border border-blue-200">
+              Cakupan Wewenang: {scopedMeta.authorityLabel}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl px-6 py-4 shadow-sm">
@@ -475,13 +483,46 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           <FilterSelect label="Year"         options={filterOptions.year}        value={year}        onChange={setYear} />
           <FilterSelect
             label="Company Unit"
-            options={lockedUnits ? ["All Units", ...lockedUnits] : filterOptions.companyUnit}
+            options={
+              lockedUnits
+                ? ["All Units", ...lockedUnits]
+                : role === "supervisor" && scopedMeta.units.length > 0
+                ? ["All Units", ...scopedMeta.units]
+                : filterOptions.companyUnit
+            }
             value={companyUnit}
             onChange={setCompanyUnit}
           />
-          <FilterSelect label="Division"     options={filterOptions.division}    value={division}    onChange={setDivision} />
-          <FilterSelect label="Department"   options={filterOptions.department}  value={department}  onChange={setDepartment} />
-          <FilterSelect label="Position"     options={filterOptions.position}    value={position}    onChange={setPosition} />
+          <FilterSelect
+            label="Division"
+            options={
+              role === "supervisor" && scopedMeta.divisions.length > 0
+                ? ["All Divisions", ...scopedMeta.divisions]
+                : filterOptions.division
+            }
+            value={division}
+            onChange={setDivision}
+          />
+          <FilterSelect
+            label="Department"
+            options={
+              role === "supervisor" && scopedMeta.departments.length > 0
+                ? ["All Departments", ...scopedMeta.departments]
+                : filterOptions.department
+            }
+            value={department}
+            onChange={setDepartment}
+          />
+          <FilterSelect
+            label="Position"
+            options={
+              role === "supervisor" && scopedMeta.positions.length > 0
+                ? ["All Positions", ...scopedMeta.positions]
+                : filterOptions.position
+            }
+            value={position}
+            onChange={setPosition}
+          />
         </div>
       </div>
 
