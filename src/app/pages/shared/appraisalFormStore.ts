@@ -1,4 +1,5 @@
 import { submitWorkflowModule, loadWorkflowRecords } from "./appraisalWorkflowStore";
+import { savePersistedState } from "../../services/supabaseClient";
 const SELF_KEY     = "af_self_ratings_v1";
 const APPROVER_KEY = "af_approver_ratings_v1";
 
@@ -16,7 +17,24 @@ export interface StoredAppraisalSelf {
 }
 
 export function saveAppraisalSelf(data: StoredAppraisalSelf): void {
-  try { localStorage.setItem(SELF_KEY, JSON.stringify(data)); localStorage.removeItem(APPROVER_KEY); submitWorkflowModule("Appraisal Form"); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(APPROVER_KEY);
+    savePersistedState(SELF_KEY, data, {
+      kind: "appraisal-form",
+      employeeId: "E002",
+      period: "2026",
+      selfRatings: data,
+      approverRatings: [],
+      status: "Submitted",
+      audit: {
+        action: "Create",
+        module: "Performance Appraisal",
+        subModule: "Appraisal Form",
+        description: "Submitted Appraisal Form Self-Assessment (Form A, B, C)",
+      },
+    });
+    submitWorkflowModule("Appraisal Form");
+  } catch { /* ignore */ }
 }
 
 export function loadAppraisalSelf(): StoredAppraisalSelf | null {
@@ -44,7 +62,14 @@ export function saveAppraisalApprover(entry: StoredAppraisalApproverEntry): void
       (e) => e.approverLevel === entry.approverLevel
     );
     if (idx >= 0) { current[idx] = entry; } else { current.push(entry); }
-    localStorage.setItem(APPROVER_KEY, JSON.stringify(current));
+    savePersistedState(APPROVER_KEY, current, {
+      kind: "appraisal-form",
+      employeeId: "E002",
+      period: "2026",
+      selfRatings: loadAppraisalSelf(),
+      approverRatings: current,
+      status: `Assessed-Approver ${entry.approverLevel}`,
+    });
   } catch { /* ignore */ }
 }
 

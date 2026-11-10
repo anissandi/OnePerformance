@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { RefreshCw, CheckSquare, Square, Database, CheckCircle2, AlertCircle, Clock } from "lucide-react";
+import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
 
 type SyncItem = {
   id: string;
@@ -55,9 +56,19 @@ function StatusBadge({ status }: { status: SyncItem["status"] }) {
 }
 
 export function DataSyncPage() {
-  const [items, setItems] = useState<SyncItem[]>(initialItems);
+  const [items, setItems] = useState<SyncItem[]>(() =>
+    loadPersistedState<SyncItem[]>("pa_data_sync_items_v1", initialItems)
+  );
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [syncing, setSyncing] = useState(false);
+
+  useEffect(() => {
+    const onHydrated = () => {
+      setItems(loadPersistedState<SyncItem[]>("pa_data_sync_items_v1", initialItems));
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
 
   const toggle = (id: string) => {
     setChecked(prev => {
@@ -100,9 +111,24 @@ export function DataSyncPage() {
     targetIds.forEach((id, i) => {
       setTimeout(() => {
         const _n = new Date(); const now = `${String(_n.getDate()).padStart(2,"0")}/${String(_n.getMonth()+1).padStart(2,"0")}/${_n.getFullYear()} ${String(_n.getHours()).padStart(2,"0")}:${String(_n.getMinutes()).padStart(2,"0")}`;
-        setItems(prev => prev.map(item =>
-          item.id === id ? { ...item, status: "success", lastSync: now } : item
-        ));
+        setItems(prev => {
+          const next = prev.map(item =>
+            item.id === id ? { ...item, status: "success" as const, lastSync: now } : item
+          );
+          if (i === targetIds.length - 1) {
+            savePersistedState("pa_data_sync_items_v1", next, {
+              kind: "data-sync",
+              items: next.filter((it) => targetIds.includes(it.id)),
+              audit: {
+                action: "Update",
+                module: "HR Settings",
+                subModule: "Data Sync",
+                description: `Synchronized HR datasets: ${targetIds.join(", ")}`,
+              },
+            });
+          }
+          return next;
+        });
         if (i === targetIds.length - 1) {
           setSyncing(false);
           setChecked(new Set());

@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { CheckCircle2, Clock, Users, BarChart2, TrendingUp, RefreshCw, Lock, Play, ArrowRight } from "lucide-react";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { toast } from "sonner";
 
 type PhaseStatus = "completed" | "in-progress" | "upcoming";
 
@@ -62,20 +64,72 @@ function PhaseCircle({ status }: { status: PhaseStatus }) {
 }
 
 export function CycleManagement() {
-  const [isCycleClosed, setIsCycleClosed] = useState(false);
-  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
-  const [cycleStartDate, setCycleStartDate] = useState("2027-02-01");
-  const [settingEnd, setSettingEnd] = useState("2027-03-31");
-  const [measurementEnd, setMeasurementEnd] = useState("2027-11-16");
-  const [evaluationEnd, setEvaluationEnd] = useState("2028-01-16");
-  const [dialogueEnd, setDialogueEnd] = useState("2028-02-16");
-  const [selectedUnits, setSelectedUnits] = useState<Record<string, boolean>>({
-    industry: true,
-    perkebunan: true,
-    rstm: true,
-    ghs: true,
-    asd: false,
+  const initialCycleState = loadPersistedState("pa_cycle_mgmt_v1", {
+    isCycleClosed: false,
+    cycleStartDate: "2027-02-01",
+    settingEnd: "2027-03-31",
+    measurementEnd: "2027-11-16",
+    evaluationEnd: "2028-01-16",
+    dialogueEnd: "2028-02-16",
+    selectedUnits: {
+      industry: true,
+      perkebunan: true,
+      rstm: true,
+      ghs: true,
+      asd: false,
+    } as Record<string, boolean>,
+    initialized2027: false,
   });
+  const [isCycleClosed, setIsCycleClosed] = useState(initialCycleState.isCycleClosed);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [cycleStartDate, setCycleStartDate] = useState(initialCycleState.cycleStartDate);
+  const [settingEnd, setSettingEnd] = useState(initialCycleState.settingEnd);
+  const [measurementEnd, setMeasurementEnd] = useState(initialCycleState.measurementEnd);
+  const [evaluationEnd, setEvaluationEnd] = useState(initialCycleState.evaluationEnd);
+  const [dialogueEnd, setDialogueEnd] = useState(initialCycleState.dialogueEnd);
+  const [selectedUnits, setSelectedUnits] = useState<Record<string, boolean>>(initialCycleState.selectedUnits);
+  const [initialized2027, setInitialized2027] = useState(Boolean(initialCycleState.initialized2027));
+
+  useEffect(() => {
+    const onHydrated = () => {
+      const s = loadPersistedState("pa_cycle_mgmt_v1", initialCycleState);
+      setIsCycleClosed(Boolean(s.isCycleClosed));
+      setCycleStartDate(s.cycleStartDate);
+      setSettingEnd(s.settingEnd);
+      setMeasurementEnd(s.measurementEnd);
+      setEvaluationEnd(s.evaluationEnd);
+      setDialogueEnd(s.dialogueEnd);
+      setSelectedUnits(s.selectedUnits);
+      setInitialized2027(Boolean(s.initialized2027));
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
+
+  const persistCycle = (patch: Partial<typeof initialCycleState>, desc: string) => {
+    const next = {
+      isCycleClosed,
+      cycleStartDate,
+      settingEnd,
+      measurementEnd,
+      evaluationEnd,
+      dialogueEnd,
+      selectedUnits,
+      initialized2027,
+      ...patch,
+    };
+    savePersistedState("pa_cycle_mgmt_v1", next, {
+      kind: "cycle-config",
+      cycleId: "2026",
+      data: next,
+      audit: {
+        action: "Update",
+        module: "HR Settings",
+        subModule: "Cycle Management",
+        description: desc,
+      },
+    });
+  };
 
   const toggleUnit = (key: string) => {
     setSelectedUnits((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -213,7 +267,12 @@ export function CycleManagement() {
                       Cancel
                     </button>
                     <button
-                      onClick={() => { setIsCycleClosed(true); setShowCloseConfirm(false); }}
+                      onClick={() => {
+                        setIsCycleClosed(true);
+                        setShowCloseConfirm(false);
+                        persistCycle({ isCycleClosed: true }, "Closed and archived 2026 PA Cycle");
+                        toast.success("2026 PA Cycle closed and saved to Supabase.");
+                      }}
                       className="bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl px-4 py-2.5 text-sm transition-colors"
                     >
                       Confirm Close
@@ -338,10 +397,15 @@ export function CycleManagement() {
           <div className="flex items-center gap-4 pt-2">
             <button
               disabled={!isCycleClosed}
+              onClick={() => {
+                setInitialized2027(true);
+                persistCycle({ initialized2027: true }, `Initialized 2027 PA Cycle (${cycleStartDate} – ${dialogueEnd})`);
+                toast.success("2027 PA Cycle configuration saved to Supabase.");
+              }}
               className={`bg-[#1A284F] hover:bg-[#243869] text-white font-semibold rounded-xl px-4 py-2.5 text-sm transition-colors flex items-center gap-2 ${!isCycleClosed ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               <Play className="w-4 h-4" />
-              Initialize New Cycle
+              {initialized2027 ? "Update 2027 Cycle Schedule" : "Initialize New Cycle"}
             </button>
             {!isCycleClosed && (
               <div className="flex items-center gap-1.5 text-xs text-amber-600">

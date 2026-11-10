@@ -1,12 +1,27 @@
 import type { SmartGoal } from "../employee/SMARTGoals";
 import { submitWorkflowModule } from "./appraisalWorkflowStore";
+import { savePersistedState } from "../../services/supabaseClient";
 
 const STORAGE_KEY = "sg_submitted_smart_goals";
 const CHECKIN_KEY = "sg_checkin_entries_v1";
 
 export function saveSubmittedGoals(goals: SmartGoal[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(goals));
+    savePersistedState(STORAGE_KEY, goals, {
+      kind: "smart-goals",
+      employeeId: "E002",
+      period: "2026",
+      goals,
+      checkinEntries: loadCheckInEntries(),
+      approvalDecisions: loadApprovalDecisions(),
+      status: "Submitted-Setting",
+      audit: {
+        action: "Create",
+        module: "SMART Goals",
+        subModule: "SMART Goals Setting",
+        description: `Submitted ${goals.length} SMART Goals for approval`,
+      },
+    });
     submitWorkflowModule("SMART Goals", "setting");
   } catch {
     // ignore storage errors
@@ -51,7 +66,21 @@ export interface StoredCheckInEntry {
 
 export function saveCheckInEntries(entries: StoredCheckInEntry[]): void {
   try {
-    localStorage.setItem(CHECKIN_KEY, JSON.stringify(entries));
+    savePersistedState(CHECKIN_KEY, entries, {
+      kind: "smart-goals",
+      employeeId: "E002",
+      period: "2026",
+      goals: loadSubmittedGoals() ?? [],
+      checkinEntries: entries,
+      approvalDecisions: loadApprovalDecisions(),
+      status: "Submitted-Measurement",
+      audit: {
+        action: "Update",
+        module: "SMART Goals",
+        subModule: "SMART Goals Measurement",
+        description: `Submitted SMART Goals Measurement check-in (${entries.length} goals)`,
+      },
+    });
     saveApprovalDecisions(loadApprovalDecisions().filter((decision) => decision.employeeId.replace(/-/g, "") !== "EMP002"));
     submitWorkflowModule("SMART Goals");
   } catch { /* ignore */ }
@@ -86,7 +115,15 @@ export interface StoredApprovalDecision {
 
 export function saveApprovalDecisions(decisions: StoredApprovalDecision[]): void {
   try {
-    localStorage.setItem(APPROVAL_KEY, JSON.stringify(decisions));
+    savePersistedState(APPROVAL_KEY, decisions, {
+      kind: "smart-goals",
+      employeeId: "E002",
+      period: "2026",
+      goals: loadSubmittedGoals() ?? [],
+      checkinEntries: loadCheckInEntries(),
+      approvalDecisions: decisions,
+      status: "Reviewed",
+    });
   } catch { /* ignore */ }
 }
 

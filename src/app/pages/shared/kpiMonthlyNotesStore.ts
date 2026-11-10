@@ -1,3 +1,5 @@
+import { savePersistedState } from "../../services/supabaseClient";
+
 const KEY = "kpi_monthly_notes";
 
 export interface MonthlyApproverNote {
@@ -36,7 +38,7 @@ export function saveMonthlyNote(
     const d = new Date();
     const date = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
     all[monthId] = { ...all[monthId], [role]: { text, approverName, approverRole, date } };
-    localStorage.setItem(KEY, JSON.stringify(all));
+    savePersistedState(KEY, all);
   } catch {
     // ignore
   }

@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   CheckCircle2, RotateCcw, ChevronDown, ChevronUp, X, Info,
   Building2, Search,
 } from "lucide-react";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 // ─── Seeded helpers ────────────────────────────────────────────────────────────
 
@@ -332,9 +333,22 @@ type ApprovalStatus = "pending" | "approved" | "revision";
 export function BODCalibrationApproval() {
   const [selectedUnitId, setSelectedUnitId] = useState(COMPANY_UNITS[0].id);
   const [modal, setModal]   = useState<"approve" | "revision" | null>(null);
-  const [statusMap, setStatusMap] = useState<Record<string, ApprovalStatus>>({});
-  const [approvedAtMap, setApprovedAtMap] = useState<Record<string, string>>({});
+  const [statusMap, setStatusMap] = useState<Record<string, ApprovalStatus>>(() =>
+    loadPersistedState("pa_bod_cal_status_map_v1", {})
+  );
+  const [approvedAtMap, setApprovedAtMap] = useState<Record<string, string>>(() =>
+    loadPersistedState("pa_bod_cal_approved_at_v1", {})
+  );
   const [empSearch, setEmpSearch] = useState("");
+
+  useEffect(() => {
+    const onHydrated = () => {
+      setStatusMap(loadPersistedState("pa_bod_cal_status_map_v1", {}));
+      setApprovedAtMap(loadPersistedState("pa_bod_cal_approved_at_v1", {}));
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
 
   const unit   = COMPANY_UNITS.find(u => u.id === selectedUnitId)!;
   const status = statusMap[selectedUnitId] ?? "pending";
@@ -364,13 +378,51 @@ export function BODCalibrationApproval() {
 
   const handleApprove = () => {
     const now = new Date().toLocaleString("id-ID", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) + " WIB";
-    setStatusMap(p => ({ ...p, [selectedUnitId]: "approved" }));
-    setApprovedAtMap(p => ({ ...p, [selectedUnitId]: now }));
+    const nextStatus = { ...statusMap, [selectedUnitId]: "approved" as ApprovalStatus };
+    const nextApprovedAt = { ...approvedAtMap, [selectedUnitId]: now };
+    setStatusMap(nextStatus);
+    setApprovedAtMap(nextApprovedAt);
+    savePersistedState("pa_bod_cal_status_map_v1", nextStatus, {
+      kind: "calibration-adjustment",
+      adjustmentKey: `bod-approval-${selectedUnitId}-2026`,
+      unitName: unit.name,
+      employeeId: "ALL",
+      period: "2026",
+      status: "Approved",
+      bodDecision: "Approved",
+      bodNote: `Approved by BOD on ${now}`,
+      data: { approvedAt: now, unitId: selectedUnitId },
+      audit: {
+        action: "Approve",
+        module: "Performance Appraisal",
+        subModule: "Calibration Approval",
+        description: `BOD approved Calibration results for ${unit.name} (${now})`,
+      },
+    });
+    savePersistedState("pa_bod_cal_approved_at_v1", nextApprovedAt);
     setModal(null);
   };
 
   const handleRevision = () => {
-    setStatusMap(p => ({ ...p, [selectedUnitId]: "revision" }));
+    const nextStatus = { ...statusMap, [selectedUnitId]: "revision" as ApprovalStatus };
+    setStatusMap(nextStatus);
+    savePersistedState("pa_bod_cal_status_map_v1", nextStatus, {
+      kind: "calibration-adjustment",
+      adjustmentKey: `bod-approval-${selectedUnitId}-2026`,
+      unitName: unit.name,
+      employeeId: "ALL",
+      period: "2026",
+      status: "Revision",
+      bodDecision: "Revision",
+      bodNote: "Returned for HR revision",
+      data: { unitId: selectedUnitId },
+      audit: {
+        action: "Reject",
+        module: "Performance Appraisal",
+        subModule: "Calibration Approval",
+        description: `BOD requested revision on Calibration results for ${unit.name}`,
+      },
+    });
     setModal(null);
   };
 

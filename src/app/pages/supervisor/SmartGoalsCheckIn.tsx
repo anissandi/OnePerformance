@@ -9,6 +9,7 @@ import { loadSubmittedGoals, saveCheckInEntries } from "../shared/smartGoalsStor
 import type { StoredCheckInEntry } from "../shared/smartGoalsStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX } from "../../utils/excelUtils";
+import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -309,6 +310,14 @@ function ActionPlansSection({
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel"].includes(f.type)
     );
+    valid.forEach((rawFile) => {
+      void uploadEvidenceFileToSupabase(rawFile, {
+        moduleType: "SMART Goals",
+        period: "2026",
+        month: "June",
+        kpiName: goal.label,
+      });
+    });
     const extra = getExtra(planId);
     setExtra(planId, { evidence: [...extra.evidence, ...valid.map((f) => ({ name: f.name, size: f.size, type: f.type }))] });
   };
@@ -666,6 +675,13 @@ function TargetVsActualSection({
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel"].includes(f.type)
     );
+    valid.forEach((rawFile) => {
+      void uploadEvidenceFileToSupabase(rawFile, {
+        moduleType: "SMART Goals",
+        period: "2026",
+        month: "June",
+      });
+    });
     const prev = getEntry(goalId);
     updateEntry(goalId, { evidenceFiles: [...prev.evidenceFiles, ...valid.map((f) => ({ name: f.name, size: f.size, type: f.type }))] });
   };

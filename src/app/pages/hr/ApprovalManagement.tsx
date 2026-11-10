@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import {
   TrendingUp, CheckCircle2, Save, ArrowDown, Shield,
   LayoutGrid, Building2, Users, ChevronDown, ClipboardList, Pencil,
@@ -1036,23 +1037,36 @@ export function HRApprovalManagement() {
   const [activeTab, setActiveTab]     = useRouteTab<"flow" | "icf" | "other" | "delegation">(["flow", "icf", "other", "delegation"], "flow");
   const [companyUnit, setCompanyUnit] = useState("");
   const [userLevel, setUserLevel]     = useState("");
-  const [ksgMap, setKsgMap]           = useState<KsgConfigMap>({});
-  const [otherMap, setOtherMap]       = useState<OtherConfigMap>({});
-  const [savedKeys, setSavedKeys]     = useState<string[]>([]);
+  const [ksgMap, setKsgMap]           = useState<KsgConfigMap>(() => loadPersistedState("pa_approval_mgmt_ksg_v1", {}));
+  const [otherMap, setOtherMap]       = useState<OtherConfigMap>(() => loadPersistedState("pa_approval_mgmt_other_v1", {}));
+  const [savedKeys, setSavedKeys]     = useState<string[]>(() => loadPersistedState("pa_approval_mgmt_keys_v1", []));
   const [showSuccess, setShowSuccess] = useState(false);
   const [savedLabel, setSavedLabel]   = useState("");
-  const [delegations, setDelegations] = useState<Record<string, DelegationEntry>>(INITIAL_DELEGATIONS);
+  const [delegations, setDelegations] = useState<Record<string, DelegationEntry>>(() => loadPersistedState("pa_approval_mgmt_deleg_v1", INITIAL_DELEGATIONS));
   const [delegSaved, setDelegSaved]   = useState(false);
 
   // ICF tab state
   const [icfCompanyUnit, setIcfCompanyUnit] = useState("");
   const [icfUserLevel, setIcfUserLevel]     = useState("");
-  const [icfPrimaryMap, setIcfPrimaryMap]   = useState<KsgConfigMap>({});
-  const [icfSecondaryMap, setIcfSecondaryMap] = useState<OtherConfigMap>({});
-  const [icfSavedKeys, setIcfSavedKeys]     = useState<string[]>([]);
+  const [icfPrimaryMap, setIcfPrimaryMap]   = useState<KsgConfigMap>(() => loadPersistedState("pa_approval_mgmt_icf_prim_v1", {}));
+  const [icfSecondaryMap, setIcfSecondaryMap] = useState<OtherConfigMap>(() => loadPersistedState("pa_approval_mgmt_icf_sec_v1", {}));
+  const [icfSavedKeys, setIcfSavedKeys]     = useState<string[]>(() => loadPersistedState("pa_approval_mgmt_icf_keys_v1", []));
   const [icfShowSuccess, setIcfShowSuccess] = useState(false);
   const [icfSavedLabel, setIcfSavedLabel]   = useState("");
 
+  useEffect(() => {
+    const onHydrated = () => {
+      setKsgMap(loadPersistedState("pa_approval_mgmt_ksg_v1", {}));
+      setOtherMap(loadPersistedState("pa_approval_mgmt_other_v1", {}));
+      setSavedKeys(loadPersistedState("pa_approval_mgmt_keys_v1", []));
+      setDelegations(loadPersistedState("pa_approval_mgmt_deleg_v1", INITIAL_DELEGATIONS));
+      setIcfPrimaryMap(loadPersistedState("pa_approval_mgmt_icf_prim_v1", {}));
+      setIcfSecondaryMap(loadPersistedState("pa_approval_mgmt_icf_sec_v1", {}));
+      setIcfSavedKeys(loadPersistedState("pa_approval_mgmt_icf_keys_v1", []));
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
   const key      = companyUnit && userLevel ? comboKey(companyUnit, userLevel) : "";
   const ready    = Boolean(companyUnit && userLevel);
   const ksgCfg   = key ? (ksgMap[key]   ?? { levels: makeKsgLevels()   }) : { levels: makeKsgLevels()   };
@@ -1085,17 +1099,27 @@ export function HRApprovalManagement() {
     // persist draft edits under the real key if they were edited before selecting scope
     const draft = ksgMap["__draft__"];
     const otherDraft = otherMap["__draft__"];
-    setKsgMap((prev) => {
-      const next = { ...prev, [key]: prev[key] ?? draft ?? { levels: makeKsgLevels() } };
-      delete next["__draft__"];
-      return next;
+    const nextKsg = { ...ksgMap, [key]: ksgMap[key] ?? draft ?? { levels: makeKsgLevels() } };
+    delete nextKsg["__draft__"];
+    const nextOther = { ...otherMap, [key]: otherMap[key] ?? otherDraft ?? { levels: makeOtherLevels() } };
+    delete nextOther["__draft__"];
+    const nextKeys = savedKeys.includes(key) ? savedKeys : [...savedKeys, key];
+    setKsgMap(nextKsg);
+    setOtherMap(nextOther);
+    setSavedKeys(nextKeys);
+    savePersistedState("pa_approval_mgmt_ksg_v1", nextKsg, {
+      kind: "approval-config",
+      configKey: `ksg::${key}`,
+      data: { ksg: nextKsg[key], other: nextOther[key] },
+      audit: {
+        action: "Update",
+        module: "HR Settings",
+        subModule: "Approval Management",
+        description: `Saved Approval Flow for ${companyUnit} — ${userLevel}`,
+      },
     });
-    setOtherMap((prev) => {
-      const next = { ...prev, [key]: prev[key] ?? otherDraft ?? { levels: makeOtherLevels() } };
-      delete next["__draft__"];
-      return next;
-    });
-    setSavedKeys((prev) => prev.includes(key) ? prev : [...prev, key]);
+    savePersistedState("pa_approval_mgmt_other_v1", nextOther);
+    savePersistedState("pa_approval_mgmt_keys_v1", nextKeys);
     setSavedLabel(`${companyUnit} — ${userLevel}`);
     setShowSuccess(true);
   };
@@ -1306,17 +1330,27 @@ export function HRApprovalManagement() {
           if (!icfKey) return;
           const primDraft = icfPrimaryMap["__icf_draft__"];
           const secDraft  = icfSecondaryMap["__icf_draft__"];
-          setIcfPrimaryMap((prev) => {
-            const next = { ...prev, [icfKey]: prev[icfKey] ?? primDraft ?? { levels: makeIcfPrimaryLevels() } };
-            delete next["__icf_draft__"];
-            return next;
+          const nextPrim = { ...icfPrimaryMap, [icfKey]: icfPrimaryMap[icfKey] ?? primDraft ?? { levels: makeIcfPrimaryLevels() } };
+          delete nextPrim["__icf_draft__"];
+          const nextSec = { ...icfSecondaryMap, [icfKey]: icfSecondaryMap[icfKey] ?? secDraft ?? { levels: makeIcfSecondaryLevels() } };
+          delete nextSec["__icf_draft__"];
+          const nextIcfKeys = icfSavedKeys.includes(icfKey) ? icfSavedKeys : [...icfSavedKeys, icfKey];
+          setIcfPrimaryMap(nextPrim);
+          setIcfSecondaryMap(nextSec);
+          setIcfSavedKeys(nextIcfKeys);
+          savePersistedState("pa_approval_mgmt_icf_prim_v1", nextPrim, {
+            kind: "approval-config",
+            configKey: `icf::${icfKey}`,
+            data: { primary: nextPrim[icfKey], secondary: nextSec[icfKey] },
+            audit: {
+              action: "Update",
+              module: "HR Settings",
+              subModule: "Approval Management",
+              description: `Saved ICF Approval Flow for ${icfCompanyUnit} — ${icfUserLevel}`,
+            },
           });
-          setIcfSecondaryMap((prev) => {
-            const next = { ...prev, [icfKey]: prev[icfKey] ?? secDraft ?? { levels: makeIcfSecondaryLevels() } };
-            delete next["__icf_draft__"];
-            return next;
-          });
-          setIcfSavedKeys((prev) => prev.includes(icfKey) ? prev : [...prev, icfKey]);
+          savePersistedState("pa_approval_mgmt_icf_sec_v1", nextSec);
+          savePersistedState("pa_approval_mgmt_icf_keys_v1", nextIcfKeys);
           setIcfSavedLabel(`${icfCompanyUnit} — ${icfUserLevel}`);
           setIcfShowSuccess(true);
         };
@@ -1474,7 +1508,21 @@ export function HRApprovalManagement() {
               </span>
             )}
             <button
-              onClick={() => { setDelegSaved(true); setTimeout(() => setDelegSaved(false), 3000); }}
+              onClick={() => {
+                savePersistedState("pa_approval_mgmt_deleg_v1", delegations, {
+                  kind: "approval-config",
+                  configKey: "delegations",
+                  data: delegations,
+                  audit: {
+                    action: "Update",
+                    module: "HR Settings",
+                    subModule: "Approval Management",
+                    description: "Saved Approver Delegation settings",
+                  },
+                });
+                setDelegSaved(true);
+                setTimeout(() => setDelegSaved(false), 3000);
+              }}
               className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold rounded-xl bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
             >
               <Save className="w-4 h-4" />

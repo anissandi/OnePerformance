@@ -1,7 +1,5 @@
 import { createBrowserRouter } from "react-router"
-import { RoleSelector } from "./pages/RoleSelector"
 import { LoginPage } from "./pages/LoginPage"
-import { SimulationKpiSetting } from "./pages/simulation/SimulationKpiSetting"
 import { AppLayout } from "./components/Layout"
 import { AnalyticsDashboard } from "./pages/hr/AnalyticsDashboard"
 import { HRApprovals } from "./pages/hr/Approvals"
@@ -140,16 +138,12 @@ function HREvidenceInterview() {
 
 export const router = createBrowserRouter([
   {
-    path: "/pa-simulasi",
-    Component: SimulationKpiSetting,
-  },
-  {
     path: "/login",
     Component: LoginPage,
   },
   {
     path: "/",
-    Component: RoleSelector,
+    Component: LoginPage,
   },
   {
     path: "/hr",
@@ -413,6 +407,6 @@ export const router = createBrowserRouter([
   },
   {
     path: "*",
-    Component: RoleSelector,
+    Component: LoginPage,
   },
 ])

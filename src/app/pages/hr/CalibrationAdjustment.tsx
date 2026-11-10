@@ -8,6 +8,7 @@ import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
 import { applyYearEndScorePolicy, isYearEndInactive } from "../shared/yearEndWorkflowStore";
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
+import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1312,8 +1313,12 @@ function EmployeeAdjustmentSection({
   const [selPosisi,  setSelPosisi]  = useState("__all__");
   const [selGrade,   setSelGrade]   = useState("__all__");
   const [detailEmp,  setDetailEmp]  = useState<Employee | null>(null);
-  const [comments,   setComments]   = useState<Record<string, string>>({});
-  const [evidence,   setEvidence]   = useState<Record<string, EvidenceFile[]>>({});
+  const [comments,   setComments]   = useState<Record<string, string>>(() =>
+    loadPersistedState("pa_calibration_adj_comments_v1", {})
+  );
+  const [evidence,   setEvidence]   = useState<Record<string, EvidenceFile[]>>(() =>
+    loadPersistedState("pa_calibration_adj_evidence_v1", {})
+  );
   const [sortKey,    setSortKey]    = useState<string | null>(null);
   const [sortDir,    setSortDir]    = useState<"asc" | "desc">("asc");
   const [freeEdit,   setFreeEdit]   = useState(false);
@@ -1871,7 +1876,14 @@ function EmployeeAdjustmentSection({
                           rows={2}
                           placeholder="Tambah komentar..."
                           value={comments[emp.id] ?? ""}
-                          onChange={e => setComments(prev => ({ ...prev, [emp.id]: e.target.value }))}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setComments(prev => {
+                              const next = { ...prev, [emp.id]: val };
+                              savePersistedState("pa_calibration_adj_comments_v1", next);
+                              return next;
+                            });
+                          }}
                           className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-[#1A284F]/30 placeholder-gray-300 text-gray-700"
                         />
                         {/* Upload evidence */}
@@ -1880,12 +1892,28 @@ function EmployeeAdjustmentSection({
                           <span className="text-[10px] font-semibold">Upload Bukti</span>
                           <input type="file" multiple className="hidden"
                             onChange={e => {
-                              const files: EvidenceFile[] = Array.from(e.target.files ?? []).map(f => ({
+                              const rawFiles = Array.from(e.target.files ?? []);
+                              const files: EvidenceFile[] = rawFiles.map(f => ({
                                 name: f.name,
                                 objectUrl: URL.createObjectURL(f),
                                 mimeType: f.type || "application/octet-stream",
                               }));
-                              if (files.length) setEvidence(prev => ({ ...prev, [emp.id]: [...(prev[emp.id] ?? []), ...files] }));
+                              if (files.length) {
+                                rawFiles.forEach((rawFile) => {
+                                  void uploadEvidenceFileToSupabase(rawFile, {
+                                    employeeId: emp.employeeId,
+                                    employeeName: emp.name,
+                                    moduleType: "Calibration",
+                                    period: "2026",
+                                    month: "Year-End",
+                                  });
+                                });
+                                setEvidence(prev => {
+                                  const next = { ...prev, [emp.id]: [...(prev[emp.id] ?? []), ...files] };
+                                  savePersistedState("pa_calibration_adj_evidence_v1", next);
+                                  return next;
+                                });
+                              }
                               e.target.value = "";
                             }}
                           />
@@ -1974,12 +2002,43 @@ function CalibrationPanel({
   canSubmit: boolean;
   onSubmit: () => void;
 }) {
-  const [liveAdjustments, setLiveAdjustments] = useState<Record<string, number>>({});
-  const [savedAdjustments, setSavedAdjustments] = useState<Record<string, number>>({});
+  const [liveAdjustments, setLiveAdjustments] = useState<Record<string, number>>(() =>
+    loadPersistedState("pa_calibration_adj_scores_v1", {})
+  );
+  const [savedAdjustments, setSavedAdjustments] = useState<Record<string, number>>(() =>
+    loadPersistedState("pa_calibration_adj_scores_v1", {})
+  );
   const [activeTab, setActiveTab] = useRouteTab<"distribusi" | "proporsi">(["distribusi", "proporsi"], "distribusi");
 
   useEffect(() => {
-    if (saveVersion > 0) setSavedAdjustments(liveAdjustments);
+    const onHydrated = () => {
+      const s = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
+      setLiveAdjustments(s);
+      setSavedAdjustments(s);
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
+
+  useEffect(() => {
+    if (saveVersion > 0) {
+      setSavedAdjustments(liveAdjustments);
+      savePersistedState("pa_calibration_adj_scores_v1", liveAdjustments, {
+        kind: "calibration-adjustment",
+        adjustmentKey: `adj-2026-${Date.now()}`,
+        unitName: "PT RSUP (Industry)",
+        employeeId: "ALL",
+        period: "2026",
+        status: "Saved",
+        data: liveAdjustments,
+        audit: {
+          action: "Update",
+          module: "Performance Appraisal",
+          subModule: "Calibration Adjustment",
+          description: `Saved Calibration score adjustments (${Object.keys(liveAdjustments).length} employees)`,
+        },
+      });
+    }
   }, [saveVersion]);
 
   const handleStart  = () => setEditMode(true);
@@ -2305,11 +2364,22 @@ function loadFromSetting(): { units: CompanyUnit[]; submittedAt: string | null }
 
 export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   useAppraisalRevision();
-  const [{ units: allCompanyUnits, submittedAt }] = useState(loadFromSetting);
+  const [{ units: allCompanyUnits, submittedAt }, setLoadedSetting] = useState(loadFromSetting);
   const companyUnits = lockedUnits ? allCompanyUnits.filter(u => lockedUnits.includes(u.name)) : allCompanyUnits;
   const [selectedUnit, setSelectedUnit] = useState<CompanyUnit | null>(null);
-  const [pageMode, setPageMode]         = useState<PageMode>("edit");
+  const [pageMode, setPageMode]         = useState<PageMode>(() =>
+    loadPersistedState<PageMode>("pa_calibration_adj_mode_v1", "edit")
+  );
   const [showConfirm, setShowConfirm]   = useState(false);
+
+  useEffect(() => {
+    const onHydrated = () => {
+      setLoadedSetting(loadFromSetting());
+      setPageMode(loadPersistedState<PageMode>("pa_calibration_adj_mode_v1", "edit"));
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
 
   const formattedDate = submittedAt
     ? (() => { const d = new Date(submittedAt); return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; })()
@@ -2318,6 +2388,21 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
   const handleSubmitConfirm = () => {
     setShowConfirm(false);
     setPageMode("submitted");
+    savePersistedState("pa_calibration_adj_mode_v1", "submitted", {
+      kind: "calibration-adjustment",
+      adjustmentKey: `submit-${selectedUnit?.id ?? "1"}-2026`,
+      unitName: selectedUnit?.name ?? "PT RSUP (Industry)",
+      employeeId: "ALL",
+      period: "2026",
+      status: "Submitted",
+      data: { submittedAt: new Date().toISOString() },
+      audit: {
+        action: "Create",
+        module: "Performance Appraisal",
+        subModule: "Calibration Adjustment",
+        description: `Submitted Calibration Adjustment for ${selectedUnit?.name ?? "Company Unit"} to BOD Approval`,
+      },
+    });
     setSelectedUnit(null);
   };
 

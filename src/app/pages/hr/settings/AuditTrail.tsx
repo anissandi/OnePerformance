@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { DatePickerID } from "../../../components/DatePickerID";
 import { Search, RefreshCw, ChevronDown, Eye, X, Download, Filter } from "lucide-react";
+import { loadLocalAuditLogs, hydrateAllStoresFromSupabase } from "../../../services/supabaseClient";
 
 type ActionType = "Login" | "Logout" | "Create" | "Update" | "Delete" | "Approve" | "Reject" | "Export";
 
@@ -179,6 +180,7 @@ function DetailModal({ log, onClose }: { log: AuditLog; onClose: () => void }) {
 }
 
 export function AuditTrailPage() {
+  const [dynamicLogs, setDynamicLogs] = useState(() => loadLocalAuditLogs());
   const [search, setSearch] = useState("");
   const [moduleFilter, setModuleFilter] = useState("All Modules");
   const [subModuleFilter, setSubModuleFilter] = useState("All Sub Modules");
@@ -191,11 +193,39 @@ export function AuditTrailPage() {
   const [viewLog, setViewLog] = useState<AuditLog | null>(null);
   const [showFilters, setShowFilters] = useState(false);
 
+  useEffect(() => {
+    const refresh = () => setDynamicLogs(loadLocalAuditLogs());
+    window.addEventListener("pa-audit-updated", refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
+    return () => {
+      window.removeEventListener("pa-audit-updated", refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
+    };
+  }, []);
+
+  const allLogs = useMemo<AuditLog[]>(() => {
+    const mappedDynamic: AuditLog[] = dynamicLogs.map((d) => ({
+      id: d.id,
+      timestamp: d.timestamp,
+      userId: d.userId,
+      userName: d.userName,
+      role: d.role,
+      action: (ACTIONS.includes(d.action as ActionType) ? d.action : "Update") as ActionType,
+      module: (MAIN_MODULES.includes(d.module as MainModule) ? d.module : "Performance Appraisal") as MainModule,
+      subModule: d.subModule && d.subModule !== "-" ? d.subModule : undefined,
+      description: d.description,
+      ipAddress: d.ipAddress || "10.0.1.15",
+      status: d.status,
+    }));
+    const seenIds = new Set(mappedDynamic.map((m) => m.id));
+    return [...mappedDynamic, ...AUDIT_LOGS.filter((a) => !seenIds.has(a.id))];
+  }, [dynamicLogs]);
+
   // available sub-modules based on selected main module
   const availableSubModules =
     moduleFilter !== "All Modules"
       ? SUB_MODULES[moduleFilter] ?? []
-      : Array.from(new Set(AUDIT_LOGS.map(l => l.subModule).filter(Boolean))) as string[];
+      : Array.from(new Set(allLogs.map(l => l.subModule).filter(Boolean))) as string[];
 
   function handleModuleChange(v: string) {
     setModuleFilter(v);
@@ -203,7 +233,7 @@ export function AuditTrailPage() {
     setCurrentPage(1);
   }
 
-  const filtered = AUDIT_LOGS.filter(l => {
+  const filtered = allLogs.filter(l => {
     if (moduleFilter !== "All Modules" && l.module !== moduleFilter) return false;
     if (subModuleFilter !== "All Sub Modules" && l.subModule !== subModuleFilter) return false;
     if (actionFilter !== "All Actions" && l.action !== actionFilter) return false;
@@ -230,8 +260,9 @@ export function AuditTrailPage() {
 
   const hasActiveFilters = moduleFilter !== "All Modules" || subModuleFilter !== "All Sub Modules" || actionFilter !== "All Actions" || statusFilter !== "All Status" || !!dateFrom || !!dateTo;
 
-  const successCount = AUDIT_LOGS.filter(l => l.status === "Success").length;
-  const failedCount  = AUDIT_LOGS.filter(l => l.status === "Failed").length;
+  const successCount = allLogs.filter(l => l.status === "Success").length;
+  const failedCount  = allLogs.filter(l => l.status === "Failed").length;
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto space-y-4">
@@ -250,10 +281,10 @@ export function AuditTrailPage() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: "Total Logs", value: AUDIT_LOGS.length,  color: "bg-[#1A284F] text-white" },
+          { label: "Total Logs", value: allLogs.length,     color: "bg-[#1A284F] text-white" },
           { label: "Successful", value: successCount,         color: "bg-emerald-600 text-white" },
           { label: "Failed",     value: failedCount,          color: "bg-red-500 text-white" },
-          { label: "Today",      value: AUDIT_LOGS.filter(l => l.timestamp.startsWith("2026-07-15")).length, color: "bg-blue-600 text-white" },
+          { label: "Today",      value: allLogs.filter(l => l.timestamp.startsWith(todayStr) || l.timestamp.startsWith("2026-07-15")).length, color: "bg-blue-600 text-white" },
         ].map(s => (
           <div key={s.label} className={`rounded-xl px-5 py-4 ${s.color} shadow-sm`}>
             <p className="text-2xl font-bold">{s.value}</p>
@@ -330,13 +361,28 @@ export function AuditTrailPage() {
           {hasActiveFilters && (
             <button onClick={reset} className="text-xs text-red-500 hover:text-red-700 underline">Reset filters</button>
           )}
-          <button onClick={reset} className="p-2 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50" title="Reset"><RefreshCw size={14} /></button>
+          <button onClick={() => { reset(); void hydrateAllStoresFromSupabase(); }} className="p-2 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50" title="Refresh from Supabase"><RefreshCw size={14} /></button>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input className="border border-gray-200 rounded-lg pl-9 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 w-56"
               placeholder="Search user, action, IP..." value={search} onChange={e => { setSearch(e.target.value); setCurrentPage(1); }} />
           </div>
-          <button className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
+          <button
+            onClick={() => {
+              const csv = [
+                ["ID", "Timestamp", "User ID", "User Name", "Role", "Action", "Module", "Sub Module", "Description", "IP Address", "Status"].join(","),
+                ...filtered.map((l) =>
+                  [l.id, l.timestamp, l.userId, `"${l.userName}"`, l.role, l.action, l.module, l.subModule ?? "", `"${l.description.replace(/"/g, '""')}"`, l.ipAddress, l.status].join(",")
+                ),
+              ].join("\n");
+              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = `Audit_Trail_${todayStr}.csv`;
+              a.click();
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+          >
             <Download size={13} /> Export
           </button>
         </div>

@@ -9,6 +9,7 @@ import {
   getEntries, addEntry, updateEntry, cancelEntry, subscribe,
   type ScheduleEntry,
 } from "./interviewScheduleStore";
+import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 
 // ── Master data ───────────────────────────────────────────────────────────────
 
@@ -199,6 +200,13 @@ function FileUpload({
   const addFiles = (incoming: FileList | null) => {
     if (!incoming) return;
     const arr = Array.from(incoming);
+    arr.forEach((rawFile) => {
+      void uploadEvidenceFileToSupabase(rawFile, {
+        moduleType: "Management Interview",
+        period: "2026",
+        month: "June",
+      });
+    });
     onChange([...files, ...arr]);
   };
 

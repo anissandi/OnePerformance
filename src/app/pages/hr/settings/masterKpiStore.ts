@@ -1,5 +1,7 @@
 // Shared localStorage store for Master KPI data — read by supervisor/setting/kpi
 
+import { savePersistedState } from "../../../services/supabaseClient";
+
 const KEY = "master_kpi_data";
 
 export interface MasterKpiStore {
@@ -52,7 +54,17 @@ export function loadMasterKpi(): MasterKpiStore {
 }
 
 export function saveMasterKpi(data: MasterKpiStore): void {
-  try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* ignore */ }
+  savePersistedState(KEY, data, {
+    kind: "master-catalog",
+    catalogKey: KEY,
+    data,
+    audit: {
+      action: "Update",
+      module: "HR Settings",
+      subModule: "Master KPI",
+      description: "Updated Master KPI catalog configuration",
+    },
+  });
 }
 
 export { DEFAULTS as MASTER_KPI_DEFAULTS };

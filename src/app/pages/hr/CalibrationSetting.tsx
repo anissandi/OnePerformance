@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { toast } from "sonner";
 import { Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send, CheckCircle2, Clock, X } from "lucide-react";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -628,11 +629,36 @@ export function CalibrationSetting() {
   const [pageMode, setPageMode] = useState<PageMode>("edit");
   const [showConfirm, setShowConfirm] = useState(false);
 
+  useEffect(() => {
+    const onHydrated = () => {
+      const saved = loadPersistedState<CompanyUnit[] | null>("calibration_hc_settings_2026", null)
+        ?? loadPersistedState<CompanyUnit[] | null>("calibration_submitted_units", null);
+      if (Array.isArray(saved) && saved.length > 0) {
+        setCompanyUnits(saved);
+      }
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
+
   const updateUnit = (updated: CompanyUnit) => {
     const next = companyUnits.map((unit) => unit.id === updated.id ? updated : unit);
     try {
-      localStorage.setItem("calibration_hc_settings_2026", JSON.stringify(next));
-      if (localStorage.getItem("calibration_submitted_units")) localStorage.setItem("calibration_submitted_units", JSON.stringify(next));
+      savePersistedState("calibration_hc_settings_2026", next, {
+        kind: "calibration-setting",
+        unitId: updated.id,
+        unitName: updated.name,
+        data: updated,
+        audit: {
+          action: "Update",
+          module: "Performance Appraisal",
+          subModule: "Calibration Setting",
+          description: `Updated Calibration HC & Grade setting for ${updated.name}`,
+        },
+      });
+      if (localStorage.getItem("calibration_submitted_units")) {
+        savePersistedState("calibration_submitted_units", next);
+      }
       setCompanyUnits(next);
     } catch { toast.error("Pengaturan HC gagal disimpan. Periksa penyimpanan browser."); }
   };
@@ -642,8 +668,20 @@ export function CalibrationSetting() {
     setPageMode("submitted");
     setSelectedUnit(null);
     try {
-      localStorage.setItem("calibration_submitted_units", JSON.stringify(companyUnits));
-      localStorage.setItem("calibration_submitted_at", new Date().toISOString());
+      const submittedAt = new Date().toISOString();
+      savePersistedState("calibration_submitted_units", companyUnits, {
+        kind: "calibration-setting",
+        unitId: selectedUnit?.id ?? "all",
+        unitName: selectedUnit?.name ?? "All Units",
+        data: { submittedAt, units: companyUnits },
+        audit: {
+          action: "Create",
+          module: "Performance Appraisal",
+          subModule: "Calibration Setting",
+          description: `Submitted Calibration Setting (${selectedUnit?.name ?? "All Units"}) for Approval Management`,
+        },
+      });
+      savePersistedState("calibration_submitted_at", submittedAt);
     } catch {}
   };
 

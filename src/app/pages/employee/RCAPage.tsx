@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { loadRCASubmissions, deleteRCASubmission, saveRCASubmission, updateRCASubmissionStatus } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCAActionPlan } from "../shared/rcaStore";
+import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { DatePickerID } from "../../components/DatePickerID";
 import {
   Plus, X, Eye, Send, CheckCircle2, Trash2, ChevronDown,
@@ -329,7 +330,15 @@ function ListEditor({ items, onChange, lockCount = 0 }: {
 function MultiFileUpload({ files, onChange }: { files: string[]; onChange: (v: string[]) => void }) {
   const ref = useRef<HTMLInputElement>(null);
   const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newFiles = Array.from(e.target.files || []).map((f) => f.name);
+    const rawFiles = Array.from(e.target.files || []);
+    rawFiles.forEach((rawFile) => {
+      void uploadEvidenceFileToSupabase(rawFile, {
+        moduleType: "RCA",
+        period: "2026",
+        month: "June",
+      });
+    });
+    const newFiles = rawFiles.map((f) => f.name);
     if (newFiles.length) onChange([...files, ...newFiles]);
     e.target.value = "";
   };
@@ -1472,7 +1481,6 @@ export function RCAPage() {
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-6 py-4 flex items-center justify-between">
         <div>
           <h1 className="font-bold text-gray-800 text-lg">RCA — Root Cause Analysis</h1>
-          <Link to="/pa-simulasi?view=rca" className="mt-1 inline-block text-xs font-semibold text-blue-700 underline">Uji dengan akun dan data RCA PA-Simulasi</Link>
           <p className="text-xs text-gray-400 mt-0.5">Analisis akar masalah KPI yang tidak tercapai</p>
         </div>
         <div className="flex items-center gap-4">

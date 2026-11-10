@@ -1,4 +1,5 @@
 import { normalizeEmployeeId, loadWorkflowRecords } from "./appraisalWorkflowStore";
+import { savePersistedState } from "../../services/supabaseClient";
 
 export interface YearEndState {
   reminded: string[];
@@ -40,7 +41,17 @@ export function applyYearEndScorePolicy<T extends Record<string, number | null>>
 }
 
 export function saveYearEndState(state: YearEndState): void {
-  localStorage.setItem(KEY, JSON.stringify(state));
+  savePersistedState(KEY, state, {
+    kind: "year-end-verification",
+    period: "2026",
+    state,
+    audit: {
+      action: "Update",
+      module: "Calibration",
+      subModule: "Year-End Verification",
+      description: `Updated Year-End Verification state (phase: ${state.phase}, reminded: ${state.reminded.length}, inactive: ${state.inactive.length})`,
+    },
+  });
   window.dispatchEvent(new Event("year-end-updated"));
 }
 

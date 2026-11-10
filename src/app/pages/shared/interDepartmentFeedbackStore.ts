@@ -1,5 +1,6 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer"
 import { feedbackEligibilityError } from "./feedbackEligibility.ts"
+import { savePersistedState } from "../../services/supabaseClient"
 
 export const FOLLOW_UP_COLUMNS = [
   "Aspek Perbaikan",
@@ -191,7 +192,18 @@ export function saveFeedbackSubmission(submission: FeedbackSubmission) {
   const records = loadFeedbackSubmissions().filter(
     (entry) => entry.row.no !== submission.row.no,
   )
-  localStorage.setItem(KEY, JSON.stringify([...records, normalize(submission)]))
+  const normalized = normalize(submission)
+  const next = [...records, normalized]
+  savePersistedState(KEY, next, {
+    kind: "inter-dept-feedback",
+    submission: normalized,
+    audit: {
+      action: "Update",
+      module: "Performance Appraisal",
+      subModule: "Inter-Department Feedback",
+      description: `Updated Inter-Department Feedback for ${normalized.row.name} (${normalized.row.status})`,
+    },
+  })
   emit()
 }
 

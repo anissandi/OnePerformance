@@ -12,6 +12,7 @@ import { saveRCASubmission, loadRCASubmissions } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
+import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -1068,7 +1069,15 @@ function RCAMultiFileUpload({ files: rawFiles, onChange }: { files: string[] | s
   const files = Array.isArray(rawFiles) ? rawFiles : (rawFiles ? [rawFiles] : []);
   const ref = useRef<HTMLInputElement>(null);
   const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newFiles = Array.from(e.target.files || []).map((f) => f.name);
+    const rawList = Array.from(e.target.files || []);
+    rawList.forEach((rawFile) => {
+      void uploadEvidenceFileToSupabase(rawFile, {
+        moduleType: "RCA",
+        period: "2026",
+        month: "June",
+      });
+    });
+    const newFiles = rawList.map((f) => f.name);
     if (newFiles.length) onChange([...files, ...newFiles]);
     e.target.value = "";
   };
@@ -2477,6 +2486,14 @@ function EvidenceUploadSection({
 
   const handleFiles = (raw: FileList | null) => {
     if (!raw || !selectedMonth) return;
+    const rawArr = Array.from(raw);
+    rawArr.forEach((rawFile) => {
+      void uploadEvidenceFileToSupabase(rawFile, {
+        moduleType: "KPI Tracking",
+        period: "2026",
+        month: selectedMonth,
+      });
+    });
     const newFiles: EvidenceFile[] = Array.from(raw).map((f) => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       name: f.name, size: f.size, type: f.type,

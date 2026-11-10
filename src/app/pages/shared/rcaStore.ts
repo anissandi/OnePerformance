@@ -1,3 +1,5 @@
+import { savePersistedState } from "../../services/supabaseClient";
+
 const KEY = "kpi_rca_submissions";
 
 export interface StoredRCAActionPlan {
@@ -59,7 +61,17 @@ function loadAll(): StoredRCASubmission[] {
 
 function saveAll(rows: StoredRCASubmission[]): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(rows));
+    const latest = rows[rows.length - 1];
+    savePersistedState(KEY, rows, latest ? {
+      kind: "rca-submission",
+      submission: latest,
+      audit: {
+        action: "Update",
+        module: "KPI",
+        subModule: "RCA",
+        description: `Saved RCA submission for "${latest.kpiIndicator}" (${latest.monthLabel})`,
+      },
+    } : undefined);
   } catch {
     // ignore
   }

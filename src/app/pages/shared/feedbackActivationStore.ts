@@ -1,3 +1,5 @@
+import { savePersistedState } from "../../services/supabaseClient";
+
 export interface FeedbackActivation {
   active: boolean;
   startDate: string;
@@ -12,7 +14,17 @@ export function loadFeedbackActivation(year: string): FeedbackActivation | null 
 export function saveFeedbackActivation(year: string, value: FeedbackActivation) {
   let records: Record<string, FeedbackActivation> = {};
   try { records = JSON.parse(localStorage.getItem(KEY) ?? "{}"); } catch {}
-  localStorage.setItem(KEY, JSON.stringify({ ...records, [year]: value }));
+  savePersistedState(KEY, { ...records, [year]: value }, {
+    kind: "module-window",
+    window: {
+      unitId: "ALL",
+      moduleId: "inter-department-feedback",
+      period: year,
+      active: value.active,
+      startDate: value.startDate,
+      endDate: value.endDate,
+    },
+  });
   window.dispatchEvent(new Event(FEEDBACK_ACTIVATION_EVENT));
 }
 export function feedbackActivationError(value: FeedbackActivation | null) {

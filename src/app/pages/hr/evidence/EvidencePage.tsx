@@ -1,8 +1,10 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Search, Download, Eye, ChevronDown, X, FileArchive,
   TrendingUp, Lightbulb, MessageSquare, CheckCircle2, Clock, RotateCcw, RefreshCw,
 } from "lucide-react";
+import { loadUploadedEvidenceList, UploadedEvidenceRecord } from "../../../services/supabaseClient";
+import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,6 +27,8 @@ interface EvidenceRow {
   // RCA-specific
   period?: string;
   kpi?: string;
+  fileName?: string;
+  fileUrl?: string;
 }
 
 // ─── Reference values (consistent with HR Approvals / Monitoring pages) ───────
@@ -283,7 +287,43 @@ function FilterDropdown({
 export function EvidencePage({ type }: { type: EvidenceType }) {
   const isRCA = type === "RCA";
   const showMonthFilter = type === "KPI Tracking";
-  const sourceRows: EvidenceRow[] = isRCA ? (RCA_ROWS as unknown as EvidenceRow[]) : ALL_ROWS;
+  const [uploadedList, setUploadedList] = useState<UploadedEvidenceRecord[]>(() => loadUploadedEvidenceList());
+  const [previewRow, setPreviewRow] = useState<EvidenceRow | null>(null);
+
+  useEffect(() => {
+    const refresh = () => setUploadedList(loadUploadedEvidenceList());
+    window.addEventListener("pa-evidence-updated", refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
+    return () => {
+      window.removeEventListener("pa-evidence-updated", refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
+    };
+  }, []);
+
+  const dynamicRows = useMemo<EvidenceRow[]>(() => {
+    return uploadedList
+      .filter((u) => u.moduleType === type)
+      .map((u, idx) => ({
+        no: `DB-${idx + 1}`,
+        employeeId: u.employeeId,
+        fullName: u.fullName,
+        position: u.position,
+        department: u.department,
+        division: u.division,
+        companyUnit: u.companyUnit,
+        approvalStatus: isRCA ? ("Pending" as ApprovalStatus) : u.approvalStatus,
+        submittedDate: u.submittedDate,
+        year: u.period || "2026",
+        month: u.month || "June",
+        period: u.month?.slice(0, 3) || "Jun",
+        kpi: u.kpi || u.fileName,
+        fileName: u.fileName,
+        fileUrl: u.url,
+      }));
+  }, [uploadedList, type, isRCA]);
+
+  const baseSource: EvidenceRow[] = isRCA ? (RCA_ROWS as unknown as EvidenceRow[]) : ALL_ROWS;
+  const sourceRows: EvidenceRow[] = useMemo(() => [...dynamicRows, ...baseSource], [dynamicRows, baseSource]);
   const rcaRows = isRCA ? RCA_ROWS : [];
 
   const [filterYears,      setFilterYears]      = useState<string[]>([]);
@@ -320,7 +360,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
       if (q && !r.employeeId.toLowerCase().includes(q) && !r.fullName.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [filterYears, filterMonths, filterUnits, filterDivs, filterDepts, filterStatuses, filterPeriods, filterProgressAPs, search]);
+  }, [sourceRows, filterYears, filterMonths, filterUnits, filterDivs, filterDepts, filterStatuses, filterPeriods, filterProgressAPs, search]);
 
   const allSelected = filtered.length > 0 && filtered.every((r) => selected.has(r.no));
 
@@ -402,6 +442,19 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
           {/* Export .rar button */}
           <button
             disabled={!hasSelected}
+            onClick={() => {
+              if (!hasSelected) return;
+              const chosen = filtered.filter((r) => selected.has(r.no));
+              const content = chosen
+                .map((r) => `${r.employeeId}\t${r.fullName}\t${r.companyUnit}\t${r.month} ${r.year}\t${r.fileName ?? `${type}_Evidence.pdf`}\t${r.fileUrl ?? "Supabase Storage"}`)
+                .join("\n");
+              const blob = new Blob([content], { type: "application/octet-stream" });
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = `Evidence_${type.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.rar`;
+              a.click();
+              toast.success(`Exported ${chosen.length} evidence archive record(s).`);
+            }}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold border transition-all ${
               hasSelected
                 ? "bg-[#1A284F] text-white border-[#1A284F] hover:bg-[#131d3b] shadow-sm"
@@ -506,10 +559,39 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <button title="View evidence" className="p-1.5 rounded-lg text-gray-500 hover:bg-blue-50 hover:text-blue-600 transition-colors">
+                          <button
+                            title="View evidence"
+                            onClick={() => {
+                              if (row.fileUrl && row.fileUrl.startsWith("http")) {
+                                window.open(row.fileUrl, "_blank", "noopener,noreferrer");
+                              } else {
+                                setPreviewRow(row);
+                              }
+                            }}
+                            className="p-1.5 rounded-lg text-gray-500 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                          >
                             <Eye className="w-4 h-4" />
                           </button>
-                          <button title="Download evidence" className="p-1.5 rounded-lg text-gray-500 hover:bg-green-50 hover:text-green-600 transition-colors">
+                          <button
+                            title="Download evidence"
+                            onClick={() => {
+                              if (row.fileUrl) {
+                                const a = document.createElement("a");
+                                a.href = row.fileUrl;
+                                a.download = row.fileName || `${row.employeeId}_${type}_Evidence.pdf`;
+                                a.target = "_blank";
+                                a.click();
+                              } else {
+                                const blob = new Blob([`Evidence Record: ${row.employeeId} - ${row.fullName} (${type} ${row.month} ${row.year})`], { type: "text/plain" });
+                                const a = document.createElement("a");
+                                a.href = URL.createObjectURL(blob);
+                                a.download = `${row.employeeId}_${type.replace(/\s+/g, "_")}_${row.month}_${row.year}.txt`;
+                                a.click();
+                              }
+                              toast.success(`Downloaded evidence for ${row.fullName}`);
+                            }}
+                            className="p-1.5 rounded-lg text-gray-500 hover:bg-green-50 hover:text-green-600 transition-colors"
+                          >
                             <Download className="w-4 h-4" />
                           </button>
                         </div>
@@ -552,6 +634,39 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
           </table>
         </div>
       </div>
+
+      {previewRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPreviewRow(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-lg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div>
+                <h3 className="font-bold text-[#1A284F] text-base">Evidence Preview — {type}</h3>
+                <p className="text-xs text-gray-400">{previewRow.employeeId} · {previewRow.fullName}</p>
+              </div>
+              <button onClick={() => setPreviewRow(null)} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs bg-gray-50 rounded-xl p-4">
+              <div><span className="text-gray-400 block">Company Unit</span><span className="font-semibold text-gray-800">{previewRow.companyUnit}</span></div>
+              <div><span className="text-gray-400 block">Division / Dept</span><span className="font-semibold text-gray-800">{previewRow.division} / {previewRow.department}</span></div>
+              <div><span className="text-gray-400 block">Period</span><span className="font-semibold text-gray-800">{previewRow.month} {previewRow.year}</span></div>
+              <div><span className="text-gray-400 block">Submitted Date</span><span className="font-semibold text-gray-800">{previewRow.submittedDate}</span></div>
+              <div className="col-span-2"><span className="text-gray-400 block">File Name</span><span className="font-semibold text-[#1A284F]">{previewRow.fileName || `${previewRow.employeeId}_${type.replace(/\s+/g, "_")}_${previewRow.month}.pdf`}</span></div>
+            </div>
+            {previewRow.fileUrl && (
+              <div className="pt-2">
+                <a href={previewRow.fileUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-xs font-semibold text-blue-600 hover:underline">
+                  Open Stored File in New Tab
+                </a>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <button onClick={() => setPreviewRow(null)} className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#1A284F] text-white">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

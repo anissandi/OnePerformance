@@ -1,3 +1,5 @@
+import { savePersistedState } from "../../services/supabaseClient";
+
 const KEY = "kpi_evidence_files";
 
 export interface StoredEvidenceFile {
@@ -21,7 +23,7 @@ export function saveEvidenceFiles(files: StoredEvidenceFile[]): void {
   try {
     // Exclude blob URLs (not serializable across sessions) — store metadata only
     const serializable = files.map((f) => ({ ...f, url: f.url.startsWith("blob:") ? "" : f.url }));
-    localStorage.setItem(KEY, JSON.stringify(serializable));
+    savePersistedState(KEY, serializable);
   } catch {
     // ignore
   }

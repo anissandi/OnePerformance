@@ -400,8 +400,18 @@ function InputView({
         : g
     ));
 
-  const allFilled = goals.every(
-    (g) => g.specific && g.measurable && g.attainable && g.relevant && g.timely && g.target
+  const allFilled =
+    goals.length >= 3 &&
+    goals.every(
+      (g) =>
+        g.specific &&
+        g.measurable &&
+        g.attainable &&
+        g.relevant &&
+        g.timely &&
+        g.target &&
+        g.actionPlans.length >= 1 &&
+        g.actionPlans.every((ap) => ap.description.trim() !== ""),
   );
 
   return (

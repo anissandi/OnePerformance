@@ -4,6 +4,7 @@ import { normalizeEmployeeId, submitWorkflowModule, workflowRowStatus, registerW
 import type { ApprovalRow, ReviewerRole } from "../components/ReviewDrawer";
 import type { ParsedExternalProjectRow } from "../utils/projectExcelUtils";
 import { EMPLOYEES } from "../pages/hr/monitoring/monitoringData";
+import { savePersistedState, syncToSupabase } from "../services/supabaseClient";
 
 export type ProjectCategory = "Improvement Project" | "Corporate Event" | "Komite/Task Force";
 export type ProjectScope =
@@ -172,7 +173,14 @@ export function loadIcfProjectRows(employeeId?: string): { rows: ProjectExcelRow
 
 export function saveIcfProjectRows(rows: ProjectExcelRow[], fileName: string, submitted: boolean) {
   try {
-    localStorage.setItem(EXCEL_STORAGE_KEY, JSON.stringify({ rows, fileName, submitted }));
+    savePersistedState(EXCEL_STORAGE_KEY, { rows, fileName, submitted }, {
+      kind: "project-records",
+      employeeId: "EMP-002",
+      period: "2026",
+      fileName,
+      submitted,
+      rows,
+    });
     if (submitted) submitWorkflowModule("Project", "measurement");
   } catch {
     // ignore storage errors
@@ -213,12 +221,28 @@ export function importExternalProjectRows(
       submitted: true,
       submittedDate: today,
     };
+    void syncToSupabase({
+      kind: "project-records",
+      employeeId: normId,
+      period: "2026",
+      fileName,
+      submitted: true,
+      submittedDate: today,
+      rows: empRows,
+    });
     // Automatically enter Approval 1 & Approval 2 workflow for each uploaded employee
     submitWorkflowModule("Project", "measurement", today, normId);
   }
 
   try {
-    localStorage.setItem(EXCEL_BY_EMP_STORAGE_KEY, JSON.stringify(currentByEmp));
+    savePersistedState(EXCEL_BY_EMP_STORAGE_KEY, currentByEmp, {
+      audit: {
+        action: "Create",
+        module: "Project",
+        subModule: "Project Monitoring",
+        description: `Uploaded external Project Excel "${fileName}" (${parsedRows.length} rows for ${grouped.size} employees) -> auto-routed to Approval 1 & 2`,
+      },
+    });
     const staffRows = grouped.get("EMP-002") ?? parsedRows.map((r, i) => ({
       no: i + 1,
       projectScope: r.projectScope,

@@ -18,7 +18,14 @@ Dokumen ini menjelaskan langkah demi langkah untuk membuat project **Supabase ba
 
 ---
 
-## 2. Menjalankan Migrasi & Edge Function ke Project Supabase Baru (Via VS Code CLI)
+## 2. Alur Deploy: Figma Make → GitHub → Supabase → Vercel
+
+Aplikasi ini telah dilengkapi **Direct Supabase PostgREST & Storage Engine** di `src/app/services/supabaseClient.ts` sehingga berbicara langsung ke **Supabase REST API (`/rest/v1/pa_*`)** dan **Supabase Storage API (`/storage/v1/object/pa-evidence`)**:
+
+1. Buka **Supabase Dashboard → SQL Editor**.
+2. Jalankan isi file **`supabase/migrations/202611010001_pa_unified_backend.sql`**.
+3. Jalankan isi file **`supabase/migrations/202611020001_pa_complete_persistence.sql`**.
+4. Tekan **Push to GitHub** dari Figma Make — **Vercel** akan otomatis mem-build dan men-deploy aplikasi frontend terbaru yang langsung terhubung penuh ke tabel `pa_*` dan Storage Bucket `pa-evidence` di Supabase.
 
 Buka terminal di **VS Code** pada folder proyek ini, lalu jalankan perintah berikut:
 

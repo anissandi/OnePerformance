@@ -1,4 +1,5 @@
 import { submitWorkflowModule, loadWorkflowRecords } from "./appraisalWorkflowStore";
+import { savePersistedState } from "../../services/supabaseClient";
 const SELF_KEY     = "ms_self_ratings_v1";
 const APPROVER_KEY = "ms_approver_ratings_v1";
 
@@ -11,7 +12,24 @@ export interface MSSelfRatings {
 }
 
 export function saveMSSelfRatings(data: MSSelfRatings): void {
-  try { localStorage.setItem(SELF_KEY, JSON.stringify(data)); localStorage.removeItem(APPROVER_KEY); submitWorkflowModule("Managerial Skill"); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(APPROVER_KEY);
+    savePersistedState(SELF_KEY, data, {
+      kind: "managerial-skill",
+      employeeId: "E002",
+      period: "2026",
+      selfRatings: data,
+      approverRatings: [],
+      status: "Submitted",
+      audit: {
+        action: "Create",
+        module: "Performance Appraisal",
+        subModule: "Managerial Skill",
+        description: "Submitted Managerial Skill Self-Assessment",
+      },
+    });
+    submitWorkflowModule("Managerial Skill");
+  } catch { /* ignore */ }
 }
 
 export function loadMSSelfRatings(): MSSelfRatings | null {
@@ -38,7 +56,14 @@ export function saveMSApproverEntry(entry: MSApproverEntry): void {
     const current = loadAllMSApprovers();
     const idx = current.findIndex((e) => e.approverLevel === entry.approverLevel);
     if (idx >= 0) { current[idx] = entry; } else { current.push(entry); }
-    localStorage.setItem(APPROVER_KEY, JSON.stringify(current));
+    savePersistedState(APPROVER_KEY, current, {
+      kind: "managerial-skill",
+      employeeId: "E002",
+      period: "2026",
+      selfRatings: loadMSSelfRatings(),
+      approverRatings: current,
+      status: `Assessed-Approver ${entry.approverLevel}`,
+    });
   } catch { /* ignore */ }
 }
 

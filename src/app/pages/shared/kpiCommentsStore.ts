@@ -1,3 +1,5 @@
+import { savePersistedState } from "../../services/supabaseClient";
+
 const KEY = "kpi_approval_comments";
 
 export interface KPIApproverComment {
@@ -33,7 +35,7 @@ export function saveKPIComment(
     const label = role === "approver1" ? "Supervisor (Approver 1)" : "HR Admin (Approver 2)";
     const _d = new Date(); const today = `${String(_d.getDate()).padStart(2,"0")}/${String(_d.getMonth()+1).padStart(2,"0")}/${_d.getFullYear()}`;
     all[rowNo] = { ...all[rowNo], [role]: { text, date: today, approverLabel: label } };
-    localStorage.setItem(KEY, JSON.stringify(all));
+    savePersistedState(KEY, all);
   } catch {
     // ignore
   }

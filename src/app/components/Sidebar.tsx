@@ -226,7 +226,7 @@ const employeeLinks = [
   { to: "/employee/documents", icon: BookOpen, label: "Documents" },
 ];
 
-export function Sidebar({ role, collapsed, simulation }: { role: string; collapsed: boolean; simulation?: { participant: boolean; hasManagerialSkill?: boolean; hasManagementInterview?: boolean; approver?: boolean; strategic: boolean; loggedIn: boolean; activeView?: string } }) {
+export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean }) {
   const { activeUser, allowedModules } = useAuthStore();
   const hasManagerial = allowedModules.includes("Managerial Skill");
   const hasIdf = allowedModules.includes("Inter-Departement Feedback");
@@ -375,88 +375,7 @@ export function Sidebar({ role, collapsed, simulation }: { role: string; collaps
       </div>
 
       <div className="py-6 flex flex-col gap-1 px-4 flex-1 overflow-y-auto">
-        {simulation ? <>
-          <span className="mb-3 px-4 text-[10px] font-bold uppercase tracking-widest text-gray-400">PA-Simulasi · 2026</span>
-          {!simulation.loggedIn ? (
-            <Link to="/pa-simulasi?view=setting" className="flex items-center gap-3 rounded-xl bg-[#1A284F] px-4 py-3 text-sm font-medium text-white shadow-sm">
-              <Shield className="h-5 w-5 shrink-0" />Login PA-Simulasi
-            </Link>
-          ) : (
-            <div className="space-y-4">
-              {simulation.participant && (
-                <div className="space-y-1">
-                  <span className="block px-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Pengajuan PA Saya</span>
-                  {[
-                    { view: "setting", label: "KPI Setting", icon: Target },
-                    { view: "sg-setting", label: "SMART Goals · Setting", icon: Lightbulb },
-                    { view: "measurement", label: "KPI Tracking", icon: TrendingUp },
-                    { view: "sg-measurement", label: "SMART Goals · Measurement", icon: Lightbulb },
-                    { view: "appraisal-form", label: "Appraisal Form", icon: ClipboardList },
-                    { view: "project", label: "Project Outside Job Scope", icon: FolderKanban },
-                    ...(simulation.hasManagerialSkill ? [{ view: "managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-                    { view: "idf", label: "Inter-Department Feedback", icon: Users },
-                    ...(simulation.hasManagementInterview ? [{ view: "management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-                    { view: "rca", label: "RCA (Root Cause Analysis)", icon: FileText },
-                  ].map((entry) => {
-                    const currentView = simulation.activeView ?? (new URLSearchParams(location.search).get("view") ?? "setting");
-                    return (
-                      <Link key={entry.view} to={`/pa-simulasi?view=${entry.view}`} className={`flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${currentView === entry.view ? "bg-[#1A284F] text-white shadow-sm" : "text-gray-600 hover:bg-gray-100/50"}`}>
-                        <entry.icon className="h-4 w-4 shrink-0" />{entry.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
-              {simulation.approver && (
-                <div className="space-y-1">
-                  <span className="block px-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Approvals</span>
-                  {[
-                    { view: "approvals-setting", label: "KPI Setting", icon: CheckSquare },
-                    { view: "approvals-sg-setting", label: "SMART Goals · Setting", icon: Lightbulb },
-                    { view: "approvals-measurement", label: "KPI Measurement", icon: Clock },
-                    { view: "approvals-sg-measurement", label: "SMART Goals · Measurement", icon: Lightbulb },
-                    { view: "approvals-appraisal-form", label: "Appraisal Form", icon: ClipboardList },
-                    { view: "approvals-project", label: "Project Outside Job Scope", icon: FolderKanban },
-                    { view: "approvals-managerial-skill", label: "Managerial Skill", icon: Briefcase },
-                    { view: "approvals-idf", label: "Inter-Department Feedback", icon: Users },
-                    { view: "approvals-management-interview", label: "Management Interview", icon: MessageSquare },
-                    { view: "approvals-rca", label: "RCA Approval", icon: ClipboardCheck },
-                  ].map((entry) => {
-                    const currentView = simulation.activeView ?? (new URLSearchParams(location.search).get("view") ?? "setting");
-                    return (
-                      <Link key={entry.view} to={`/pa-simulasi?view=${entry.view}`} className={`flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${currentView === entry.view ? "bg-[#1A284F] text-white shadow-sm" : "text-gray-600 hover:bg-gray-100/50"}`}>
-                        <entry.icon className="h-4 w-4 shrink-0" />{entry.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
-              <div className="space-y-1">
-                <span className="block px-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Layanan & Jadwal</span>
-                {[
-                  ...(simulation.strategic ? [{ view: "activation", label: "Activation · KPI Setting", icon: Settings }] : []),
-                  ...(simulation.strategic ? [{ view: "tracking-activation", label: "Activation · KPI Measurement", icon: Settings }] : []),
-                  ...(simulation.strategic ? [{ view: "sg-activation", label: "Activation · SMART Goals", icon: Settings }] : []),
-                  ...(simulation.strategic ? [{ view: "af-activation", label: "Activation · Appraisal Form", icon: Settings }] : []),
-                  ...(simulation.strategic ? [{ view: "project-activation", label: "Activation · Project", icon: Settings }] : []),
-                  ...(simulation.strategic ? [{ view: "ms-activation", label: "Activation · Managerial Skill", icon: Settings }] : []),
-                  ...(simulation.strategic ? [{ view: "idf-activation", label: "Activation · Inter-Dept Feedback", icon: Settings }] : []),
-                  ...(simulation.strategic ? [{ view: "mi-activation", label: "Activation · Management Interview", icon: Settings }] : []),
-                  { view: "open-lock", label: "Open Lock KPI", icon: LockOpen },
-                  { view: "notifications", label: "Notifikasi", icon: MessageSquare },
-                ].map((entry) => {
-                  const currentView = simulation.activeView ?? (new URLSearchParams(location.search).get("view") ?? "setting");
-                  return (
-                    <Link key={entry.view} to={`/pa-simulasi?view=${entry.view}`} className={`flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${currentView === entry.view ? "bg-[#1A284F] text-white shadow-sm" : "text-gray-600 hover:bg-gray-100/50"}`}>
-                      <entry.icon className="h-4 w-4 shrink-0" />{entry.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          <p className="mt-auto px-4 pt-6 text-xs leading-relaxed text-gray-400">Akun dan data simulasi terpisah. Menu mengikuti workflow yang sudah tersambung.</p>
-        </> : links.map((link, idx) => {
+        {links.map((link, idx) => {
           if (link.subLinks) {
             const isExpanded = expandedMenus.has(idx);
             return (

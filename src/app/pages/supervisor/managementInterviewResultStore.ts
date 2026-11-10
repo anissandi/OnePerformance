@@ -1,5 +1,7 @@
 // Shared store: BOD Management Interview results visible to each interviewee (supervisor)
 
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+
 export const MI_CRITERIA: { id: number; label: string }[] = [
   { id: 1, label: "Kewajaran Hasil Kinerja" },
   { id: 2, label: "Justifikasi & Evidence" },
@@ -100,10 +102,13 @@ function buildSeededResult(employeeId: string): MIEmployeeResult {
 
 // ─── In-memory store with listener support ────────────────────────────────────
 
-const _results: Record<string, MIEmployeeResult> = {};
+const MI_RESULTS_KEY = "pa_mi_results_by_emp_v1";
+const _results: Record<string, MIEmployeeResult> = loadPersistedState(MI_RESULTS_KEY, {});
 const _listeners: Array<() => void> = [];
 
 export function getMIResult(employeeId: string): MIEmployeeResult {
+  const persisted = loadPersistedState<Record<string, MIEmployeeResult>>(MI_RESULTS_KEY, {});
+  if (persisted[employeeId]) _results[employeeId] = persisted[employeeId];
   return _results[employeeId] ?? buildSeededResult(employeeId);
 }
 
@@ -124,6 +129,19 @@ export function setMIPenilaiResult(
     ),
   };
   _results[employeeId] = updated;
+  savePersistedState(MI_RESULTS_KEY, _results, {
+    kind: "interview-assessment",
+    employeeId,
+    period: "2026",
+    schedulePeriod: updated.schedulePeriod,
+    penilai: updated.penilai,
+    audit: {
+      action: "Approve",
+      module: "Performance Appraisal",
+      subModule: "Management Interview",
+      description: `Penilai ${slot} submitted Management Interview assessment for ${employeeId} (Recommendation: ${recommendation || "-"})`,
+    },
+  });
   _listeners.forEach((fn) => fn());
 }
 

@@ -1,3 +1,5 @@
+import { savePersistedState } from "../../services/supabaseClient";
+
 const KEY = "rca_approval_decisions_v1";
 
 export interface RCAApprovalDecision {
@@ -14,7 +16,17 @@ export function saveRCAApprovalDecision(decision: RCAApprovalDecision): void {
     const current = loadRCAApprovalDecisions();
     const idx = current.findIndex((d) => d.approverLevel === decision.approverLevel);
     if (idx >= 0) { current[idx] = decision; } else { current.push(decision); }
-    localStorage.setItem(KEY, JSON.stringify(current));
+    savePersistedState(KEY, current, {
+      kind: "kv-state",
+      stateKey: KEY,
+      stateValue: current,
+      audit: {
+        action: decision.status === "Approved" ? "Approve" : "Reject",
+        module: "KPI",
+        subModule: "RCA Approval",
+        description: `RCA decision (${decision.status}) by ${decision.approverName}`,
+      },
+    });
   } catch { /* ignore */ }
 }
 

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, Plus, Trash2, Save, RotateCcw } from "lucide-react";
-import { FORMS, FormDef, FormItem } from "../../employee/AppraisalForm";
+import { FORMS, FormDef, FormItem, loadMasterAppraisalForms, saveMasterAppraisalForms } from "../../employee/AppraisalForm";
 
 // ─── Deep-clone helper ────────────────────────────────────────────────────────
 
@@ -209,11 +209,17 @@ function AddItemModal({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function MasterAppraisalForm() {
-  const [forms, setForms] = useState<FormDef[]>(cloneForms(FORMS));
+  const [forms, setForms] = useState<FormDef[]>(() => cloneForms(loadMasterAppraisalForms()));
   const [activeForm, setActiveForm] = useState<"A" | "B" | "C">("A");
   const [editItem, setEditItem] = useState<FormItem | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const onHydrated = () => setForms(cloneForms(loadMasterAppraisalForms()));
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
 
   const form = forms.find((f) => f.id === activeForm)!;
   const formIdx = forms.findIndex((f) => f.id === activeForm);
@@ -250,7 +256,9 @@ export function MasterAppraisalForm() {
   };
 
   const resetToDefault = () => {
-    setForms(cloneForms(FORMS));
+    const defaults = cloneForms(FORMS);
+    setForms(defaults);
+    saveMasterAppraisalForms(defaults);
     setSaved(false);
   };
 
@@ -271,7 +279,10 @@ export function MasterAppraisalForm() {
             Reset Default
           </button>
           <button
-            onClick={() => setSaved(true)}
+            onClick={() => {
+              saveMasterAppraisalForms(forms);
+              setSaved(true);
+            }}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
           >
             <Save className="w-4 h-4" />

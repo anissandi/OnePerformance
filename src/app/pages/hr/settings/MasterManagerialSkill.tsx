@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, Plus, Trash2, Save, RotateCcw } from "lucide-react";
-import { MS_ITEMS, MSItem } from "../../supervisor/ManagerialSkillCheckIn";
+import { MS_ITEMS, MSItem, loadMasterMSItems, saveMasterMSItems } from "../../supervisor/ManagerialSkillCheckIn";
 
 const PERCENTAGE = 20;
 
@@ -196,10 +196,16 @@ function AddItemModal({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function MasterManagerialSkill() {
-  const [items, setItems] = useState<MSItem[]>(cloneItems(MS_ITEMS));
+  const [items, setItems] = useState<MSItem[]>(() => cloneItems(loadMasterMSItems()));
   const [editItem, setEditItem] = useState<MSItem | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const onHydrated = () => setItems(cloneItems(loadMasterMSItems()));
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
 
   const updateItem = (updated: MSItem) => {
     setSaved(false);
@@ -217,7 +223,9 @@ export function MasterManagerialSkill() {
   };
 
   const resetToDefault = () => {
-    setItems(cloneItems(MS_ITEMS));
+    const defaults = cloneItems(MS_ITEMS);
+    setItems(defaults);
+    saveMasterMSItems(defaults);
     setSaved(false);
   };
 
@@ -238,7 +246,10 @@ export function MasterManagerialSkill() {
             Reset Default
           </button>
           <button
-            onClick={() => setSaved(true)}
+            onClick={() => {
+              saveMasterMSItems(items);
+              setSaved(true);
+            }}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
           >
             <Save className="w-4 h-4" />

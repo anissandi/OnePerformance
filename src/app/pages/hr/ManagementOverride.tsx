@@ -1,10 +1,13 @@
+import { useState, useEffect } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { Search, CheckCircle2 } from "lucide-react";
 import { Button } from "../../components/ui/button";
 // force reload
 import { Input } from "../../components/ui/input";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { toast } from "sonner";
 
-const DATA = [
+const INITIAL_DATA = [
   { id: "01", name: "Sarah Johnson", role: "Analyst 1", division: "iQx/ITD/IMG", status: "Approved", date: "2026-02-05" },
   { id: "02", name: "Sarah Johnson", role: "Analyst 2", division: "FMDQD/DOD/CIG", status: "Approved", date: "2026-02-05" },
   { id: "03", name: "Sarah Johnson", role: "Analyst 3", division: "iQx/EMD/BUG", status: "Approved", date: "2026-02-05" },
@@ -17,6 +20,46 @@ const DATA = [
 
 export function HRManagementOverride() {
   const [activeTab, setActiveTab] = useRouteTab(["Reviewer Delegation", "Audit Trail"], "Reviewer Delegation");
+  const [rows, setRows] = useState(() => loadPersistedState("pa_mgmt_override_rows_v1", INITIAL_DATA));
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    const onHydrated = () => setRows(loadPersistedState("pa_mgmt_override_rows_v1", INITIAL_DATA));
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
+
+  const handleReassign = (idx: number) => {
+    const target = rows[idx];
+    if (!target) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const next = rows.map((r, i) =>
+      i === idx ? { ...r, status: "Reassigned", date: today } : r
+    );
+    setRows(next);
+    savePersistedState("pa_mgmt_override_rows_v1", next, {
+      kind: "management-override",
+      overrideId: `OVR-${target.id}`,
+      employeeId: `E0${target.id}`,
+      module: "Performance Appraisal",
+      data: next[idx],
+      audit: {
+        action: "Update",
+        module: "HR Settings",
+        subModule: "Management Override",
+        description: `Reassigned reviewer delegation for ${target.name} (${target.role} · ${target.division})`,
+      },
+    });
+    toast.success(`Reviewer delegation reassigned for ${target.name} (${target.role}) and saved to Supabase.`);
+  };
+
+  const filtered = rows.filter(
+    (r) =>
+      !search ||
+      r.name.toLowerCase().includes(search.toLowerCase()) ||
+      r.role.toLowerCase().includes(search.toLowerCase()) ||
+      r.division.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div className="w-full">
@@ -56,6 +99,8 @@ export function HRManagementOverride() {
           <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
             <Input 
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="Search employees..." 
               className="pl-12 py-6 bg-[#FAFAFA] border-gray-200 rounded-xl w-full text-base"
             />
@@ -76,10 +121,13 @@ export function HRManagementOverride() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {DATA.map((row, idx) => (
+              {filtered.map((row, idx) => (
                 <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
                   <td className="py-4 px-6">
-                    <Button className="bg-[#1A284F] hover:bg-[#1A284F]/90 text-white rounded-full px-6 py-2 text-sm font-medium">
+                    <Button
+                      onClick={() => handleReassign(idx)}
+                      className="bg-[#1A284F] hover:bg-[#1A284F]/90 text-white rounded-full px-6 py-2 text-sm font-medium"
+                    >
                       Reassign
                     </Button>
                   </td>

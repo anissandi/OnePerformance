@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, CheckCircle2, FileCheck } from "lucide-react";
 import {
-  saveAppraisalSelf, saveAppraisalApprover, loadAllAppraisalApprovers,
+  saveAppraisalSelf, saveAppraisalApprover, loadAllAppraisalApprovers, loadAppraisalSelf,
 } from "../shared/appraisalFormStore";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -309,6 +310,30 @@ export const FORMS: FormDef[] = [
   },
 ];
 
+const MASTER_FORMS_KEY = "master_appraisal_forms_v1";
+
+export function loadMasterAppraisalForms(): FormDef[] {
+  const stored = loadPersistedState<FormDef[] | null>(MASTER_FORMS_KEY, null);
+  if (Array.isArray(stored) && stored.length === 3) {
+    return stored;
+  }
+  return FORMS;
+}
+
+export function saveMasterAppraisalForms(forms: FormDef[]): void {
+  savePersistedState(MASTER_FORMS_KEY, forms, {
+    kind: "master-catalog",
+    catalogKey: MASTER_FORMS_KEY,
+    data: forms,
+    audit: {
+      action: "Update",
+      module: "HR Settings",
+      subModule: "Master Appraisal Form",
+      description: "Updated Master Appraisal Form criteria & indicators",
+    },
+  });
+}
+
 // ─── Indicator Modal ──────────────────────────────────────────────────────────
 
 function IndicatorModal({ item, onClose }: { item: FormItem; onClose: () => void }) {
@@ -433,14 +458,41 @@ function SuccessModal({ onClose }: { onClose: () => void }) {
 }
 
 export function AppraisalForm() {
+  const [formsList, setFormsList] = useState<FormDef[]>(() => loadMasterAppraisalForms());
   const [activeForm, setActiveForm] = useState<"A" | "B" | "C">("A");
-  const [selfRatings, setSelfRatings] = useState<Ratings>({});
-  const [savedForms, setSavedForms] = useState<SavedForms>({});
+  const [selfRatings, setSelfRatings] = useState<Ratings>(() => {
+    const existing = loadAppraisalSelf();
+    if (!existing) return {};
+    const merged: Ratings = {};
+    existing.forms.forEach((f) => {
+      Object.entries(f.ratings).forEach(([k, v]) => {
+        merged[k] = v;
+      });
+    });
+    return merged;
+  });
+  const [savedForms, setSavedForms] = useState<SavedForms>(() => {
+    const existing = loadAppraisalSelf();
+    if (!existing) return {};
+    const saved: SavedForms = {};
+    existing.forms.forEach((f) => {
+      if (Object.keys(f.ratings).length > 0) {
+        saved[f.formId] = { total: f.avgScore };
+      }
+    });
+    return saved;
+  });
   const [modalItem, setModalItem] = useState<FormItem | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  const form = FORMS.find((f) => f.id === activeForm)!;
+  useEffect(() => {
+    const onHydrated = () => setFormsList(loadMasterAppraisalForms());
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
+
+  const form = formsList.find((f) => f.id === activeForm) ?? formsList[0];
 
   const sumScore = form.items.reduce((sum, item) => {
     return sum + (selfRatings[key(form.id, item.no)] ?? 0);
@@ -470,7 +522,7 @@ export function AppraisalForm() {
     setSavedForms(nextSavedForms);
 
     // Build all saved form entries for persistence
-    const allFormEntries = FORMS.map((f) => {
+    const allFormEntries = formsList.map((f) => {
       const fRatings: Record<string, number> = {};
       f.items.forEach((item) => {
         const v = selfRatings[key(f.id, item.no)];
@@ -499,9 +551,9 @@ export function AppraisalForm() {
       });
     }
 
-    const nextIndex = FORMS.findIndex((f) => f.id === activeForm) + 1;
-    if (nextIndex < FORMS.length) {
-      setActiveForm(FORMS[nextIndex].id);
+    const nextIndex = formsList.findIndex((f) => f.id === activeForm) + 1;
+    if (nextIndex < formsList.length) {
+      setActiveForm(formsList[nextIndex].id);
     }
   };
 
@@ -516,17 +568,17 @@ export function AppraisalForm() {
     <div className="w-full flex flex-col h-full pb-20 relative">
       {/* Tab bar */}
       <div className="flex border-b border-gray-200 mb-5 shrink-0">
-        {FORMS.map((f, idx) => {
+        {formsList.map((f, idx) => {
           const isTabSaved = !!savedForms[f.id];
           const isActive = activeForm === f.id;
           // Locked if any previous form is not yet saved
-          const isLocked = idx > 0 && !savedForms[FORMS[idx - 1].id];
+          const isLocked = idx > 0 && !savedForms[formsList[idx - 1].id];
           return (
             <button
               key={f.id}
               onClick={() => !isLocked && setActiveForm(f.id)}
               disabled={isLocked}
-              title={isLocked ? `Complete ${FORMS[idx - 1].tab} first` : undefined}
+              title={isLocked ? `Complete ${formsList[idx - 1].tab} first` : undefined}
               className={`flex-1 text-center py-4 px-4 transition-colors border-b-2 ${
                 isActive
                   ? "border-[#1A284F] bg-gray-50"

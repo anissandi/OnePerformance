@@ -1,3 +1,5 @@
+import { savePersistedState } from "../../services/supabaseClient";
+
 export type ScoreWeightColumn = "operasional" | "kaWaKaSeksi" | "pengawasKepalaBagian" | "kepalaDepartement" | "kepalaDivisi";
 export type ScoreWeightRow = { indikator: string } & Record<ScoreWeightColumn, string>;
 export type UnitScoreWeights = Record<string, Partial<Record<ScoreWeightColumn, string>>>;
@@ -27,6 +29,17 @@ export function saveUnitScoreWeights(companyName: string, rows: readonly ScoreWe
   const weights: UnitScoreWeights = Object.fromEntries(rows.map(({ indikator, ...values }) => [indikator, values]));
   let saved: Record<string, UnitScoreWeights> = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) ?? "{}"); } catch {}
-  localStorage.setItem(KEY, JSON.stringify({ ...saved, [companyName]: weights }));
+  const next = { ...saved, [companyName]: weights };
+  savePersistedState(KEY, next, {
+    kind: "score-weights",
+    companyUnit: companyName,
+    weights,
+    audit: {
+      action: "Update",
+      module: "HR Settings",
+      subModule: "Scores Setting",
+      description: `Updated module score weights for ${companyName}`,
+    },
+  });
   window.dispatchEvent(new Event(SCORE_WEIGHT_EVENT));
 }

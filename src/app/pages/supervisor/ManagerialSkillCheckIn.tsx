@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, CheckCircle2, FileCheck } from "lucide-react";
 import { saveMSSelfRatings, loadMSSelfRatings } from "../shared/msStore";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,30 @@ export const MS_ITEMS: MSItem[] = [
     ],
   },
 ];
+
+const MASTER_MS_KEY = "master_managerial_skills_v1";
+
+export function loadMasterMSItems(): MSItem[] {
+  const stored = loadPersistedState<MSItem[] | null>(MASTER_MS_KEY, null);
+  if (Array.isArray(stored) && stored.length > 0) {
+    return stored;
+  }
+  return MS_ITEMS;
+}
+
+export function saveMasterMSItems(items: MSItem[]): void {
+  savePersistedState(MASTER_MS_KEY, items, {
+    kind: "master-catalog",
+    catalogKey: MASTER_MS_KEY,
+    data: items,
+    audit: {
+      action: "Update",
+      module: "HR Settings",
+      subModule: "Master Managerial Skill",
+      description: "Updated Master Managerial Skill criteria & indicators",
+    },
+  });
+}
 
 const PERCENTAGE = 20;
 
@@ -172,6 +197,7 @@ function SuccessModal({ onClose }: { onClose: () => void }) {
 type Ratings = Record<number, number | null>;
 
 export function SupervisorManagerialSkillCheckIn() {
+  const [msItems, setMsItems] = useState<MSItem[]>(() => loadMasterMSItems());
   const [ratings, setRatings] = useState<Ratings>(() => {
     const stored = loadMSSelfRatings();
     return stored ? stored.ratings as Ratings : {};
@@ -181,9 +207,15 @@ export function SupervisorManagerialSkillCheckIn() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  const totalScore = MS_ITEMS.reduce((sum, item) => sum + (ratings[item.no] ?? 0), 0);
-  const rated = MS_ITEMS.filter((item) => ratings[item.no] != null).length;
-  const allRated = rated === MS_ITEMS.length;
+  useEffect(() => {
+    const onHydrated = () => setMsItems(loadMasterMSItems());
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+  }, []);
+
+  const totalScore = msItems.reduce((sum, item) => sum + (ratings[item.no] ?? 0), 0);
+  const rated = msItems.filter((item) => ratings[item.no] != null).length;
+  const allRated = rated === msItems.length;
 
   const setRating = (no: number, val: number) => {
     setSaved(false);
@@ -244,7 +276,7 @@ export function SupervisorManagerialSkillCheckIn() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {MS_ITEMS.map((item) => {
+              {msItems.map((item) => {
                 const selected = ratings[item.no] ?? null;
                 return (
                   <tr key={item.no} className="hover:bg-gray-50/50 transition-colors">
