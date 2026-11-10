@@ -14,7 +14,7 @@ create table if not exists public.pa_users (
   division text not null,
   department text not null,
   grade text not null default 'Grade 5',
-  role text not null check (role in ('Employee', 'Supervisor', 'HR Unit', 'HR ICF', 'Director', 'BOD', 'Administrator')),
+  role text not null check (role in ('Employee', 'Supervisor', 'GM', 'HR Unit', 'HR ICF', 'Director', 'BOD', 'Administrator')),
   groupings text not null,
   status text not null default 'Active' check (status in ('Active', 'Inactive')),
   last_login text not null default '',

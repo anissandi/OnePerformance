@@ -4,7 +4,7 @@ import {
   Eye, EyeOff, Save, X, ToggleLeft, ToggleRight, Search, Menu,
 } from "lucide-react";
 
-type Role = "Administrator" | "BOD" | "Director" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
+type Role = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
 
 interface MenuItem {
   id: string;
@@ -17,14 +17,15 @@ interface MenuItem {
   children?: MenuItem[];
 }
 
-const ALL_ROLES: Role[] = ["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor", "Employee"];
-const HR_ROLES: Role[] = ["Administrator", "BOD", "Director", "HR Unit", "HR ICF"];
+const ALL_ROLES: Role[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor", "Employee"];
+const HR_ROLES: Role[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF"];
 const HR_ADMIN: Role[] = ["Administrator", "HR Unit", "HR ICF"];
 
 const ROLE_COLORS: Record<Role, string> = {
   "Administrator": "bg-slate-100 text-slate-700",
   "BOD":           "bg-red-100 text-red-800",
   "Director":      "bg-rose-50 text-rose-700",
+  "GM":            "bg-indigo-50 text-indigo-700",
   "HR Unit":       "bg-purple-50 text-purple-700",
   "HR ICF":        "bg-amber-50 text-amber-700",
   "Supervisor":    "bg-blue-50 text-blue-700",
@@ -39,15 +40,15 @@ const INITIAL_MENUS: MenuItem[] = [
   },
   {
     id: "appraisal", label: "My Performance Appraisal", path: "/appraisal", icon: "UserCheck",
-    isVisible: true, order: 2, roles: ["Supervisor", "Employee"] as Role[],
+    isVisible: true, order: 2, roles: ["GM", "Supervisor", "Employee"] as Role[],
   },
   {
     id: "approvals", label: "Approvals", path: "", icon: "CheckSquare",
-    isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor"] as Role[],
+    isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
     children: [
-      { id: "approvals_kpi_business",   label: "KPI Business",                      path: "/hr/settings/kpi",                    icon: "TrendingUp",  isVisible: true, order: 1, roles: HR_ADMIN },
-      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement", path: "/hr/approvals/measurement",               icon: "Clock",       isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",     path: "/hr/approvals/setting",               icon: "Target",      isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_kpi_business",   label: "KPI Business",                      path: "/hr/settings/kpi",                    icon: "TrendingUp",  isVisible: true, order: 1, roles: [...HR_ADMIN, "GM", "Director"] as Role[] },
+      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement", path: "/hr/approvals/measurement",               icon: "Clock",       isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",     path: "/hr/approvals/setting",               icon: "Target",      isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
       { id: "approvals_open_lock",      label: "Open Lock",                         path: "/hr/settings/open-lock",              icon: "LockOpen",    isVisible: true, order: 4, roles: HR_ADMIN },
       { id: "approvals_calibration",    label: "Calibration",                       path: "/bod/approvals/calibration",          icon: "BarChart2",   isVisible: true, order: 5, roles: ["BOD"] as Role[] },
     ],

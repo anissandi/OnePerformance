@@ -9,7 +9,8 @@ Dokumen ini adalah acuan utama (*Single Source of Truth*) untuk alur kerja dan a
 1. **Import Excel Data Karyawan (`/hr/settings/data-sync`)**
    - Role **Administrator** melakukan import Excel data karyawan ke dalam sistem PA.
    - Format kolom tabel wajib:
-     `No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2`
+     `No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2; Role; Groupings`
+   - Daftar **Role** sistem: `Employee`, `Supervisor`, `GM`, `HR Unit`, `HR ICF`, `Director`, `BOD`, `Administrator`.
    - Fitur ini berada di `/hr/settings/data-sync` karena untuk tahun berjalan belum terintegrasi langsung ke database & sistem approval internal unit usaha.
 
 2. **Validasi Approval Berjenjang (`Reg No AP1` & `Reg No AP2`)**

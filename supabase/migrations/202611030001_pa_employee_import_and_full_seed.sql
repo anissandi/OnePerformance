@@ -17,6 +17,11 @@ alter table public.pa_users
   add column if not exists is_hr_unit_checker boolean not null default false,
   add column if not exists is_hr_icf_validator boolean not null default false;
 
+-- Pastikan constraint role di pa_users mengizinkan role 'GM'
+alter table public.pa_users drop constraint if exists pa_users_role_check;
+alter table public.pa_users add constraint pa_users_role_check
+  check (role in ('Employee', 'Supervisor', 'GM', 'HR Unit', 'HR ICF', 'Director', 'BOD', 'Administrator'));
+
 -- Update seed data karyawan dengan Reg No, Bagian, Joindate, No Telegram, Reg No AP1, dan Reg No AP2
 insert into public.pa_users (
   employee_id, no, reg_no, name, email, position, company, unit_id,

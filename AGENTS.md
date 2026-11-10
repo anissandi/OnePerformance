@@ -27,7 +27,8 @@ Seluruh pengembangan dan logika bisnis pada sistem Performance Appraisal (PA) wa
 1. **Import Excel Data Karyawan (`/hr/settings/data-sync`)**:
    - Role **Administrator** mengimpor file Excel data karyawan ke dalam sistem PA (karena untuk tahun berjalan belum terintegrasi langsung ke database & sistem approval internal unit usaha).
    - Format kolom tabel wajib:
-     `No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2`
+     `No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2; Role; Groupings`
+   - Daftar **Role** sistem: `Employee`, `Supervisor`, `GM`, `HR Unit`, `HR ICF`, `Director`, `BOD`, `Administrator`.
    - Fitur import ini ditempatkan di `/hr/settings/data-sync`.
 2. **Validasi Approval Berjenjang (`Reg No AP1` & `Reg No AP2`)**:
    - Kolom tabel `Reg No AP1` dan `Reg No AP2` dari file import data karyawan digunakan sebagai validasi approval berjenjang dari masing-masing karyawan.

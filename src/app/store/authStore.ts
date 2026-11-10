@@ -4,6 +4,7 @@ import { notifyLoginToSupabase, savePersistedState, syncToSupabase } from "../se
 export type AppUserRole =
   | "Employee"
   | "Supervisor"
+  | "GM"
   | "HR Unit"
   | "HR ICF"
   | "Director"
@@ -123,7 +124,7 @@ export function isAdminOrHrIcfRole(role: AppUserRole): boolean {
 }
 
 export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers()): boolean {
-  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director" || user.role === "HR Unit" || user.role === "Supervisor") {
+  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director" || user.role === "GM" || user.role === "HR Unit" || user.role === "Supervisor") {
     return true;
   }
   const reg = (user.regNo ?? "").trim().toLowerCase();
@@ -140,7 +141,7 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director") {
     return allUsers;
   }
-  if (user.role === "HR Unit") {
+  if (user.role === "HR Unit" || user.role === "GM") {
     return allUsers.filter((u) => u.company === user.company);
   }
   const reg = (user.regNo ?? "").trim().toLowerCase();
@@ -341,6 +342,7 @@ export function resolvePortalPathForRole(role: AppUserRole, position = ""): "/hr
   }
   if (
     role === "Supervisor" ||
+    role === "GM" ||
     /kepala|supervisor|manager|gm|pengawas/i.test(position)
   ) {
     return "/supervisor";

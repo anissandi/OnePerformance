@@ -11,12 +11,12 @@ import {
   type ManagedUser,
 } from "../../../store/authStore";
 
-type Role = "Employee" | "Supervisor" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "";
+type Role = "Employee" | "Supervisor" | "GM" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "";
 type Status = "Active" | "Inactive";
 
 type User = ManagedUser;
 
-const ROLES: Role[] = ["Employee", "Supervisor", "HR Unit", "HR ICF", "Director", "BOD", "Administrator"];
+const ROLES: Role[] = ["Employee", "Supervisor", "GM", "HR Unit", "HR ICF", "Director", "BOD", "Administrator"];
 const COMPANIES = [
   "PT RSUP (Industry)", "PT RSUP (Perkebunan)",
   "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)",
@@ -41,6 +41,7 @@ function avatarColor(id: string) {
 const ROLE_BADGE: Record<string, string> = {
   "Employee":      "bg-emerald-50 text-emerald-700",
   "Supervisor":    "bg-blue-50 text-blue-700",
+  "GM":            "bg-indigo-50 text-indigo-700",
   "HR Unit":       "bg-purple-50 text-purple-700",
   "HR ICF":        "bg-amber-50 text-amber-700",
   "Director":      "bg-rose-50 text-rose-700",
@@ -795,6 +796,7 @@ export function UserManagementPage() {
 
   const employeeCount = companyUsers.filter(u => u.role === "Employee").length;
   const supervisorCount = companyUsers.filter(u => u.role === "Supervisor").length;
+  const gmCount = companyUsers.filter(u => u.role === "GM").length;
   const hrUnitCount = companyUsers.filter(u => u.role === "HR Unit").length;
   const hrIcfCount = companyUsers.filter(u => u.role === "HR ICF").length;
   const directorCount = companyUsers.filter(u => u.role === "Director").length;
@@ -842,11 +844,12 @@ export function UserManagementPage() {
       {/* User Management tab content */}
       {activeTab === "users" && <>
       {/* Stats */}
-      <div className="grid grid-cols-3 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-4 lg:grid-cols-8 gap-3">
         {[
           { label: "Total Users",    value: companyUsers.length, color: "bg-[#1A284F] text-white" },
           { label: "Employee",       value: employeeCount,       color: "bg-emerald-600 text-white" },
           { label: "Supervisor",     value: supervisorCount,     color: "bg-blue-600 text-white" },
+          { label: "GM",             value: gmCount,             color: "bg-indigo-600 text-white" },
           { label: "HR Unit",        value: hrUnitCount,         color: "bg-purple-600 text-white" },
           { label: "HR ICF",         value: hrIcfCount,          color: "bg-amber-500 text-white" },
           { label: "Director",       value: directorCount,       color: "bg-rose-600 text-white" },

@@ -17,6 +17,7 @@ import {
   loadManagedUsers,
   saveManagedUsers,
   type ManagedUser,
+  type AppUserRole,
 } from "../../../store/authStore";
 
 export const EMPLOYEE_IMPORT_HEADERS = [
@@ -33,6 +34,8 @@ export const EMPLOYEE_IMPORT_HEADERS = [
   "Corporate Email",
   "Reg No AP1",
   "Reg No AP2",
+  "Role",
+  "Groupings",
 ] as const;
 
 type SyncItem = {
@@ -134,6 +137,8 @@ export function DataSyncPage() {
         "Corporate Email": "siti.rahayu@sambugroup.com",
         "Reg No AP1": "REG-014",
         "Reg No AP2": "REG-008",
+        "Role": "Employee",
+        "Groupings": "Operasional",
       },
       {
         "No": 2,
@@ -149,6 +154,8 @@ export function DataSyncPage() {
         "Corporate Email": "hr.unit.ind@sambugroup.com",
         "Reg No AP1": "REG-008",
         "Reg No AP2": "REG-016",
+        "Role": "HR Unit",
+        "Groupings": "Ka./Wa.Ka.Bagian",
       },
       {
         "No": 3,
@@ -164,6 +171,8 @@ export function DataSyncPage() {
         "Corporate Email": "hendra.wijaya@sambugroup.com",
         "Reg No AP1": "REG-016",
         "Reg No AP2": "REG-017",
+        "Role": "Supervisor",
+        "Groupings": "Ka./Wa.Ka.Div ke atas",
       },
     ];
     const ws = XLSX.utils.json_to_sheet(sampleRows, { header: [...EMPLOYEE_IMPORT_HEADERS] });
@@ -188,6 +197,8 @@ export function DataSyncPage() {
       "Corporate Email": u.email,
       "Reg No AP1": u.regNoAp1 ?? "",
       "Reg No AP2": u.regNoAp2 ?? "",
+      "Role": u.role || "Employee",
+      "Groupings": u.groupings,
     }));
     const ws = XLSX.utils.json_to_sheet(rows, { header: [...EMPLOYEE_IMPORT_HEADERS] });
     const wb = XLSX.utils.book_new();
@@ -243,18 +254,49 @@ export function DataSyncPage() {
           const email = String(r["Corporate Email"] ?? r["Email"] ?? "").trim();
           const regNoAp1 = String(r["Reg No AP1"] ?? r["AP1"] ?? "").trim();
           const regNoAp2 = String(r["Reg No AP2"] ?? r["AP2"] ?? "").trim();
+          const rawRole = String(r["Role"] ?? r["User Role"] ?? "").trim();
+          const rawGrouping = String(r["Groupings"] ?? r["Grouping"] ?? r["User Groupings"] ?? "").trim();
 
-          const grouping = inferGroupingFromPosition(position);
+          const normalizeImportedGrouping = (val: string, fallbackPos: string): string => {
+            const v = val.trim().toLowerCase();
+            if (!v) return inferGroupingFromPosition(fallbackPos);
+            if (/div|gm|direktur|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
+            if (/dept|departemen/i.test(v)) return "Ka./Wa.Ka.Dept";
+            if (/bagian/i.test(v)) return "Ka./Wa.Ka.Bagian";
+            if (/seksi|shift/i.test(v)) return "Ka./Wa.Ka.Seksi";
+            if (/operasional|operational/i.test(v)) return "Operasional";
+            return val.trim();
+          };
+
+          const normalizeImportedRole = (val: string): AppUserRole | "" => {
+            const v = val.trim().toLowerCase();
+            if (!v) return "";
+            if (v === "administrator" || v === "admin") return "Administrator";
+            if (v === "hr icf" || v === "hricf" || v === "icf") return "HR ICF";
+            if (v === "hr unit" || v === "hrunit") return "HR Unit";
+            if (v === "bod") return "BOD";
+            if (v === "director" || v === "direktur") return "Director";
+            if (v === "gm" || v === "general manager") return "GM";
+            if (v === "supervisor" || v === "approver") return "Supervisor";
+            if (v === "employee" || v === "staff" || v === "karyawan") return "Employee";
+            return val.trim() as AppUserRole;
+          };
+
+          const grouping = normalizeImportedGrouping(rawGrouping, position);
           const existingIdx = existingUsers.findIndex(
             (u) => u.employeeId.toLowerCase() === empId.toLowerCase() || (u.regNo && u.regNo.toLowerCase() === regNo.toLowerCase()),
           );
           const prev = existingIdx >= 0 ? existingUsers[existingIdx] : undefined;
 
           const isApproverByChain = referencedApproverRegNos.has(regNo.toUpperCase());
+          const explicitRole = normalizeImportedRole(rawRole);
           const inferredRole =
+            explicitRole ||
             prev?.role ||
             (/direktur|director/i.test(position)
               ? "Director"
+              : /\bgm\b|general manager/i.test(position)
+              ? "GM"
               : /bod/i.test(position)
               ? "BOD"
               : isApproverByChain || grouping !== "Operasional"
@@ -279,11 +321,11 @@ export function DataSyncPage() {
             company: String(r["Company"] ?? r["Unit"] ?? prev?.company ?? targetCompany).trim(),
             grade: prev?.grade ?? (grouping === "Ka./Wa.Ka.Div ke atas" ? "Grade 9" : grouping === "Ka./Wa.Ka.Dept" ? "Grade 8" : grouping === "Ka./Wa.Ka.Bagian" ? "Grade 7" : grouping === "Ka./Wa.Ka.Seksi" ? "Grade 6" : "Grade 5"),
             role: inferredRole,
-            groupings: prev?.groupings || grouping,
+            groupings: rawGrouping ? grouping : prev?.groupings || grouping,
             status: prev?.status ?? "Active",
             lastLogin: prev?.lastLogin ?? "",
-            isHrUnitChecker: prev?.isHrUnitChecker,
-            isHrIcfValidator: prev?.isHrIcfValidator,
+            isHrUnitChecker: inferredRole === "HR Unit" ? true : prev?.isHrUnitChecker,
+            isHrIcfValidator: inferredRole === "HR ICF" || inferredRole === "Administrator" ? true : prev?.isHrIcfValidator,
           };
 
           if (existingIdx >= 0) {
@@ -471,9 +513,9 @@ export function DataSyncPage() {
               </h2>
             </div>
             <p className="text-xs text-gray-500 mt-1">
-              Format wajib 13 kolom:{" "}
+              Format wajib 15 kolom:{" "}
               <span className="font-mono text-[11px] text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded">
-                No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2
+                No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2; Role; Groupings
               </span>
             </p>
           </div>
@@ -595,7 +637,6 @@ export function DataSyncPage() {
                       {h}
                     </th>
                   ))}
-                  <th className="px-3 py-2.5 font-semibold whitespace-nowrap">User Grouping</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -622,6 +663,11 @@ export function DataSyncPage() {
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium text-[11px]">
                         {resolveApproverDisplay(u.regNoAp2)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold text-[11px]">
+                        {u.role || "Employee"}
                       </span>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">

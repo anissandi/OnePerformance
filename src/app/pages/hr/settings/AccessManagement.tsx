@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2 } from "lucide-react";
 
-type BuiltinRole = "Administrator" | "BOD" | "Director" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
+type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
 type Role = BuiltinRole | string;
 
 interface Permission {
@@ -581,22 +581,35 @@ const DEFAULT_BOD: RolePermissions = {
   setting_audit:         N,
 };
 
+const DEFAULT_GM: RolePermissions = {
+  ...DEFAULT_SUPERVISOR,
+  analytics: V,
+  approvals_kpi_business: VCEA,
+  pa_monitoring_interview: V,
+  calibration: V,
+  calibration_adjustment: VE,
+  calibration_team_performance: VE,
+  pa_setting_interview: VCE,
+};
+
 const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
   "Administrator": DEFAULT_ADMIN,
   "BOD":           DEFAULT_BOD,
   "Director":      DEFAULT_DIRECTOR,
+  "GM":            DEFAULT_GM,
   "HR Unit":       DEFAULT_HR_UNIT,
   "HR ICF":        DEFAULT_HR_ICF,
   "Supervisor":    DEFAULT_SUPERVISOR,
   "Employee":      DEFAULT_EMPLOYEE,
 };
 
-const BUILTIN_ROLES: BuiltinRole[] = ["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor", "Employee"];
+const BUILTIN_ROLES: BuiltinRole[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor", "Employee"];
 
 const ROLE_COLORS: Record<string, string> = {
   "Administrator": "bg-slate-100 text-slate-700 border-slate-200",
   "BOD":           "bg-red-100 text-red-800 border-red-200",
   "Director":      "bg-rose-100 text-rose-700 border-rose-200",
+  "GM":            "bg-indigo-100 text-indigo-700 border-indigo-200",
   "HR Unit":       "bg-purple-100 text-purple-700 border-purple-200",
   "HR ICF":        "bg-amber-100 text-amber-700 border-amber-200",
   "Supervisor":    "bg-blue-100 text-blue-700 border-blue-200",
