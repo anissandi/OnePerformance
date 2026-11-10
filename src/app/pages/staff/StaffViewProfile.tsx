@@ -551,8 +551,8 @@ export function StaffViewProfile() {
               { icon: Calendar,  label: `Joined ${USER.joinDate} · ${yearsOfService} yrs` },
               { icon: Mail,      label: USER.email },
               { icon: Phone,     label: USER.phone },
-            ].map(({ icon: Icon, label }) => (
-              <div key={label} className="flex items-center gap-2">
+            ].map(({ icon: Icon, label }, idx) => (
+              <div key={`${idx}-${label}`} className="flex items-center gap-2">
                 <Icon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                 <span className="text-xs text-gray-600 truncate">{label}</span>
               </div>

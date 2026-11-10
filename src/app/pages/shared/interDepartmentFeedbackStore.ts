@@ -181,11 +181,9 @@ function normalize(record: FeedbackSubmission): FeedbackSubmission {
 
 export function loadFeedbackSubmissions(): FeedbackSubmission[] {
   const current = safeRead(KEY).map(normalize)
-  if (current.length) return current
+  if (current.length) return current.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
   const legacy = safeRead(LEGACY_KEY).map(normalize)
-  const records = legacy.length ? legacy : [exampleSubmission()]
-  localStorage.setItem(KEY, JSON.stringify(records))
-  return records
+  return legacy.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
 }
 
 export function saveFeedbackSubmission(submission: FeedbackSubmission) {

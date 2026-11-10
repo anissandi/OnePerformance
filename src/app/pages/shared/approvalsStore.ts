@@ -113,8 +113,12 @@ export function saveOverride(no: string, status: string, approvalDate: string): 
   }
 }
 
-export function applyOverrides(rows: ApprovalRow[], role: "approver1" | "approver2" = "approver1"): ApprovalRow[] {
-  const phase = /^(?:H?ST)-/.test(rows[0]?.no ?? "") ? "setting" : "measurement";
+export function applyOverrides(
+  rows: ApprovalRow[],
+  role: "approver1" | "approver2" = "approver1",
+  explicitPhase?: "setting" | "measurement",
+): ApprovalRow[] {
+  const phase = explicitPhase ?? (/^(?:H?ST)-/.test(rows[0]?.no ?? "") ? "setting" : "measurement");
   const isCleanTrial = localStorage.getItem("pa_trial_mode_clean_v1") === "true";
   const managedUsers = loadManagedUsers();
   const baseRows = isCleanTrial

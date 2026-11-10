@@ -133,3 +133,90 @@ export function workflowRowStatus(row: ApprovalRow, role: ReviewerRole): Partial
   const status = own?.status ?? (role === "approver2" && !ready ? "Awaiting Approver 1" : "Pending");
   return { status, submittedDate: record.submittedDate, approvalDate: own?.date ?? "-" };
 }
+
+export type LiveApprovalStepStatus = "completed" | "in_progress" | "pending";
+export interface LiveApprovalStep {
+  label: string;
+  description: string;
+  status: LiveApprovalStepStatus;
+}
+export interface LiveModuleApprovalData {
+  module: string;
+  overallStatus: "Approved" | "Pending" | "In Progress";
+  steps: LiveApprovalStep[];
+}
+
+export function getLiveUserModuleApprovals(includeManagerial = false): LiveModuleApprovalData[] {
+  const activeUser = getActiveUser();
+  const normId = normalizeEmployeeId(activeUser.employeeId);
+  const records = loadWorkflowRecords().filter(
+    (r) => r.year === "2026" && (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
+  );
+  const bypassCheck = shouldBypassCheckerForSubmission(activeUser.employeeId);
+
+  const buildFourStep = (modLabel: string, modKey: string, phase: "setting" | "measurement"): LiveModuleApprovalData => {
+    const rec = records.find((r) => r.module === modKey && r.phase === phase);
+    if (!rec) {
+      return {
+        module: modLabel,
+        overallStatus: "Pending",
+        steps: [
+          { label: "Check", description: "Submission reviewed by HR Unit Usaha", status: "pending" },
+          { label: "Approver 1", description: `First-level approval (${activeUser.regNoAp1 || "AP1"})`, status: "pending" },
+          { label: "Approver 2", description: `Second-level approval (${activeUser.regNoAp2 || "AP2"})`, status: "pending" },
+          { label: "Validate", description: "Final validation by HR ICF", status: "pending" },
+        ],
+      };
+    }
+    const a1Done = Boolean(rec.decisions.approver1 && (rec.decisions.approver1.status === "Approved" || rec.decisions.approver1.status.startsWith("Assessed")));
+    const a2Done = Boolean(rec.decisions.approver2 && (rec.decisions.approver2.status === "Approved" || rec.decisions.approver2.status.startsWith("Assessed")));
+    const overallStatus = a2Done ? "Approved" : "In Progress";
+    return {
+      module: modLabel,
+      overallStatus,
+      steps: [
+        { label: "Check", description: bypassCheck ? "Auto-bypassed (Self HR Unit)" : "Submission reviewed by HR Unit Usaha", status: "completed" },
+        { label: "Approver 1", description: `First-level approval (${activeUser.regNoAp1 || "AP1"})`, status: a1Done ? "completed" : "in_progress" },
+        { label: "Approver 2", description: `Second-level approval (${activeUser.regNoAp2 || "AP2"})`, status: a2Done ? "completed" : a1Done ? "in_progress" : "pending" },
+        { label: "Validate", description: "Final validation by HR ICF", status: a2Done ? "completed" : "pending" },
+      ],
+    };
+  };
+
+  const buildTwoStep = (modLabel: string, modKey: string): LiveModuleApprovalData => {
+    const rec = records.find((r) => r.module === modKey && r.phase === "measurement");
+    if (!rec) {
+      return {
+        module: modLabel,
+        overallStatus: "Pending",
+        steps: [
+          { label: "Approver 1", description: `First-level approval (${activeUser.regNoAp1 || "AP1"})`, status: "pending" },
+          { label: "Approver 2", description: `Second-level approval (${activeUser.regNoAp2 || "AP2"})`, status: "pending" },
+        ],
+      };
+    }
+    const a1Done = Boolean(rec.decisions.approver1 && (rec.decisions.approver1.status === "Approved" || rec.decisions.approver1.status.startsWith("Assessed")));
+    const a2Done = Boolean(rec.decisions.approver2 && (rec.decisions.approver2.status === "Approved" || rec.decisions.approver2.status.startsWith("Assessed")));
+    return {
+      module: modLabel,
+      overallStatus: a2Done ? "Approved" : "In Progress",
+      steps: [
+        { label: "Approver 1", description: `First-level approval (${activeUser.regNoAp1 || "AP1"})`, status: a1Done ? "completed" : "in_progress" },
+        { label: "Approver 2", description: `Second-level approval (${activeUser.regNoAp2 || "AP2"})`, status: a2Done ? "completed" : a1Done ? "in_progress" : "pending" },
+      ],
+    };
+  };
+
+  const list: LiveModuleApprovalData[] = [
+    buildFourStep("KPI (Setting)", "KPI", "setting"),
+    buildFourStep("SMART Goals (Setting)", "SMART Goals", "setting"),
+    buildFourStep("KPI (Tracking)", "KPI", "measurement"),
+    buildFourStep("SMART Goals (Tracking)", "SMART Goals", "measurement"),
+    buildTwoStep("Appraisal Form", "Appraisal Form"),
+    buildTwoStep("Project OJS", "Project"),
+  ];
+  if (includeManagerial) {
+    list.push(buildTwoStep("Managerial Skill", "Managerial Skill"));
+  }
+  return list;
+}

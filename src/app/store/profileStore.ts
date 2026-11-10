@@ -1,3 +1,5 @@
+import { getActiveUser } from "./authStore";
+
 export interface UserProfile {
   name: string;
   initials: string;
@@ -12,30 +14,37 @@ export interface UserProfile {
   joinDate: string;
 }
 
-export const STAFF_PROFILE: UserProfile = {
-  name: "Edward David",
-  initials: "ED",
-  employeeId: "E003",
-  position: "Staf Keuangan",
-  department: "Departemen Akuntansi & Keuangan",
-  division: "Divisi Keuangan",
-  companyUnit: "PT RSUP (Industry)",
-  location: "Pekanbaru, Indonesia",
-  email: "edward.david@rsup.sambu.co.id",
-  phone: "+62 813-4567-8901",
-  joinDate: "2021-06-15",
-};
+export function getDynamicUserProfile(): UserProfile {
+  const u = getActiveUser();
+  const initials = u.name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("") || "PA";
+  return {
+    name: u.name,
+    initials,
+    employeeId: u.employeeId,
+    position: u.position,
+    department: u.department,
+    division: u.division,
+    companyUnit: u.company,
+    location: u.bagian ? `${u.division} · ${u.bagian}` : u.division || u.company,
+    email: u.email,
+    phone: u.telegramNo || "—",
+    joinDate: u.joinDate || "—",
+  };
+}
 
-export const SUPERVISOR_PROFILE: UserProfile = {
-  name: "Anis Sandi",
-  initials: "AS",
-  employeeId: "E001",
-  position: "HR Strategic Specialist",
-  department: "Human Resource Department",
-  division: "Divisi Sumber Daya Manusia",
-  companyUnit: "PT RSUP (Industry)",
-  location: "Jakarta, Indonesia",
-  email: "anis.sandi@sambugroup.com",
-  phone: "+62 812-3456-7890",
-  joinDate: "2019-03-15",
-};
+export const STAFF_PROFILE: UserProfile = new Proxy({} as UserProfile, {
+  get(_target, prop: keyof UserProfile) {
+    return getDynamicUserProfile()[prop];
+  },
+});
+
+export const SUPERVISOR_PROFILE: UserProfile = new Proxy({} as UserProfile, {
+  get(_target, prop: keyof UserProfile) {
+    return getDynamicUserProfile()[prop];
+  },
+});

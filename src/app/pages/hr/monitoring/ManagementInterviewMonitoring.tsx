@@ -125,12 +125,19 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
     return { ...rec, penilaiScores };
   });
 
-  const filteredMI = mergedMI.filter(k => filteredEmployees.some(e => e.id === k.employeeId));
+  const allRows = filteredEmployees.map((emp) => {
+    const live = getPenilai1Score(emp.id);
+    const found = mergedMI.find((k) => k.employeeId === emp.id);
+    const mi: MIRecord = found ?? {
+      employeeId: emp.id,
+      status: live !== null ? "Selesai" : "Belum Dijadwalkan",
+      penilaiScores: [live, null, null, null],
+    };
+    return { emp, mi };
+  });
+  const filteredMI = allRows.map((r) => r.mi);
 
-  const baseRows = filteredEmployees.map((emp) => ({
-    emp,
-    mi: mergedMI.find((k) => k.employeeId === emp.id)!,
-  })).filter(({ emp, mi }) => {
+  const baseRows = allRows.filter(({ emp, mi }) => {
     if (!mi) return false;
     const q = search.toLowerCase();
     const matchSearch = !q

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { TrendingUp, Lightbulb, ClipboardList, FolderKanban, SearchCode } from "lucide-react";
-import { EDWARD_PROFILE } from "../../data/edwardData";
+import { useAuthStore } from "../../store/authStore";
 import { EmptyState } from "../../components/EmptyState";
 
 // ─── Tab Contents ─────────────────────────────────────────────────────────────
@@ -69,12 +69,13 @@ const TABS: { id: Tab; icon: React.ElementType }[] = [
 
 export function StaffMeasurementPage() {
   const [activeTab, setActiveTab] = useState<Tab>("KPI Tracking");
+  const { activeUser } = useAuthStore();
 
   return (
     <div className="w-full flex flex-col gap-6">
       <div>
         <h1 className="text-3xl font-bold text-[#1A284F] mb-1">Performance Appraisal Measurement</h1>
-        <p className="text-gray-500 text-sm">{EDWARD_PROFILE.name} · Performance Year 2026</p>
+        <p className="text-gray-500 text-sm">{activeUser.name} ({activeUser.employeeId}) · Performance Year 2026</p>
       </div>
 
       <div className="flex border-b border-gray-200 overflow-x-auto">

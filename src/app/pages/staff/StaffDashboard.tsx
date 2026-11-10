@@ -1,10 +1,13 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking } from "../employee/KPIPage";
 import {
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
   CheckCircle2, Clock, X, Target, ArrowRight,
 } from "lucide-react";
 import { useNavigate } from "react-router";
+import { getLiveUserModuleApprovals } from "../shared/appraisalWorkflowStore";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,15 +26,6 @@ interface ModuleApprovalData {
   steps: ApprovalStep[];
 }
 
-// ─── Cycle Steps ──────────────────────────────────────────────────────────────
-
-const CYCLE_STEPS = [
-  { label: "Setting",                           date: "Quarter 1",                         dateRange: "01 Feb - 31 Mar", status: "Completed"   as const },
-  { label: "Measurement",                       date: "Quarter 2 - Quarter 4",             dateRange: "10 Apr - 16 Nov", status: "On Progress" as const },
-  { label: "Performance Evaluation & Analysis", date: "Quarter 4",                         dateRange: "17 Nov - 16 Jan", status: "Not Started" as const },
-  { label: "Year end Performance Dialogue",     date: "Quarter 4 - Quarter 1 (next year)", dateRange: "17 Jan - 16 Feb", status: "Not Started" as const },
-];
-
 const CYCLE_STEP_STYLE: Record<string, string> = {
   "Completed":   "bg-green-500 text-white",
   "On Progress": "bg-[#EEDDBB] text-[#1A284F]",
@@ -46,68 +40,42 @@ const CYCLE_LABEL_STYLE: Record<string, string> = {
 
 // ─── Appraisal Summary ────────────────────────────────────────────────────────
 
-const MY_APPRAISAL_SUMMARY = {
-  currentScore: 87.9,
-  currentGrade: "A",
-  modulesApproved: 2,
-  modulesTotal: 6,
-  lastUpdated: "15/06/2026",
-  yearEnd: "Dec 2026",
-  status: "In Progress" as const,
-};
+const MODULE_APPROVALS: ModuleApprovalData[] = new Proxy([] as ModuleApprovalData[], {
+  get(_target, prop, receiver) {
+    const list = getLiveUserModuleApprovals(false);
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
-// Shared hierarchy for the 5 active modules (Check → Approver 1 → Approver 2 → Validate)
-const SHARED_STEP_LABELS = [
-  { label: "Check",      description: "Submission reviewed by HR Team"             },
-  { label: "Approver 1", description: "First-level approval by Superior 1"          },
-  { label: "Approver 2", description: "Second-level approval by Superior 2"         },
-  { label: "Validate",   description: "Final validation by HR Strategic Specialist" },
-] as const;
-
-function sharedSteps(statuses: ApprovalStepStatus[]): ApprovalStep[] {
-  return SHARED_STEP_LABELS.map((s, i) => ({ ...s, status: statuses[i] }));
-}
-
-// ─── Module Approvals ─────────────────────────────────────────────────────────
-
-const MODULE_APPROVALS: ModuleApprovalData[] = [
+const MY_APPRAISAL_SUMMARY = new Proxy(
   {
-    module: "KPI (Setting)",
-    overallStatus: "Approved",
-    steps: sharedSteps(["completed", "completed", "completed", "completed"]),
+    currentScore: 0,
+    currentGrade: "—",
+    modulesApproved: 0,
+    modulesTotal: 6,
+    lastUpdated: "—",
+    yearEnd: "Dec 2026",
+    status: "In Progress" as const,
   },
   {
-    module: "SMART Goals (Setting)",
-    overallStatus: "Approved",
-    steps: sharedSteps(["completed", "completed", "completed", "completed"]),
+    get(_target, prop: string) {
+      const mods = getLiveUserModuleApprovals(false);
+      const emps = getLiveTransactionalEmployees();
+      const me = emps[0];
+      const summary = {
+        currentScore: me?.totalScore ?? 0,
+        currentGrade: me?.grade && me.grade !== "N/A" ? me.grade : "—",
+        modulesApproved: mods.filter((m) => m.overallStatus === "Approved").length,
+        modulesTotal: mods.length,
+        lastUpdated: me?.approvalCompleteDate ?? "—",
+        yearEnd: "Dec 2026",
+        status: (mods.every((m) => m.overallStatus === "Approved") ? "Done" : "In Progress") as "In Progress",
+      };
+      return summary[prop as keyof typeof summary];
+    },
   },
-  {
-    module: "KPI (Tracking)",
-    overallStatus: "In Progress",
-    steps: sharedSteps(["completed", "completed", "completed", "in_progress"]),
-  },
-  {
-    module: "SMART Goals (Tracking)",
-    overallStatus: "In Progress",
-    steps: sharedSteps(["in_progress", "pending", "pending", "pending"]),
-  },
-  {
-    module: "Appraisal Form",
-    overallStatus: "Pending",
-    steps: [
-      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
-    ],
-  },
-  {
-    module: "Project OJS",
-    overallStatus: "Pending",
-    steps: [
-      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
-    ],
-  },
-];
+);
 
 // ─── Milestone helpers (derived from MODULE_APPROVALS) ────────────────────────
 
@@ -174,8 +142,20 @@ const STAGE_TEXT_COLOR: Record<ApprovalStatus, string> = {
 // ─── CurrentCycleBanner ───────────────────────────────────────────────────────
 
 function CurrentCycleBanner() {
-  const activeStep = CYCLE_STEPS.find((s) => s.status === "On Progress");
-  const phaseLabel = activeStep ? `${activeStep.label} Phase` : "On Progress";
+  const [cycleSteps, setCycleSteps] = useState(() => buildLiveCycleStepsFromActivation("2026"));
+  useEffect(() => {
+    const refresh = () => setCycleSteps(buildLiveCycleStepsFromActivation("2026"));
+    window.addEventListener("pa-module-activation-updated", refresh);
+    window.addEventListener("feedback-activation-changed", refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
+    return () => {
+      window.removeEventListener("pa-module-activation-updated", refresh);
+      window.removeEventListener("feedback-activation-changed", refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
+    };
+  }, []);
+  const activeStep = cycleSteps.find((s) => s.status === "On Progress") ?? cycleSteps[0];
+  const phaseLabel = activeStep ? `${activeStep.label}` : "On Progress";
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-8 py-6 flex flex-col gap-5">
@@ -193,8 +173,8 @@ function CurrentCycleBanner() {
       </div>
 
       {/* Row 2 — steps in a single line */}
-      <div className="flex items-center gap-3">
-        {CYCLE_STEPS.map((step, i) => (
+      <div className="flex items-center gap-3 overflow-x-auto pb-1">
+        {cycleSteps.map((step, i) => (
           <React.Fragment key={step.label}>
             {i > 0 && (
               <div className={`h-0.5 flex-1 min-w-[24px] rounded-full ${step.status === "Not Started" ? "bg-gray-200" : "bg-green-400"}`} />

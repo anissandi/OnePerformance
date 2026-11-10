@@ -5,7 +5,7 @@ import { EMPLOYEES } from "../../hr/monitoring/monitoringData";
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
-const TEAM_EMPLOYEES = EMPLOYEES.filter((e) => TEAM_IDS.includes(e.id));
+const TEAM_EMPLOYEES = EMPLOYEES;
 
 type ProgressStatus = "Submitted" | "In Progress" | "Done";
 type ProjectScope   = "SS" | "QCC" | "QCP";
@@ -163,7 +163,17 @@ export function SupervisorMonitoringProject() {
   const baseRows = TEAM_EMPLOYEES.map((emp, idx) => ({
     no: idx + 1,
     emp,
-    rec: PROJ_DATA.find(k => k.employeeId === emp.id)!,
+    rec: PROJ_DATA.find(k => k.employeeId === emp.id) ?? {
+      employeeId: emp.id,
+      scope: null,
+      role: null,
+      title: null,
+      detail: null,
+      startDate: null,
+      finishDate: null,
+      progressStatus: null,
+      projectScore: null,
+    },
   })).filter(({ emp, rec }) => {
     const q = search.toLowerCase();
     const matchSearch   = !q || emp.name.toLowerCase().includes(q) || emp.id.toLowerCase().includes(q)

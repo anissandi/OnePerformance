@@ -4,116 +4,86 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { useLanguage } from "../../context/LangContext";
 import type { Employee, CalibrationTarget } from "../../data/mockEmployees";
 import {
-  mockEmployees, GRADE_ORDER,
+  getLiveTransactionalEmployees, GRADE_ORDER,
   readCalibrationTargets, getModuleScoreGrade,
 } from "../../data/mockEmployees";
+import { loadManagedUsers, resolveUserAllowedModules, type ManagedUser } from "../../store/authStore";
+import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
+import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
 
-// ── Master data (All Units / All Modules) ──────────────────────────────────────
-const allDivisionData = [
-  { name: "Coconut",    Completed: 45, "In Progress": 10, Pending: 5,  total: 60, rate: 75.0 },
-  { name: "Pineapple",  Completed: 28, "In Progress": 4,  Pending: 8,  total: 40, rate: 70.0 },
-  { name: "Qual. Mgmt", Completed: 35, "In Progress": 8,  Pending: 12, total: 55, rate: 63.6 },
-  { name: "Material",   Completed: 15, "In Progress": 3,  Pending: 2,  total: 20, rate: 75.0 },
-  { name: "General",    Completed: 20, "In Progress": 5,  Pending: 5,  total: 30, rate: 66.7 },
-  { name: "Utility",    Completed: 18, "In Progress": 6,  Pending: 4,  total: 28, rate: 64.3 },
-  { name: "Finance",    Completed: 22, "In Progress": 3,  Pending: 3,  total: 28, rate: 78.6 },
-];
+// ── Live Transactional Completion Calculator ──────────────────────────────────
+function computeModuleStatsForUsers(
+  users: ManagedUser[],
+  workflows: WorkflowRecord[],
+  modLabel: string,
+  year: string,
+): { total: number; completed: number; inProgress: number; pending: number } {
+  const eligibleUsers = users.filter((u) => {
+    if (u.status !== "Active") return false;
+    const allowed = resolveUserAllowedModules(u);
+    if (modLabel === "Managerial Skill") return allowed.includes("Managerial Skill");
+    if (modLabel === "Management Interview") return allowed.includes("Management Interview");
+    return true;
+  });
+  const total = eligibleUsers.length;
+  if (total === 0) return { total: 0, completed: 0, inProgress: 0, pending: 0 };
 
-const allDeptData = [
-  { name: "Finance", Completed: 30, "In Progress": 5, Pending: 3, total: 38 },
-  { name: "MPD",     Completed: 42, "In Progress": 9, Pending: 8, total: 59 },
-  { name: "IT",      Completed: 25, "In Progress": 6, Pending: 7, total: 38 },
-  { name: "HR",      Completed: 18, "In Progress": 4, Pending: 2, total: 24 },
-  { name: "PHD",     Completed: 28, "In Progress": 6, Pending: 12, total: 46 },
-  { name: "RMR",     Completed: 22, "In Progress": 5, Pending: 4, total: 31 },
-  { name: "COF",     Completed: 20, "In Progress": 3, Pending: 6, total: 29 },
-];
+  const mapModPhase = (m: string): { moduleName: string; phase: "setting" | "measurement" } => {
+    if (m === "KPI (Setting)") return { moduleName: "KPI", phase: "setting" };
+    if (m === "SMART Goals (Setting)") return { moduleName: "SMART Goals", phase: "setting" };
+    if (m === "KPI (Tracking)") return { moduleName: "KPI", phase: "measurement" };
+    if (m === "SMART Goals (Tracking)") return { moduleName: "SMART Goals", phase: "measurement" };
+    if (m === "Project OJS") return { moduleName: "Project", phase: "measurement" };
+    return { moduleName: m, phase: "measurement" };
+  };
 
-const unitData = [
-  { id: "rsup-ind", name: "PT RSUP (Industry)",          label: "RSUP Ind.",  Completed: 88, "In Progress": 15, Pending: 12, total: 115, unitCompleted: 88,  unitInProgress: 15, unitPending: 12 },
-  { id: "rsup-pkb", name: "PT RSUP (Perkebunan)",        label: "RSUP Pkbn.", Completed: 54, "In Progress": 10, Pending: 8,  total: 72,  unitCompleted: 54,  unitInProgress: 10, unitPending: 8  },
-  { id: "ps-jkt",   name: "PT Pulau Sambu (Jakarta)",    label: "PS Jakarta", Completed: 32, "In Progress": 8,  Pending: 10, total: 50,  unitCompleted: 32,  unitInProgress: 8,  unitPending: 10 },
-  { id: "ps-gtg",   name: "PT Pulau Sambu (Guntung)",    label: "PS Guntung", Completed: 23, "In Progress": 7,  Pending: 10, total: 40,  unitCompleted: 23,  unitInProgress: 7,  unitPending: 10 },
-  { id: "ps-ke",    name: "PT Pulau Sambu (Kuala Enok)", label: "PS K.Enok",  Completed: 19, "In Progress": 5,  Pending: 6,  total: 30,  unitCompleted: 19,  unitInProgress: 5,  unitPending: 6  },
-  { id: "rstm",     name: "PT RSTM",                     label: "RSTM",       Completed: 26, "In Progress": 6,  Pending: 8,  total: 40,  unitCompleted: 26,  unitInProgress: 6,  unitPending: 8  },
-  { id: "ghs",      name: "PT GHS",                      label: "GHS",        Completed: 21, "In Progress": 4,  Pending: 5,  total: 30,  unitCompleted: 21,  unitInProgress: 4,  unitPending: 5  },
-  { id: "asd",      name: "ASD",                      label: "ASD",        Completed: 15, "In Progress": 3,  Pending: 4,  total: 22,  unitCompleted: 15,  unitInProgress: 3,  unitPending: 4  },
-];
+  const { moduleName, phase } = mapModPhase(modLabel);
+  let completed = 0;
+  let inProgress = 0;
+  let pending = 0;
 
-type UnitBreakdown = { divisionData: typeof allDivisionData; deptData: typeof allDeptData };
+  for (const u of eligibleUsers) {
+    const normId = normalizeEmployeeId(u.employeeId);
+    const rec = workflows.find(
+      (w) =>
+        w.year === year &&
+        w.module === moduleName &&
+        w.phase === phase &&
+        (w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
+    );
+    if (!rec) {
+      pending++;
+      continue;
+    }
+    const a2 = rec.decisions.approver2?.status ?? "";
+    const a1 = rec.decisions.approver1?.status ?? "";
+    if (
+      a2 === "Approved" ||
+      a2 === "Validated" ||
+      a2.startsWith("Assessed") ||
+      (!u.regNoAp2 && (a1 === "Approved" || a1.startsWith("Assessed")))
+    ) {
+      completed++;
+    } else {
+      inProgress++;
+    }
+  }
 
-
-// ── Color tokens ───────────────────────────────────────────────────────────────
-
+  return { total, completed, inProgress, pending };
+}
 
 // ── PA Cycle Timeline ──────────────────────────────────────────────────────────
 const MONTHS      = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb"];
 const MONTH_YEARS = [2026,2026,2026,2026,2026,2026,2026,2026,2026,2026,2026,2026,2027,2027];
 const TOTAL_MONTHS = 14;
-const TODAY_MONTH  = 8; // Sep 2026 = index 8
-
-const TIMELINE_ROWS = [
-  {
-    label: "KPI; SMART Goals",
-    segments: [
-      { start: 0,  end: 2,  color: "#10b981", phase: "Setting"     },
-      { start: 3,  end: 10, color: "#f97316", phase: "Tracking" },
-    ],
-  },
-  { label: "Appraisal Form",       segments: [{ start: 10, end: 12, color: "#9ca3af", phase: "Not Started" }] },
-  { label: "Managerial Skill",     segments: [{ start: 10, end: 12, color: "#9ca3af", phase: "Not Started" }] },
-  { label: "Project",              segments: [{ start: 10, end: 12, color: "#9ca3af", phase: "Not Started" }] },
-  { label: "Management Interview", segments: [{ start: 12, end: 13, color: "#9ca3af", phase: "Not Started" }] },
-];
 
 // ── Module → Timeline correlation ─────────────────────────────────────────────
 type TimelinePhase = "done" | "in-progress" | "not-started";
-const MODULE_TIMELINE_MAP: Record<string, { rowIndex: number; segmentIndex?: number; phase: TimelinePhase }> = {
-  "KPI (Setting)":             { rowIndex: 0, segmentIndex: 0, phase: "done"        },
-  "SMART Goals (Setting)":     { rowIndex: 0, segmentIndex: 0, phase: "done"        },
-  "KPI (Tracking)":         { rowIndex: 0, segmentIndex: 1, phase: "in-progress" },
-  "SMART Goals (Tracking)": { rowIndex: 0, segmentIndex: 1, phase: "in-progress" },
-  "Appraisal Form":            { rowIndex: 1,                  phase: "not-started" },
-  "Managerial Skill":          { rowIndex: 2,                  phase: "not-started" },
-  "Project OJS":               { rowIndex: 3,                  phase: "not-started" },
-  "Management Interview":      { rowIndex: 4,                  phase: "not-started" },
-};
 
 const PHASE_META: Record<TimelinePhase, { label: string; color: string; bg: string; dot: string }> = {
   "done":        { label: "Completed",   color: "#059669", bg: "#d1fae5", dot: "#10b981" },
   "in-progress": { label: "In Progress", color: "#c2410c", bg: "#ffedd5", dot: "#f97316" },
   "not-started": { label: "Not Started", color: "#374151", bg: "#f3f4f6", dot: "#9ca3af" },
-};
-
-// ── Per-module stats (All Units) ───────────────────────────────────────────────
-const MODULE_STATS: Record<string, { total: number; completed: number; inProgress: number; pending: number }> = {
-  "KPI (Setting)":             { total: 205, completed: 185, inProgress: 12, pending:   8 },
-  "SMART Goals (Setting)":     { total: 205, completed: 178, inProgress: 15, pending:  12 },
-  "KPI (Tracking)":         { total: 205, completed:  85, inProgress: 80, pending:  40 },
-  "SMART Goals (Tracking)": { total: 205, completed:  72, inProgress: 85, pending:  48 },
-  "Appraisal Form":            { total: 205, completed:   0, inProgress:  7, pending: 198 },
-  "Managerial Skill":          { total: 205, completed:   0, inProgress:  0, pending: 205 },
-  "Project OJS":               { total: 205, completed:   0, inProgress: 10, pending: 195 },
-  "Management Interview":      { total: 205, completed:   0, inProgress:  0, pending: 205 },
-};
-
-// ── Per-module division data (All Units) ───────────────────────────────────────
-
-
-// ── Per-module dept data (All Units) ───────────────────────────────────────────
-
-
-// ── Unit scale factors (for module × unit cross-filtering) ────────────────────
-const UNIT_SCALE: Record<string, number> = {
-  "All Units":                    1.000,
-  "PT RSUP (Industry)":           0.288,
-  "PT RSUP (Perkebunan)":         0.180,
-  "PT Pulau Sambu (Jakarta)":     0.125,
-  "PT Pulau Sambu (Guntung)":     0.100,
-  "PT Pulau Sambu (Kuala Enok)":  0.075,
-  "PT RSTM":                      0.100,
-  "PT GHS":                       0.075,
-  "ASD":                       0.055,
 };
 
 // ── All modules in display order ──────────────────────────────────────────────
@@ -140,53 +110,23 @@ const MODULE_SHORT: Record<string, string> = {
   "Management Interview":      "Mgmt. Interview",
 };
 
-// ── Module Completion Overview ─────────────────────────────────────────────────
-// Units with fixed completion patterns (100% done for Setting, 100% in-progress for Tracking, 100% pending for the rest)
-const FIXED_COMPLETION_UNITS = new Set([
-  "PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT RSTM", "PT GHS", "ASD",
-]);
-
-// Headcount per unit (from unitData totals)
-const UNIT_HEADCOUNT: Record<string, number> = {
-  "PT RSUP (Industry)":  115,
-  "PT RSUP (Perkebunan)": 72,
-  "PT RSTM":              40,
-  "PT GHS":               30,
-  "ASD":               22,
-};
-
-function ModuleCompletionOverview({ companyUnit, module }: { companyUnit: string; module: string }) {
-  const scale      = UNIT_SCALE[companyUnit] ?? 0;
+function ModuleCompletionOverview({
+  companyUnit,
+  module,
+  scopedUsers,
+  workflows,
+  year,
+}: {
+  companyUnit: string;
+  module: string;
+  scopedUsers: ManagedUser[];
+  workflows: WorkflowRecord[];
+  year: string;
+}) {
   const isAllUnits = companyUnit === "All Units";
-  const isFixed    = FIXED_COMPLETION_UNITS.has(companyUnit);
 
-  const rows = ALL_MODULES.map(mod => {
-    let total: number, completed: number, inProgress: number, pending: number;
-
-    const ALWAYS_PENDING = new Set(["Appraisal Form", "Managerial Skill", "Project OJS", "Management Interview"]);
-
-    if (!isAllUnits && isFixed) {
-      total = UNIT_HEADCOUNT[companyUnit] ?? 0;
-      if (mod === "KPI (Setting)" || mod === "SMART Goals (Setting)") {
-        completed = total; inProgress = 0; pending = 0;
-      } else if (mod === "KPI (Tracking)" || mod === "SMART Goals (Tracking)") {
-        completed = 0; inProgress = total; pending = 0;
-      } else {
-        completed = 0; inProgress = 0; pending = total;
-      }
-    } else {
-      const base = MODULE_STATS[mod] ?? { total: 205, completed: 0, inProgress: 0, pending: 205 };
-      total      = isAllUnits ? base.total      : Math.round(base.total      * scale);
-      completed  = isAllUnits ? base.completed   : Math.round(base.completed   * scale);
-      inProgress = isAllUnits ? base.inProgress  : Math.round(base.inProgress  * scale);
-      pending    = isAllUnits ? base.pending     : Math.round(base.pending     * scale);
-    }
-
-    // These modules are always 100% pending across every unit
-    if (ALWAYS_PENDING.has(mod)) {
-      completed = 0; inProgress = 0; pending = total;
-    }
-
+  const rows = ALL_MODULES.map((mod) => {
+    const { total, completed, inProgress, pending } = computeModuleStatsForUsers(scopedUsers, workflows, mod, year);
     const rate = total > 0 ? (completed / total) * 100 : 0;
     return { mod, total, completed, inProgress, pending, rate };
   });
@@ -565,81 +505,99 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const [module, setModule] = useState("All Modules");
   const [year, setYear] = useState("2026");
   const [month, setMonth] = useState("All Months");
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const onRefresh = () => setTick((v) => v + 1);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-employees-imported", onRefresh);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("pa-module-activation-updated", onRefresh);
+    window.addEventListener("feedback-activation-changed", onRefresh);
+    return () => {
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-employees-imported", onRefresh);
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("pa-module-activation-updated", onRefresh);
+      window.removeEventListener("feedback-activation-changed", onRefresh);
+    };
+  }, []);
 
   // Calibration targets (same source as /hr/summary)
   const [calibrationTargets, setCalibrationTargets] = useState<CalibrationTarget[]>(
     () => readCalibrationTargets("All Units")
   );
-  useEffect(() => { setCalibrationTargets(readCalibrationTargets(companyUnit)); }, [companyUnit]);
+  useEffect(() => { setCalibrationTargets(readCalibrationTargets(companyUnit)); }, [companyUnit, tick]);
 
   // Employees filtered by company unit (for the grade distribution charts)
+  const liveEmployees = useMemo(() => getLiveTransactionalEmployees(), [tick]);
   const filteredEmployees = useMemo(
     () => {
       const unitEmployees = lockedUnits
-        ? mockEmployees.filter(e => lockedUnits.includes(e.companyUnit))
-        : mockEmployees;
+        ? liveEmployees.filter(e => lockedUnits.includes(e.companyUnit))
+        : liveEmployees;
       return companyUnit === "All Units"
         ? unitEmployees
         : unitEmployees.filter(e => e.companyUnit === companyUnit);
     },
-    [companyUnit, lockedUnits],
+    [companyUnit, lockedUnits, liveEmployees],
   );
 
-  // Derive active timeline info from selected module
-  const activeTimelineInfo = module !== "All Modules" ? MODULE_TIMELINE_MAP[module] ?? null : null;
+  const scopedUsers = useMemo(() => {
+    const all = loadManagedUsers().filter((u) => u.status === "Active");
+    const unitFiltered = lockedUnits ? all.filter((u) => lockedUnits.includes(u.company)) : all;
+    return companyUnit === "All Units" ? unitFiltered : unitFiltered.filter((u) => u.company === companyUnit);
+  }, [companyUnit, lockedUnits, tick]);
 
-  // Stats mirror ModuleCompletionOverview logic exactly so all infographics are consistent
+  const workflows = useMemo(() => loadWorkflowRecords(), [tick]);
+
+  // Live timeline rows built directly from /hr/modules (Module Activation)
+  const { rows: liveTimelineRows, todayMonthSlot, todayLabel } = useMemo(
+    () => buildLiveTimelineRowsFromActivation(year),
+    [year, tick],
+  );
+
+  const activeTimelineInfo = useMemo(() => {
+    if (module === "All Modules") return null;
+    const idx = liveTimelineRows.findIndex((r) => r.filterModuleLabel === module);
+    if (idx < 0) return null;
+    return { rowIndex: idx, phase: liveTimelineRows[idx].status };
+  }, [module, liveTimelineRows]);
+
+  // Stats computed 100% from imported employees and live workflow transactions
   const stats = useMemo(() => {
-    const ALWAYS_PENDING = new Set(["Appraisal Form", "Managerial Skill", "Project OJS", "Management Interview"]);
-    const isAllUnits = companyUnit === "All Units";
-    const isFixed    = FIXED_COMPLETION_UNITS.has(companyUnit);
-    const scale      = UNIT_SCALE[companyUnit] ?? 0;
-
-    let total: number, completed: number, inProgress: number, pending: number;
-
     if (module !== "All Modules") {
-      // Specific module — identical branching to ModuleCompletionOverview
-      if (!isAllUnits && isFixed) {
-        total = UNIT_HEADCOUNT[companyUnit] ?? 0;
-        if (module === "KPI (Setting)" || module === "SMART Goals (Setting)") {
-          completed = total; inProgress = 0; pending = 0;
-        } else if (module === "KPI (Tracking)" || module === "SMART Goals (Tracking)") {
-          completed = 0; inProgress = total; pending = 0;
-        } else {
-          completed = 0; inProgress = 0; pending = total;
-        }
+      const { total, completed, inProgress, pending } = computeModuleStatsForUsers(scopedUsers, workflows, module, year);
+      return { total, completed, inProgress, pending, rate: total > 0 ? ((completed / total) * 100).toFixed(1) : "0.0" };
+    }
+
+    const total = scopedUsers.length;
+    let completed = 0;
+    let inProgress = 0;
+    let pending = 0;
+
+    for (const u of scopedUsers) {
+      const normId = normalizeEmployeeId(u.employeeId);
+      const userRecs = workflows.filter(
+        (w) => w.year === year && (w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
+      );
+      if (userRecs.length === 0) {
+        pending++;
       } else {
-        const base = MODULE_STATS[module] ?? { total: 205, completed: 0, inProgress: 0, pending: 205 };
-        total      = isAllUnits ? base.total      : Math.round(base.total      * scale);
-        completed  = isAllUnits ? base.completed   : Math.round(base.completed   * scale);
-        inProgress = isAllUnits ? base.inProgress  : Math.round(base.inProgress  * scale);
-        pending    = isAllUnits ? base.pending     : Math.round(base.pending     * scale);
-        // Force 100% not-started for modules not yet active (same as ModuleCompletionOverview)
-        if (ALWAYS_PENDING.has(module)) { completed = 0; inProgress = 0; pending = total; }
-      }
-    } else {
-      // All Modules — derive from unitData (single source of truth for per-unit headcounts)
-      if (isAllUnits) {
-        if (lockedUnits) {
-          const subset = unitData.filter(u => lockedUnits.includes(u.name));
-          total      = subset.reduce((s, u) => s + u.total, 0);
-          completed  = subset.reduce((s, u) => s + u.Completed, 0);
-          inProgress = subset.reduce((s, u) => s + u["In Progress"], 0);
-          pending    = subset.reduce((s, u) => s + u.Pending, 0);
-        } else {
-          total = 205; completed = 143; inProgress = 30; pending = 32;
-        }
-      } else {
-        const ud = unitData.find(u => u.name === companyUnit);
-        total      = ud?.total            ?? Math.round(205 * scale);
-        completed  = ud?.Completed        ?? Math.round(143 * scale);
-        inProgress = ud?.["In Progress"]  ?? Math.round(30  * scale);
-        pending    = ud?.Pending          ?? Math.round(32  * scale);
+        const allDone = userRecs.every((r) => {
+          const a2 = r.decisions.approver2?.status ?? "";
+          const a1 = r.decisions.approver1?.status ?? "";
+          return a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed") || (!u.regNoAp2 && (a1 === "Approved" || a1.startsWith("Assessed")));
+        });
+        if (allDone) completed++;
+        else inProgress++;
       }
     }
 
     return { total, completed, inProgress, pending, rate: total > 0 ? ((completed / total) * 100).toFixed(1) : "0.0" };
-  }, [companyUnit, module, lockedUnits]);
+  }, [module, scopedUsers, workflows, year]);
 
   const hasActiveFilters = companyUnit !== "All Units" || module !== "All Modules" || year !== "2026" || month !== "All Months";
 
@@ -706,7 +664,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
           subtitle={
             module !== "All Modules" && activeTimelineInfo
               ? `Showing: ${module} — ${PHASE_META[activeTimelineInfo.phase].label} (highlighted row)`
-              : "Module activation schedule — vertical line marks current period (September)"
+              : `Jadwal otomatis mengikuti setup tanggal di Module Activation (/hr/modules) — posisi saat ini: ${todayLabel}`
           }
         />
         <div className="overflow-x-auto">
@@ -715,10 +673,10 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             {/* Year band */}
             <div className="flex ml-44 mb-0">
               <div className="text-center text-[10px] font-semibold text-gray-400 pb-1 border-b border-gray-200" style={{ flex: 12 }}>
-                2026
+                {year}
               </div>
               <div className="text-center text-[10px] font-semibold pb-1 border-b border-[#1A284F]/30" style={{ flex: 2, color: "#1A284F99" }}>
-                2027
+                {Number(year) + 1}
               </div>
             </div>
 
@@ -728,11 +686,11 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                 <div
                   key={i}
                   className={`flex-1 text-center text-[10px] font-semibold pb-2 ${
-                    i === TODAY_MONTH ? "text-[#1A284F] font-black" : i >= 12 ? "text-[#1A284F]/50" : "text-gray-400"
+                    i === todayMonthSlot ? "text-[#1A284F] font-black" : i >= 12 ? "text-[#1A284F]/50" : "text-gray-400"
                   }`}
                 >
                   {m}
-                  {i === TODAY_MONTH && <div className="w-0.5 h-2 bg-[#1A284F]/40 mx-auto mt-0.5 rounded-full" />}
+                  {i === todayMonthSlot && <div className="w-0.5 h-2 bg-[#1A284F]/40 mx-auto mt-0.5 rounded-full" />}
                 </div>
               ))}
             </div>
@@ -741,32 +699,33 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
               {/* Column shading */}
               <div className="absolute inset-0 ml-44 flex pointer-events-none">
                 {MONTHS.map((_, i) => (
-                  <div key={i} className={`flex-1 ${i % 2 === 0 ? "bg-gray-50/50" : ""} ${i === TODAY_MONTH ? "bg-blue-50/50" : ""} ${i >= 12 ? "bg-indigo-50/20" : ""}`} />
+                  <div key={i} className={`flex-1 ${i % 2 === 0 ? "bg-gray-50/50" : ""} ${i === todayMonthSlot ? "bg-blue-50/50" : ""} ${i >= 12 ? "bg-indigo-50/20" : ""}`} />
                 ))}
               </div>
 
               {/* Today marker */}
               <div
                 className="absolute top-0 bottom-0 pointer-events-none z-10"
-                style={{ left: `calc(11rem + (100% - 11rem) * ${((TODAY_MONTH + 0.5) / TOTAL_MONTHS).toFixed(4)})` }}
+                style={{ left: `calc(11rem + (100% - 11rem) * ${((todayMonthSlot + 0.5) / TOTAL_MONTHS).toFixed(4)})` }}
               >
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 flex flex-col items-center">
                   <div className="bg-[#1A284F] text-white text-[9px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap shadow-md flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
-                    Sep 2026
+                    {todayLabel}
                   </div>
                 </div>
                 <div className="absolute top-5 bottom-0 left-1/2 -translate-x-1/2 w-px bg-[#1A284F]/50" />
               </div>
 
               {/* Timeline rows */}
-              {TIMELINE_ROWS.map((row, ri) => {
+              {liveTimelineRows.map((row, ri) => {
                 const isActiveRow    = activeTimelineInfo?.rowIndex === ri;
                 const isInactiveRow  = activeTimelineInfo !== null && !isActiveRow;
+                const dotColor = PHASE_META[row.status].dot;
 
                 return (
                   <div
-                    key={ri}
+                    key={row.id}
                     className={`flex items-center mb-2 rounded-xl transition-all duration-300 ${
                       isInactiveRow ? "opacity-25" : ""
                     } ${isActiveRow ? "-mx-2 px-2 py-1 border" : ""}`}
@@ -776,7 +735,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                     } : undefined}
                   >
                     <div className="w-44 shrink-0 pr-3 flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: row.segments[0].color }} />
+                      <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: dotColor }} />
                       <span className="text-xs font-medium text-gray-700 leading-tight">{row.label}</span>
                       {isActiveRow && activeTimelineInfo && (
                         <span
@@ -794,20 +753,15 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                         const activeSeg = segIdx >= 0 ? row.segments[segIdx] : undefined;
                         const isFirst  = activeSeg ? mi === activeSeg.start : false;
                         const isLast   = activeSeg ? mi === activeSeg.end   : false;
-                        // For rows with multiple segments (row 0), dim non-active segment when module is selected
-                        const segDimmed = isActiveRow
-                          && activeTimelineInfo?.segmentIndex !== undefined
-                          && segIdx >= 0
-                          && segIdx !== activeTimelineInfo.segmentIndex;
 
                         return (
                           <div key={mi} className="flex-1 h-8 relative">
                             {activeSeg && (
                               <div
                                 className={`absolute inset-y-1.5 inset-x-0 transition-opacity duration-300 ${isFirst ? "rounded-l-md" : ""} ${isLast ? "rounded-r-md" : ""}`}
-                                style={{ background: activeSeg.color, opacity: segDimmed ? 0.18 : 0.85 }}
+                                style={{ background: activeSeg.color, opacity: 0.85 }}
                               >
-                                {isFirst && !segDimmed && (
+                                {isFirst && (
                                   <span className="absolute inset-0 flex items-center px-2 text-[10px] font-bold text-white whitespace-nowrap overflow-hidden">
                                     {activeSeg.phase}
                                   </span>
@@ -819,17 +773,16 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                       })}
                     </div>
 
-                    <div className="w-28 shrink-0 pl-3 text-[10px] text-gray-400 leading-relaxed">
-                      {row.segments.map((s, si) => {
-                        const startStr = `${MONTHS[s.start]}${MONTH_YEARS[s.start] === 2027 ? " '27" : ""}`;
-                        const endStr   = s.start !== s.end ? `–${MONTHS[s.end]}${MONTH_YEARS[s.end] === 2027 ? " '27" : ""}` : "";
-                        const isActiveSeg = isActiveRow && (activeTimelineInfo?.segmentIndex === undefined || activeTimelineInfo.segmentIndex === si);
-                        return (
-                          <div key={si} className={isActiveSeg ? "font-semibold" : ""} style={isActiveSeg ? { color: PHASE_META[activeTimelineInfo!.phase].color } : undefined}>
-                            {startStr}{endStr}
+                    <div className="w-40 shrink-0 pl-3 text-[10px] text-gray-500 leading-relaxed">
+                      {row.segments.length === 0 ? (
+                        <span className="text-gray-300 italic">Belum diatur</span>
+                      ) : (
+                        row.segments.map((s, si) => (
+                          <div key={si} className={isActiveRow ? "font-semibold" : ""} style={isActiveRow ? { color: PHASE_META[activeTimelineInfo!.phase].color } : undefined}>
+                            {s.phase}
                           </div>
-                        );
-                      })}
+                        ))
+                      )}
                     </div>
                   </div>
                 );
@@ -851,7 +804,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
               <span className="flex items-center gap-1.5 ml-auto">
                 <span className="w-px h-4 bg-[#1A284F]/50 inline-block" />
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
-                Today (Sep 2026)
+                Today ({todayLabel})
               </span>
             </div>
           </div>
@@ -866,7 +819,13 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       />
 
       {/* ── Module Completion Overview ─────────────────────────────────────── */}
-      <ModuleCompletionOverview companyUnit={companyUnit} module={module} />
+      <ModuleCompletionOverview
+        companyUnit={companyUnit}
+        module={module}
+        scopedUsers={scopedUsers}
+        workflows={workflows}
+        year={year}
+      />
 
 
     </div>

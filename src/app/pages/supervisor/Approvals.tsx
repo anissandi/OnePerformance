@@ -17,36 +17,8 @@ import { canUserAccessEmployeeData, shouldBypassCheckerForSubmission, useAuthSto
 const TEAM_UNIT = "PT RSUP (Industry)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
 
-const BASE_CHECKIN: ApprovalRow[] = [
-  { no: "CI-01", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",          submittedDate: "15/05/2026", approvalDate: "17/05/2026", status: "Assessed-Approver 1" },
-  { no: "CI-02", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals",  submittedDate: "16/05/2026", approvalDate: "-", status: "Pending", period: "Mid-Year Checkin 2026", goalsCount: 3, achievement: "82%", actionPlansSummary: "5/8 Selesai · 2 Sedang Berjalan · 1 Batal" },
-  { no: "CI-03", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "Appraisal Form", submittedDate: "20/05/2026", approvalDate: "-",        status: "Pending" },
-  { no: "CI-04", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",          submittedDate: "17/05/2026", approvalDate: "19/05/2026", status: "Edit Request", editRequestReason: "Data realisasi bulan April perlu dikoreksi karena ada kesalahan input dari sistem absensi.", editRequestDate: "05/06/2026" },
-  { no: "CI-05", employeeId: "EMP011", name: "Kartini Dewi",  position: "Staff Rekrutmen",        department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",          submittedDate: "15/05/2026", approvalDate: "17/05/2026", status: "Assessed-Approver 1" },
-  { no: "CI-06", employeeId: "EMP011", name: "Kartini Dewi",  position: "Staff Rekrutmen",        department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals",  submittedDate: "17/05/2026", approvalDate: "-", status: "Revision", period: "Mid-Year Checkin 2026", goalsCount: 3, achievement: "61%", actionPlansSummary: "3/7 Selesai · 3 Sedang Berjalan · 1 Batal", editRequestReason: "Achievement Goals 2 (rekrutmen berbasis kompetensi) perlu diklarifikasi — metode pengukuran belum sesuai standar yang ditetapkan. Mohon revisi data aktual dan lampirkan bukti pendukung." },
-  { no: "CI-07", employeeId: "EMP011", name: "Kartini Dewi",  position: "Staff Rekrutmen",        department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "Appraisal Form", submittedDate: "21/05/2026", approvalDate: "-",        status: "Pending" },
-  { no: "CI-09", employeeId: "EMP012", name: "Rizal Pratama", position: "Staff Pelatihan & Dev",  department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",          submittedDate: "16/05/2026", approvalDate: "-",          status: "Pending" },
-  { no: "CI-10", employeeId: "EMP012", name: "Rizal Pratama", position: "Staff Pelatihan & Dev",  department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals",  submittedDate: "18/05/2026", approvalDate: "20/05/2026", status: "Assessed-Approver 1", period: "Mid-Year Checkin 2026", goalsCount: 3, achievement: "74%", actionPlansSummary: "6/9 Selesai · 2 Sedang Berjalan · 1 Batal" },
-  { no: "CI-11", employeeId: "EMP012", name: "Rizal Pratama", position: "Staff Pelatihan & Dev",  department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "Appraisal Form", submittedDate: "22/05/2026", approvalDate: "-",          status: "Pending" },
-  { no: "CI-12", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "RCA",           submittedDate: "25/05/2026", approvalDate: "-",          status: "Pending" },
-  { no: "CI-13", employeeId: "EMP012", name: "Rizal Pratama", position: "Staff Pelatihan & Dev",  department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "RCA",           submittedDate: "26/05/2026", approvalDate: "-",          status: "Pending" },
-  { no: "CI-14", employeeId: "EMP009", name: "Ahmad Fauzan",  position: "Analis SDM",             department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals",  submittedDate: "19/05/2026", approvalDate: "-",          status: "Pending", period: "Mid-Year Checkin 2026", goalsCount: 3, achievement: "68%", actionPlansSummary: "4/9 Selesai · 3 Sedang Berjalan · 2 Batal" },
-  { no: "CI-15", employeeId: "EMP013", name: "Diana Kurniawati", position: "Staff Kompensasi & Benefit", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals", submittedDate: "20/05/2026", approvalDate: "-", status: "Pending", period: "Mid-Year Checkin 2026", goalsCount: 2, achievement: "91%", actionPlansSummary: "5/6 Selesai · 1 Sedang Berjalan" },
-];
-
-const BASE_SETTING: ApprovalRow[] = [
-  { no: "ST-01", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",         submittedDate: "08/04/2026", approvalDate: "10/04/2026", status: "Assessed-Approver 1" },
-  { no: "ST-02", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals", submittedDate: "-", approvalDate: "-", status: "Pending", period: "Setting 2026", goalsCount: 3, actionPlansSummary: "3 Goals · 8 Action Plans · Approver: Supervisor & Admin HR" },
-  { no: "ST-03", employeeId: "EMP002", name: "Siti Rahayu",   position: "Staff Pengembangan SDM", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",         submittedDate: "09/04/2026", approvalDate: "11/04/2026", status: "Edit Request", editRequestReason: "Bobot KPI perlu disesuaikan karena terjadi perubahan prioritas program SDM pada kuartal pertama.", editRequestDate: "02/06/2026" },
-  { no: "ST-05", employeeId: "EMP011", name: "Kartini Dewi",  position: "Staff Rekrutmen",        department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",         submittedDate: "08/04/2026", approvalDate: "-",          status: "Pending" },
-  { no: "ST-06", employeeId: "EMP011", name: "Kartini Dewi",  position: "Staff Rekrutmen",        department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals", submittedDate: "-", approvalDate: "-", status: "Pending", period: "Setting 2026", goalsCount: 3, actionPlansSummary: "3 Goals · 7 Action Plans · Approver: Supervisor & Admin HR" },
-  { no: "ST-09", employeeId: "EMP012", name: "Rizal Pratama", position: "Staff Pelatihan & Dev",  department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",         submittedDate: "09/04/2026", approvalDate: "11/04/2026", status: "Assessed-Approver 1" },
-  { no: "ST-10", employeeId: "EMP012", name: "Rizal Pratama", position: "Staff Pelatihan & Dev",  department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals", submittedDate: "10/04/2026", approvalDate: "12/04/2026", status: "Assessed-Approver 1", period: "Setting 2026", goalsCount: 3, actionPlansSummary: "3 Goals · 9 Action Plans · Approver: Supervisor & Admin HR" },
-  { no: "ST-11", employeeId: "EMP011", name: "Kartini Dewi",  position: "Staff Rekrutmen",        department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",         submittedDate: "08/04/2026", approvalDate: "10/04/2026", status: "EditRequest-PendingA2", editRequestReason: "Target rekrutmen perlu direvisi sesuai perubahan kebutuhan organisasi Q1.", editRequestDate: "03/06/2026" },
-  { no: "ST-12", employeeId: "EMP012", name: "Rizal Pratama", position: "Staff Pelatihan & Dev",  department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "KPI",         submittedDate: "09/04/2026", approvalDate: "11/04/2026", status: "EditRequest-AcceptedA2", editRequestReason: "Bobot indikator pelatihan perlu dikoreksi sesuai standar kompetensi terbaru.", editRequestDate: "04/06/2026" },
-  { no: "ST-13", employeeId: "EMP009", name: "Ahmad Fauzan",  position: "Analis SDM",             department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals", submittedDate: "11/04/2026", approvalDate: "-",          status: "Pending", period: "Setting 2026", goalsCount: 3, actionPlansSummary: "3 Goals · 9 Action Plans · Approver: Supervisor & Admin HR" },
-  { no: "ST-14", employeeId: "EMP013", name: "Diana Kurniawati", position: "Staff Kompensasi & Benefit", department: "SDM", division: TEAM_DIV, companyUnit: TEAM_UNIT, type: "SMART Goals", submittedDate: "12/04/2026", approvalDate: "-", status: "Pending", period: "Setting 2026", goalsCount: 2, actionPlansSummary: "2 Goals · 6 Action Plans · Approver: Supervisor & Admin HR" },
-];
+const BASE_CHECKIN: ApprovalRow[] = [];
+const BASE_SETTING: ApprovalRow[] = [];
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const MONTH_NUM: Record<string,string> = Object.fromEntries(MONTHS.map((m, i) => [m, String(i + 1).padStart(2, "0")]));
@@ -95,11 +67,11 @@ export function SupervisorApprovals() {
     });
   };
 
-  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => [...applyOverrides(BASE_CHECKIN), ...projectApprovalRows("approver1"), ...feedbackApprovalRows("approver1").filter((row) => row.companyUnit === TEAM_UNIT && row.division === TEAM_DIV)]);
+  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => [...applyOverrides(BASE_CHECKIN, "approver1", "measurement"), ...projectApprovalRows("approver1"), ...feedbackApprovalRows("approver1")]);
   useEffect(() => {
     const refresh = () => {
-      setCheckinData([...applyOverrides(BASE_CHECKIN, "approver1"), ...projectApprovalRows("approver1"), ...feedbackApprovalRows("approver1").filter((row) => row.companyUnit === TEAM_UNIT && row.division === TEAM_DIV)]);
-      setSettingData(applyOverrides(BASE_SETTING, "approver1"));
+      setCheckinData([...applyOverrides(BASE_CHECKIN, "approver1", "measurement"), ...projectApprovalRows("approver1"), ...feedbackApprovalRows("approver1")]);
+      setSettingData(applyOverrides(BASE_SETTING, "approver1", "setting"));
     };
     refresh();
     window.addEventListener("feedback-updated", refresh);
@@ -108,10 +80,10 @@ export function SupervisorApprovals() {
     return () => { window.removeEventListener("feedback-updated", refresh); window.removeEventListener("appraisal-updated", refresh); window.removeEventListener("storage", refresh); };
   }, [location.pathname]);
   const [settingData, setSettingData] = useState<ApprovalRow[]>(() => {
-    const base = applyOverrides(BASE_SETTING);
+    const base = applyOverrides(BASE_SETTING, "approver1", "setting");
     const live = loadSubmittedGoals();
     if (live && live.length > 0) {
-      return base.map((r) => r.no === "ST-02" ? { ...r, submittedDate: "29/05/2026", status: (applyOverrides(BASE_SETTING).find((x) => x.no === "ST-02")?.status ?? "Pending") } : r);
+      return base.map((r) => r.no === "ST-02" ? { ...r, submittedDate: "29/05/2026", status: (applyOverrides(BASE_SETTING, "approver1", "setting").find((x) => x.no === "ST-02")?.status ?? "Pending") } : r);
     }
     return base;
   });
@@ -129,7 +101,7 @@ export function SupervisorApprovals() {
         <h1 className="text-3xl font-bold text-[#1A284F]">
           {mainTab === "checkin" ? "Performance Appraisal Measurement" : "Performance Appraisal Setting"}
         </h1>
-        <p className="text-gray-500 mt-1 text-sm">{TEAM_UNIT} · {TEAM_DIV}</p>
+        <p className="text-gray-500 mt-1 text-sm">{activeUser.company} · {activeUser.division}</p>
       </div>
       <ModuleRouteNav base={moduleBase} modules={moduleTypes} label="Modul approval" />
       {mainTab === "checkin" ? (

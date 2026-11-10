@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking } from "../employee/KPIPage";
 import { ArrowRight, TrendingUp, Lightbulb, ClipboardList, FolderKanban, Target, Clock, CheckCircle2, Search, AlertTriangle, LayoutDashboard, ClipboardCheck, Star, X } from "lucide-react";
@@ -6,6 +6,10 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { useNavigate } from "react-router";
+import { getAuthorizedSubordinates, useAuthStore } from "../../store/authStore";
+import { getLiveUserModuleApprovals, loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,26 +33,6 @@ interface PendingItem {
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
-const PENDING_ITEMS: PendingItem[] = [
-  { id: "pr-01", employeeId: "E002", employeeName: "Siti Rahayu",   position: "Staff Pengembangan SDM",   unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "KPI",            submissionType: "KPI Setting — Submission",                   actionNeeded: "Approve",             submittedDate: "2026-01-28", notes: "8 KPI indicators submitted. Total bobot: 100%.",                                              urgent: false },
-  { id: "pr-02", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "KPI",            submissionType: "KPI Measurement — Mid-Year",                    actionNeeded: "Review & Validate",   submittedDate: "2026-05-20", notes: "Avg. achievement 65%. 3 KPI below 80% — RCA incomplete.",                                     urgent: true  },
-  { id: "pr-03", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "KPI",            submissionType: "KPI Measurement — Mid-Year",                    actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "Avg. achievement 73%. 2 RCA items not yet completed.",                                         urgent: true  },
-  { id: "pr-04", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "KPI",            submissionType: "KPI Measurement — Mid-Year",                    actionNeeded: "Review & Validate",   submittedDate: "2026-05-15", notes: "Avg. achievement 55%. 3 RCA items incomplete. Requires immediate attention.",                  urgent: true  },
-  { id: "pr-05", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "SMART Goals",    submissionType: "SMART Goals — Draft Review",                 actionNeeded: "Review & Validate",   submittedDate: "2026-05-20", notes: "1 of 3 goals with evidence. Completion 33%. Needs guidance.",                                  urgent: false },
-  { id: "pr-06", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "SMART Goals",    submissionType: "SMART Goals — Draft Review",                 actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "2 of 3 goals with evidence. Completion 67%.",                                                  urgent: false },
-  { id: "pr-07", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "SMART Goals",    submissionType: "SMART Goals — Draft Review",                 actionNeeded: "Review & Validate",   submittedDate: "2026-05-15", notes: "0 of 2 goals with evidence. Completion 0%. Action required.",                                  urgent: true  },
-  { id: "pr-08", employeeId: "E002", employeeName: "Siti Rahayu",   position: "Staff Pengembangan SDM",   unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-28", notes: "Employee self-assessment done (avg. 3.8). Awaiting your supervisor assessment.",               urgent: false },
-  { id: "pr-09", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-20", notes: "Employee self-assessment in progress. Supervisor assessment not yet started.",                  urgent: false },
-  { id: "pr-10", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-25", notes: "Employee self-assessment done (avg. 3.5). Awaiting your supervisor assessment.",               urgent: false },
-  { id: "pr-11", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "Appraisal Form", submissionType: "Appraisal Form — Supervisor Assessment",      actionNeeded: "Complete Assessment", submittedDate: "2026-05-15", notes: "Self-assessment in progress. Supervisor assessment not yet started.",                         urgent: false },
-  { id: "pr-12", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "Project",        submissionType: "Project Registration — Draft Approval",      actionNeeded: "Approve",             submittedDate: "2026-05-20", notes: "1 project: Campaign Media Sosial Q2 2026 (SS). Status: At Risk — progress 30%.",               urgent: true  },
-  { id: "pr-13", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "Project",        submissionType: "Project Measurement — Review",                  actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "1 project: Peningkatan Kualitas Pupuk Organik. Status: At Risk — progress 25%.",               urgent: true  },
-  { id: "pr-14", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "Project",        submissionType: "Project Registration — Draft Approval",      actionNeeded: "Approve",             submittedDate: "2026-05-15", notes: "1 project: Digitalisasi Arsip Kepegawaian (SS). Status: Not Started.",                        urgent: false },
-  { id: "pr-15", employeeId: "E004", employeeName: "Diana Kusuma",  position: "Staff Pemasaran",           unit: "PT GHS",                      division: "Divisi Pemasaran & Penjualan",  module: "RCA",            submissionType: "Root Cause Analysis — Validation",           actionNeeded: "Review & Validate",   submittedDate: "2026-05-20", notes: "3 RCA items required. Only 1 completed. 2 action plans pending.",                              urgent: true  },
-  { id: "pr-16", employeeId: "E009", employeeName: "Indah Lestari", position: "Staff Agronomi",            unit: "PT RSUP (Perkebunan)",         division: "Divisi Perkebunan",             module: "RCA",            submissionType: "Root Cause Analysis — Validation",           actionNeeded: "Review & Validate",   submittedDate: "2026-05-25", notes: "2 RCA items required. None completed. Requires immediate follow-up.",                          urgent: true  },
-  { id: "pr-17", employeeId: "E011", employeeName: "Kartini Dewi",  position: "Staff Rekrutmen",           unit: "PT RSUP (Industry)",          division: "Divisi Sumber Daya Manusia",    module: "RCA",            submissionType: "Root Cause Analysis — Validation",           actionNeeded: "Review & Validate",   submittedDate: "2026-05-15", notes: "3 RCA items required. None completed. Critical — avg. achievement 55%.",                      urgent: true  },
-];
-
 const MODULE_META: Record<Module, { icon: React.ElementType; color: string; bg: string; border: string }> = {
   "KPI":            { icon: TrendingUp,    color: "text-blue-700",  bg: "bg-blue-50",  border: "border-blue-200"  },
   "SMART Goals":    { icon: Lightbulb,     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200" },
@@ -65,17 +49,7 @@ const ACTION_STYLE: Record<ActionType, string> = {
 
 type TabFilter = "All" | Module;
 
-const TEAM_MEMBERS = [...new Set(PENDING_ITEMS.map((p) => p.employeeId))].length;
-
 // ─── Approval Dashboard ───────────────────────────────────────────────────────
-
-// Top-5 oldest IDs — used to mark urgent regardless of data flag
-const TOP5_OLDEST_IDS = new Set(
-  [...PENDING_ITEMS]
-    .sort((a, b) => a.submittedDate.localeCompare(b.submittedDate))
-    .slice(0, 5)
-    .map(i => i.id)
-);
 
 function formatDate(iso: string) {
   const [y, m, d] = iso.split("-");
@@ -93,19 +67,78 @@ const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
 
 function ApprovalDashboard() {
   const navigate = useNavigate();
+  const { activeUser, allUsers } = useAuthStore();
   const [activeTab, setActiveTab] = useState<TabFilter>("All");
   const [search, setSearch]       = useState("");
   const [urgentOnly, setUrgentOnly] = useState(false);
+  const [tick, setTick] = useState(0);
 
-  const filtered = PENDING_ITEMS.filter((item) => {
+  useEffect(() => {
+    const onRefresh = () => setTick((v) => v + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+    };
+  }, []);
+
+  const subordinates = useMemo(
+    () => getAuthorizedSubordinates(activeUser, allUsers).filter((u) => u.employeeId !== activeUser.employeeId),
+    [activeUser, allUsers, tick],
+  );
+
+  const pendingItems = useMemo<PendingItem[]>(() => {
+    const workflows = loadWorkflowRecords();
+    const list: PendingItem[] = [];
+    for (const rec of workflows) {
+      const sub = subordinates.find(
+        (u) => normalizeEmployeeId(u.employeeId) === rec.employeeId || u.employeeId.toLowerCase() === rec.employeeId.toLowerCase(),
+      );
+      if (!sub) continue;
+      const a1 = rec.decisions.approver1?.status ?? "";
+      if (a1 === "Approved" || a1.startsWith("Assessed")) continue;
+      const mod = (["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"].includes(rec.module) ? rec.module : "KPI") as Module;
+      list.push({
+        id: rec.key,
+        employeeId: sub.employeeId,
+        employeeName: sub.name,
+        position: sub.position,
+        unit: sub.company,
+        division: sub.division,
+        module: mod,
+        submissionType: `${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"})`,
+        actionNeeded: mod === "Appraisal Form" ? "Complete Assessment" : "Approve",
+        submittedDate: rec.submittedDate || "2026-06-10",
+        notes: `Pengajuan ${rec.module} (${rec.phase}) dari ${sub.name} menunggu persetujuan Anda.`,
+        urgent: false,
+      });
+    }
+    return list;
+  }, [subordinates, tick]);
+
+  const top5OldestIds = useMemo(
+    () =>
+      new Set(
+        [...pendingItems]
+          .sort((a, b) => a.submittedDate.localeCompare(b.submittedDate))
+          .slice(0, 5)
+          .map((i) => i.id),
+      ),
+    [pendingItems],
+  );
+
+  const filtered = pendingItems.filter((item) => {
     if (activeTab !== "All" && item.module !== activeTab) return false;
     if (search && !item.employeeName.toLowerCase().includes(search.toLowerCase()) && !item.submissionType.toLowerCase().includes(search.toLowerCase())) return false;
-    if (urgentOnly && !TOP5_OLDEST_IDS.has(item.id)) return false;
+    if (urgentOnly && !top5OldestIds.has(item.id)) return false;
     return true;
   }).sort((a, b) => a.submittedDate.localeCompare(b.submittedDate));
 
-  const urgentCount = TOP5_OLDEST_IDS.size;
-  const byModule = (m: Module) => PENDING_ITEMS.filter((p) => p.module === m).length;
+  const urgentCount = top5OldestIds.size;
+  const byModule = (m: Module) => pendingItems.filter((p) => p.module === m).length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -113,8 +146,8 @@ function ApprovalDashboard() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="rounded-2xl border border-gray-100 px-5 py-4 bg-[#1A284F]/5">
           <p className="text-xs text-gray-500 mb-1">Total Pending</p>
-          <p className="text-2xl font-bold text-[#1A284F]">{PENDING_ITEMS.length}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">{TEAM_MEMBERS} team members</p>
+          <p className="text-2xl font-bold text-[#1A284F]">{pendingItems.length}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">{subordinates.length} team members</p>
         </div>
         <div className="rounded-2xl border border-gray-100 px-5 py-4 bg-rose-50">
           <p className="text-xs text-gray-500 mb-1">Urgent</p>
@@ -128,7 +161,7 @@ function ApprovalDashboard() {
         </div>
         <div className="rounded-2xl border border-gray-100 px-5 py-4 bg-green-50">
           <p className="text-xs text-gray-500 mb-1">Approvals Needed</p>
-          <p className="text-2xl font-bold text-green-700">{PENDING_ITEMS.filter((p) => p.actionNeeded === "Approve").length}</p>
+          <p className="text-2xl font-bold text-green-700">{pendingItems.filter((p) => p.actionNeeded === "Approve").length}</p>
           <p className="text-[11px] text-gray-400 mt-0.5">KPI & project submissions</p>
         </div>
       </div>
@@ -159,7 +192,7 @@ function ApprovalDashboard() {
             <div className="flex flex-col justify-center gap-1.5 flex-1 min-w-0">
               {(["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"] as Module[]).map((m, i) => {
                 const colors = ["#1A284F","#d97706","#15803d","#0f766e","#be123c"];
-                const pct = Math.round((byModule(m) / PENDING_ITEMS.length) * 100);
+                const pct = pendingItems.length > 0 ? Math.round((byModule(m) / pendingItems.length) * 100) : 0;
                 return (
                   <div key={m} className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ background: colors[i] }} />
@@ -177,8 +210,8 @@ function ApprovalDashboard() {
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Action Required Breakdown</p>
           <div className="flex flex-col justify-center gap-3 flex-1">
             {(["Approve", "Complete Assessment", "Review & Validate"] as ActionType[]).map((a) => {
-              const count = PENDING_ITEMS.filter((p) => p.actionNeeded === a).length;
-              const pct = Math.round((count / PENDING_ITEMS.length) * 100);
+              const count = pendingItems.filter((p) => p.actionNeeded === a).length;
+              const pct = pendingItems.length > 0 ? Math.round((count / pendingItems.length) * 100) : 0;
               const barColor   = a === "Approve" ? "bg-[#1A284F]" : a === "Complete Assessment" ? "bg-green-600" : "bg-amber-500";
               const labelColor = a === "Approve" ? "text-[#1A284F]" : a === "Complete Assessment" ? "text-green-700" : "text-amber-700";
               return (
@@ -247,7 +280,7 @@ function ApprovalDashboard() {
           const meta    = MODULE_META[item.module];
           const Icon    = meta.icon;
           const btnCls  = ACTION_STYLE[item.actionNeeded];
-          const isUrgent = TOP5_OLDEST_IDS.has(item.id);
+          const isUrgent = top5OldestIds.has(item.id);
           return (
             <div key={item.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden hover:shadow-md transition-all ${isUrgent ? "border-rose-200" : "border-gray-200"}`}>
               {isUrgent && (
@@ -466,13 +499,6 @@ function MilestoneProgress() {
   );
 }
 
-const CYCLE_STEPS = [
-  { label: "Setting",                          date: "Quarter 1",                         dateRange: "01 Feb - 31 Mar",    status: "Completed"   as const },
-  { label: "Measurement",                      date: "Quarter 2 - Quarter 4",             dateRange: "10 Apr - 16 Nov",    status: "On Progress" as const },
-  { label: "Performance Evaluation & Analysis",date: "Quarter 4",                         dateRange: "17 Nov - 16 Jan",    status: "Not Started" as const },
-  { label: "Year end Performance Dialogue",    date: "Quarter 4 - Quarter 1 (next year)", dateRange: "17 Jan - 16 Feb",    status: "Not Started" as const },
-];
-
 const CYCLE_STEP_STYLE: Record<string, string> = {
   "Completed":   "bg-green-500 text-white",
   "On Progress": "bg-[#EEDDBB] text-[#1A284F]",
@@ -486,8 +512,20 @@ const CYCLE_LABEL_STYLE: Record<string, string> = {
 };
 
 function CurrentCycleBanner() {
-  const activeStep = CYCLE_STEPS.find((s) => s.status === "On Progress");
-  const phaseLabel = activeStep ? `${activeStep.label} Phase` : "On Progress";
+  const [cycleSteps, setCycleSteps] = useState(() => buildLiveCycleStepsFromActivation("2026"));
+  useEffect(() => {
+    const refresh = () => setCycleSteps(buildLiveCycleStepsFromActivation("2026"));
+    window.addEventListener("pa-module-activation-updated", refresh);
+    window.addEventListener("feedback-activation-changed", refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
+    return () => {
+      window.removeEventListener("pa-module-activation-updated", refresh);
+      window.removeEventListener("feedback-activation-changed", refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
+    };
+  }, []);
+  const activeStep = cycleSteps.find((s) => s.status === "On Progress") ?? cycleSteps[0];
+  const phaseLabel = activeStep ? `${activeStep.label}` : "On Progress";
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-8 py-6 flex flex-col gap-5">
@@ -505,8 +543,8 @@ function CurrentCycleBanner() {
       </div>
 
       {/* Row 2 — steps in a single line */}
-      <div className="flex items-center gap-3">
-        {CYCLE_STEPS.map((step, i) => (
+      <div className="flex items-center gap-3 overflow-x-auto pb-1">
+        {cycleSteps.map((step, i) => (
           <React.Fragment key={step.label}>
             {i > 0 && (
               <div className={`h-0.5 flex-1 min-w-[24px] rounded-full ${step.status === "Not Started" ? "bg-gray-200" : "bg-green-400"}`} />
@@ -530,16 +568,6 @@ function CurrentCycleBanner() {
 
 // ─── Appraisal Summary Cards ──────────────────────────────────────────────────
 
-const MY_APPRAISAL_SUMMARY = {
-  currentScore: 80.9,
-  currentGrade: "A",
-  modulesApproved: 2,
-  modulesTotal: 7,
-  lastUpdated: "15/06/2026",
-  yearEnd: "Dec 2026",
-  status: "In Progress" as const,
-};
-
 type ApprovalStepStatus = "completed" | "in_progress" | "pending";
 
 interface ApprovalStep {
@@ -554,72 +582,42 @@ interface ModuleApprovalData {
   steps: ApprovalStep[];
 }
 
-const MODULE_APPROVALS: ModuleApprovalData[] = [
+const MODULE_APPROVALS: ModuleApprovalData[] = new Proxy([] as ModuleApprovalData[], {
+  get(_target, prop, receiver) {
+    const list = getLiveUserModuleApprovals(true);
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
+
+const MY_APPRAISAL_SUMMARY = new Proxy(
   {
-    module: "KPI (Setting)",
-    overallStatus: "Approved",
-    steps: [
-      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed" },
-      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "completed" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "completed" },
-      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "completed" },
-    ],
+    currentScore: 0,
+    currentGrade: "—",
+    modulesApproved: 0,
+    modulesTotal: 7,
+    lastUpdated: "—",
+    yearEnd: "Dec 2026",
+    status: "In Progress" as const,
   },
   {
-    module: "SMART Goals (Setting)",
-    overallStatus: "Approved",
-    steps: [
-      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed" },
-      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "completed" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "completed" },
-      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "completed" },
-    ],
+    get(_target, prop: string) {
+      const mods = getLiveUserModuleApprovals(true);
+      const emps = getLiveTransactionalEmployees();
+      const me = emps[0];
+      const summary = {
+        currentScore: me?.totalScore ?? 0,
+        currentGrade: me?.grade && me.grade !== "N/A" ? me.grade : "—",
+        modulesApproved: mods.filter((m) => m.overallStatus === "Approved").length,
+        modulesTotal: mods.length,
+        lastUpdated: me?.approvalCompleteDate ?? "—",
+        yearEnd: "Dec 2026",
+        status: (mods.every((m) => m.overallStatus === "Approved") ? "Done" : "In Progress") as "In Progress",
+      };
+      return summary[prop as keyof typeof summary];
+    },
   },
-  {
-    module: "KPI (Tracking)",
-    overallStatus: "In Progress",
-    steps: [
-      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed"   },
-      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "completed"   },
-      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "in_progress" },
-      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "pending"     },
-    ],
-  },
-  {
-    module: "SMART Goals (Tracking)",
-    overallStatus: "In Progress",
-    steps: [
-      { label: "Check",      description: "Submission reviewed by HR Team",             status: "completed"   },
-      { label: "Approver 1", description: "First-level approval by Superior 1",          status: "in_progress" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2",         status: "pending"     },
-      { label: "Validate",   description: "Final validation by HR Strategic Specialist", status: "pending"     },
-    ],
-  },
-  {
-    module: "Appraisal Form",
-    overallStatus: "Pending",
-    steps: [
-      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
-    ],
-  },
-  {
-    module: "Project OJS",
-    overallStatus: "Pending",
-    steps: [
-      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
-    ],
-  },
-  {
-    module: "Managerial Skill",
-    overallStatus: "Pending",
-    steps: [
-      { label: "Approver 1", description: "First-level approval by Superior 1",  status: "pending" },
-      { label: "Approver 2", description: "Second-level approval by Superior 2", status: "pending" },
-    ],
-  },
-];
+);
 
 function ModuleApprovalPopup({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState(0);

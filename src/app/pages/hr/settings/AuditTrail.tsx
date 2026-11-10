@@ -217,8 +217,7 @@ export function AuditTrailPage() {
       ipAddress: d.ipAddress || "10.0.1.15",
       status: d.status,
     }));
-    const seenIds = new Set(mappedDynamic.map((m) => m.id));
-    return [...mappedDynamic, ...AUDIT_LOGS.filter((a) => !seenIds.has(a.id))];
+    return mappedDynamic;
   }, [dynamicLogs]);
 
   // available sub-modules based on selected main module

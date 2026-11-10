@@ -87,56 +87,11 @@ export const ROLE_OPTIONS = [
   "Sponsor",
 ];
 
-const INITIAL_PROJECTS: ProjectEntry[] = [
-  {
-    id: "p1",
-    no: 1,
-    category: "Improvement Project",
-    scope: 'QCC - "Small Group Activity"',
-    projectName: "Reduksi Downtime Mesin Boiler",
-    description:
-      "Proyek perbaikan untuk mengurangi downtime mesin boiler melalui preventive maintenance terjadwal dan analisis root cause.",
-    startDate: "2026-01-15",
-    endDate: "2026-06-30",
-    role: "Member / Anggota",
-    expectedOutput: "Penurunan downtime sebesar 20% dibanding baseline 2025.",
-    status: "draft",
-    checkInStatus: "not_started",
-    progressPercent: 0,
-    progressNotes: "",
-    actualOutput: "",
-    note: "",
-    evidenceFiles: [],
-    lastUpdated: "",
-  },
-];
+const INITIAL_PROJECTS: ProjectEntry[] = [];
 
 const EXCEL_STORAGE_KEY = "pa_project_icf_excel_rows_v1";
 const EXCEL_BY_EMP_STORAGE_KEY = "pa_project_icf_by_emp_v1";
-const INITIAL_EXCEL_ROWS: ProjectExcelRow[] = [
-  {
-    no: 1,
-    projectScope: 'QCC - "Small Group Activity"',
-    roleProject: "Member / Anggota",
-    projectTitle: "Reduksi Downtime Mesin Boiler",
-    projectDetail: "Proyek perbaikan untuk mengurangi downtime mesin boiler melalui preventive maintenance terjadwal.",
-    startDate: "2026-01-15",
-    finishDate: "2026-06-30",
-    progressStatus: "Done",
-    finalScore: 88,
-  },
-  {
-    no: 2,
-    projectScope: 'SS - "Small Idea Kaizen"',
-    roleProject: "Leader / Ketua",
-    projectTitle: "Otomasi Checklist Inspeksi Harian",
-    projectDetail: "Digitalisasi form inspeksi harian menggunakan QR code untuk mempercepat pelaporan.",
-    startDate: "2026-03-01",
-    finishDate: "2026-08-15",
-    progressStatus: "Done",
-    finalScore: 92,
-  },
-];
+const INITIAL_EXCEL_ROWS: ProjectExcelRow[] = [];
 
 export type EmployeeIcfProjectState = {
   rows: ProjectExcelRow[];

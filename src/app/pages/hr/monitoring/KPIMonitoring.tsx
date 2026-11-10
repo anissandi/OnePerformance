@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Search, TrendingUp, CheckCircle2, AlertCircle, Clock, Filter } from "lucide-react";
 import { EMPLOYEES, COMPANY_UNITS } from "./monitoringData";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 // ─── Mock KPI data per employee ───────────────────────────────────────────────
 
@@ -63,18 +64,45 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
   const [statusFilter, setStatusFilter] = useState("Semua Status");
 
   const filteredEmployees = lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES;
-  const filteredKPI = lockedUnits
-    ? KPI_DATA.filter(k => filteredEmployees.some(e => e.id === k.employeeId))
-    : KPI_DATA;
+  const workflows = loadWorkflowRecords();
 
-  const rows = filteredEmployees.map((emp) => ({
-    emp,
-    kpi: KPI_DATA.find((k) => k.employeeId === emp.id)!,
-  })).filter(({ emp, kpi }) => {
+  const allRows = filteredEmployees.map((emp) => {
+    const normId = normalizeEmployeeId(emp.id);
+    const rec = workflows.find(
+      (w) => w.module === "KPI" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
+    );
+    const kpi: KPIRecord = rec
+      ? {
+          employeeId: emp.id,
+          totalKPI: 8,
+          submittedKPI: 8,
+          avgAchievement: 85,
+          perspektifBreakdown: [],
+          rcaRequired: 0,
+          rcaCompleted: 0,
+          status: "Submitted",
+          lastUpdated: rec.submittedDate || "-",
+        }
+      : {
+          employeeId: emp.id,
+          totalKPI: 0,
+          submittedKPI: 0,
+          avgAchievement: 0,
+          perspektifBreakdown: [],
+          rcaRequired: 0,
+          rcaCompleted: 0,
+          status: "Belum Mulai",
+          lastUpdated: "-",
+        };
+    return { emp, kpi };
+  });
+  const filteredKPI = allRows.map((r) => r.kpi);
+
+  const rows = allRows.filter(({ emp, kpi }) => {
     const q = search.toLowerCase();
     const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
     const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;
-    const matchStatus = statusFilter === "Semua Status" || kpi.status === statusFilter;
+    const matchStatus = statusFilter === "Semua Status" || statusFilter === "All Status" || kpi.status === statusFilter;
     return matchSearch && matchUnit && matchStatus;
   });
 

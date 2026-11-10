@@ -165,9 +165,21 @@ export function HRMonitoringProject({ lockedUnits }: { lockedUnits?: string[] } 
   }, []);
 
   const filteredEmployees = lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES;
-  const effectiveRecords: ProjRecord[] = PROJ_DATA.map((base) => {
-    const uploaded = uploadedByEmp[normalizeEmployeeId(base.employeeId)];
-    if (!uploaded || !uploaded.rows.length) return base;
+  const effectiveRecords: ProjRecord[] = filteredEmployees.map((emp) => {
+    const uploaded = uploadedByEmp[normalizeEmployeeId(emp.id)] ?? uploadedByEmp[emp.id];
+    if (!uploaded || !uploaded.rows.length) {
+      return {
+        employeeId: emp.id,
+        scope: null,
+        role: null,
+        title: null,
+        detail: null,
+        startDate: null,
+        finishDate: null,
+        progressStatus: null,
+        projectScore: null,
+      };
+    }
     const bestRow = [...uploaded.rows].sort((a, b) => b.finalScore - a.finalScore)[0];
     const normScope: ProjectScope = bestRow.projectScope.toUpperCase().includes("QCP")
       ? "QCP"
@@ -185,7 +197,7 @@ export function HRMonitoringProject({ lockedUnits }: { lockedUnits?: string[] } 
       ? "In Progress"
       : "Submitted";
     return {
-      employeeId: base.employeeId,
+      employeeId: emp.id,
       scope: normScope,
       role: normRole,
       title: bestRow.projectTitle,
@@ -215,7 +227,17 @@ export function HRMonitoringProject({ lockedUnits }: { lockedUnits?: string[] } 
   const baseRows = filteredEmployees.map((emp, idx) => ({
     no: idx + 1,
     emp,
-    rec: effectiveRecords.find(k => k.employeeId === emp.id)!,
+    rec: effectiveRecords.find(k => k.employeeId === emp.id) ?? {
+      employeeId: emp.id,
+      scope: null,
+      role: null,
+      title: null,
+      detail: null,
+      startDate: null,
+      finishDate: null,
+      progressStatus: null,
+      projectScore: null,
+    },
   })).filter(({ emp, rec }) => {
     const q = search.toLowerCase();
     const matchSearch   = !q || emp.name.toLowerCase().includes(q) || emp.id.toLowerCase().includes(q)

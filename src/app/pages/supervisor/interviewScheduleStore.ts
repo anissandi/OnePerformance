@@ -26,22 +26,7 @@ export interface InterviewSchedule {
 
 const SCHEDULES_STORAGE_KEY = "pa_interview_schedules_v1";
 
-const SEED_ENTRIES: ScheduleEntry[] = [
-  {
-    id: "sch-seed-001",
-    companyUnit: "PT. RSUP (Industri)",
-    addedUsers: ["Siti Rahayu", "Kartini Dewi", "Rini Susanti", "Dian Permana"],
-    interviewers: ["Direktur Operasional", "Direktur Keuangan", "Direktur Produksi", "Direktur Pemasaran"],
-    otherUsers: [],
-    scheduledDate: "2026-10-15",
-    scheduledTime: "09:00",
-    location: "Ruang Rapat A, Gedung HQ Lt. 3",
-    textNotifikasi: "Harap hadir tepat waktu. Interview berdurasi ±60 menit.",
-    textLampiran: "Lampirkan dokumen KPI terakhir sebelum sesi dimulai.",
-    status: "Scheduled",
-    createdAt: "2026-09-20T08:00:00.000Z",
-  },
-];
+const SEED_ENTRIES: ScheduleEntry[] = [];
 let _entries: ScheduleEntry[] = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, SEED_ENTRIES);
 const _listeners: (() => void)[] = [];
 

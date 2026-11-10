@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { CheckCircle2, Clock, Users, BarChart2, TrendingUp, RefreshCw, Lock, Play, ArrowRight } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import { toast } from "sonner";
+import { buildLiveCycleStepsFromActivation } from "./ModuleActivation";
 
 type PhaseStatus = "completed" | "in-progress" | "upcoming";
 
@@ -11,12 +12,20 @@ interface Phase {
   status: PhaseStatus;
 }
 
-const phases: Phase[] = [
-  { label: "Setting", period: "Q1", status: "completed" },
-  { label: "Measurement", period: "Q2–Q4", status: "completed" },
-  { label: "Performance Evaluation & Analysis", period: "Q4", status: "in-progress" },
-  { label: "Year-End Performance Dialogue", period: "Q4–Q1", status: "upcoming" },
-];
+function getLivePhases(): Phase[] {
+  return buildLiveCycleStepsFromActivation("2026").map((s) => ({
+    label: s.label,
+    period: s.dateRange,
+    status: s.status === "Completed" ? "completed" : s.status === "On Progress" ? "in-progress" : "upcoming",
+  }));
+}
+const phases: Phase[] = new Proxy([] as Phase[], {
+  get(_target, prop, receiver) {
+    const list = getLivePhases();
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
 const currentPhaseProgress = [
   { label: "Appraisal Form", pct: 89 },

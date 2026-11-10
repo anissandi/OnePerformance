@@ -5,7 +5,7 @@ import { EMPLOYEES } from "../../hr/monitoring/monitoringData";
 const TEAM_IDS   = ["E002", "E011"];
 const TEAM_UNIT  = "PT. RSUP (Industri)";
 const TEAM_DIV   = "Divisi Sumber Daya Manusia";
-const TEAM_EMPLOYEES = EMPLOYEES.filter((e) => TEAM_IDS.includes(e.id));
+const TEAM_EMPLOYEES = EMPLOYEES;
 
 const DEPARTMENT_MAP: Record<string, string> = {
   E002: "Dept. Rekrutmen & Seleksi",
@@ -981,7 +981,22 @@ export function SupervisorMonitoringKPI() {
   const [rcaModal, setRcaModal] = useState<{ rec: KPIRecord; empName: string } | null>(null);
 
   const rows = TEAM_EMPLOYEES
-    .map((emp, idx) => ({ idx, emp, kpi: KPI_DATA.find((k) => k.employeeId === emp.id)! }))
+    .map((emp, idx) => ({
+      idx,
+      emp,
+      kpi: KPI_DATA.find((k) => k.employeeId === emp.id) ?? {
+        employeeId: emp.id,
+        totalKPI: 0,
+        submittedKPI: 0,
+        avgAchievement: 0,
+        rcaRequired: 0,
+        rcaCompleted: 0,
+        lastUpdated: "—",
+        items: [],
+        cells: {},
+        rcas: [],
+      },
+    }))
     .filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()) || emp.id.toLowerCase().includes(search.toLowerCase()));
 
   const totalSubmitted = KPI_DATA.filter((k) => k.submittedKPI === k.totalKPI).length;

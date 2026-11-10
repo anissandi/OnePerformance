@@ -5,7 +5,7 @@ import { EMPLOYEES } from "../../hr/monitoring/monitoringData";
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
-const TEAM_EMPLOYEES = EMPLOYEES.filter((e) => TEAM_IDS.includes(e.id));
+const TEAM_EMPLOYEES = EMPLOYEES;
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 

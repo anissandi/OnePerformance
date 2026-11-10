@@ -5,7 +5,7 @@ import { EMPLOYEES } from "../../hr/monitoring/monitoringData";
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
 const TEAM_DIV  = "Divisi Sumber Daya Manusia";
-const TEAM_EMPLOYEES = EMPLOYEES.filter((e) => TEAM_IDS.includes(e.id));
+const TEAM_EMPLOYEES = EMPLOYEES;
 
 interface AFRecord {
   employeeId: string;
@@ -67,7 +67,17 @@ export function SupervisorMonitoringAppraisalForm() {
 
   const rows = TEAM_EMPLOYEES.map((emp) => ({
     emp,
-    af: AF_DATA.find((k) => k.employeeId === emp.id)!,
+    af: AF_DATA.find((k) => k.employeeId === emp.id) ?? {
+      employeeId: emp.id,
+      selfAssessmentStatus: "Belum Mulai" as const,
+      supervisorAssessmentStatus: "Belum Mulai" as const,
+      selfAvgScore: 0,
+      approver1Score: 0,
+      approver2Score: 0,
+      finalScore: 0,
+      competencies: [],
+      lastUpdated: "—",
+    },
   })).filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
 
   const selfDone  = AF_DATA.filter((k) => k.selfAssessmentStatus === "Selesai").length;

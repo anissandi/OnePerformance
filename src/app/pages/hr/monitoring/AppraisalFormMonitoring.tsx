@@ -215,14 +215,23 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
 
   const filteredEmployees = lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES;
-  const filteredAF = lockedUnits
-    ? data.filter(k => filteredEmployees.some(e => e.id === k.employeeId))
-    : data;
-
-  const rows = filteredEmployees.map((emp) => ({
+  const allRows = filteredEmployees.map((emp) => ({
     emp,
-    af: data.find((k) => k.employeeId === emp.id)!,
-  })).filter(({ emp }) => {
+    af: data.find((k) => k.employeeId === emp.id) ?? {
+      employeeId: emp.id,
+      selfAssessmentStatus: "Belum Mulai" as const,
+      supervisorAssessmentStatus: "Belum Mulai" as const,
+      selfAvgScore: 0,
+      approver1Score: 0,
+      approver2Score: 0,
+      finalScore: 0,
+      competencies: [],
+      lastUpdated: "—",
+    },
+  }));
+  const filteredAF = allRows.map((r) => r.af);
+
+  const rows = allRows.filter(({ emp }) => {
     const q = search.toLowerCase();
     const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
     const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;

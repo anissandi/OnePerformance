@@ -322,9 +322,8 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
       }));
   }, [uploadedList, type, isRCA]);
 
-  const baseSource: EvidenceRow[] = isRCA ? (RCA_ROWS as unknown as EvidenceRow[]) : ALL_ROWS;
-  const sourceRows: EvidenceRow[] = useMemo(() => [...dynamicRows, ...baseSource], [dynamicRows, baseSource]);
-  const rcaRows = isRCA ? RCA_ROWS : [];
+  const sourceRows: EvidenceRow[] = useMemo(() => dynamicRows, [dynamicRows]);
+  const rcaRows: typeof RCA_ROWS = [];
 
   const [filterYears,      setFilterYears]      = useState<string[]>([]);
   const [filterMonths,     setFilterMonths]     = useState<string[]>([]);

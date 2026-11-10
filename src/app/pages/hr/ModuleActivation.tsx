@@ -56,6 +56,217 @@ export function saveKpiValidationChecklist(year: string, next: KpiHierarchyValid
   window.dispatchEvent(new Event("pa-module-activation-updated"));
 }
 
+export interface LiveTimelineSegment {
+  start: number;
+  end: number;
+  color: string;
+  phase: string;
+  startDate: string;
+  endDate: string;
+  status: "done" | "in-progress" | "not-started";
+}
+
+export interface LiveTimelineRow {
+  id: string;
+  label: string;
+  filterModuleLabel: string;
+  status: "done" | "in-progress" | "not-started";
+  segments: LiveTimelineSegment[];
+}
+
+const SHORT_MONTHS_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+function fmtShortRange(startIso: string, endIso: string): string {
+  if (!startIso && !endIso) return "Belum diatur";
+  const fmtOne = (iso: string) => {
+    if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || "—";
+    const [y, m, d] = iso.split("-");
+    const mIdx = Math.max(0, Math.min(11, parseInt(m, 10) - 1));
+    return `${d} ${SHORT_MONTHS_ID[mIdx]} ${y}`;
+  };
+  if (startIso && endIso) return `${fmtOne(startIso)} - ${fmtOne(endIso)}`;
+  return fmtOne(startIso || endIso);
+}
+
+function isoToMonthSlot(iso: string, baseYear: number): number | null {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const [yStr, mStr] = iso.split("-");
+  const y = parseInt(yStr, 10);
+  const m = parseInt(mStr, 10) - 1;
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return null;
+  const offset = (y - baseYear) * 12 + m;
+  return Math.max(0, Math.min(13, offset));
+}
+
+export function loadLiveModuleActivationList(selectedYear = "2026"): Module[] {
+  let saved: Record<string, Partial<Module>> = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(`pa_module_activation_${selectedYear}`) ?? "{}");
+  } catch {
+    saved = {};
+  }
+  return INITIAL_MODULES.map((module) => ({
+    ...module,
+    ...saved[module.id],
+    ...(module.id === "inter-department-feedback" ? loadFeedbackActivation(selectedYear) : {}),
+    ...(module.id === "kpi-measurement"
+      ? {
+          backlogMonths: Array.isArray(saved[module.id]?.backlogMonths)
+            ? saved[module.id]!.backlogMonths!.filter((month) => ["1", "2", "3", "4"].includes(month))
+            : [],
+          dateLockPerMonth: /^(?:[1-9]|1[0-9]|2[0-8])$/.test(saved[module.id]?.dateLockPerMonth ?? "")
+            ? saved[module.id]!.dateLockPerMonth
+            : "",
+        }
+      : {}),
+    id: module.id,
+    label: module.label,
+    icon: module.icon,
+  }));
+}
+
+export function buildLiveTimelineRowsFromActivation(selectedYear = "2026"): {
+  rows: LiveTimelineRow[];
+  todayMonthSlot: number;
+  todayLabel: string;
+} {
+  const baseYear = parseInt(selectedYear, 10) || 2026;
+  const modules = loadLiveModuleActivationList(selectedYear);
+  const now = new Date();
+  const todayIso = now.toISOString().slice(0, 10);
+  const todaySlot = isoToMonthSlot(todayIso, baseYear) ?? now.getMonth();
+  const todayLabel = `${String(now.getDate()).padStart(2, "0")} ${SHORT_MONTHS_ID[now.getMonth()]} ${now.getFullYear()}`;
+
+  const FILTER_LABEL_BY_ID: Record<string, string> = {
+    "kpi-setting": "KPI (Setting)",
+    "smart-goals-setting": "SMART Goals (Setting)",
+    "kpi-measurement": "KPI (Tracking)",
+    "smart-goals-measurement": "SMART Goals (Tracking)",
+    "appraisal-form": "Appraisal Form",
+    "managerial-skill": "Managerial Skill",
+    "project": "Project OJS",
+    "inter-department-feedback": "Inter-Department Feedback",
+    "management-interview": "Management Interview",
+  };
+
+  const ORDER_IDS = [
+    "kpi-setting",
+    "smart-goals-setting",
+    "kpi-measurement",
+    "smart-goals-measurement",
+    "appraisal-form",
+    "managerial-skill",
+    "project",
+    "inter-department-feedback",
+    "management-interview",
+  ];
+
+  const rows: LiveTimelineRow[] = ORDER_IDS.map((id) => {
+    const mod = modules.find((m) => m.id === id);
+    const startDate = mod?.startDate ?? "";
+    const endDate = mod?.endDate ?? "";
+    const active = Boolean(mod?.active);
+
+    let status: "done" | "in-progress" | "not-started" = "not-started";
+    if (startDate && endDate) {
+      if (todayIso > endDate) {
+        status = "done";
+      } else if (active && todayIso >= startDate && todayIso <= endDate) {
+        status = "in-progress";
+      } else if (active) {
+        status = "in-progress";
+      }
+    } else if (active) {
+      status = "in-progress";
+    }
+
+    const sSlot = isoToMonthSlot(startDate, baseYear);
+    const eSlot = isoToMonthSlot(endDate, baseYear);
+    const start = sSlot ?? 0;
+    const end = eSlot !== null ? Math.max(start, eSlot) : start;
+    const color =
+      status === "done"
+        ? "#10b981"
+        : status === "in-progress"
+        ? "#f97316"
+        : "#9ca3af";
+    const phaseLabel =
+      startDate && endDate
+        ? fmtShortRange(startDate, endDate)
+        : active
+        ? "Active (Tanggal belum diatur)"
+        : "Not Started";
+
+    return {
+      id,
+      label: mod?.label ?? id,
+      filterModuleLabel: FILTER_LABEL_BY_ID[id] ?? mod?.label ?? id,
+      status,
+      segments:
+        startDate && endDate
+          ? [
+              {
+                start,
+                end,
+                color,
+                phase: phaseLabel,
+                startDate,
+                endDate,
+                status,
+              },
+            ]
+          : [],
+    };
+  });
+
+  return { rows, todayMonthSlot: todaySlot, todayLabel };
+}
+
+export function buildLiveCycleStepsFromActivation(selectedYear = "2026"): Array<{
+  label: string;
+  date: string;
+  dateRange: string;
+  status: "Completed" | "On Progress" | "Not Started";
+}> {
+  const modules = loadLiveModuleActivationList(selectedYear);
+  const byId = Object.fromEntries(modules.map((m) => [m.id, m]));
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const evalStep = (modIds: string[], fallbackQuarter: string) => {
+    const list = modIds.map((id) => byId[id]).filter(Boolean);
+    const starts = list.map((m) => m.startDate).filter(Boolean).sort();
+    const ends = list.map((m) => m.endDate).filter(Boolean).sort();
+    const startIso = starts[0] ?? "";
+    const endIso = ends[ends.length - 1] ?? "";
+    const anyActive = list.some((m) => m.active);
+
+    let status: "Completed" | "On Progress" | "Not Started" = "Not Started";
+    if (endIso && todayIso > endIso) {
+      status = "Completed";
+    } else if (anyActive || (startIso && endIso && todayIso >= startIso && todayIso <= endIso)) {
+      status = "On Progress";
+    }
+
+    return {
+      date: fallbackQuarter,
+      dateRange: fmtShortRange(startIso, endIso),
+      status,
+    };
+  };
+
+  const s1 = evalStep(["kpi-setting", "smart-goals-setting"], "Setting Phase");
+  const s2 = evalStep(["kpi-measurement", "smart-goals-measurement", "project"], "Measurement Phase");
+  const s3 = evalStep(["appraisal-form", "managerial-skill", "inter-department-feedback"], "Evaluation Phase");
+  const s4 = evalStep(["management-interview"], "Year-End Dialogue");
+
+  return [
+    { label: "Setting (KPI & SMART Goals)", ...s1 },
+    { label: "Measurement (Tracking & Project)", ...s2 },
+    { label: "Performance Evaluation & Feedback", ...s3 },
+    { label: "Management Interview & Calibration", ...s4 },
+  ];
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const POSITION_OPTIONS = [
@@ -87,20 +298,20 @@ interface Module {
 
 const INITIAL_MODULES: Module[] = [
   {
-    id: "inter-department-feedback",
-    label: "Inter-Department Feedback",
-    icon: MessageSquare,
-    description: "Nominasi 3 pemberi feedback, feedback anonim, summary, dan tindak lanjut approver",
-    active: false,
-    startDate: "",
-    endDate: "",
-    activationFor: ["All"],
-  },
-  {
     id: "kpi-setting",
     label: "KPI · Setting",
     icon: TrendingUp,
     description: "Jadwal penyusunan dan pengesahan KPI",
+    active: true,
+    startDate: "2026-01-02",
+    endDate: "2026-01-31",
+    activationFor: ["All"],
+  },
+  {
+    id: "smart-goals-setting",
+    label: "SMART Goals · Setting",
+    icon: Lightbulb,
+    description: "Jadwal penyusunan dan pengesahan SMART Goals",
     active: true,
     startDate: "2026-01-02",
     endDate: "2026-01-31",
@@ -125,16 +336,6 @@ const INITIAL_MODULES: Module[] = [
     active: false,
     startDate: "",
     endDate: "",
-    activationFor: ["All"],
-  },
-  {
-    id: "smart-goals-setting",
-    label: "SMART Goals · Setting",
-    icon: Lightbulb,
-    description: "Jadwal penyusunan dan pengesahan SMART Goals",
-    active: true,
-    startDate: "2026-01-02",
-    endDate: "2026-01-31",
     activationFor: ["All"],
   },
   {
@@ -164,13 +365,23 @@ const INITIAL_MODULES: Module[] = [
   },
   {
     id: "project",
-    label: "Project",
+    label: "Project Outside Job Scope",
     icon: FolderKanban,
     description: "Project Outside Job Scope registration and measurement tracking",
     active: false,
     startDate: "2026-01-02",
     endDate: "2026-07-31",
     activationFor: [],
+  },
+  {
+    id: "inter-department-feedback",
+    label: "Inter-Department Feedback",
+    icon: MessageSquare,
+    description: "Nominasi 3 pemberi feedback, feedback anonim, summary, dan tindak lanjut approver",
+    active: false,
+    startDate: "",
+    endDate: "",
+    activationFor: ["All"],
   },
   {
     id: "management-interview",
@@ -517,24 +728,7 @@ function ModuleCard({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function HRModuleActivation() {
-  const loadModules = (selectedYear: string) => {
-    let saved: Record<string, Partial<Module>> = {};
-    try { saved = JSON.parse(localStorage.getItem(`pa_module_activation_${selectedYear}`) ?? "{}"); } catch {}
-    return INITIAL_MODULES.map((module) => ({
-      ...module,
-      ...saved[module.id],
-      ...(module.id === "inter-department-feedback" ? loadFeedbackActivation(selectedYear) : {}),
-      ...(module.id === "kpi-measurement" ? {
-        backlogMonths: Array.isArray(saved[module.id]?.backlogMonths)
-          ? saved[module.id]!.backlogMonths!.filter((month) => ["1", "2", "3", "4"].includes(month)) : [],
-        dateLockPerMonth: /^(?:[1-9]|1[0-9]|2[0-8])$/.test(saved[module.id]?.dateLockPerMonth ?? "")
-          ? saved[module.id]!.dateLockPerMonth : "",
-      } : {}),
-      id: module.id,
-      label: module.label,
-      icon: module.icon,
-    }));
-  };
+  const loadModules = (selectedYear: string) => loadLiveModuleActivationList(selectedYear);
   const [year, setYear] = useState("2026");
   const [modules, setModules] = useState<Module[]>(() => loadModules("2026"));
   const [kpiChecklist, setKpiChecklist] = useState<KpiHierarchyValidationChecklist>(() =>
