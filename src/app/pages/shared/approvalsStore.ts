@@ -3,6 +3,7 @@ import { registerWorkflowRows, workflowAlias, loadWorkflowRecords, saveWorkflowA
 import { saveAppraisalApprover } from "./appraisalFormStore";
 import { saveMSApproverEntry } from "./msStore";
 import { upsertApprovalDecision } from "./smartGoalsStore";
+import { savePersistedState } from "../../services/supabaseClient";
 
 const KEY = "sg_approvals_overrides";
 
@@ -31,7 +32,8 @@ export function saveAssessment(
     const raw = localStorage.getItem(ASSESSMENT_KEY);
     const existing: StoredAssessment[] = raw ? JSON.parse(raw) : [];
     const filtered = existing.filter((a) => !(a.rowNo === rowNo && a.approverRole === approverRole));
-    localStorage.setItem(ASSESSMENT_KEY, JSON.stringify([...filtered, { rowNo, approverRole, type, ratings, comments, assessedDate }]));
+    const nextList = [...filtered, { rowNo, approverRole, type, ratings, comments, assessedDate }];
+    savePersistedState(ASSESSMENT_KEY, nextList);
     saveWorkflowAssessment(rowNo, approverRole, ratings, comments, assessedDate);
     const alias = workflowAlias(rowNo);
     if (alias?.employeeId === "EMP-002" && alias.phase === "measurement") {
@@ -97,7 +99,7 @@ export function loadOverrides(): Override[] {
 export function saveOverride(no: string, status: string, approvalDate: string): void {
   try {
     const existing = loadOverrides().filter((o) => o.no !== no);
-    localStorage.setItem(KEY, JSON.stringify([...existing, { no, status, approvalDate }]));
+    savePersistedState(KEY, [...existing, { no, status, approvalDate }]);
     saveWorkflowDecision(no, status, approvalDate);
     const alias = workflowAlias(no);
     if (alias?.employeeId === "EMP-002" && alias.module === "SMART Goals" && alias.phase === "measurement") {

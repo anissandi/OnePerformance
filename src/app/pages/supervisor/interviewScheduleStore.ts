@@ -1,4 +1,4 @@
-import { syncToSupabase } from "../../services/supabaseClient";
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 export interface ScheduleEntry {
   id: string;
@@ -24,7 +24,9 @@ export interface InterviewSchedule {
   location: string; notes: string; attachments: AttachedFile[];
 }
 
-let _entries: ScheduleEntry[] = [
+const SCHEDULES_STORAGE_KEY = "pa_interview_schedules_v1";
+
+const SEED_ENTRIES: ScheduleEntry[] = [
   {
     id: "sch-seed-001",
     companyUnit: "PT. RSUP (Industri)",
@@ -40,9 +42,26 @@ let _entries: ScheduleEntry[] = [
     createdAt: "2026-09-20T08:00:00.000Z",
   },
 ];
+let _entries: ScheduleEntry[] = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, SEED_ENTRIES);
 const _listeners: (() => void)[] = [];
 
-export function getEntries(): ScheduleEntry[] { return [..._entries]; }
+if (typeof window !== "undefined") {
+  window.addEventListener("pa-db-hydrated", () => {
+    const hydrated = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, _entries);
+    if (Array.isArray(hydrated) && hydrated.length > 0) {
+      _entries = hydrated;
+      _listeners.forEach((fn) => fn());
+    }
+  });
+}
+
+export function getEntries(): ScheduleEntry[] {
+  const persisted = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, _entries);
+  if (Array.isArray(persisted) && persisted.length > 0) {
+    _entries = persisted;
+  }
+  return [..._entries];
+}
 
 export function addEntry(e: Omit<ScheduleEntry, "id" | "createdAt" | "status">): ScheduleEntry {
   const entry: ScheduleEntry = {
@@ -51,9 +70,9 @@ export function addEntry(e: Omit<ScheduleEntry, "id" | "createdAt" | "status">):
     status: "Scheduled",
     createdAt: new Date().toISOString(),
   };
-  _entries = [entry, ..._entries];
+  _entries = [entry, ...getEntries().filter((x) => x.id !== entry.id)];
   _listeners.forEach(fn => fn());
-  void syncToSupabase({
+  savePersistedState(SCHEDULES_STORAGE_KEY, _entries, {
     kind: "interview-schedule",
     schedule: entry,
     audit: {
@@ -67,11 +86,11 @@ export function addEntry(e: Omit<ScheduleEntry, "id" | "createdAt" | "status">):
 }
 
 export function updateEntry(id: string, patch: Partial<ScheduleEntry>): void {
-  _entries = _entries.map(e => e.id === id ? { ...e, ...patch } : e);
+  _entries = getEntries().map(e => e.id === id ? { ...e, ...patch } : e);
   _listeners.forEach(fn => fn());
   const updated = _entries.find(e => e.id === id);
   if (updated) {
-    void syncToSupabase({
+    savePersistedState(SCHEDULES_STORAGE_KEY, _entries, {
       kind: "interview-schedule",
       schedule: updated,
     });

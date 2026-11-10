@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { notifyLoginToSupabase, syncToSupabase } from "../services/supabaseClient";
+import { notifyLoginToSupabase, savePersistedState, syncToSupabase } from "../services/supabaseClient";
 
 export type AppUserRole =
   | "Employee"
@@ -176,9 +176,8 @@ export function saveUnitGroupRules(company: string, rules: ManagedGroupRule[]): 
     const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
     const map = raw ? (JSON.parse(raw) as Record<string, ManagedGroupRule[]>) : {};
     map[company] = rules;
-    localStorage.setItem(GROUP_RULES_BY_UNIT_KEY, JSON.stringify(map));
     window.dispatchEvent(new Event("pa-auth-updated"));
-    void syncToSupabase({
+    savePersistedState(GROUP_RULES_BY_UNIT_KEY, map, {
       kind: "group-rules",
       company,
       rules,

@@ -1,5 +1,5 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
-import { syncToSupabase } from "../../services/supabaseClient";
+import { savePersistedState } from "../../services/supabaseClient";
 
 export const MOCK_EMPLOYEE_ID = "EMP-002";
 const KEY = "appraisal_workflow_v1";
@@ -29,21 +29,31 @@ export function loadWorkflowRecords(): WorkflowRecord[] { return read(KEY, []); 
 export function workflowAlias(no: string): WorkflowAlias | undefined { return read<Record<string, WorkflowAlias>>(ALIASES_KEY, {})[no]; }
 export function registerWorkflowRows(rows: ApprovalRow[], role: ReviewerRole) {
   const aliases = read<Record<string, WorkflowAlias>>(ALIASES_KEY, {});
+  let changed = false;
   for (const row of rows) {
     const phase = /^(?:H?ST)-/.test(row.no) ? "setting" : "measurement";
     const year = row.period?.match(/20\d{2}/)?.[0] ?? "2026";
-    aliases[row.no] = { key: keyFor(row.employeeId, row.type, phase, year), employeeId: normalizeEmployeeId(row.employeeId), module: row.type, phase, year, submittedDate: row.submittedDate, role };
+    const nextAlias: WorkflowAlias = { key: keyFor(row.employeeId, row.type, phase, year), employeeId: normalizeEmployeeId(row.employeeId), module: row.type, phase, year, submittedDate: row.submittedDate, role };
+    const prev = aliases[row.no];
+    if (!prev || prev.key !== nextAlias.key || prev.submittedDate !== nextAlias.submittedDate || prev.role !== nextAlias.role) {
+      changed = true;
+    }
+    aliases[row.no] = nextAlias;
   }
   localStorage.setItem(ALIASES_KEY, JSON.stringify(aliases));
+  if (changed) {
+    savePersistedState(ALIASES_KEY, aliases);
+  }
 }
 function write(record: WorkflowRecord) {
-  localStorage.setItem(KEY, JSON.stringify([...loadWorkflowRecords().filter((item) => item.key !== record.key), record]));
+  const nextRecords = [...loadWorkflowRecords().filter((item) => item.key !== record.key), record];
+  localStorage.setItem(KEY, JSON.stringify(nextRecords));
   window.dispatchEvent(new Event("appraisal-updated"));
   const latestStatus =
     record.decisions.approver2?.status ??
     record.decisions.approver1?.status ??
     "Pending";
-  void syncToSupabase({
+  savePersistedState(KEY, nextRecords, {
     kind: "workflow-document",
     doc: {
       key: record.key,

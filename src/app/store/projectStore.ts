@@ -347,8 +347,15 @@ export const projectStore = {
 export function useProjectStore() {
   const [, rerender] = useState(0);
   useEffect(() => {
-    const unsub = projectStore.subscribe(() => { rerender((n) => n + 1); });
-    return () => { unsub(); };
+    const bump = () => rerender((n) => n + 1);
+    const unsub = projectStore.subscribe(bump);
+    window.addEventListener("pa-db-hydrated", bump);
+    window.addEventListener("appraisal-updated", bump);
+    return () => {
+      unsub();
+      window.removeEventListener("pa-db-hydrated", bump);
+      window.removeEventListener("appraisal-updated", bump);
+    };
   }, []);
   const excelState = loadIcfProjectRows();
   const maxFinalScore = excelState.rows.length

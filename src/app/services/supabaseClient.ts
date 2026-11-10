@@ -788,20 +788,39 @@ export async function notifyLoginToSupabase(user: {
 export async function fetchBootstrapFromSupabase(): Promise<Record<string, unknown> | null> {
   try {
     // 1. Try direct PostgREST queries first (works immediately without requiring Edge Function deployment)
-    const [users, kvStates, masterCatalogs, evidenceFiles, auditTrail, yearEndRows] = await Promise.all([
+    const [
+      users,
+      kvStates,
+      masterCatalogs,
+      evidenceFiles,
+      auditTrail,
+      yearEndRows,
+      workflowDocs,
+      interviewSchedules,
+      groupRules,
+      scoreWeights,
+      projectRecords,
+    ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
       restSelect("pa_master_catalogs", "select=*"),
       restSelect("pa_evidence_files", "select=*&order=created_at.desc"),
       restSelect("pa_audit_trail", "select=*&order=id.desc&limit=150"),
       restSelect("pa_year_end_verifications", "select=*&period=eq.2026&limit=1"),
+      restSelect("pa_workflow_documents", "select=*"),
+      restSelect("pa_interview_schedules", "select=*&order=updated_at.desc"),
+      restSelect("pa_group_rules", "select=*"),
+      restSelect("pa_score_weights", "select=*"),
+      restSelect("pa_project_records", "select=*"),
     ]);
     if (
       users.length > 0 ||
       kvStates.length > 0 ||
       masterCatalogs.length > 0 ||
       evidenceFiles.length > 0 ||
-      auditTrail.length > 0
+      auditTrail.length > 0 ||
+      workflowDocs.length > 0 ||
+      interviewSchedules.length > 0
     ) {
       return {
         ok: true,
@@ -811,6 +830,11 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         evidenceFiles,
         auditTrail,
         yearEndVerification: (yearEndRows[0] as { state?: unknown } | undefined)?.state ?? null,
+        workflowDocs,
+        interviewSchedules,
+        groupRules,
+        scoreWeights,
+        projectRecords,
       };
     }
 
@@ -922,6 +946,98 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     // 6. Hydrate year-end verification state
     if (data.yearEndVerification) {
       localStorage.setItem("year_end_workflow_2026", JSON.stringify(data.yearEndVerification));
+    }
+
+    // 7. Hydrate normalized workflow documents if present
+    const workflowDocs = data.workflowDocs as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(workflowDocs) && workflowDocs.length > 0) {
+      const existingRaw = localStorage.getItem("appraisal_workflow_v1");
+      const existingList: Array<Record<string, unknown>> = existingRaw ? JSON.parse(existingRaw) : [];
+      const byKey = new Map<string, Record<string, unknown>>();
+      for (const item of existingList) {
+        if (item && typeof item.key === "string") byKey.set(item.key, item);
+      }
+      for (const doc of workflowDocs) {
+        const payload = doc.payload as Record<string, unknown> | undefined;
+        if (payload && typeof payload.key === "string") {
+          byKey.set(payload.key, payload);
+        }
+      }
+      if (byKey.size > 0) {
+        localStorage.setItem("appraisal_workflow_v1", JSON.stringify(Array.from(byKey.values())));
+      }
+    }
+
+    // 8. Hydrate normalized interview schedules if present
+    const schedules = data.interviewSchedules as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(schedules) && schedules.length > 0) {
+      const mappedSchedules = schedules.map((s) => ({
+        id: String(s.id),
+        companyUnit: String(s.company_unit ?? "PT. RSUP (Industri)"),
+        addedUsers: Array.isArray(s.added_users) ? s.added_users : [],
+        interviewers: Array.isArray(s.interviewers) ? s.interviewers : [],
+        otherUsers: Array.isArray(s.other_users) ? s.other_users : [],
+        scheduledDate: String(s.scheduled_date ?? "2026-10-15"),
+        scheduledTime: String(s.scheduled_time ?? "09:00"),
+        location: String(s.location ?? ""),
+        textNotifikasi: String(s.text_notifikasi ?? ""),
+        textLampiran: String(s.text_lampiran ?? ""),
+        status: (s.status as "Scheduled" | "Cancelled" | "Done") ?? "Scheduled",
+        createdAt: String(s.updated_at ?? new Date().toISOString()),
+      }));
+      localStorage.setItem("pa_interview_schedules_v1", JSON.stringify(mappedSchedules));
+    }
+
+    // 9. Hydrate normalized group rules by unit if present
+    const groupRules = data.groupRules as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(groupRules) && groupRules.length > 0) {
+      const existingRaw = localStorage.getItem("pa_group_rules_by_unit_v1");
+      const map: Record<string, Array<Record<string, unknown>>> = existingRaw ? JSON.parse(existingRaw) : {};
+      const grouped: Record<string, Array<Record<string, unknown>>> = {};
+      for (const r of groupRules) {
+        const comp = String(r.company ?? "DEFAULT");
+        const rawId = String(r.id ?? "").replace(`${comp}::`, "");
+        if (!grouped[comp]) grouped[comp] = [];
+        grouped[comp].push({
+          id: rawId || String(grouped[comp].length + 1),
+          position: String(r.position ?? ""),
+          group: String(r.group_name ?? ""),
+          description: String(r.description ?? ""),
+          allowedModules: Array.isArray(r.allowed_modules) ? r.allowed_modules : [],
+        });
+      }
+      localStorage.setItem("pa_group_rules_by_unit_v1", JSON.stringify({ ...map, ...grouped }));
+    }
+
+    // 10. Hydrate normalized score weights if present
+    const scoreWeights = data.scoreWeights as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(scoreWeights) && scoreWeights.length > 0) {
+      const existingRaw = localStorage.getItem("score_calibration_weights_v1");
+      const map: Record<string, unknown> = existingRaw ? JSON.parse(existingRaw) : {};
+      for (const sw of scoreWeights) {
+        if (sw.company_unit && sw.weights) {
+          map[String(sw.company_unit)] = sw.weights;
+        }
+      }
+      localStorage.setItem("score_calibration_weights_v1", JSON.stringify(map));
+    }
+
+    // 11. Hydrate normalized project records if present
+    const projectRecords = data.projectRecords as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(projectRecords) && projectRecords.length > 0) {
+      const existingRaw = localStorage.getItem("pa_project_icf_by_emp_v1");
+      const byEmp: Record<string, unknown> = existingRaw ? JSON.parse(existingRaw) : {};
+      for (const pr of projectRecords) {
+        const empId = String(pr.employee_id ?? "");
+        if (!empId) continue;
+        byEmp[empId] = {
+          rows: Array.isArray(pr.rows) ? pr.rows : [],
+          fileName: String(pr.file_name ?? "Project_ICF_2026.xlsx"),
+          submitted: Boolean(pr.submitted ?? true),
+          submittedDate: String(pr.submitted_date ?? ""),
+        };
+      }
+      localStorage.setItem("pa_project_icf_by_emp_v1", JSON.stringify(byEmp));
     }
 
     window.dispatchEvent(new Event("pa-db-hydrated"));
