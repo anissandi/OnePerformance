@@ -32,6 +32,9 @@ Dokumen ini adalah acuan utama (*Single Source of Truth*) untuk alur kerja dan a
      3. **Level Divisi**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada semua posisi, bagian, dan departemen di dalam **Divisinya**.
      4. **Level Departemen**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada semua posisi dan bagian di dalam **Departemennya**.
      5. **Level Bagian**: Dapat melihat semua karyawan, transaksi, summary, dll. dari karyawan yang berada pada semua posisi di dalam **Bagiannya**.
+   - **Penentu Otomatis Level Kewenangan Berjenjang**:
+     - Mengacu 100% pada kombinasi **`Role` + `Groupings` (serta tabel mapping `User Groupings` per Company Unit di `/hr/settings/user-management`)**, bukan dari tebakan teks nama `Jabatan / Position`.
+     - Dengan demikian, perbedaan nomenklatur jabatan antar-unit usaha yang memiliki definisi setara (contoh: **Kepala Bagian** di `PT RSUP (Industry)` vs **Mandor** di `PT RSUP (Perkebunan)` yang sama-sama dipetakan ke grouping `Ka./Wa.Ka.Bagian`) tetap menghasilkan level kewenangan berjenjang yang sama secara otomatis.
 
 5. **Setup Approval Check HR Unit Usaha**
    - Role **Administrator** melakukan setup untuk **Approval Check HR Unit Usaha** di **User Management** (`/hr/settings/user-management`).

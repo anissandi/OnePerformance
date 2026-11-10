@@ -150,16 +150,68 @@ const HIERARCHY_RANK: Record<HierarchyAuthorityLevel, number> = {
   operational: 10,
 };
 
+export function resolveGroupingForCompanyAndPosition(
+  company: string,
+  position: string,
+  explicitGrouping?: string,
+): UserGrouping {
+  const normalizeToUserGrouping = (val: string): UserGrouping | null => {
+    const v = val.trim().toLowerCase();
+    if (!v) return null;
+    if (val.trim() === "Ka./Wa.Ka.Div ke atas" || /div|gm|direktur|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
+    if (val.trim() === "Ka./Wa.Ka.Dept" || /dept|departemen/i.test(v)) return "Ka./Wa.Ka.Dept";
+    if (val.trim() === "Ka./Wa.Ka.Bagian" || /bagian/i.test(v)) return "Ka./Wa.Ka.Bagian";
+    if (val.trim() === "Ka./Wa.Ka.Seksi" || /seksi|shift/i.test(v)) return "Ka./Wa.Ka.Seksi";
+    if (val.trim() === "Operasional" || /operasional|operational/i.test(v)) return "Operasional";
+    return null;
+  };
+
+  // 1. Cek terlebih dahulu di tabel User Groupings milik Company Unit tersebut (pa_group_rules_by_unit_v1)
+  try {
+    const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
+    if (raw) {
+      const map = JSON.parse(raw) as Record<string, ManagedGroupRule[]>;
+      const unitRules = map[company];
+      if (Array.isArray(unitRules)) {
+        const matchedRule = unitRules.find(
+          (r) => r.position.trim().toLowerCase() === position.trim().toLowerCase(),
+        );
+        if (matchedRule) {
+          const fromRule = normalizeToUserGrouping(matchedRule.group);
+          if (fromRule) return fromRule;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. Gunakan nilai eksplisit dari kolom Groupings (Excel / User Management) jika tersedia
+  if (explicitGrouping) {
+    const fromExplicit = normalizeToUserGrouping(explicitGrouping);
+    if (fromExplicit) return fromExplicit;
+  }
+
+  return inferGroupingFromPosition(position);
+}
+
+export function resolveEffectiveUserGrouping(user: ManagedUser): UserGrouping {
+  return resolveGroupingForCompanyAndPosition(user.company, user.position, user.groupings);
+}
+
 export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthorityLevel {
   if (isAdminOrHrIcfRole(user.role)) return "admin";
-  if (user.role === "BOD" || /\bbod\b|board of director/i.test(user.position)) return "bod";
-  if (user.role === "Director" || /direktur|director|\bcoo\b/i.test(user.position)) return "director_group";
-  if (user.role === "GM" || /\bgm\b|\bvgm\b|general manager|koordinator/i.test(user.position)) return "gm_unit";
+  if (user.role === "BOD") return "bod";
+  if (user.role === "Director") return "director_group";
+  if (user.role === "GM") return "gm_unit";
   if (user.role === "HR Unit") return "hr_unit";
-  if (user.groupings === "Ka./Wa.Ka.Div ke atas" || /divisi|division/i.test(user.position)) return "division";
-  if (user.groupings === "Ka./Wa.Ka.Dept" || /departemen|departement|\bdept\b/i.test(user.position)) return "department";
-  if (user.groupings === "Ka./Wa.Ka.Bagian" || /bagian|supervisor/i.test(user.position)) return "bagian";
-  if (user.groupings === "Ka./Wa.Ka.Seksi" || /seksi|shift|pengawas/i.test(user.position)) return "seksi";
+
+  // Penentuan level kewenangan berjenjang murni dari Effective Grouping (bebas dari perbedaan nama posisi seperti 'Mandor' vs 'Kepala Bagian')
+  const effectiveGrouping = resolveEffectiveUserGrouping(user);
+  if (effectiveGrouping === "Ka./Wa.Ka.Div ke atas") return "division";
+  if (effectiveGrouping === "Ka./Wa.Ka.Dept") return "department";
+  if (effectiveGrouping === "Ka./Wa.Ka.Bagian") return "bagian";
+  if (effectiveGrouping === "Ka./Wa.Ka.Seksi") return "seksi";
   return "operational";
 }
 
@@ -545,17 +597,17 @@ export function getActiveUser(): ManagedUser {
   return users[0] ?? DEFAULT_MANAGED_USERS[0];
 }
 
-export function resolvePortalPathForRole(role: AppUserRole, position = ""): "/hr" | "/bod" | "/supervisor" | "/employee" {
+export function resolvePortalPathForRole(role: AppUserRole, _position = "", grouping = ""): "/hr" | "/bod" | "/supervisor" | "/employee" {
   if (role === "Administrator" || role === "HR Admin" || role === "HR Unit" || role === "HR ICF") {
     return "/hr";
   }
-  if (role === "BOD" || role === "Director" || /direktur|director|bod/i.test(position)) {
+  if (role === "BOD" || role === "Director") {
     return "/bod";
   }
   if (
     role === "Supervisor" ||
     role === "GM" ||
-    /kepala|supervisor|manager|gm|pengawas/i.test(position)
+    (grouping && grouping !== "Operasional")
   ) {
     return "/supervisor";
   }
@@ -563,6 +615,7 @@ export function resolvePortalPathForRole(role: AppUserRole, position = ""): "/hr
 }
 
 export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleName[] {
+  const effectiveGrouping = resolveEffectiveUserGrouping(user);
   try {
     const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
     if (raw) {
@@ -572,7 +625,7 @@ export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleNam
         const matched = unitRules.find(
           (r) =>
             r.position.toLowerCase() === user.position.toLowerCase() ||
-            r.group.toLowerCase() === user.groupings.toLowerCase(),
+            r.group.toLowerCase() === effectiveGrouping.toLowerCase(),
         );
         if (matched && matched.allowedModules.length > 0) {
           return matched.allowedModules;
@@ -584,15 +637,9 @@ export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleNam
   }
   if (user.role === "HR Unit") {
     // Dual-role HR Unit: acts as appraisal participant at Ka./Wa.Ka.Bagian level
-    return defaultAllowedModulesForGrouping("Ka./Wa.Ka.Bagian");
+    return defaultAllowedModulesForGrouping(effectiveGrouping !== "Operasional" ? effectiveGrouping : "Ka./Wa.Ka.Bagian");
   }
-  if (/divisi|gm|direktur/i.test(user.position) || user.groupings === "Ka./Wa.Ka.Div ke atas" || user.groupings === "TEAM_DIV") {
-    return defaultAllowedModulesForGrouping("Ka./Wa.Ka.Div ke atas");
-  }
-  if (/departemen|bagian|supervisor/i.test(user.position) || user.groupings === "Ka./Wa.Ka.Bagian" || user.groupings === "Ka./Wa.Ka.Dept") {
-    return defaultAllowedModulesForGrouping("Ka./Wa.Ka.Bagian");
-  }
-  return defaultAllowedModulesForGrouping(user.groupings);
+  return defaultAllowedModulesForGrouping(effectiveGrouping);
 }
 
 export function loginWithCompanyAndEmployeeId(
@@ -648,7 +695,7 @@ export function loginWithCompanyAndEmployeeId(
     company: updatedUser.company,
   });
 
-  const redirectPath = resolvePortalPathForRole(updatedUser.role, updatedUser.position);
+  const redirectPath = resolvePortalPathForRole(updatedUser.role, updatedUser.position, resolveEffectiveUserGrouping(updatedUser));
   return { ok: true, user: updatedUser, redirectPath };
 }
 
@@ -685,6 +732,6 @@ export function useAuthStore() {
     allowedModules,
     isHrUnitLocked,
     lockedUnits,
-    portalPath: resolvePortalPathForRole(activeUser.role, activeUser.position),
+    portalPath: resolvePortalPathForRole(activeUser.role, activeUser.position, resolveEffectiveUserGrouping(activeUser)),
   };
 }

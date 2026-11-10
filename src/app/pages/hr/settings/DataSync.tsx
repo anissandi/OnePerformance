@@ -13,8 +13,8 @@ import {
 } from "../../../services/supabaseClient";
 import {
   COMPANY_UNIT_LOCATIONS,
-  inferGroupingFromPosition,
   loadManagedUsers,
+  resolveGroupingForCompanyAndPosition,
   saveManagedUsers,
   type ManagedUser,
   type AppUserRole,
@@ -257,16 +257,8 @@ export function DataSyncPage() {
           const rawRole = String(r["Role"] ?? r["User Role"] ?? "").trim();
           const rawGrouping = String(r["Groupings"] ?? r["Grouping"] ?? r["User Groupings"] ?? "").trim();
 
-          const normalizeImportedGrouping = (val: string, fallbackPos: string): string => {
-            const v = val.trim().toLowerCase();
-            if (!v) return inferGroupingFromPosition(fallbackPos);
-            if (/div|gm|direktur|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
-            if (/dept|departemen/i.test(v)) return "Ka./Wa.Ka.Dept";
-            if (/bagian/i.test(v)) return "Ka./Wa.Ka.Bagian";
-            if (/seksi|shift/i.test(v)) return "Ka./Wa.Ka.Seksi";
-            if (/operasional|operational/i.test(v)) return "Operasional";
-            return val.trim();
-          };
+          const rowCompany = String(r["Company"] ?? r["Unit"] ?? targetCompany).trim();
+          const grouping = resolveGroupingForCompanyAndPosition(rowCompany, position, rawGrouping);
 
           const normalizeImportedRole = (val: string): AppUserRole | "" => {
             const v = val.trim().toLowerCase();
@@ -282,7 +274,6 @@ export function DataSyncPage() {
             return val.trim() as AppUserRole;
           };
 
-          const grouping = normalizeImportedGrouping(rawGrouping, position);
           const existingIdx = existingUsers.findIndex(
             (u) => u.employeeId.toLowerCase() === empId.toLowerCase() || (u.regNo && u.regNo.toLowerCase() === regNo.toLowerCase()),
           );

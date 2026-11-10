@@ -252,14 +252,12 @@ export function YearEndVerification() {
     window.addEventListener("pa-auth-updated", refresh);
     window.addEventListener("pa-employees-imported", refresh);
     window.addEventListener("pa-db-hydrated", refresh);
-    window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener("appraisal-updated", refresh);
       window.removeEventListener("feedback-updated", refresh);
       window.removeEventListener("pa-auth-updated", refresh);
       window.removeEventListener("pa-employees-imported", refresh);
       window.removeEventListener("pa-db-hydrated", refresh);
-      window.removeEventListener("storage", refresh);
     };
   }, []);
   const currentEmployees = useMemo(() => {

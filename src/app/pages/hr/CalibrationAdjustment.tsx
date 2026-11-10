@@ -11,6 +11,7 @@ import { loadMeasurementRCARecords } from "../employee/RCAPage";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { applyImportedEmployeesDistribution, orgSlug } from "./CalibrationSetting";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -253,12 +254,14 @@ const MI_LINKED_EMPLOYEES: Employee[] = [
 function buildLiveCalibrationEmployees(): Employee[] {
   const users = loadManagedUsers().filter((u) => u.status === "Active");
   const liveEmps = getLiveTransactionalEmployees();
-  return users.map((u, idx) => {
+  return users.map((u) => {
     const live = liveEmps.find((e) => e.id.toLowerCase() === u.employeeId.toLowerCase());
-    const matchedBagian = BAGIAN_DEFS.find(([, , bName]) => u.bagian && bName.toLowerCase() === u.bagian.toLowerCase()) ?? BAGIAN_DEFS[idx % BAGIAN_DEFS.length];
-    const bagianId = matchedBagian[0];
-    const deptId = matchedBagian[1];
-    const divisiId = DEPT_DEFS.find(([dId]) => dId === deptId)?.[1] ?? "div1";
+    const divName = (u.division || "Umum").trim();
+    const deptName = (u.department || divName).trim();
+    const bagName = (u.bagian || deptName).trim();
+    const divisiId = `div_${orgSlug(divName)}`;
+    const deptId = `dep_${orgSlug(divName)}__${orgSlug(deptName)}`;
+    const bagianId = `bag_${orgSlug(divName)}__${orgSlug(deptName)}__${orgSlug(bagName)}`;
     const grouping = u.groupings || "Operasional";
     const allowedModules = resolveUserAllowedModules(u);
     const level: EmpLevel =
@@ -305,9 +308,9 @@ const ALL_EMPLOYEES: Employee[] = new Proxy([] as Employee[], {
 const makeUnit = (id: string, name: string, code: string, industry: string): CompanyUnit => ({
   id, name, code, industry,
   calibrationGrades: makeDefaultCalibrationGrades(),
-  divisionProportions: DIV_DEFS.map(d => ({ id: d.id, divisi: d.divisi, hc: 0 })),
-  departemenenProportions: DEPT_DEFS.map(([id, divisiId, departemen]) => ({ id, divisiId, departemen, hc: 0 })),
-  bagianProportions: BAGIAN_DEFS.map(([id, departemenenId, bagian]) => ({ id, departemenenId, bagian, hc: 0 })),
+  divisionProportions: [],
+  departemenenProportions: [],
+  bagianProportions: [],
 });
 
 const defaultCompanyUnits: CompanyUnit[] = [
@@ -2391,24 +2394,33 @@ function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBa
 
 function loadFromSetting(): { units: CompanyUnit[]; submittedAt: string | null } {
   try {
-    const raw = localStorage.getItem("calibration_submitted_units");
+    const raw = localStorage.getItem("calibration_submitted_units") ?? localStorage.getItem("calibration_hc_settings_2026");
     const submittedAt = localStorage.getItem("calibration_submitted_at");
-    if (!raw) return { units: defaultCompanyUnits, submittedAt: null };
+    if (!raw) {
+      return {
+        units: defaultCompanyUnits.map((u) => applyImportedEmployeesDistribution(u)),
+        submittedAt: null,
+      };
+    }
     const submitted: any[] = JSON.parse(raw);
     const units = defaultCompanyUnits.map(def => {
+      const synced = applyImportedEmployeesDistribution(def);
       const src = submitted.find(s => s.id === def.id);
-      if (!src) return def;
+      if (!src) return synced;
       return {
-        ...def,
-        calibrationGrades:        src.calibrationGrades        ?? def.calibrationGrades,
-        divisionProportions:      src.divisionProportions      ?? def.divisionProportions,
-        departemenenProportions:  src.departemenenProportions  ?? def.departemenenProportions,
-        bagianProportions:        src.bagianProportions        ?? def.bagianProportions,
+        ...synced,
+        calibrationGrades:        src.calibrationGrades ?? synced.calibrationGrades,
+        divisionProportions:      synced.divisionProportions.length > 0 ? synced.divisionProportions : (src.divisionProportions ?? []),
+        departemenenProportions:  synced.departemenenProportions.length > 0 ? synced.departemenenProportions : (src.departemenenProportions ?? []),
+        bagianProportions:        synced.bagianProportions.length > 0 ? synced.bagianProportions : (src.bagianProportions ?? []),
       };
     });
     return { units, submittedAt };
   } catch {
-    return { units: defaultCompanyUnits, submittedAt: null };
+    return {
+      units: defaultCompanyUnits.map((u) => applyImportedEmployeesDistribution(u)),
+      submittedAt: null,
+    };
   }
 }
 

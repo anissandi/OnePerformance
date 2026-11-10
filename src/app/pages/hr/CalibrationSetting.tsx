@@ -80,9 +80,9 @@ const BAGIAN_DEFS: [string, string, string][] = [
 const makeUnit = (id: string, name: string, code: string, industry: string): CompanyUnit => ({
   id, name, code, industry,
   calibrationGrades: makeDefaultCalibrationGrades(),
-  divisionProportions: DIV_DEFS.map(d => ({ id: d.id, divisi: d.divisi, hc: 0 })),
-  departemenenProportions: DEPT_DEFS.map(([id, divisiId, departemen]) => ({ id, divisiId, departemen, hc: 0 })),
-  bagianProportions: BAGIAN_DEFS.map(([id, departemenenId, bagian]) => ({ id, departemenenId, bagian, hc: 0 })),
+  divisionProportions: [],
+  departemenenProportions: [],
+  bagianProportions: [],
 });
 
 const defaultCompanyUnits: CompanyUnit[] = [
@@ -102,59 +102,59 @@ function gradeCalcs(hc: number, grades: CalibrationGrade[]) {
   return grades.map(g => hc > 0 ? Math.round(hc * (parseFloat(g.proporsi) || 0) / 100) : 0);
 }
 
+export function orgSlug(text: string): string {
+  return text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "general";
+}
+
 /**
  * Bagian III Poin 3:
- * Otomatis mendistribusikan data karyawan yang sudah diimpor sesuai kuota
- * per masing-masing Divisi, Departement, dan Bagian pada unit usaha terkait.
+ * Membangun daftar Divisi, Departemen, dan Bagian beserta jumlah HC secara dinamis
+ * langsung dari data karyawan hasil Import Excel pada unit usaha terkait.
  */
-function applyImportedEmployeesDistribution(unit: CompanyUnit): CompanyUnit {
+export function applyImportedEmployeesDistribution(unit: CompanyUnit): CompanyUnit {
   const unitUsers = loadManagedUsers().filter(
     (u) => u.company === unit.name && u.status === "Active",
   );
-  if (unitUsers.length === 0) return unit;
+  if (unitUsers.length === 0) {
+    return {
+      ...unit,
+      divisionProportions: [],
+      departemenenProportions: [],
+      bagianProportions: [],
+    };
+  }
 
-  const matchText = (a: string, b: string) => {
-    const na = a.trim().toLowerCase();
-    const nb = b.trim().toLowerCase();
-    return na === nb || na.includes(nb) || nb.includes(na);
-  };
+  const divMap = new Map<string, { id: string; divisi: string; hc: number }>();
+  const deptMap = new Map<string, { id: string; divisiId: string; departemen: string; hc: number }>();
+  const bagianMap = new Map<string, { id: string; departemenenId: string; bagian: string; hc: number }>();
 
-  const nextBagian = unit.bagianProportions.map((b) => {
-    const parentDept = unit.departemenenProportions.find((d) => d.id === b.departemenenId);
-    const count = unitUsers.filter((u) => {
-      if (u.bagian && matchText(u.bagian, b.bagian)) return true;
-      if (!u.bagian && parentDept && matchText(u.department, parentDept.departemen)) {
-        const siblings = unit.bagianProportions.filter((x) => x.departemenenId === parentDept.id);
-        return siblings[0]?.id === b.id;
-      }
-      return false;
-    }).length;
-    return { ...b, hc: count > 0 ? count : b.hc };
-  });
+  for (const u of unitUsers) {
+    const divName = (u.division || "Umum").trim();
+    const deptName = (u.department || divName).trim();
+    const bagName = (u.bagian || deptName).trim();
 
-  const nextDept = unit.departemenenProportions.map((d) => {
-    const directCount = unitUsers.filter((u) => matchText(u.department, d.departemen)).length;
-    const sumBagian = nextBagian
-      .filter((b) => b.departemenenId === d.id)
-      .reduce((s, b) => s + b.hc, 0);
-    const hc = Math.max(directCount, sumBagian, d.hc);
-    return { ...d, hc };
-  });
+    const divId = `div_${orgSlug(divName)}`;
+    const deptId = `dep_${orgSlug(divName)}__${orgSlug(deptName)}`;
+    const bagId = `bag_${orgSlug(divName)}__${orgSlug(deptName)}__${orgSlug(bagName)}`;
 
-  const nextDiv = unit.divisionProportions.map((div) => {
-    const directCount = unitUsers.filter((u) => matchText(u.division, div.divisi)).length;
-    const sumDept = nextDept
-      .filter((d) => d.divisiId === div.id)
-      .reduce((s, d) => s + d.hc, 0);
-    const hc = Math.max(directCount, sumDept, div.hc);
-    return { ...div, hc };
-  });
+    const curDiv = divMap.get(divId) ?? { id: divId, divisi: divName, hc: 0 };
+    curDiv.hc += 1;
+    divMap.set(divId, curDiv);
+
+    const curDept = deptMap.get(deptId) ?? { id: deptId, divisiId: divId, departemen: deptName, hc: 0 };
+    curDept.hc += 1;
+    deptMap.set(deptId, curDept);
+
+    const curBag = bagianMap.get(bagId) ?? { id: bagId, departemenenId: deptId, bagian: bagName, hc: 0 };
+    curBag.hc += 1;
+    bagianMap.set(bagId, curBag);
+  }
 
   return {
     ...unit,
-    divisionProportions: nextDiv,
-    departemenenProportions: nextDept,
-    bagianProportions: nextBagian,
+    divisionProportions: Array.from(divMap.values()),
+    departemenenProportions: Array.from(deptMap.values()),
+    bagianProportions: Array.from(bagianMap.values()),
   };
 }
 // ─── Calibration Panel ────────────────────────────────────────────────────────
@@ -718,9 +718,11 @@ export function CalibrationSetting() {
     };
     window.addEventListener("pa-db-hydrated", onHydrated);
     window.addEventListener("pa-employees-imported", onEmployeesImported);
+    window.addEventListener("pa-auth-updated", onEmployeesImported);
     return () => {
       window.removeEventListener("pa-db-hydrated", onHydrated);
       window.removeEventListener("pa-employees-imported", onEmployeesImported);
+      window.removeEventListener("pa-auth-updated", onEmployeesImported);
     };
   }, []);
 

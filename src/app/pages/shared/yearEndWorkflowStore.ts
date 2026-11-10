@@ -41,6 +41,14 @@ export function applyYearEndScorePolicy<T extends Record<string, number | null>>
 }
 
 export function saveYearEndState(state: YearEndState): void {
+  try {
+    const existingRaw = localStorage.getItem(KEY);
+    if (existingRaw && existingRaw === JSON.stringify(state)) {
+      return;
+    }
+  } catch {
+    // ignore
+  }
   savePersistedState(KEY, state, {
     kind: "year-end-verification",
     period: "2026",

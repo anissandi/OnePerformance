@@ -585,6 +585,47 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
       saveUnitGroupRules(companyName, nextList);
       return { ...previous, [companyName]: nextList };
     });
+    // Otomatis sinkronkan properti groupings karyawan pada Company Unit ini yang memiliki Position/Jabatan yang sama
+    const allUsers = loadManagedUsers();
+    let changed = false;
+    const syncedUsers = allUsers.map(u => {
+      if (u.company === companyName && u.position.trim().toLowerCase() === updated.position.trim().toLowerCase() && u.groupings !== updated.group) {
+        changed = true;
+        return { ...u, groupings: updated.group };
+      }
+      return u;
+    });
+    if (changed) {
+      saveManagedUsers(syncedUsers);
+    }
+  }
+
+  function handleSyncPositionsFromUsers() {
+    const unitUsers = loadManagedUsers().filter(u => u.company === companyName && u.position.trim());
+    const current = rulesByCompany[companyName] ?? [];
+    const existingPositions = new Set(current.map(r => r.position.trim().toLowerCase()));
+    const addedRules: GroupRule[] = [];
+
+    unitUsers.forEach((u, idx) => {
+      const posKey = u.position.trim().toLowerCase();
+      if (!existingPositions.has(posKey)) {
+        existingPositions.add(posKey);
+        const group = ALL_GROUPS.includes(u.groupings) ? u.groupings : "Operasional";
+        addedRules.push({
+          id: `sync-${Date.now()}-${idx}`,
+          position: u.position.trim(),
+          group,
+          description: `Auto-synced from imported employee position in ${companyName}`,
+          allowedModules: defaultAllowedModulesForGrouping(group),
+        });
+      }
+    });
+
+    if (addedRules.length > 0) {
+      const nextList = [...current, ...addedRules];
+      saveUnitGroupRules(companyName, nextList);
+      setRulesByCompany(prev => ({ ...prev, [companyName]: nextList }));
+    }
   }
 
   // Summary: count per group
@@ -635,6 +676,14 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
           )}
           <div className="flex-1" />
           <span className="text-xs text-gray-400">{filtered.length} rules</span>
+          <button
+            type="button"
+            onClick={handleSyncPositionsFromUsers}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-blue-200 bg-blue-50 text-[#1A284F] text-xs font-semibold rounded-lg hover:bg-blue-100 transition-colors"
+            title="Tambahkan otomatis semua nama Jabatan dari data karyawan unit ini ke tabel User Groupings"
+          >
+            <RefreshCw size={13} /> Sync Posisi Karyawan
+          </button>
           <button
             onClick={() => setAddOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1A284F] text-white text-sm rounded-lg hover:bg-[#2a3d6e]"
