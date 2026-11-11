@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { notifyLoginToSupabase, savePersistedState, syncToSupabase } from "../services/supabaseClient";
+import { ACCESS_UPDATED_EVENT, getRolePermissions } from "../pages/hr/settings/AccessManagement";
 
 export type AppUserRole =
   | "Employee"
@@ -11,7 +12,8 @@ export type AppUserRole =
   | "BOD"
   | "Administrator"
   | "HR Admin"
-  | "";
+  | ""
+  | string;
 
 export type UserGrouping =
   | "Operasional"
@@ -114,6 +116,12 @@ export function isAdminOrHrIcfRole(role: AppUserRole): boolean {
 export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers()): boolean {
   if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director" || user.role === "GM" || user.role === "HR Unit" || user.role === "Supervisor") {
     return true;
+  }
+  if (user.role) {
+    const perms = getRolePermissions(user.role);
+    if (perms.approvals?.approve || perms.approvals?.view) {
+      return true;
+    }
   }
   const reg = (user.regNo ?? "").trim().toLowerCase();
   const emp = user.employeeId.trim().toLowerCase();
@@ -611,6 +619,18 @@ export function resolvePortalPathForRole(role: AppUserRole, _position = "", grou
   ) {
     return "/supervisor";
   }
+  if (role && role !== "Employee") {
+    const perms = getRolePermissions(role);
+    if (perms.setting?.view || perms.evidence?.view || perms.analytics?.view) {
+      return "/hr";
+    }
+    if (perms.approvals_calibration?.view || perms.mgmt_interview_assessment?.view) {
+      return "/bod";
+    }
+    if (perms.approvals?.view || perms.pa_monitoring?.view || perms.pa_summary?.view) {
+      return "/supervisor";
+    }
+  }
   return "/employee";
 }
 
@@ -713,9 +733,11 @@ export function useAuthStore() {
   useEffect(() => {
     const onUpdate = () => setTick((t) => t + 1);
     window.addEventListener("pa-auth-updated", onUpdate);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onUpdate);
     window.addEventListener("storage", onUpdate);
     return () => {
       window.removeEventListener("pa-auth-updated", onUpdate);
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onUpdate);
       window.removeEventListener("storage", onUpdate);
     };
   }, []);

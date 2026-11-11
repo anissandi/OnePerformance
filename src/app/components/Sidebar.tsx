@@ -30,8 +30,33 @@ import {
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import { useAuthStore } from "../store/authStore";
+import { useAccessManagement } from "../pages/hr/settings/AccessManagement";
 
 type Role = "hr" | "employee" | "supervisor" | "bod";
+
+interface NavSubChild {
+  to: string;
+  label: string;
+  icon?: any;
+  menuId?: string;
+}
+
+interface NavSubLink {
+  to?: string;
+  label: string;
+  icon?: any;
+  menuId?: string;
+  children?: NavSubChild[];
+}
+
+interface NavTopLink {
+  to?: string;
+  icon: any;
+  label: string;
+  exact?: boolean;
+  menuId?: string;
+  subLinks?: NavSubLink[];
+}
 
 const hrLinks = [
   { to: "/hr", icon: BarChart2, label: "Analytics Dashboard", exact: true },
@@ -228,90 +253,454 @@ const employeeLinks = [
 
 export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean }) {
   const { activeUser, allowedModules } = useAuthStore();
+  const { getRolePermissions } = useAccessManagement();
+  const rolePerms = getRolePermissions(activeUser.role || "Employee");
+  const canView = (menuId: string) => Boolean(rolePerms[menuId]?.view);
+
   const hasManagerial = allowedModules.includes("Managerial Skill");
   const hasIdf = allowedModules.includes("Inter-Departement Feedback");
   const hasMi = allowedModules.includes("Management Interview");
 
-  const filteredEmployeeLinks = employeeLinks.map((link) => {
-    if (link.label === "Performance Appraisal Measurement" && link.subLinks) {
-      return {
-        ...link,
-        subLinks: link.subLinks.filter((sub) => {
-          if (sub.to.endsWith("/inter-department-feedback")) return hasIdf;
-          return true;
-        }),
-      };
-    }
-    return link;
-  });
+  const buildSettingLink = (): NavTopLink | null => {
+    const masterChildren: NavSubChild[] = [
+      ...(canView("setting_master_kpi") ? [{ to: "/hr/settings/master/kpi", label: "KPI", icon: TrendingUp }] : []),
+      ...(canView("setting_master_appraisal") ? [{ to: "/hr/settings/master/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+      ...(canView("setting_master_managerial") ? [{ to: "/hr/settings/master/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+    ];
+    const settingSubs: NavSubLink[] = [
+      ...(canView("setting_master") && masterChildren.length > 0
+        ? [{ label: "Master", icon: ListTodo, children: masterChildren }]
+        : []),
+      ...(canView("setting_scores") ? [{ to: "/hr/settings/scores-calibration", label: "Scores Setting", icon: TrendingUp }] : []),
+      ...(canView("setting_modules") ? [{ to: "/hr/modules", label: "Module Activation", icon: Settings }] : []),
+      ...(canView("setting_cycle") ? [{ to: "/hr/settings/cycle", label: "Cycle Management", icon: RefreshCw }] : []),
+      ...(canView("setting_approval_mgmt") ? [{ to: "/hr/settings/approval-management", label: "Approval Management", icon: CheckSquare }] : []),
+      ...(canView("setting_user_mgmt") ? [{ to: "/hr/settings/user-management", label: "User Management", icon: Users }] : []),
+      ...(canView("setting_access_mgmt") ? [{ to: "/hr/settings/access-management", label: "Access Management", icon: Shield }] : []),
+      ...(canView("setting_menu_mgmt") ? [{ to: "/hr/settings/menu-management", label: "Menu Management", icon: Menu }] : []),
+      ...(canView("setting_data_sync") ? [{ to: "/hr/settings/data-sync", label: "Data Sync", icon: RefreshCw }] : []),
+      ...(canView("setting_audit") ? [{ to: "/hr/settings/audit-trail", label: "Audit Trail", icon: FileSearch }] : []),
+    ];
+    if (!canView("setting") || settingSubs.length === 0) return null;
+    return { label: "Setting", icon: Settings, subLinks: settingSubs };
+  };
 
-  const filteredSupervisorLinks = supervisorLinks.map((link) => {
-    if (link.label === "Performance Appraisal Measurement" && link.subLinks) {
-      return {
-        ...link,
-        subLinks: link.subLinks.filter((sub) => {
-          if (sub.to.endsWith("/managerial-skill")) return hasManagerial;
-          if (sub.to.endsWith("/inter-department-feedback")) return hasIdf;
-          return true;
-        }),
-      };
-    }
-    if (link.label === "Performance Appraisal Monitoring" && link.subLinks) {
-      return {
-        ...link,
-        subLinks: link.subLinks.filter((sub) => {
-          if (sub.to.endsWith("/managerial-skill")) return hasManagerial;
-          if (sub.to.endsWith("/inter-department-feedback")) return hasIdf;
-          return true;
-        }),
-      };
-    }
-    if (link.label === "Calibration" && link.subLinks) {
-      return {
-        ...link,
-        subLinks: link.subLinks.filter((sub) => {
-          if (sub.to.endsWith("/management-interview")) return hasMi;
-          return true;
-        }),
-      };
-    }
-    return link;
-  });
+  const buildEvidenceLink = (): NavTopLink | null => {
+    const subs: NavSubLink[] = [
+      ...(canView("evidence_kpi") ? [{ to: "/hr/evidence/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+      ...(canView("evidence_rca") ? [{ to: "/hr/evidence/rca", label: "RCA", icon: RefreshCw }] : []),
+      ...(canView("evidence_smart") ? [{ to: "/hr/evidence/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("evidence_interview") ? [{ to: "/hr/evidence/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+    ];
+    if (!canView("evidence") || subs.length === 0) return null;
+    return { label: "Evidence", icon: FolderOpen, subLinks: subs };
+  };
 
-  // Dual-role HR Unit: also acts as an appraisal participant at level Ka./Wa.Ka.Bagian
-  const effectiveHrLinks =
-    activeUser.role === "HR Unit"
-      ? [
-          hrLinks[0],
-          { to: "/supervisor/appraisal", icon: FileText, label: "My Performance Appraisal" },
-          {
+  const buildLinksForPortal = (): NavTopLink[] => {
+    if (role === "hr") {
+      const list: NavTopLink[] = [];
+      if (canView("analytics")) {
+        list.push({ to: "/hr", icon: BarChart2, label: "Analytics Dashboard", exact: true });
+      }
+      if (canView("dashboard")) {
+        list.push({ to: "/supervisor", icon: ListTodo, label: "Dashboard", exact: true });
+      }
+      if (canView("appraisal")) {
+        list.push({ to: "/supervisor/appraisal", icon: FileText, label: "My Performance Appraisal" });
+      }
+      if (activeUser.role === "HR Unit") {
+        const myPaSubs: NavSubLink[] = [
+          ...(canView("pa_setting") && canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI Setting", icon: TrendingUp }] : []),
+          ...(canView("pa_setting") && canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals Setting", icon: Lightbulb }] : []),
+          ...(canView("pa_setting") && canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Setting", icon: FolderKanban }] : []),
+          ...(canView("pa_measurement") && canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+          ...(canView("pa_measurement") && canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+          ...(canView("pa_measurement") && canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals Measurement", icon: Lightbulb }] : []),
+          ...(canView("pa_measurement") && canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+          ...(canView("pa_measurement") && canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+          ...(canView("pa_measurement") && canView("pa_measurement_managerial") && hasManagerial ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+          ...(canView("pa_measurement") && canView("pa_measurement_feedback") && hasIdf ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+          ...(((canView("pa_setting") && canView("pa_setting_interview")) || (canView("pa_measurement") && canView("pa_measurement_interview"))) && hasMi
+            ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }]
+            : []),
+        ];
+        if (myPaSubs.length > 0) {
+          list.push({
             label: "My PA Setting & Measurement",
             icon: Target,
-            subLinks: [
-              { to: "/supervisor/setting/kpi", label: "KPI Setting", icon: TrendingUp },
-              { to: "/supervisor/setting/smart-goals", label: "SMART Goals Setting", icon: Lightbulb },
-              { to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp },
-              { to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText },
-              { to: "/supervisor/measurement/smart-goals", label: "SMART Goals Measurement", icon: Lightbulb },
-              { to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList },
-              { to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban },
-              ...(hasManagerial ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-              ...(hasIdf ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-              ...(hasMi ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-            ],
-          },
-          ...hrLinks.slice(1),
-        ]
-      : hrLinks;
+            subLinks: myPaSubs,
+          });
+        }
+      } else {
+        const paSettingSubs: NavSubLink[] = [
+          ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
+          ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+          ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+          ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ];
+        if (canView("pa_setting") && paSettingSubs.length > 0) {
+          list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+        }
+        const paMeasSubs: NavSubLink[] = [
+          ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+          ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+          ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+          ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+          ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+          ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+          ...(canView("pa_measurement_feedback") ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+          ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ];
+        if (canView("pa_measurement") && paMeasSubs.length > 0) {
+          list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
+        }
+      }
 
-  const links =
-    role === "hr"
-      ? effectiveHrLinks
-      : role === "employee"
-      ? filteredEmployeeLinks
-      : role === "bod"
-      ? bodLinks
-      : filteredSupervisorLinks;
+      if (canView("profile")) {
+        list.push({ to: "/hr/profile", icon: UserCog, label: "My Profile" });
+      }
+
+      const approvalSubs: NavSubLink[] = [
+        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
+          ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
+          : []),
+        ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
+        ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+        ...(canView("approvals_mgmt_interview") ? [{ to: "/hr/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
+        ...(canView("approvals_calibration") ? [{ to: "/bod/approvals/calibration", label: "Calibration", icon: Target }] : []),
+      ];
+      if (canView("approvals") && approvalSubs.length > 0) {
+        list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
+      }
+
+      const monitoringSubs: NavSubLink[] = [
+        ...(canView("pa_monitoring_kpi") ? [{ to: "/hr/monitoring/kpi", label: "KPI", icon: TrendingUp }] : []),
+        ...(canView("pa_monitoring_smart") ? [{ to: "/hr/monitoring/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_monitoring_appraisal") ? [{ to: "/hr/monitoring/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+        ...(canView("pa_monitoring_managerial") ? [{ to: "/hr/monitoring/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+        ...(canView("pa_monitoring_project") ? [{ to: "/hr/monitoring/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_monitoring_interview") ? [{ to: "/hr/monitoring/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ...(canView("pa_monitoring_feedback") ? [{ to: "/supervisor/monitoring/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+      ];
+      if (canView("pa_monitoring") && monitoringSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Monitoring", icon: ClipboardCheck, subLinks: monitoringSubs });
+      }
+
+      if (canView("pa_summary")) {
+        list.push({ to: "/hr/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
+      }
+
+      const calSubs: NavSubLink[] = [
+        ...(canView("calibration_setting") ? [{ to: "/hr/calibration/setting", label: "Setting", icon: Settings }] : []),
+        ...(canView("calibration_verification") ? [{ to: "/hr/calibration/verification", label: "Verification", icon: CheckSquare }] : []),
+        ...(canView("calibration_adjustment") ? [{ to: "/hr/calibration/adjustment", label: "Adjustment", icon: RefreshCw }] : []),
+        ...(canView("calibration_interview") ? [{ to: "/hr/calibration/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ...(canView("calibration_team_performance") ? [{ to: "/supervisor/calibration/team-performance", label: "Team Performance", icon: BarChart2 }] : []),
+      ];
+      if (canView("calibration") && calSubs.length > 0) {
+        list.push({ label: "Calibration", icon: Target, subLinks: calSubs });
+      }
+
+      const evLink = buildEvidenceLink();
+      if (evLink) list.push(evLink);
+
+      const miSubs: NavSubLink[] = [
+        ...(canView("mgmt_interview_assessment") ? [{ to: "/bod/management-interview/assessment", label: "Assessment", icon: MessageSquare }] : []),
+        ...(canView("mgmt_interview_invitation") ? [{ to: "/hr/management-interview/invitation", label: "Invitation", icon: MessageSquare }] : []),
+      ];
+      if (canView("management_interview") && miSubs.length > 0) {
+        list.push({ label: "Management Interview", icon: MessageSquare, subLinks: miSubs });
+      }
+
+      if (canView("history")) {
+        list.push({ to: "/hr/history", icon: BookOpen, label: "PA Cycle History" });
+      }
+      if (canView("documents")) {
+        list.push({ to: "/hr/documents", icon: BookOpen, label: "Documents" });
+      }
+      if (canView("override")) {
+        list.push({ to: "/hr/override", icon: Shield, label: "Management Override" });
+      }
+
+      const settingLink = buildSettingLink();
+      if (settingLink) list.push(settingLink);
+
+      return list;
+    }
+
+    if (role === "bod") {
+      const list: NavTopLink[] = [];
+      if (canView("analytics") || canView("dashboard")) {
+        list.push({ to: "/bod", icon: BarChart2, label: "Analytics Dashboard", exact: true });
+      }
+      if (canView("profile")) {
+        list.push({ to: "/bod/profile", icon: UserCog, label: "My Profile" });
+      }
+      if (canView("appraisal")) {
+        list.push({ to: "/supervisor/appraisal", icon: FileText, label: "My Performance Appraisal" });
+      }
+      const approvalSubs: NavSubLink[] = [
+        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
+          ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
+          : []),
+        ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
+        ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+        ...(canView("approvals_mgmt_interview") ? [{ to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
+        ...(canView("approvals_calibration") ? [{ to: "/bod/approvals/calibration", label: "Calibration", icon: Target }] : []),
+      ];
+      if (canView("approvals") && approvalSubs.length > 0) {
+        list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
+      }
+
+      const monitoringSubs: NavSubLink[] = [
+        ...(canView("pa_monitoring_kpi") ? [{ to: "/bod/monitoring/kpi", label: "KPI", icon: TrendingUp }] : []),
+        ...(canView("pa_monitoring_smart") ? [{ to: "/bod/monitoring/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_monitoring_appraisal") ? [{ to: "/bod/monitoring/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+        ...(canView("pa_monitoring_managerial") ? [{ to: "/bod/monitoring/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+        ...(canView("pa_monitoring_project") ? [{ to: "/bod/monitoring/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_monitoring_interview") ? [{ to: "/bod/monitoring/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ...(canView("pa_monitoring_feedback") ? [{ to: "/supervisor/monitoring/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+      ];
+      if (canView("pa_monitoring") && monitoringSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Monitoring", icon: ClipboardCheck, subLinks: monitoringSubs });
+      }
+
+      if (canView("pa_summary")) {
+        list.push({ to: "/bod/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
+      }
+
+      const paSettingSubs: NavSubLink[] = [
+        ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
+        ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_setting") && paSettingSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+      }
+
+      const paMeasSubs: NavSubLink[] = [
+        ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+        ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+        ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+        ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+        ...(canView("pa_measurement_feedback") ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+        ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_measurement") && paMeasSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
+      }
+
+      const calSubs: NavSubLink[] = [
+        ...(canView("calibration_setting") ? [{ to: "/hr/calibration/setting", label: "Setting", icon: Settings }] : []),
+        ...(canView("calibration_verification") ? [{ to: "/hr/calibration/verification", label: "Verification", icon: CheckSquare }] : []),
+        ...(canView("calibration_adjustment") ? [{ to: "/bod/calibration/adjustment", label: "Adjustment", icon: RefreshCw }] : []),
+        ...(canView("calibration_interview") ? [{ to: "/bod/calibration/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ...(canView("calibration_team_performance") ? [{ to: "/supervisor/calibration/team-performance", label: "Team Performance", icon: BarChart2 }] : []),
+      ];
+      if (canView("calibration") && calSubs.length > 0) {
+        list.push({ label: "Calibration", icon: Target, subLinks: calSubs });
+      }
+
+      if (canView("management_interview") || canView("mgmt_interview_assessment")) {
+        list.push({ to: "/bod/management-interview/assessment", icon: MessageSquare, label: "Management Interview" });
+      }
+
+      const evLink = buildEvidenceLink();
+      if (evLink) list.push(evLink);
+
+      if (canView("history")) {
+        list.push({ to: "/bod/history", icon: BookOpen, label: "PA Cycle History" });
+      }
+      if (canView("documents")) {
+        list.push({ to: "/bod/documents", icon: BookOpen, label: "Documents" });
+      }
+
+      const settingLink = buildSettingLink();
+      if (settingLink) list.push(settingLink);
+
+      return list;
+    }
+
+    if (role === "employee") {
+      const list: NavTopLink[] = [];
+      if (canView("dashboard") || canView("analytics")) {
+        list.push({ to: "/employee", icon: BarChart2, label: "Dashboard", exact: true });
+      }
+      if (canView("profile")) {
+        list.push({ to: "/employee/profile", icon: UserCog, label: "My Profile" });
+      }
+      if (canView("appraisal")) {
+        list.push({ to: "/employee/appraisal", icon: FileText, label: "My Performance Appraisal" });
+      }
+
+      const approvalSubs: NavSubLink[] = [
+        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
+          ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
+          : []),
+        ...(canView("approvals_pa_measurement") ? [{ to: "/supervisor/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
+        ...(canView("approvals_pa_setting") ? [{ to: "/supervisor/appraisals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+      ];
+      if (canView("approvals") && approvalSubs.length > 0) {
+        list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
+      }
+
+      if (canView("pa_summary")) {
+        list.push({ to: "/supervisor/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
+      }
+
+      const monitoringSubs: NavSubLink[] = [
+        ...(canView("pa_monitoring_kpi") ? [{ to: "/supervisor/monitoring/kpi", label: "KPI", icon: TrendingUp }] : []),
+        ...(canView("pa_monitoring_smart") ? [{ to: "/supervisor/monitoring/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_monitoring_appraisal") ? [{ to: "/supervisor/monitoring/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+        ...(canView("pa_monitoring_managerial") ? [{ to: "/supervisor/monitoring/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+        ...(canView("pa_monitoring_project") ? [{ to: "/supervisor/monitoring/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_monitoring_interview") ? [{ to: "/supervisor/monitoring/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        ...(canView("pa_monitoring_feedback") ? [{ to: "/supervisor/monitoring/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+      ];
+      if (canView("pa_monitoring") && monitoringSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Monitoring", icon: ClipboardCheck, subLinks: monitoringSubs });
+      }
+
+      const paSettingSubs: NavSubLink[] = [
+        ...(canView("pa_setting_kpi") ? [{ to: "/employee/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
+        ...(canView("pa_setting_smart") ? [{ to: "/employee/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_setting") && paSettingSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+      }
+
+      const paMeasSubs: NavSubLink[] = [
+        ...(canView("pa_measurement_kpi") ? [{ to: "/employee/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+        ...(canView("pa_measurement_rca") ? [{ to: "/employee/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+        ...(canView("pa_measurement_smart") ? [{ to: "/employee/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_measurement_appraisal") ? [{ to: "/employee/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+        ...(canView("pa_measurement_project") ? [{ to: "/employee/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+        ...(canView("pa_measurement_feedback") && hasIdf ? [{ to: "/employee/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+        ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_measurement") && paMeasSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
+      }
+
+      if (canView("history")) {
+        list.push({ to: "/supervisor/history", icon: BookOpen, label: "PA Cycle History" });
+      }
+      if (canView("documents")) {
+        list.push({ to: "/employee/documents", icon: BookOpen, label: "Documents" });
+      }
+
+      const evLink = buildEvidenceLink();
+      if (evLink) list.push(evLink);
+
+      const settingLink = buildSettingLink();
+      if (settingLink) list.push(settingLink);
+
+      return list;
+    }
+
+    // Default: supervisor / gm portal
+    const list: NavTopLink[] = [];
+    if (canView("dashboard") || canView("analytics")) {
+      list.push({ to: "/supervisor", icon: ListTodo, label: "Dashboard", exact: true });
+    }
+    if (canView("profile")) {
+      list.push({ to: "/supervisor/profile", icon: UserCog, label: "My Profile" });
+    }
+    if (canView("appraisal")) {
+      list.push({ to: "/supervisor/appraisal", icon: FileText, label: "My Performance Appraisal" });
+    }
+
+    const approvalSubs: NavSubLink[] = [
+      ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
+        ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
+        : []),
+      ...(canView("approvals_pa_measurement") ? [{ to: "/supervisor/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
+      ...(canView("approvals_pa_setting") ? [{ to: "/supervisor/appraisals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+      ...(canView("approvals_mgmt_interview") ? [{ to: "/supervisor/appraisals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
+      ...(canView("approvals_calibration") ? [{ to: "/bod/approvals/calibration", label: "Calibration", icon: Target }] : []),
+    ];
+    if (canView("approvals") && approvalSubs.length > 0) {
+      list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
+    }
+
+    if (canView("pa_summary")) {
+      list.push({ to: "/supervisor/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
+    }
+
+    const monitoringSubs: NavSubLink[] = [
+      ...(canView("pa_monitoring_kpi") ? [{ to: "/supervisor/monitoring/kpi", label: "KPI", icon: TrendingUp }] : []),
+      ...(canView("pa_monitoring_smart") ? [{ to: "/supervisor/monitoring/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("pa_monitoring_appraisal") ? [{ to: "/supervisor/monitoring/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+      ...(canView("pa_monitoring_managerial") && hasManagerial ? [{ to: "/supervisor/monitoring/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+      ...(canView("pa_monitoring_project") ? [{ to: "/supervisor/monitoring/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+      ...(canView("pa_monitoring_interview") ? [{ to: "/supervisor/monitoring/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ...(canView("pa_monitoring_feedback") && hasIdf ? [{ to: "/supervisor/monitoring/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+    ];
+    if (canView("pa_monitoring") && monitoringSubs.length > 0) {
+      list.push({ label: "Performance Appraisal Monitoring", icon: ClipboardCheck, subLinks: monitoringSubs });
+    }
+
+    const paSettingSubs: NavSubLink[] = [
+      ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
+      ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+      ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+    ];
+    if (canView("pa_setting") && paSettingSubs.length > 0) {
+      list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+    }
+
+    const paMeasSubs: NavSubLink[] = [
+      ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+      ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+      ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+      ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+      ...(canView("pa_measurement_managerial") && hasManagerial ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+      ...(canView("pa_measurement_feedback") && hasIdf ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+      ...(canView("pa_measurement_interview") && hasMi ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+    ];
+    if (canView("pa_measurement") && paMeasSubs.length > 0) {
+      list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
+    }
+
+    const calSubs: NavSubLink[] = [
+      ...(canView("calibration_setting") ? [{ to: "/hr/calibration/setting", label: "Setting", icon: Settings }] : []),
+      ...(canView("calibration_verification") ? [{ to: "/hr/calibration/verification", label: "Verification", icon: CheckSquare }] : []),
+      ...(canView("calibration_adjustment") ? [{ to: "/hr/calibration/adjustment", label: "Adjustment", icon: RefreshCw }] : []),
+      ...(canView("calibration_team_performance") ? [{ to: "/supervisor/calibration/team-performance", label: "Team Performance", icon: BarChart2 }] : []),
+      ...(canView("calibration_interview") && hasMi ? [{ to: "/supervisor/calibration/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+    ];
+    if (canView("calibration") && calSubs.length > 0) {
+      list.push({ label: "Calibration", icon: Target, subLinks: calSubs });
+    }
+
+    const evLink = buildEvidenceLink();
+    if (evLink) list.push(evLink);
+
+    if (canView("history")) {
+      list.push({ to: "/supervisor/history", icon: BookOpen, label: "PA Cycle History" });
+    }
+    if (canView("documents")) {
+      list.push({ to: "/supervisor/documents", icon: BookOpen, label: "Documents" });
+    }
+
+    const settingLink = buildSettingLink();
+    if (settingLink) list.push(settingLink);
+
+    return list;
+  };
+
+  const links = buildLinksForPortal();
   const location = useLocation();
 
   // Pre-compute which menus have an active child

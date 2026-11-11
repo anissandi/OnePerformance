@@ -10,13 +10,13 @@ import {
   saveUnitGroupRules,
   type ManagedUser,
 } from "../../../store/authStore";
+import { useAccessManagement } from "./AccessManagement";
 
-type Role = "Employee" | "Supervisor" | "GM" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "";
+type Role = "Employee" | "Supervisor" | "GM" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "" | string;
 type Status = "Active" | "Inactive";
 
 type User = ManagedUser;
 
-const ROLES: Role[] = ["Employee", "Supervisor", "GM", "HR Unit", "HR ICF", "Director", "BOD", "Administrator"];
 const COMPANIES = [
   "PT RSUP (Industry)", "PT RSUP (Perkebunan)",
   "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)",
@@ -117,7 +117,7 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
 }
 
 // ─── Edit / Add Modal ──────────────────────────────────────────────────────────
-function EditModal({ user, onClose, onSave }: { user: User | null; onClose: () => void; onSave: (u: User) => void }) {
+function EditModal({ user, availableRoles, onClose, onSave }: { user: User | null; availableRoles: Role[]; onClose: () => void; onSave: (u: User) => void }) {
   const isNew = !user || !user.name;
   const [form, setForm] = useState<User>(user ?? {
     id: String(Date.now()), regNo: "", name: "", employeeId: "", position: "", company: COMPANIES[0],
@@ -165,7 +165,7 @@ function EditModal({ user, onClose, onSave }: { user: User | null; onClose: () =
           </div>
 
           {[
-            { label: "Role",            key: "role"     as keyof User, options: ["", ...ROLES], labels: { "": "— No Role —" } },
+            { label: "Role (from Access Management)", key: "role" as keyof User, options: ["", ...availableRoles], labels: { "": "— No Role —" } },
             { label: "Groupings Scores",key: "groupings"as keyof User, options: GROUPINGS_SCORES },
             { label: "Status",          key: "status"   as keyof User, options: ["Active", "Inactive"] },
           ].map(({ label, key, options, labels = {} }) => (
@@ -854,6 +854,7 @@ export function UserManagementPage() {
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useRouteTab<"users" | "grouping">(["users", "grouping"], "users");
   const [users, setUsers] = useState<User[]>(() => loadManagedUsers());
+  const { roles: accessRoles } = useAccessManagement();
   const [pageSize, setPageSize] = useState(10);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [statusFilter, setStatusFilter] = useState("All Status");
@@ -1005,7 +1006,7 @@ export function UserManagementPage() {
           </div>
 
           {[
-            { val: roleFilter, set: (v: string) => { setRoleFilter(v); setCurrentPage(1); }, opts: ["All Roles", ...ROLES] },
+            { val: roleFilter, set: (v: string) => { setRoleFilter(v); setCurrentPage(1); }, opts: ["All Roles", ...accessRoles] },
             { val: statusFilter, set: (v: string) => { setStatusFilter(v); setCurrentPage(1); }, opts: ["All Status", "Active", "Inactive"] },
           ].map(({ val, set, opts }, i) => (
             <div key={i} className="relative">
@@ -1133,6 +1134,7 @@ export function UserManagementPage() {
       {(editUser || addOpen) && (
         <EditModal
           user={addOpen ? { id: String(Date.now()), name: "", employeeId: "", position: "", company: selectedCompany, division: "", department: "", grade: "", role: "Employee", groupings: GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "" } : editUser}
+          availableRoles={accessRoles}
           onClose={() => { setEditUser(null); setAddOpen(false); }}
           onSave={handleSave}
         />

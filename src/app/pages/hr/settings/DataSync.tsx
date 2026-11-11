@@ -19,6 +19,7 @@ import {
   type ManagedUser,
   type AppUserRole,
 } from "../../../store/authStore";
+import { loadAccessRoles } from "./AccessManagement";
 
 export const EMPLOYEE_IMPORT_HEADERS = [
   "No",
@@ -263,6 +264,9 @@ export function DataSyncPage() {
           const normalizeImportedRole = (val: string): AppUserRole | "" => {
             const v = val.trim().toLowerCase();
             if (!v) return "";
+            const configuredRoles = loadAccessRoles();
+            const exactMatch = configuredRoles.find((cr) => cr.toLowerCase() === v);
+            if (exactMatch) return exactMatch;
             if (v === "administrator" || v === "admin") return "Administrator";
             if (v === "hr icf" || v === "hricf" || v === "icf") return "HR ICF";
             if (v === "hr unit" || v === "hrunit") return "HR Unit";

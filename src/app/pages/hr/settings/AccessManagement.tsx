@@ -2,10 +2,10 @@ import { useState, useRef, useEffect } from "react";
 import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2 } from "lucide-react";
 import { loadPersistedState, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
 
-type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
-type Role = BuiltinRole | string;
+export type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
+export type Role = BuiltinRole | string;
 
-interface Permission {
+export interface Permission {
   view: boolean;
   create: boolean;
   edit: boolean;
@@ -13,25 +13,61 @@ interface Permission {
   approve: boolean;
 }
 
-interface MenuItem {
+export interface MenuItem {
   id: string;
   label: string;
   children?: MenuItem[];
 }
 
-interface RolePermissions {
+export interface RolePermissions {
   [menuId: string]: Permission;
 }
 
-const MENU_STRUCTURE: MenuItem[] = [
+export const ACCESS_UPDATED_EVENT = "pa-access-updated";
+
+export const MENU_STRUCTURE: MenuItem[] = [
+  {
+    id: "dashboard", label: "Dashboard",
+    children: [
+      { id: "dashboard_my",       label: "My Dashboard" },
+      { id: "dashboard_approval", label: "Approval Summary" },
+    ],
+  },
   { id: "analytics", label: "Analytics Dashboard" },
-  { id: "appraisal", label: "My Performance Appraisal" },
+  {
+    id: "profile", label: "My Profile",
+    children: [
+      { id: "profile_overview", label: "Overview" },
+      { id: "profile_results",  label: "PA Results" },
+      { id: "profile_kpi",      label: "KPI Summary" },
+    ],
+  },
+  {
+    id: "appraisal", label: "My Performance Appraisal",
+    children: [
+      { id: "appraisal_kpi",        label: "KPI" },
+      { id: "appraisal_smart",      label: "SMART Goals" },
+      { id: "appraisal_form",       label: "Appraisal Form" },
+      { id: "appraisal_project",    label: "Project Outside Job Scope" },
+      { id: "appraisal_managerial", label: "Managerial Skill" },
+      { id: "appraisal_feedback",   label: "Inter-Department Feedback" },
+      { id: "appraisal_interview",  label: "Management Interview" },
+    ],
+  },
   {
     id: "approvals", label: "Approvals",
     children: [
-      { id: "approvals_kpi_business",    label: "KPI Business" },
+      {
+        id: "approvals_kpi_business", label: "KPI Business",
+        children: [
+          { id: "approvals_kpi_business_group", label: "KPI Group" },
+          { id: "approvals_kpi_business_unit",  label: "KPI Unit (GM)" },
+        ],
+      },
       { id: "approvals_pa_measurement",  label: "Performance Appraisal Measurement" },
+      { id: "approvals_feedback",        label: "Inter-Department Feedback Approvals" },
       { id: "approvals_pa_setting",      label: "Performance Appraisal Setting" },
+      { id: "approvals_mgmt_interview",  label: "Management Interview" },
       { id: "approvals_open_lock",       label: "Open Lock" },
       { id: "approvals_calibration",     label: "Calibration" },
     ]
@@ -94,9 +130,12 @@ const MENU_STRUCTURE: MenuItem[] = [
     id: "management_interview", label: "Management Interview",
     children: [
       { id: "mgmt_interview_assessment", label: "Assessment" },
+      { id: "mgmt_interview_invitation", label: "Invitation" },
     ]
   },
+  { id: "history",   label: "PA Cycle History" },
   { id: "documents", label: "Documents" },
+  { id: "override",  label: "Management Override" },
   {
     id: "setting", label: "Setting",
     children: [
@@ -111,8 +150,22 @@ const MENU_STRUCTURE: MenuItem[] = [
       { id: "setting_scores",        label: "Scores Setting" },
       { id: "setting_modules",       label: "Module Activation" },
       { id: "setting_cycle",         label: "Cycle Management" },
-      { id: "setting_approval_mgmt", label: "Approval Management" },
-      { id: "setting_user_mgmt",     label: "User Management" },
+      {
+        id: "setting_approval_mgmt", label: "Approval Management",
+        children: [
+          { id: "setting_approval_mgmt_flow",       label: "Approval Flow" },
+          { id: "setting_approval_mgmt_icf",        label: "Approval ICF" },
+          { id: "setting_approval_mgmt_other",      label: "Approval Other" },
+          { id: "setting_approval_mgmt_delegation", label: "Delegation" },
+        ],
+      },
+      {
+        id: "setting_user_mgmt", label: "User Management",
+        children: [
+          { id: "setting_user_mgmt_users",    label: "Users & Approval Checker/Validator" },
+          { id: "setting_user_mgmt_grouping", label: "User Groupings" },
+        ],
+      },
       { id: "setting_access_mgmt",   label: "Access Management" },
       { id: "setting_menu_mgmt",     label: "Menu Management" },
       { id: "setting_data_sync",     label: "Data Sync" },
@@ -149,12 +202,23 @@ const VCET:Permission={ view: true,  create: true,  edit: true,  delete: true,  
 const N: Permission = { view: false, create: false, edit: false, delete: false, approve: false };
 
 const DEFAULT_ADMIN: RolePermissions = {
+  dashboard: N,
+  dashboard_my: N,
+  dashboard_approval: N,
   calibration_verification: VE,
   analytics: V,
+  profile: VE,
+  profile_overview: VE,
+  profile_results: V,
+  profile_kpi: V,
   approvals: VA,
   approvals_kpi_business:   T,
+  approvals_kpi_business_group: T,
+  approvals_kpi_business_unit:  T,
   approvals_pa_measurement: VA,
+  approvals_feedback:       VA,
   approvals_pa_setting:     VA,
+  approvals_mgmt_interview: N,
   approvals_open_lock:      VCEA,
   pa_monitoring: V,
   pa_monitoring_kpi:        VE,
@@ -163,6 +227,7 @@ const DEFAULT_ADMIN: RolePermissions = {
   pa_monitoring_managerial: VE,
   pa_monitoring_project:    VE,
   pa_monitoring_interview:  VE,
+  pa_monitoring_feedback:   N,
   pa_summary: V,
   calibration: V,
   calibration_setting:    VE,
@@ -173,19 +238,21 @@ const DEFAULT_ADMIN: RolePermissions = {
   evidence_rca:       V,
   evidence_smart:     V,
   evidence_interview: V,
-  pa_setting: V,
-  pa_setting_kpi:   VCET,
-  pa_setting_smart: VCET,
-  pa_measurement: V,
-  pa_measurement_kpi:        VE,
-  pa_measurement_rca:        VE,
-  pa_measurement_smart:      VE,
-  pa_measurement_appraisal:  VE,
-  pa_measurement_project:    VE,
-  pa_measurement_managerial: VE,
-  pa_measurement_feedback:   VE,
-  pa_measurement_interview:  VE,
+  pa_setting: N,
+  pa_setting_kpi:   N,
+  pa_setting_smart: N,
+  pa_measurement: N,
+  pa_measurement_kpi:        N,
+  pa_measurement_rca:        N,
+  pa_measurement_smart:      N,
+  pa_measurement_appraisal:  N,
+  pa_measurement_project:    N,
+  pa_measurement_managerial: N,
+  pa_measurement_feedback:   N,
+  pa_measurement_interview:  N,
+  history: V,
   documents: T,
+  override: N,
   setting: V,
   setting_master: V,
   setting_master_kpi:       T,
@@ -194,29 +261,53 @@ const DEFAULT_ADMIN: RolePermissions = {
   setting_scores:        VE,
   setting_modules:       VE,
   setting_approval_mgmt: T,
+  setting_approval_mgmt_flow:       T,
+  setting_approval_mgmt_icf:        T,
+  setting_approval_mgmt_other:      T,
+  setting_approval_mgmt_delegation: T,
   setting_user_mgmt:     T,
+  setting_user_mgmt_users:    T,
+  setting_user_mgmt_grouping: T,
   setting_access_mgmt:   T,
   setting_menu_mgmt:     T,
   setting_data_sync:     VE,
   setting_cycle:         T,
   setting_audit:         V,
   appraisal:             N,
+  appraisal_kpi:         N,
+  appraisal_smart:       N,
+  appraisal_form:        N,
+  appraisal_project:     N,
+  appraisal_managerial:  N,
+  appraisal_feedback:    N,
+  appraisal_interview:   N,
   approvals_calibration: N,
-  pa_monitoring_feedback:    VE,
   calibration_team_performance: N,
   pa_setting_project:    N,
   pa_setting_interview:  N,
   management_interview:  N,
   mgmt_interview_assessment: N,
+  mgmt_interview_invitation: N,
 };
 
 const DEFAULT_DIRECTOR: RolePermissions = {
+  dashboard: N,
+  dashboard_my: N,
+  dashboard_approval: N,
   calibration_verification: N,
   analytics: V,
+  profile: N,
+  profile_overview: VE,
+  profile_results: V,
+  profile_kpi: V,
   approvals: VA,
   approvals_kpi_business:   N,
+  approvals_kpi_business_group: N,
+  approvals_kpi_business_unit:  N,
   approvals_pa_measurement: VA,
+  approvals_feedback:       VA,
   approvals_pa_setting:     VA,
+  approvals_mgmt_interview: VA,
   approvals_open_lock:      N,
   pa_monitoring: V,
   pa_monitoring_kpi:        V,
@@ -247,7 +338,9 @@ const DEFAULT_DIRECTOR: RolePermissions = {
   pa_measurement_managerial: N,
   pa_measurement_feedback:   N,
   pa_measurement_interview:  N,
+  history: V,
   documents: V,
+  override: N,
   setting: N,
   setting_master: N,
   setting_master_kpi:       N,
@@ -256,29 +349,54 @@ const DEFAULT_DIRECTOR: RolePermissions = {
   setting_scores:        N,
   setting_modules:       N,
   setting_approval_mgmt: N,
+  setting_approval_mgmt_flow:       N,
+  setting_approval_mgmt_icf:        N,
+  setting_approval_mgmt_other:      N,
+  setting_approval_mgmt_delegation: N,
   setting_user_mgmt:     N,
+  setting_user_mgmt_users:    N,
+  setting_user_mgmt_grouping: N,
   setting_access_mgmt:   N,
   setting_menu_mgmt:     N,
   setting_data_sync:     N,
   setting_cycle:         N,
   setting_audit:         N,
   appraisal:             N,
+  appraisal_kpi:         N,
+  appraisal_smart:       N,
+  appraisal_form:        N,
+  appraisal_project:     N,
+  appraisal_managerial:  N,
+  appraisal_feedback:    N,
+  appraisal_interview:   N,
   approvals_calibration: VA,
-  pa_monitoring_feedback:    V,
+  pa_monitoring_feedback:    N,
   calibration_team_performance: N,
   pa_setting_project:    N,
   pa_setting_interview:  N,
   management_interview:  V,
-  mgmt_interview_assessment: N,
+  mgmt_interview_assessment: VCEA,
+  mgmt_interview_invitation: N,
 };
 
 const DEFAULT_HR_UNIT: RolePermissions = {
+  dashboard: N,
+  dashboard_my: N,
+  dashboard_approval: N,
   calibration_verification: VE,
   analytics: V,
+  profile: VE,
+  profile_overview: VE,
+  profile_results: V,
+  profile_kpi: V,
   approvals: VA,
   approvals_kpi_business:   VCET,
+  approvals_kpi_business_group: V,
+  approvals_kpi_business_unit:  VCET,
   approvals_pa_measurement: VA,
+  approvals_feedback:       VA,
   approvals_pa_setting:     VA,
+  approvals_mgmt_interview: N,
   approvals_open_lock:      VCE,
   pa_monitoring: V,
   pa_monitoring_kpi:        VE,
@@ -287,6 +405,7 @@ const DEFAULT_HR_UNIT: RolePermissions = {
   pa_monitoring_managerial: VE,
   pa_monitoring_project:    VE,
   pa_monitoring_interview:  VE,
+  pa_monitoring_feedback:   N,
   pa_summary: V,
   calibration: V,
   calibration_setting:    VE,
@@ -309,7 +428,9 @@ const DEFAULT_HR_UNIT: RolePermissions = {
   pa_measurement_managerial: VE,
   pa_measurement_feedback:   VE,
   pa_measurement_interview:  VE,
+  history: V,
   documents: T,
+  override: N,
   setting: V,
   setting_master: V,
   setting_master_kpi:       VCET,
@@ -318,29 +439,47 @@ const DEFAULT_HR_UNIT: RolePermissions = {
   setting_scores:        VE,
   setting_modules:       VE,
   setting_approval_mgmt: VCE,
+  setting_approval_mgmt_flow:       VCE,
+  setting_approval_mgmt_icf:        V,
+  setting_approval_mgmt_other:      VCE,
+  setting_approval_mgmt_delegation: VCE,
   setting_user_mgmt:     VCE,
+  setting_user_mgmt_users:    VCE,
+  setting_user_mgmt_grouping: VCE,
   setting_access_mgmt:   N,
   setting_menu_mgmt:     VE,
   setting_data_sync:     VE,
   setting_cycle:         VCET,
   setting_audit:         V,
-  appraisal:             N,
+  appraisal:             V,
+  appraisal_kpi:         V,
+  appraisal_smart:       V,
+  appraisal_form:        V,
+  appraisal_project:     V,
+  appraisal_managerial:  V,
+  appraisal_feedback:    V,
+  appraisal_interview:   V,
   approvals_calibration: N,
-  pa_monitoring_feedback:    VE,
   calibration_team_performance: N,
   pa_setting_project:    N,
   pa_setting_interview:  N,
-  management_interview:  V,
+  management_interview:  N,
   mgmt_interview_assessment: N,
+  mgmt_interview_invitation: N,
 };
 
 const DEFAULT_HR_ICF: RolePermissions = {
+  ...DEFAULT_ADMIN,
   calibration_verification: VE,
   analytics: V,
   approvals: VA,
   approvals_kpi_business:   VCEA,
+  approvals_kpi_business_group: VCEA,
+  approvals_kpi_business_unit:  VCEA,
   approvals_pa_measurement: VA,
+  approvals_feedback:       VA,
   approvals_pa_setting:     VA,
+  approvals_mgmt_interview: N,
   approvals_open_lock:      VCE,
   pa_monitoring: V,
   pa_monitoring_kpi:        V,
@@ -349,6 +488,7 @@ const DEFAULT_HR_ICF: RolePermissions = {
   pa_monitoring_managerial: V,
   pa_monitoring_project:    V,
   pa_monitoring_interview:  V,
+  pa_monitoring_feedback:   N,
   pa_summary: V,
   calibration: V,
   calibration_setting:    VE,
@@ -359,19 +499,21 @@ const DEFAULT_HR_ICF: RolePermissions = {
   evidence_rca:       V,
   evidence_smart:     V,
   evidence_interview: V,
-  pa_setting: V,
-  pa_setting_kpi:   VCEA,
-  pa_setting_smart: VCE,
-  pa_measurement: V,
-  pa_measurement_kpi:        VE,
-  pa_measurement_rca:        VE,
-  pa_measurement_smart:      VE,
-  pa_measurement_appraisal:  VE,
-  pa_measurement_project:    VE,
-  pa_measurement_managerial: VE,
-  pa_measurement_feedback:   VE,
-  pa_measurement_interview:  VE,
+  pa_setting: N,
+  pa_setting_kpi:   N,
+  pa_setting_smart: N,
+  pa_measurement: N,
+  pa_measurement_kpi:        N,
+  pa_measurement_rca:        N,
+  pa_measurement_smart:      N,
+  pa_measurement_appraisal:  N,
+  pa_measurement_project:    N,
+  pa_measurement_managerial: N,
+  pa_measurement_feedback:   N,
+  pa_measurement_interview:  N,
+  history: V,
   documents: VCE,
+  override: N,
   setting: V,
   setting_master: V,
   setting_master_kpi:       VCEA,
@@ -380,7 +522,13 @@ const DEFAULT_HR_ICF: RolePermissions = {
   setting_scores:        VE,
   setting_modules:       VE,
   setting_approval_mgmt: T,
+  setting_approval_mgmt_flow:       T,
+  setting_approval_mgmt_icf:        T,
+  setting_approval_mgmt_other:      T,
+  setting_approval_mgmt_delegation: T,
   setting_user_mgmt:     T,
+  setting_user_mgmt_users:    T,
+  setting_user_mgmt_grouping: T,
   setting_access_mgmt:   V,
   setting_menu_mgmt:     VCE,
   setting_data_sync:     V,
@@ -388,21 +536,32 @@ const DEFAULT_HR_ICF: RolePermissions = {
   setting_audit:         V,
   appraisal:             N,
   approvals_calibration: N,
-  pa_monitoring_feedback:    VE,
   calibration_team_performance: N,
   pa_setting_project:    N,
   pa_setting_interview:  N,
-  management_interview:  V,
+  management_interview:  N,
   mgmt_interview_assessment: N,
+  mgmt_interview_invitation: N,
 };
 
 const DEFAULT_SUPERVISOR: RolePermissions = {
+  dashboard: V,
+  dashboard_my: V,
+  dashboard_approval: V,
   calibration_verification: N,
   analytics: N,
+  profile: VE,
+  profile_overview: VE,
+  profile_results: V,
+  profile_kpi: V,
   approvals: VA,
   approvals_kpi_business:   N,
+  approvals_kpi_business_group: N,
+  approvals_kpi_business_unit:  N,
   approvals_pa_measurement: VA,
+  approvals_feedback:       VA,
   approvals_pa_setting:     VA,
+  approvals_mgmt_interview: N,
   approvals_open_lock:      N,
   pa_monitoring: V,
   pa_monitoring_kpi:        V,
@@ -412,10 +571,10 @@ const DEFAULT_SUPERVISOR: RolePermissions = {
   pa_monitoring_project:    V,
   pa_monitoring_interview:  N,
   pa_summary: V,
-  calibration: N,
+  calibration: V,
   calibration_setting:    N,
   calibration_adjustment: N,
-  calibration_interview:  N,
+  calibration_interview:  V,
   evidence: N,
   evidence_kpi:       N,
   evidence_rca:       N,
@@ -432,8 +591,10 @@ const DEFAULT_SUPERVISOR: RolePermissions = {
   pa_measurement_project:    VCET,
   pa_measurement_managerial: VCET,
   pa_measurement_feedback:   VCET,
-  pa_measurement_interview:  VCET,
+  pa_measurement_interview:  N,
+  history: V,
   documents: VCE,
+  override: N,
   setting: N,
   setting_master: N,
   setting_master_kpi:       N,
@@ -442,29 +603,54 @@ const DEFAULT_SUPERVISOR: RolePermissions = {
   setting_scores:        N,
   setting_modules:       N,
   setting_approval_mgmt: N,
+  setting_approval_mgmt_flow:       N,
+  setting_approval_mgmt_icf:        N,
+  setting_approval_mgmt_other:      N,
+  setting_approval_mgmt_delegation: N,
   setting_user_mgmt:     N,
+  setting_user_mgmt_users:    N,
+  setting_user_mgmt_grouping: N,
   setting_access_mgmt:   N,
   setting_menu_mgmt:     N,
   setting_data_sync:     N,
   setting_cycle:         N,
   setting_audit:         N,
   appraisal:             V,
+  appraisal_kpi:         V,
+  appraisal_smart:       V,
+  appraisal_form:        V,
+  appraisal_project:     V,
+  appraisal_managerial:  V,
+  appraisal_feedback:    V,
+  appraisal_interview:   V,
   approvals_calibration: N,
   pa_monitoring_feedback:    V,
   calibration_team_performance: V,
-  pa_setting_project:    VCET,
-  pa_setting_interview:  VCET,
+  pa_setting_project:    N,
+  pa_setting_interview:  N,
   management_interview:  N,
   mgmt_interview_assessment: N,
+  mgmt_interview_invitation: N,
 };
 
 const DEFAULT_EMPLOYEE: RolePermissions = {
+  dashboard: V,
+  dashboard_my: V,
+  dashboard_approval: N,
   calibration_verification: N,
   analytics: N,
+  profile: VE,
+  profile_overview: VE,
+  profile_results: V,
+  profile_kpi: V,
   approvals: N,
   approvals_kpi_business:   N,
+  approvals_kpi_business_group: N,
+  approvals_kpi_business_unit:  N,
   approvals_pa_measurement: N,
+  approvals_feedback:       N,
   approvals_pa_setting:     N,
+  approvals_mgmt_interview: N,
   approvals_open_lock:      N,
   pa_monitoring: N,
   pa_monitoring_kpi:        N,
@@ -473,7 +659,7 @@ const DEFAULT_EMPLOYEE: RolePermissions = {
   pa_monitoring_managerial: N,
   pa_monitoring_project:    N,
   pa_monitoring_interview:  N,
-  pa_summary: V,
+  pa_summary: N,
   calibration: N,
   calibration_setting:    N,
   calibration_adjustment: N,
@@ -493,9 +679,11 @@ const DEFAULT_EMPLOYEE: RolePermissions = {
   pa_measurement_appraisal:  VCET,
   pa_measurement_project:    VCET,
   pa_measurement_managerial: N,
-  pa_measurement_feedback:   N,
+  pa_measurement_feedback:   VCET,
   pa_measurement_interview:  N,
+  history: N,
   documents: V,
+  override: N,
   setting: N,
   setting_master: N,
   setting_master_kpi:       N,
@@ -504,13 +692,26 @@ const DEFAULT_EMPLOYEE: RolePermissions = {
   setting_scores:        N,
   setting_modules:       N,
   setting_approval_mgmt: N,
+  setting_approval_mgmt_flow:       N,
+  setting_approval_mgmt_icf:        N,
+  setting_approval_mgmt_other:      N,
+  setting_approval_mgmt_delegation: N,
   setting_user_mgmt:     N,
+  setting_user_mgmt_users:    N,
+  setting_user_mgmt_grouping: N,
   setting_access_mgmt:   N,
   setting_menu_mgmt:     N,
   setting_data_sync:     N,
   setting_cycle:         N,
   setting_audit:         N,
   appraisal:             V,
+  appraisal_kpi:         V,
+  appraisal_smart:       V,
+  appraisal_form:        V,
+  appraisal_project:     V,
+  appraisal_managerial:  N,
+  appraisal_feedback:    V,
+  appraisal_interview:   N,
   approvals_calibration: N,
   pa_monitoring_feedback:    N,
   calibration_team_performance: N,
@@ -518,16 +719,35 @@ const DEFAULT_EMPLOYEE: RolePermissions = {
   pa_setting_interview:  N,
   management_interview:  N,
   mgmt_interview_assessment: N,
+  mgmt_interview_invitation: N,
 };
 
 const DEFAULT_BOD: RolePermissions = {
+  dashboard: N,
+  dashboard_my: N,
+  dashboard_approval: N,
   calibration_verification: N,
   analytics: V,
+  profile: N,
+  profile_overview: VE,
+  profile_results: V,
+  profile_kpi: V,
   appraisal: N,
+  appraisal_kpi:         N,
+  appraisal_smart:       N,
+  appraisal_form:        N,
+  appraisal_project:     N,
+  appraisal_managerial:  N,
+  appraisal_feedback:    N,
+  appraisal_interview:   N,
   approvals: VA,
   approvals_kpi_business:    N,
+  approvals_kpi_business_group: N,
+  approvals_kpi_business_unit:  N,
   approvals_pa_measurement:  VA,
+  approvals_feedback:        VA,
   approvals_pa_setting:      VA,
+  approvals_mgmt_interview:  VA,
   approvals_open_lock:       N,
   approvals_calibration:     VA,
   pa_monitoring: V,
@@ -537,12 +757,12 @@ const DEFAULT_BOD: RolePermissions = {
   pa_monitoring_managerial: V,
   pa_monitoring_project:    V,
   pa_monitoring_interview:  V,
-  pa_monitoring_feedback:   V,
+  pa_monitoring_feedback:   N,
   pa_summary: V,
   calibration: V,
   calibration_setting:          N,
   calibration_adjustment:       V,
-  calibration_interview:        V,
+  calibration_interview:        N,
   calibration_team_performance: N,
   evidence: N,
   evidence_kpi:       N,
@@ -565,7 +785,10 @@ const DEFAULT_BOD: RolePermissions = {
   pa_measurement_interview:  N,
   management_interview: V,
   mgmt_interview_assessment: VCEA,
+  mgmt_interview_invitation: N,
+  history: V,
   documents: V,
+  override: N,
   setting: N,
   setting_master: N,
   setting_master_kpi:        N,
@@ -575,7 +798,13 @@ const DEFAULT_BOD: RolePermissions = {
   setting_modules:       N,
   setting_cycle:         N,
   setting_approval_mgmt: N,
+  setting_approval_mgmt_flow:       N,
+  setting_approval_mgmt_icf:        N,
+  setting_approval_mgmt_other:      N,
+  setting_approval_mgmt_delegation: N,
   setting_user_mgmt:     N,
+  setting_user_mgmt_users:    N,
+  setting_user_mgmt_grouping: N,
   setting_access_mgmt:   N,
   setting_menu_mgmt:     N,
   setting_data_sync:     N,
@@ -584,16 +813,18 @@ const DEFAULT_BOD: RolePermissions = {
 
 const DEFAULT_GM: RolePermissions = {
   ...DEFAULT_SUPERVISOR,
-  analytics: V,
-  approvals_kpi_business: VCEA,
-  pa_monitoring_interview: V,
+  dashboard: V,
+  analytics: N,
+  approvals_kpi_business: N,
+  approvals_kpi_business_unit: N,
+  pa_monitoring_interview: N,
   calibration: V,
-  calibration_adjustment: VE,
+  calibration_adjustment: N,
   calibration_team_performance: VE,
-  pa_setting_interview: VCE,
+  pa_setting_interview: N,
 };
 
-const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
+export const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
   "Administrator": DEFAULT_ADMIN,
   "BOD":           DEFAULT_BOD,
   "Director":      DEFAULT_DIRECTOR,
@@ -604,7 +835,7 @@ const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
   "Employee":      DEFAULT_EMPLOYEE,
 };
 
-const BUILTIN_ROLES: BuiltinRole[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor", "Employee"];
+export const BUILTIN_ROLES: BuiltinRole[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor", "Employee"];
 
 const ROLE_COLORS: Record<string, string> = {
   "Administrator": "bg-slate-100 text-slate-700 border-slate-200",
@@ -722,12 +953,13 @@ function SaveModal({ role, onConfirm, onClose }: SaveModalProps) {
 
 interface AddAccessModalProps {
   existingRoles: Role[];
-  onAdd: (name: string) => void;
+  onAdd: (name: string, baseRole?: Role) => void;
   onClose: () => void;
 }
 
 function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) {
   const [name, setName] = useState("");
+  const [baseRole, setBaseRole] = useState<string>("");
   const duplicate = name.trim() && existingRoles.map(r => r.toLowerCase()).includes(name.trim().toLowerCase());
   const valid = name.trim().length > 0 && !duplicate;
 
@@ -748,26 +980,43 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
             <X size={18} />
           </button>
         </div>
-        <div className="mb-5">
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Role Name</label>
-          <input
-            autoFocus
-            value={name}
-            onChange={e => setName(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && valid) { onAdd(name.trim()); onClose(); } }}
-            placeholder="e.g. Finance Manager"
-            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-          {duplicate && (
-            <p className="text-xs text-red-500 mt-1">A role with this name already exists.</p>
-          )}
-          <p className="text-xs text-gray-400 mt-1.5">The new role will start with all permissions disabled. You can configure them after creation.</p>
+        <div className="mb-5 space-y-3.5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Role Name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={e => setName(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && valid) { onAdd(name.trim(), baseRole || undefined); onClose(); } }}
+              placeholder="e.g. Finance Manager"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            {duplicate && (
+              <p className="text-xs text-red-500 mt-1">A role with this name already exists.</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Copy Initial Permissions From (Optional)</label>
+            <select
+              value={baseRole}
+              onChange={e => setBaseRole(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+            >
+              <option value="">— Empty (All Permissions Disabled) —</option>
+              {existingRoles.map(r => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1.5">
+              This role will immediately become available in User Management, Menu Management, and Data Sync.
+            </p>
+          </div>
         </div>
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
           <button
             disabled={!valid}
-            onClick={() => { if (valid) { onAdd(name.trim()); onClose(); } }}
+            onClick={() => { if (valid) { onAdd(name.trim(), baseRole || undefined); onClose(); } }}
             className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Plus size={14} /> Create Role
@@ -801,6 +1050,60 @@ function IndeterminateCheckbox({ state, onChange }: { state: "all" | "none" | "i
 const ACCESS_ROLES_KEY = "pa_access_roles_v1";
 const ACCESS_PERMS_KEY = "pa_access_permissions_v1";
 
+function getAllExpandableIds(items: MenuItem[] = MENU_STRUCTURE): string[] {
+  const ids: string[] = [];
+  function walk(list: MenuItem[]) {
+    for (const item of list) {
+      if (item.children && item.children.length > 0) {
+        ids.push(item.id);
+        walk(item.children);
+      }
+    }
+  }
+  walk(items);
+  return ids;
+}
+
+function findDescendantIds(targetId: string, items: MenuItem[] = MENU_STRUCTURE): string[] {
+  const result: string[] = [];
+  function collect(list: MenuItem[]) {
+    for (const item of list) {
+      result.push(item.id);
+      if (item.children) collect(item.children);
+    }
+  }
+  function search(list: MenuItem[]): boolean {
+    for (const item of list) {
+      if (item.id === targetId) {
+        if (item.children) collect(item.children);
+        return true;
+      }
+      if (item.children && search(item.children)) return true;
+    }
+    return false;
+  }
+  search(items);
+  return result;
+}
+
+function findAncestorIds(targetId: string, items: MenuItem[] = MENU_STRUCTURE): string[] {
+  const path: string[] = [];
+  function dfs(list: MenuItem[], ancestors: string[]): boolean {
+    for (const item of list) {
+      if (item.id === targetId) {
+        path.push(...ancestors);
+        return true;
+      }
+      if (item.children && dfs(item.children, [...ancestors, item.id])) {
+        return true;
+      }
+    }
+    return false;
+  }
+  dfs(items, []);
+  return path;
+}
+
 function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
   return {
     "Administrator": deepClone(DEFAULT_ADMIN),
@@ -814,22 +1117,123 @@ function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
   };
 }
 
-export function AccessManagementPage() {
-  const [roles, setRoles] = useState<Role[]>(() => {
-    const saved = loadPersistedState<Role[]>(ACCESS_ROLES_KEY, [...BUILTIN_ROLES]);
-    const merged = [...BUILTIN_ROLES];
+export function loadAccessRoles(): Role[] {
+  const saved = loadPersistedState<Role[]>(ACCESS_ROLES_KEY, [...BUILTIN_ROLES]);
+  const merged: Role[] = [...BUILTIN_ROLES];
+  if (Array.isArray(saved)) {
     for (const r of saved) {
-      if (!merged.includes(r as BuiltinRole)) merged.push(r);
+      if (r && typeof r === "string" && !merged.includes(r)) {
+        merged.push(r);
+      }
     }
-    return merged;
-  });
+  }
+  return merged;
+}
+
+export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
+  const defaults = buildDefaultPermissionsMap();
+  const saved = loadPersistedState<Record<Role, RolePermissions>>(ACCESS_PERMS_KEY, {});
+  const roles = loadAccessRoles();
+  const result: Record<Role, RolePermissions> = {};
+
+  for (const role of roles) {
+    const base = defaults[role] ? deepClone(defaults[role]) : emptyPermissions();
+    const savedRole = saved?.[role];
+    if (savedRole && typeof savedRole === "object") {
+      result[role] = { ...base, ...savedRole };
+    } else {
+      result[role] = base;
+    }
+  }
+  return result;
+}
+
+export function getRolePermissions(role: Role): RolePermissions {
+  const normalized = role === "HR Admin" ? "Administrator" : role;
+  const map = loadRolePermissionsMap();
+  return map[normalized] ?? map["Employee"] ?? emptyPermissions();
+}
+
+export function hasRolePermission(
+  role: Role,
+  menuId: string,
+  action: keyof Permission = "view",
+): boolean {
+  if (!role) return false;
+  const perms = getRolePermissions(role);
+  return Boolean(perms[menuId]?.[action]);
+}
+
+export function canRoleViewMenu(role: Role, menuId: string): boolean {
+  if (!role) return false;
+  const perms = getRolePermissions(role);
+  if (perms[menuId]?.view) return true;
+  // Also check if any descendant of menuId has view === true
+  const descendants = findDescendantIds(menuId);
+  if (descendants.length > 0) {
+    return descendants.some((childId) => Boolean(perms[childId]?.view));
+  }
+  return false;
+}
+
+export function updateMenuViewRolesFromMenuManagement(
+  menuId: string,
+  allowedRoles: Role[],
+): void {
+  const currentMap = loadRolePermissionsMap();
+  const allRoles = loadAccessRoles();
+  const nextMap: Record<Role, RolePermissions> = { ...currentMap };
+
+  for (const role of allRoles) {
+    const rolePerm = { ...(nextMap[role] ?? emptyPermissions()) };
+    const shouldView = allowedRoles.includes(role);
+    const prevPerm = rolePerm[menuId] ?? { ...EMPTY_PERM };
+    rolePerm[menuId] = { ...prevPerm, view: shouldView };
+    if (shouldView) {
+      for (const ancestorId of findAncestorIds(menuId)) {
+        const ancPerm = rolePerm[ancestorId] ?? { ...EMPTY_PERM };
+        rolePerm[ancestorId] = { ...ancPerm, view: true };
+      }
+    }
+    nextMap[role] = rolePerm;
+  }
+
+  savePersistedState(ACCESS_PERMS_KEY, nextMap);
+  window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+}
+
+export function useAccessManagement() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onUpdate = () => setTick((t) => t + 1);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onUpdate);
+    window.addEventListener("pa-db-hydrated", onUpdate);
+    window.addEventListener("storage", onUpdate);
+    return () => {
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onUpdate);
+      window.removeEventListener("pa-db-hydrated", onUpdate);
+      window.removeEventListener("storage", onUpdate);
+    };
+  }, []);
+
+  const roles = loadAccessRoles();
+  const permissionsMap = loadRolePermissionsMap();
+
+  return {
+    roles,
+    permissionsMap,
+    getRolePermissions: (role: Role) => permissionsMap[role === "HR Admin" ? "Administrator" : role] ?? emptyPermissions(),
+    canView: (role: Role, menuId: string) => canRoleViewMenu(role, menuId),
+    hasPermission: (role: Role, menuId: string, action: keyof Permission = "view") =>
+      hasRolePermission(role, menuId, action),
+  };
+}
+
+export function AccessManagementPage() {
+  const [roles, setRoles] = useState<Role[]>(() => loadAccessRoles());
   const [activeRole, setActiveRole] = useState<Role>("Administrator");
-  const [permissions, setPermissions] = useState<Record<Role, RolePermissions>>(() => {
-    const defaults = buildDefaultPermissionsMap();
-    const saved = loadPersistedState<Record<Role, RolePermissions>>(ACCESS_PERMS_KEY, {});
-    return { ...defaults, ...saved };
-  });
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(["approvals", "pa_monitoring", "calibration", "evidence", "pa_setting", "pa_measurement", "setting"]));
+  const [permissions, setPermissions] = useState<Record<Role, RolePermissions>>(() => loadRolePermissionsMap());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(getAllExpandableIds()));
   const [search, setSearch] = useState("");
   const [showSave, setShowSave] = useState(false);
   const [showAddAccess, setShowAddAccess] = useState(false);
@@ -837,18 +1241,15 @@ export function AccessManagementPage() {
 
   useEffect(() => {
     const onHydrated = () => {
-      const savedRoles = loadPersistedState<Role[]>(ACCESS_ROLES_KEY, [...BUILTIN_ROLES]);
-      const merged = [...BUILTIN_ROLES];
-      for (const r of savedRoles) {
-        if (!merged.includes(r as BuiltinRole)) merged.push(r);
-      }
-      setRoles(merged);
-      const defaults = buildDefaultPermissionsMap();
-      const savedPerms = loadPersistedState<Record<Role, RolePermissions>>(ACCESS_PERMS_KEY, {});
-      setPermissions({ ...defaults, ...savedPerms });
+      setRoles(loadAccessRoles());
+      setPermissions(loadRolePermissionsMap());
     };
     window.addEventListener("pa-db-hydrated", onHydrated);
-    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onHydrated);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onHydrated);
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onHydrated);
+    };
   }, []);
 
   function toggleExpand(id: string) {
@@ -861,13 +1262,45 @@ export function AccessManagementPage() {
 
   function handleChange(menuId: string, key: keyof Permission, val: boolean) {
     setSaved(false);
-    setPermissions(prev => ({
-      ...prev,
-      [activeRole]: {
-        ...prev[activeRole],
-        [menuId]: { ...prev[activeRole][menuId], [key]: val },
+    setPermissions(prev => {
+      const rolePerm = { ...(prev[activeRole] ?? emptyPermissions()) };
+      const currentItemPerm = rolePerm[menuId] ?? { ...EMPTY_PERM };
+      rolePerm[menuId] = {
+        ...currentItemPerm,
+        [key]: val,
+        // Jika mencentang create/edit/delete/approve, otomatis view = true
+        ...(val && key !== "view" ? { view: true } : {}),
+      };
+
+      // Cascade ke seluruh descendant (sub-menu) jika menuId adalah parent
+      const descendants = findDescendantIds(menuId);
+      for (const descId of descendants) {
+        const descPerm = rolePerm[descId] ?? { ...EMPTY_PERM };
+        rolePerm[descId] = {
+          ...descPerm,
+          [key]: val,
+          ...(val && key !== "view" ? { view: true } : {}),
+        };
       }
-    }));
+
+      // Jika mencentang true pada child, pastikan seluruh parent memiliki view = true (dan key = true bila relevan)
+      if (val) {
+        const ancestors = findAncestorIds(menuId);
+        for (const ancId of ancestors) {
+          const ancPerm = rolePerm[ancId] ?? { ...EMPTY_PERM };
+          rolePerm[ancId] = {
+            ...ancPerm,
+            view: true,
+            ...(key === "view" ? { view: true } : {}),
+          };
+        }
+      }
+
+      return {
+        ...prev,
+        [activeRole]: rolePerm,
+      };
+    });
   }
 
   function handleReset() {
@@ -889,6 +1322,7 @@ export function AccessManagementPage() {
           description: `Reset access permissions for role ${activeRole} to default`,
         },
       });
+      window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
       return next;
     });
   }
@@ -907,6 +1341,7 @@ export function AccessManagementPage() {
         description: `Saved access permissions for role ${activeRole}`,
       },
     });
+    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
     setSaved(true);
   }
 
@@ -931,9 +1366,11 @@ export function AccessManagementPage() {
     return "indeterminate";
   }
 
-  function handleAddRole(name: string) {
+  function handleAddRole(name: string, baseRole?: Role) {
     const nextRoles = [...roles, name];
-    const initPerm = emptyPermissions();
+    const initPerm = baseRole && permissions[baseRole]
+      ? deepClone(permissions[baseRole])
+      : emptyPermissions();
     const nextPerms = { ...permissions, [name]: initPerm };
     setRoles(nextRoles);
     setPermissions(nextPerms);
@@ -949,6 +1386,7 @@ export function AccessManagementPage() {
         description: `Created custom access role ${name}`,
       },
     });
+    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
     setActiveRole(name);
     setSaved(false);
   }
@@ -975,6 +1413,7 @@ export function AccessManagementPage() {
         description: `Deleted custom access role ${role}`,
       },
     });
+    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
     setActiveRole(next[Math.min(idx, next.length - 1)]);
     setSaved(false);
   }
@@ -1043,7 +1482,7 @@ export function AccessManagementPage() {
             />
           </div>
           <button
-            onClick={() => setExpanded(new Set(MENU_STRUCTURE.flatMap(m => m.children ? [m.id] : [])))}
+            onClick={() => setExpanded(new Set(getAllExpandableIds()))}
             className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
           >
             Expand All

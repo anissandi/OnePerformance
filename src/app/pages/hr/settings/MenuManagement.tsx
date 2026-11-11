@@ -4,8 +4,12 @@ import {
   Eye, EyeOff, Save, X, ToggleLeft, ToggleRight, Search, Menu,
 } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
-
-type Role = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
+import {
+  canRoleViewMenu,
+  updateMenuViewRolesFromMenuManagement,
+  useAccessManagement,
+  type Role,
+} from "./AccessManagement";
 
 interface MenuItem {
   id: string;
@@ -22,7 +26,7 @@ const ALL_ROLES: Role[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", 
 const HR_ROLES: Role[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF"];
 const HR_ADMIN: Role[] = ["Administrator", "HR Unit", "HR ICF"];
 
-const ROLE_COLORS: Record<Role, string> = {
+const ROLE_COLORS: Record<string, string> = {
   "Administrator": "bg-slate-100 text-slate-700",
   "BOD":           "bg-red-100 text-red-800",
   "Director":      "bg-rose-50 text-rose-700",
@@ -36,8 +40,25 @@ const ROLE_COLORS: Record<Role, string> = {
 // Mirrors MENU_STRUCTURE from AccessManagement — same IDs, same hierarchy
 const INITIAL_MENUS: MenuItem[] = [
   {
+    id: "dashboard", label: "Dashboard", path: "/supervisor", icon: "ListTodo",
+    isVisible: true, order: 1, roles: ["GM", "Supervisor", "Employee"],
+    children: [
+      { id: "dashboard_my",       label: "My Dashboard",     path: "/supervisor/dashboard/my",       icon: "BarChart2", isVisible: true, order: 1, roles: ["GM", "Supervisor", "Employee"] },
+      { id: "dashboard_approval", label: "Approval Summary", path: "/supervisor/dashboard/approval", icon: "CheckSquare", isVisible: true, order: 2, roles: ["GM", "Supervisor"] },
+    ],
+  },
+  {
     id: "analytics", label: "Analytics Dashboard", path: "/hr", icon: "BarChart2",
     isVisible: true, order: 1, roles: HR_ROLES,
+  },
+  {
+    id: "profile", label: "My Profile", path: "/profile", icon: "UserCog",
+    isVisible: true, order: 2, roles: ALL_ROLES,
+    children: [
+      { id: "profile_overview", label: "Overview",    path: "/profile/overview", icon: "UserCog",    isVisible: true, order: 1, roles: ALL_ROLES },
+      { id: "profile_results",  label: "PA Results",  path: "/profile/results",  icon: "FileText",   isVisible: true, order: 2, roles: ALL_ROLES },
+      { id: "profile_kpi",      label: "KPI Summary", path: "/profile/kpi",      icon: "TrendingUp", isVisible: true, order: 3, roles: ALL_ROLES },
+    ],
   },
   {
     id: "appraisal", label: "My Performance Appraisal", path: "/appraisal", icon: "UserCheck",
@@ -49,7 +70,9 @@ const INITIAL_MENUS: MenuItem[] = [
     children: [
       { id: "approvals_kpi_business",   label: "KPI Business",                      path: "/hr/settings/kpi",                    icon: "TrendingUp",  isVisible: true, order: 1, roles: [...HR_ADMIN, "GM", "Director"] as Role[] },
       { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement", path: "/hr/approvals/measurement",               icon: "Clock",       isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/hr/approvals/measurement/inter-department-feedback", icon: "Users", isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
       { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",     path: "/hr/approvals/setting",               icon: "Target",      isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_mgmt_interview", label: "Management Interview",              path: "/bod/approvals/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: ["BOD", "Director"] as Role[] },
       { id: "approvals_open_lock",      label: "Open Lock",                         path: "/hr/settings/open-lock",              icon: "LockOpen",    isVisible: true, order: 4, roles: HR_ADMIN },
       { id: "approvals_calibration",    label: "Calibration",                       path: "/bod/approvals/calibration",          icon: "BarChart2",   isVisible: true, order: 5, roles: ["BOD"] as Role[] },
     ],
@@ -121,11 +144,20 @@ const INITIAL_MENUS: MenuItem[] = [
     isVisible: true, order: 10, roles: ["BOD", "Director"] as Role[],
     children: [
       { id: "mgmt_interview_assessment", label: "Assessment", path: "/bod/management-interview/assessment", icon: "ClipboardList", isVisible: true, order: 1, roles: ["BOD"] as Role[] },
+      { id: "mgmt_interview_invitation", label: "Invitation", path: "/hr/management-interview/invitation",  icon: "MessageSquare", isVisible: true, order: 2, roles: HR_ADMIN },
     ],
+  },
+  {
+    id: "history", label: "PA Cycle History", path: "/hr/history", icon: "BookOpen",
+    isVisible: true, order: 11, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
   },
   {
     id: "documents", label: "Documents", path: "/documents", icon: "BookOpen",
     isVisible: true, order: 11, roles: ALL_ROLES,
+  },
+  {
+    id: "override", label: "Management Override", path: "/hr/override", icon: "Shield",
+    isVisible: false, order: 12, roles: HR_ADMIN,
   },
   {
     id: "setting", label: "Setting", path: "", icon: "Settings",
@@ -158,11 +190,12 @@ function deepClone<T>(v: T): T { return JSON.parse(JSON.stringify(v)); }
 interface EditMenuModalProps {
   item: MenuItem | null;
   isNew: boolean;
+  availableRoles: Role[];
   onClose: () => void;
   onSave: (item: MenuItem) => void;
 }
 
-function EditMenuModal({ item, isNew, onClose, onSave }: EditMenuModalProps) {
+function EditMenuModal({ item, isNew, availableRoles, onClose, onSave }: EditMenuModalProps) {
   const [form, setForm] = useState<MenuItem>(item ?? {
     id: `menu_${Date.now()}`, label: "", path: "", icon: "FileText",
     isVisible: true, order: 99, roles: [],
@@ -222,9 +255,9 @@ function EditMenuModal({ item, isNew, onClose, onSave }: EditMenuModalProps) {
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-2">Visible to Roles</label>
+            <label className="block text-xs font-medium text-gray-600 mb-2">Visible to Roles (Synced with Access Management)</label>
             <div className="flex gap-2 flex-wrap">
-              {ALL_ROLES.map(r => (
+              {availableRoles.map(r => (
                 <button
                   key={r} type="button" onClick={() => toggleRole(r)}
                   className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
@@ -364,6 +397,7 @@ function deleteNested(items: MenuItem[], id: string): MenuItem[] {
 const MENU_CONFIGS_KEY = "pa_menu_configs_v1";
 
 export function MenuManagementPage() {
+  const { roles: accessRoles } = useAccessManagement();
   const [menus, setMenus] = useState<MenuItem[]>(() =>
     loadPersistedState<MenuItem[]>(MENU_CONFIGS_KEY, deepClone(INITIAL_MENUS)),
   );
@@ -402,12 +436,25 @@ export function MenuManagementPage() {
     });
   }
 
+  function syncMenuRolesWithAccessManagement(items: MenuItem[]): MenuItem[] {
+    return items.map((m) => {
+      const syncedRoles = accessRoles.filter((r) => canRoleViewMenu(r, m.id));
+      return {
+        ...m,
+        roles: syncedRoles.length > 0 || m.id ? syncedRoles : m.roles,
+        ...(m.children ? { children: syncMenuRolesWithAccessManagement(m.children) } : {}),
+      };
+    });
+  }
+
   function handleEdit(item: MenuItem) {
-    setEditItem(deepClone(item));
+    const syncedRoles = accessRoles.filter((r) => canRoleViewMenu(r, item.id));
+    setEditItem({ ...deepClone(item), roles: syncedRoles });
   }
 
   function handleSave(updated: MenuItem) {
     setSaved(false);
+    updateMenuViewRolesFromMenuManagement(updated.id, updated.roles);
     setMenus(prev => {
       const next = updateNested(prev, updated.id, () => updated);
       persistMenus(next, `Updated menu item ${updated.label} (${updated.id})`);
@@ -438,8 +485,9 @@ export function MenuManagementPage() {
     return item.children?.some(c => matchSearch(c, q)) ?? false;
   }
 
+  const syncedMenus = syncMenuRolesWithAccessManagement(menus);
   const q = search.toLowerCase();
-  const filtered = q ? menus.filter(m => matchSearch(m, q)) : menus;
+  const filtered = q ? syncedMenus.filter(m => matchSearch(m, q)) : syncedMenus;
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto space-y-4">
@@ -546,10 +594,10 @@ export function MenuManagementPage() {
       </div>
 
       {editItem && (
-        <EditMenuModal item={editItem} isNew={false} onClose={() => setEditItem(null)} onSave={handleSave} />
+        <EditMenuModal item={editItem} isNew={false} availableRoles={accessRoles} onClose={() => setEditItem(null)} onSave={handleSave} />
       )}
       {addOpen && (
-        <EditMenuModal item={null} isNew={true} onClose={() => setAddOpen(false)} onSave={handleAdd} />
+        <EditMenuModal item={null} isNew={true} availableRoles={accessRoles} onClose={() => setAddOpen(false)} onSave={handleAdd} />
       )}
     </div>
   );
