@@ -302,7 +302,13 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
   };
 
   const buildLinksForPortal = (): NavTopLink[] => {
-    if (role === "hr") {
+    const isStandardParticipantRole =
+      activeUser.role === "Employee" ||
+      activeUser.role === "Supervisor" ||
+      activeUser.role === "GM" ||
+      activeUser.role === "HR Unit";
+
+    if (role === "hr" && !isStandardParticipantRole) {
       const list: NavTopLink[] = [];
       if (canView("analytics")) {
         list.push({ to: "/hr", icon: BarChart2, label: "Analytics Dashboard", exact: true });
@@ -310,59 +316,33 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       if (canView("dashboard")) {
         list.push({ to: "/supervisor", icon: ListTodo, label: "Dashboard", exact: true });
       }
+      if (canView("profile")) {
+        list.push({ to: "/hr/profile", icon: UserCog, label: "My Profile" });
+      }
       if (canView("appraisal")) {
         list.push({ to: "/supervisor/appraisal", icon: FileText, label: "My Performance Appraisal" });
       }
-      if (activeUser.role === "HR Unit") {
-        const myPaSubs: NavSubLink[] = [
-          ...(canView("pa_setting") && canView("pa_setting_kpi") && hasKpi ? [{ to: "/supervisor/setting/kpi", label: "KPI Setting", icon: TrendingUp }] : []),
-          ...(canView("pa_setting") && canView("pa_setting_smart") && hasSmart ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals Setting", icon: Lightbulb }] : []),
-          ...(canView("pa_setting") && canView("pa_setting_project") && hasProject ? [{ to: "/supervisor/setting/project", label: "Project Outside Setting", icon: FolderKanban }] : []),
-          ...(canView("pa_measurement") && canView("pa_measurement_kpi") && hasKpi ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
-          ...(canView("pa_measurement") && canView("pa_measurement_rca") && hasKpi ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
-          ...(canView("pa_measurement") && canView("pa_measurement_smart") && hasSmart ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals Measurement", icon: Lightbulb }] : []),
-          ...(canView("pa_measurement") && canView("pa_measurement_appraisal") && hasAppraisalForm ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
-          ...(canView("pa_measurement") && canView("pa_measurement_project") && hasProject ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-          ...(canView("pa_measurement") && canView("pa_measurement_managerial") && hasManagerial ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-          ...(canView("pa_measurement") && canView("pa_measurement_feedback") && hasIdf ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-          ...(((canView("pa_setting") && canView("pa_setting_interview")) || (canView("pa_measurement") && canView("pa_measurement_interview"))) && hasMi
-            ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }]
-            : []),
-        ];
-        if (myPaSubs.length > 0) {
-          list.push({
-            label: "My PA Setting & Measurement",
-            icon: Target,
-            subLinks: myPaSubs,
-          });
-        }
-      } else {
-        const paSettingSubs: NavSubLink[] = [
-          ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
-          ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-          ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-          ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-        ];
-        if (canView("pa_setting") && paSettingSubs.length > 0) {
-          list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
-        }
-        const paMeasSubs: NavSubLink[] = [
-          ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
-          ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
-          ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-          ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
-          ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-          ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-          ...(canView("pa_measurement_feedback") ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-          ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-        ];
-        if (canView("pa_measurement") && paMeasSubs.length > 0) {
-          list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
-        }
+      const paSettingSubs: NavSubLink[] = [
+        ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
+        ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_setting") && paSettingSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
       }
-
-      if (canView("profile")) {
-        list.push({ to: "/hr/profile", icon: UserCog, label: "My Profile" });
+      const paMeasSubs: NavSubLink[] = [
+        ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+        ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+        ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+        ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+        ...(canView("pa_measurement_feedback") ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+        ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_measurement") && paMeasSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
       }
 
       const approvalSubs: NavSubLink[] = [
@@ -445,6 +425,30 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       if (canView("appraisal")) {
         list.push({ to: "/supervisor/appraisal", icon: FileText, label: "My Performance Appraisal" });
       }
+      const paSettingSubs: NavSubLink[] = [
+        ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
+        ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_setting") && paSettingSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+      }
+
+      const paMeasSubs: NavSubLink[] = [
+        ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
+        ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+        ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+        ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+        ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+        ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+        ...(canView("pa_measurement_feedback") ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
+        ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ];
+      if (canView("pa_measurement") && paMeasSubs.length > 0) {
+        list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
+      }
+
       const approvalSubs: NavSubLink[] = [
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
           ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
@@ -474,30 +478,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
       if (canView("pa_summary")) {
         list.push({ to: "/bod/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
-      }
-
-      const paSettingSubs: NavSubLink[] = [
-        ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
-        ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-        ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-        ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-      ];
-      if (canView("pa_setting") && paSettingSubs.length > 0) {
-        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
-      }
-
-      const paMeasSubs: NavSubLink[] = [
-        ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
-        ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
-        ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-        ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
-        ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-        ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-        ...(canView("pa_measurement_feedback") ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-        ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-      ];
-      if (canView("pa_measurement") && paMeasSubs.length > 0) {
-        list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
       }
 
       const calSubs: NavSubLink[] = [
@@ -531,98 +511,66 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       return list;
     }
 
-    if (role === "employee") {
-      const list: NavTopLink[] = [];
-      if (canView("dashboard") || canView("analytics")) {
-        list.push({ to: "/employee", icon: BarChart2, label: "Dashboard", exact: true });
-      }
-      if (canView("profile")) {
-        list.push({ to: "/employee/profile", icon: UserCog, label: "My Profile" });
-      }
-      if (canView("appraisal")) {
-        list.push({ to: "/employee/appraisal", icon: FileText, label: "My Performance Appraisal" });
-      }
-
-      const approvalSubs: NavSubLink[] = [
-        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-          ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
-          : []),
-        ...(canView("approvals_pa_measurement") ? [{ to: "/supervisor/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
-        ...(canView("approvals_pa_setting") ? [{ to: "/supervisor/appraisals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
-      ];
-      if (canView("approvals") && approvalSubs.length > 0) {
-        list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
-      }
-
-      if (canView("pa_summary")) {
-        list.push({ to: "/supervisor/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
-      }
-
-      const monitoringSubs: NavSubLink[] = [
-        ...(canView("pa_monitoring_kpi") ? [{ to: "/supervisor/monitoring/kpi", label: "KPI", icon: TrendingUp }] : []),
-        ...(canView("pa_monitoring_smart") ? [{ to: "/supervisor/monitoring/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-        ...(canView("pa_monitoring_appraisal") ? [{ to: "/supervisor/monitoring/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
-        ...(canView("pa_monitoring_managerial") ? [{ to: "/supervisor/monitoring/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-        ...(canView("pa_monitoring_project") ? [{ to: "/supervisor/monitoring/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-        ...(canView("pa_monitoring_interview") ? [{ to: "/supervisor/monitoring/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-        ...(canView("pa_monitoring_feedback") ? [{ to: "/supervisor/monitoring/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-      ];
-      if (canView("pa_monitoring") && monitoringSubs.length > 0) {
-        list.push({ label: "Performance Appraisal Monitoring", icon: ClipboardCheck, subLinks: monitoringSubs });
-      }
-
-      const paSettingSubs: NavSubLink[] = [
-        ...(canView("pa_setting_kpi") ? [{ to: "/employee/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
-        ...(canView("pa_setting_smart") ? [{ to: "/employee/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-        ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-        ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-      ];
-      if (canView("pa_setting") && paSettingSubs.length > 0) {
-        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
-      }
-
-      const paMeasSubs: NavSubLink[] = [
-        ...(canView("pa_measurement_kpi") ? [{ to: "/employee/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
-        ...(canView("pa_measurement_rca") ? [{ to: "/employee/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
-        ...(canView("pa_measurement_smart") ? [{ to: "/employee/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-        ...(canView("pa_measurement_appraisal") ? [{ to: "/employee/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
-        ...(canView("pa_measurement_project") ? [{ to: "/employee/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-        ...(canView("pa_measurement_managerial") ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-        ...(canView("pa_measurement_feedback") && hasIdf ? [{ to: "/employee/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-        ...(canView("pa_measurement_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-      ];
-      if (canView("pa_measurement") && paMeasSubs.length > 0) {
-        list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
-      }
-
-      if (canView("history")) {
-        list.push({ to: "/supervisor/history", icon: BookOpen, label: "PA Cycle History" });
-      }
-      if (canView("documents")) {
-        list.push({ to: "/employee/documents", icon: BookOpen, label: "Documents" });
-      }
-
-      const evLink = buildEvidenceLink();
-      if (evLink) list.push(evLink);
-
-      const settingLink = buildSettingLink();
-      if (settingLink) list.push(settingLink);
-
-      return list;
-    }
-
-    // Default: supervisor / gm portal
+    // Default susunan menu untuk Role: Employee, GM, Supervisor, HR Unit (sesuai urutan 1 - 10)
+    const isEmployeePortal = role === "employee" && activeUser.role === "Employee";
+    const prefix = isEmployeePortal ? "/employee" : "/supervisor";
     const list: NavTopLink[] = [];
+
+    // 1. Dashboard
     if (canView("dashboard") || canView("analytics")) {
-      list.push({ to: "/supervisor", icon: ListTodo, label: "Dashboard", exact: true });
-    }
-    if (canView("profile")) {
-      list.push({ to: "/supervisor/profile", icon: UserCog, label: "My Profile" });
-    }
-    if (canView("appraisal")) {
-      list.push({ to: "/supervisor/appraisal", icon: FileText, label: "My Performance Appraisal" });
+      list.push({
+        to: isEmployeePortal ? "/employee" : "/supervisor",
+        icon: isEmployeePortal ? BarChart2 : ListTodo,
+        label: "Dashboard",
+        exact: true,
+      });
     }
 
+    // 2. My Profile
+    if (canView("profile")) {
+      list.push({
+        to: isEmployeePortal ? "/employee/profile" : "/supervisor/profile",
+        icon: UserCog,
+        label: "My Profile",
+      });
+    }
+
+    // 3. My Performance Appraisal
+    if (canView("appraisal")) {
+      list.push({
+        to: isEmployeePortal ? "/employee/appraisal" : "/supervisor/appraisal",
+        icon: FileText,
+        label: "My Performance Appraisal",
+      });
+    }
+
+    // 4. Performance Appraisal Setting
+    const paSettingSubs: NavSubLink[] = [
+      ...(canView("pa_setting_kpi") && hasKpi ? [{ to: `${prefix}/setting/kpi`, label: "KPI", icon: TrendingUp }] : []),
+      ...(canView("pa_setting_smart") && hasSmart ? [{ to: `${prefix}/setting/smart-goals`, label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("pa_setting_project") && hasProject ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+      ...(canView("pa_setting_interview") && hasMi ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+    ];
+    if (canView("pa_setting") && paSettingSubs.length > 0) {
+      list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+    }
+
+    // 5. Performance Appraisal Measurement
+    const paMeasSubs: NavSubLink[] = [
+      ...(canView("pa_measurement_kpi") && hasKpi ? [{ to: `${prefix}/measurement/kpi-tracking`, label: "KPI Tracking", icon: TrendingUp }] : []),
+      ...(canView("pa_measurement_rca") && hasKpi ? [{ to: `${prefix}/measurement/rca`, label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
+      ...(canView("pa_measurement_smart") && hasSmart ? [{ to: `${prefix}/measurement/smart-goals`, label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("pa_measurement_appraisal") && hasAppraisalForm ? [{ to: `${prefix}/measurement/appraisal-form`, label: "Appraisal Form", icon: ClipboardList }] : []),
+      ...(canView("pa_measurement_project") && hasProject ? [{ to: `${prefix}/measurement/project-outside`, label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+      ...(canView("pa_measurement_managerial") && hasManagerial ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
+      ...(canView("pa_measurement_feedback") && hasIdf ? [{ to: `${prefix}/measurement/inter-department-feedback`, label: "Inter-Department Feedback", icon: Users }] : []),
+      ...(canView("pa_measurement_interview") && hasMi ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+    ];
+    if (canView("pa_measurement") && paMeasSubs.length > 0) {
+      list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
+    }
+
+    // Approvals (jika di-allow untuk GM / Supervisor / HR Unit / Employee)
     const approvalSubs: NavSubLink[] = [
       ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
         ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
@@ -637,47 +585,26 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
     }
 
-    if (canView("pa_summary")) {
-      list.push({ to: "/supervisor/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
-    }
-
+    // 6. Performance Appraisal Monitoring
     const monitoringSubs: NavSubLink[] = [
-      ...(canView("pa_monitoring_kpi") ? [{ to: "/supervisor/monitoring/kpi", label: "KPI", icon: TrendingUp }] : []),
-      ...(canView("pa_monitoring_smart") ? [{ to: "/supervisor/monitoring/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-      ...(canView("pa_monitoring_appraisal") ? [{ to: "/supervisor/monitoring/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
+      ...(canView("pa_monitoring_kpi") && hasKpi ? [{ to: "/supervisor/monitoring/kpi", label: "KPI", icon: TrendingUp }] : []),
+      ...(canView("pa_monitoring_smart") && hasSmart ? [{ to: "/supervisor/monitoring/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("pa_monitoring_appraisal") && hasAppraisalForm ? [{ to: "/supervisor/monitoring/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
       ...(canView("pa_monitoring_managerial") && hasManagerial ? [{ to: "/supervisor/monitoring/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-      ...(canView("pa_monitoring_project") ? [{ to: "/supervisor/monitoring/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-      ...(canView("pa_monitoring_interview") ? [{ to: "/supervisor/monitoring/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+      ...(canView("pa_monitoring_project") && hasProject ? [{ to: "/supervisor/monitoring/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+      ...(canView("pa_monitoring_interview") && hasMi ? [{ to: "/supervisor/monitoring/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
       ...(canView("pa_monitoring_feedback") && hasIdf ? [{ to: "/supervisor/monitoring/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
     ];
     if (canView("pa_monitoring") && monitoringSubs.length > 0) {
       list.push({ label: "Performance Appraisal Monitoring", icon: ClipboardCheck, subLinks: monitoringSubs });
     }
 
-    const paSettingSubs: NavSubLink[] = [
-      ...(canView("pa_setting_kpi") ? [{ to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
-      ...(canView("pa_setting_smart") ? [{ to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-      ...(canView("pa_setting_project") ? [{ to: "/supervisor/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-      ...(canView("pa_setting_interview") ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-    ];
-    if (canView("pa_setting") && paSettingSubs.length > 0) {
-      list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+    // 7. Performance Appraisal Summary
+    if (canView("pa_summary")) {
+      list.push({ to: "/supervisor/summary", icon: LayoutList, label: "Performance Appraisal Summary" });
     }
 
-    const paMeasSubs: NavSubLink[] = [
-      ...(canView("pa_measurement_kpi") ? [{ to: "/supervisor/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
-      ...(canView("pa_measurement_rca") ? [{ to: "/supervisor/measurement/rca", label: "RCA (Root Cause Analysis)", icon: FileText }] : []),
-      ...(canView("pa_measurement_smart") ? [{ to: "/supervisor/measurement/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
-      ...(canView("pa_measurement_appraisal") ? [{ to: "/supervisor/measurement/appraisal-form", label: "Appraisal Form", icon: ClipboardList }] : []),
-      ...(canView("pa_measurement_project") ? [{ to: "/supervisor/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-      ...(canView("pa_measurement_managerial") && hasManagerial ? [{ to: "/supervisor/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
-      ...(canView("pa_measurement_feedback") && hasIdf ? [{ to: "/supervisor/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-      ...(canView("pa_measurement_interview") && hasMi ? [{ to: "/supervisor/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-    ];
-    if (canView("pa_measurement") && paMeasSubs.length > 0) {
-      list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
-    }
-
+    // 8. Calibration
     const calSubs: NavSubLink[] = [
       ...(canView("calibration_setting") ? [{ to: "/hr/calibration/setting", label: "Setting", icon: Settings }] : []),
       ...(canView("calibration_verification") ? [{ to: "/hr/calibration/verification", label: "Verification", icon: CheckSquare }] : []),
@@ -689,15 +616,18 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       list.push({ label: "Calibration", icon: Target, subLinks: calSubs });
     }
 
-    const evLink = buildEvidenceLink();
-    if (evLink) list.push(evLink);
-
+    // 9. PA Cycle History
     if (canView("history")) {
       list.push({ to: "/supervisor/history", icon: BookOpen, label: "PA Cycle History" });
     }
+
+    // 10. Documents
     if (canView("documents")) {
-      list.push({ to: "/supervisor/documents", icon: BookOpen, label: "Documents" });
+      list.push({ to: `${prefix}/documents`, icon: BookOpen, label: "Documents" });
     }
+
+    const evLink = buildEvidenceLink();
+    if (evLink) list.push(evLink);
 
     const settingLink = buildSettingLink();
     if (settingLink) list.push(settingLink);

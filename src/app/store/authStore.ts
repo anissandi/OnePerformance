@@ -624,7 +624,7 @@ export function getActiveUser(): ManagedUser {
 }
 
 export function resolvePortalPathForRole(role: AppUserRole, _position = "", grouping = ""): "/hr" | "/bod" | "/supervisor" | "/employee" {
-  if (role === "Administrator" || role === "HR Admin" || role === "HR Unit" || role === "HR ICF") {
+  if (role === "Administrator" || role === "HR Admin" || role === "HR ICF") {
     return "/hr";
   }
   if (role === "BOD" || role === "Director") {
@@ -633,6 +633,7 @@ export function resolvePortalPathForRole(role: AppUserRole, _position = "", grou
   if (
     role === "Supervisor" ||
     role === "GM" ||
+    role === "HR Unit" ||
     (grouping && grouping !== "Operasional")
   ) {
     return "/supervisor";

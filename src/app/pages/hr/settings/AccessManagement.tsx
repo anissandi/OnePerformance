@@ -165,6 +165,28 @@ export const MENU_STRUCTURE: MenuItem[] = [
     ],
   },
   {
+    id: "pa_setting", label: "Performance Appraisal Setting",
+    children: [
+      { id: "pa_setting_kpi",       label: "KPI" },
+      { id: "pa_setting_smart",     label: "SMART Goals" },
+      { id: "pa_setting_project",   label: "Project Outside Job Scope" },
+      { id: "pa_setting_interview", label: "Management Interview" },
+    ]
+  },
+  {
+    id: "pa_measurement", label: "Performance Appraisal Measurement",
+    children: [
+      { id: "pa_measurement_kpi",        label: "KPI Tracking" },
+      { id: "pa_measurement_rca",        label: "RCA (Root Cause Analysis)" },
+      { id: "pa_measurement_smart",      label: "SMART Goals" },
+      { id: "pa_measurement_appraisal",  label: "Appraisal Form" },
+      { id: "pa_measurement_project",    label: "Project Outside Job Scope" },
+      { id: "pa_measurement_managerial", label: "Managerial Skill" },
+      { id: "pa_measurement_feedback",   label: "Inter-Department Feedback" },
+      { id: "pa_measurement_interview",  label: "Management Interview" },
+    ]
+  },
+  {
     id: "approvals", label: "Approvals",
     children: [
       {
@@ -205,6 +227,8 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "calibration_team_performance", label: "Team Performance" },
     ]
   },
+  { id: "history",   label: "PA Cycle History" },
+  { id: "documents", label: "Documents" },
   {
     id: "evidence", label: "Evidence",
     children: [
@@ -215,36 +239,12 @@ export const MENU_STRUCTURE: MenuItem[] = [
     ]
   },
   {
-    id: "pa_setting", label: "Performance Appraisal Setting",
-    children: [
-      { id: "pa_setting_kpi",       label: "KPI" },
-      { id: "pa_setting_smart",     label: "SMART Goals" },
-      { id: "pa_setting_project",   label: "Project Outside Job Scope" },
-      { id: "pa_setting_interview", label: "Management Interview" },
-    ]
-  },
-  {
-    id: "pa_measurement", label: "Performance Appraisal Measurement",
-    children: [
-      { id: "pa_measurement_kpi",        label: "KPI Tracking" },
-      { id: "pa_measurement_rca",        label: "RCA (Root Cause Analysis)" },
-      { id: "pa_measurement_smart",      label: "SMART Goals" },
-      { id: "pa_measurement_appraisal",  label: "Appraisal Form" },
-      { id: "pa_measurement_project",    label: "Project Outside Job Scope" },
-      { id: "pa_measurement_managerial", label: "Managerial Skill" },
-      { id: "pa_measurement_feedback",   label: "Inter-Department Feedback" },
-      { id: "pa_measurement_interview",  label: "Management Interview" },
-    ]
-  },
-  {
     id: "management_interview", label: "Management Interview",
     children: [
       { id: "mgmt_interview_assessment", label: "Assessment" },
       { id: "mgmt_interview_invitation", label: "Invitation" },
     ]
   },
-  { id: "history",   label: "PA Cycle History" },
-  { id: "documents", label: "Documents" },
   { id: "override",  label: "Management Override" },
   {
     id: "setting", label: "Setting",
@@ -494,7 +494,7 @@ const DEFAULT_HR_UNIT: RolePermissions = {
   dashboard_my: V,
   dashboard_approval: V,
   calibration_verification: N,
-  analytics: V,
+  analytics: N,
   profile: VE,
   profile_overview: VE,
   profile_results: V,
@@ -515,17 +515,17 @@ const DEFAULT_HR_UNIT: RolePermissions = {
   pa_monitoring_managerial: VE,
   pa_monitoring_project:    VE,
   pa_monitoring_interview:  VE,
-  pa_monitoring_feedback:   N,
+  pa_monitoring_feedback:   V,
   pa_summary: V,
   calibration: N,
   calibration_setting:    N,
   calibration_adjustment: N,
   calibration_interview:  N,
-  evidence: V,
-  evidence_kpi:       V,
-  evidence_rca:       V,
-  evidence_smart:     V,
-  evidence_interview: V,
+  evidence: N,
+  evidence_kpi:       N,
+  evidence_rca:       N,
+  evidence_smart:     N,
+  evidence_interview: N,
   pa_setting: V,
   pa_setting_kpi:   VCET,
   pa_setting_smart: VCE,
@@ -1158,7 +1158,7 @@ function IndeterminateCheckbox({ state, onChange }: { state: "all" | "none" | "i
 }
 
 const ACCESS_ROLES_KEY = "pa_access_roles_v1";
-const ACCESS_PERMS_KEY = "pa_access_permissions_v1";
+const ACCESS_PERMS_KEY = "pa_access_permissions_v2";
 const ACCESS_GROUPS_KEY = "pa_access_groups_v1";
 const ACCESS_GROUP_CONFIGS_KEY = "pa_access_group_configs_v1";
 

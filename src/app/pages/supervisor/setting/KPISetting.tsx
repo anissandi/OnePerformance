@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { loadMasterKpi, type MasterKpiStore } from "../../hr/settings/masterKpiStore";
+import { getActiveUser, resolveEffectiveUserGrouping } from "../../../store/authStore";
 import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock } from "lucide-react";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
@@ -4468,7 +4469,13 @@ function TabStatusBadge({ ts, useValidate = false }: { ts: TabStatus; useValidat
   );
 }
 
-export function SupervisorSettingKPIPage({ personalOnly = false }: { personalOnly?: boolean } = {}) {
+export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = false }: { personalOnly?: boolean } = {}) {
+  const activeUser = getActiveUser();
+  const effectiveGrouping = resolveEffectiveUserGrouping(activeUser);
+  const personalOnly =
+    personalOnlyProp ||
+    effectiveGrouping === "Operasional" ||
+    effectiveGrouping === "Ka./Wa.Ka.Seksi";
   const [routeKpiTab, setActiveTab]         = useRouteTab<KPITab>(["corporate", "pak-anton", "pak-amir", "division", "department", "personal"], personalOnly ? "personal" : "corporate");
   const activeTab: KPITab                   = personalOnly ? "personal" : routeKpiTab;
   const [personalTabStatus, setPersonalTabStatus]   = useState<TabStatus>("idle");

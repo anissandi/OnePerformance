@@ -62,62 +62,11 @@ const INITIAL_MENUS: MenuItem[] = [
   },
   {
     id: "appraisal", label: "My Performance Appraisal", path: "/appraisal", icon: "UserCheck",
-    isVisible: true, order: 2, roles: ["GM", "Supervisor", "Employee"] as Role[],
-  },
-  {
-    id: "approvals", label: "Approvals", path: "", icon: "CheckSquare",
-    isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
-    children: [
-      { id: "approvals_kpi_business",   label: "KPI Business",                      path: "/hr/settings/kpi",                    icon: "TrendingUp",  isVisible: true, order: 1, roles: [...HR_ADMIN, "GM", "Director"] as Role[] },
-      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement", path: "/hr/approvals/measurement",               icon: "Clock",       isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/hr/approvals/measurement/inter-department-feedback", icon: "Users", isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",     path: "/hr/approvals/setting",               icon: "Target",      isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_mgmt_interview", label: "Management Interview",              path: "/bod/approvals/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: ["BOD", "Director"] as Role[] },
-      { id: "approvals_open_lock",      label: "Open Lock",                         path: "/hr/settings/open-lock",              icon: "LockOpen",    isVisible: true, order: 4, roles: HR_ADMIN },
-      { id: "approvals_calibration",    label: "Calibration",                       path: "/bod/approvals/calibration",          icon: "BarChart2",   isVisible: true, order: 5, roles: ["BOD"] as Role[] },
-    ],
-  },
-  {
-    id: "pa_monitoring", label: "Performance Appraisal Monitoring", path: "", icon: "ClipboardCheck",
-    isVisible: true, order: 4, roles: ["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor"] as Role[],
-    children: [
-      { id: "pa_monitoring_kpi",        label: "KPI",                       path: "/monitoring/kpi",                    icon: "TrendingUp",    isVisible: true, order: 1, roles: HR_ADMIN },
-      { id: "pa_monitoring_smart",      label: "SMART Goals",               path: "/monitoring/smart-goals",            icon: "Lightbulb",     isVisible: true, order: 2, roles: HR_ADMIN },
-      { id: "pa_monitoring_appraisal",  label: "Appraisal Form",            path: "/monitoring/appraisal-form",         icon: "ClipboardList", isVisible: true, order: 3, roles: HR_ADMIN },
-      { id: "pa_monitoring_managerial", label: "Managerial Skill",          path: "/monitoring/managerial-skill",       icon: "Briefcase",     isVisible: true, order: 4, roles: HR_ADMIN },
-      { id: "pa_monitoring_project",    label: "Project Outside Job Scope", path: "/monitoring/project",                icon: "FolderKanban",  isVisible: true, order: 5, roles: HR_ADMIN },
-      { id: "pa_monitoring_interview",  label: "Management Interview",      path: "/monitoring/management-interview",   icon: "MessageSquare", isVisible: true, order: 6, roles: HR_ADMIN },
-      { id: "pa_monitoring_feedback",   label: "Inter-Department Feedback", path: "/monitoring/inter-department-feedback", icon: "Users",      isVisible: true, order: 7, roles: ["Administrator", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-    ],
-  },
-  {
-    id: "pa_summary", label: "Performance Appraisal Summary", path: "/summary", icon: "LayoutList",
-    isVisible: true, order: 5, roles: ALL_ROLES,
-  },
-  {
-    id: "calibration", label: "Calibration", path: "", icon: "Target",
-    isVisible: true, order: 6, roles: HR_ROLES,
-    children: [
-      { id: "calibration_setting",          label: "Setting",              path: "/calibration/setting",              icon: "Settings",      isVisible: true, order: 1, roles: HR_ADMIN },
-      { id: "calibration_verification", label: "Verification", path: "/hr/calibration/verification", icon: "CheckSquare", isVisible: true, order: 2, roles: HR_ADMIN },
-      { id: "calibration_adjustment",       label: "Adjustment",           path: "/calibration/adjustment",           icon: "RefreshCw",     isVisible: true, order: 3, roles: HR_ROLES },
-      { id: "calibration_interview",        label: "Management Interview", path: "/calibration/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: HR_ADMIN },
-      { id: "calibration_team_performance", label: "Team Performance",     path: "/supervisor/calibration/team-performance", icon: "Users", isVisible: true, order: 5, roles: ["Supervisor"] as Role[] },
-    ],
-  },
-  {
-    id: "evidence", label: "Evidence", path: "", icon: "FolderOpen",
-    isVisible: true, order: 7, roles: HR_ADMIN,
-    children: [
-      { id: "evidence_kpi",       label: "KPI Tracking",         path: "/evidence/kpi-tracking",         icon: "TrendingUp",    isVisible: true, order: 1, roles: HR_ADMIN },
-      { id: "evidence_rca",       label: "RCA",                  path: "/evidence/rca",                  icon: "RefreshCw",     isVisible: true, order: 2, roles: HR_ADMIN },
-      { id: "evidence_smart",     label: "SMART Goals",          path: "/evidence/smart-goals",          icon: "Lightbulb",     isVisible: true, order: 3, roles: HR_ADMIN },
-      { id: "evidence_interview", label: "Management Interview", path: "/evidence/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: HR_ADMIN },
-    ],
+    isVisible: true, order: 3, roles: ["GM", "Supervisor", "Employee"] as Role[],
   },
   {
     id: "pa_setting", label: "Performance Appraisal Setting", path: "", icon: "Target",
-    isVisible: true, order: 8, roles: ALL_ROLES,
+    isVisible: true, order: 4, roles: ALL_ROLES,
     children: [
       { id: "pa_setting_kpi",       label: "KPI",                       path: "/setting/kpi",                  icon: "TrendingUp",    isVisible: true, order: 1, roles: ALL_ROLES },
       { id: "pa_setting_smart",     label: "SMART Goals",               path: "/setting/smart-goals",          icon: "Lightbulb",     isVisible: true, order: 2, roles: ALL_ROLES },
@@ -127,7 +76,7 @@ const INITIAL_MENUS: MenuItem[] = [
   },
   {
     id: "pa_measurement", label: "Performance Appraisal Measurement", path: "", icon: "Clock",
-    isVisible: true, order: 9, roles: ALL_ROLES,
+    isVisible: true, order: 5, roles: ALL_ROLES,
     children: [
       { id: "pa_measurement_kpi",        label: "KPI Tracking",                  path: "/measurement/kpi-tracking",            icon: "TrendingUp",    isVisible: true, order: 1, roles: ALL_ROLES },
       { id: "pa_measurement_rca",        label: "RCA (Root Cause Analysis)",     path: "/measurement/rca",                     icon: "FileText",      isVisible: true, order: 2, roles: ALL_ROLES },
@@ -140,20 +89,71 @@ const INITIAL_MENUS: MenuItem[] = [
     ],
   },
   {
-    id: "management_interview", label: "Management Interview", path: "", icon: "UserSquare",
-    isVisible: true, order: 10, roles: ["BOD", "Director"] as Role[],
+    id: "approvals", label: "Approvals", path: "", icon: "CheckSquare",
+    isVisible: true, order: 6, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
     children: [
-      { id: "mgmt_interview_assessment", label: "Assessment", path: "/bod/management-interview/assessment", icon: "ClipboardList", isVisible: true, order: 1, roles: ["BOD"] as Role[] },
-      { id: "mgmt_interview_invitation", label: "Invitation", path: "/hr/management-interview/invitation",  icon: "MessageSquare", isVisible: true, order: 2, roles: HR_ADMIN },
+      { id: "approvals_kpi_business",   label: "KPI Business",                      path: "/hr/settings/kpi",                    icon: "TrendingUp",  isVisible: true, order: 1, roles: [...HR_ADMIN, "GM", "Director"] as Role[] },
+      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement", path: "/hr/approvals/measurement",               icon: "Clock",       isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/hr/approvals/measurement/inter-department-feedback", icon: "Users", isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",     path: "/hr/approvals/setting",               icon: "Target",      isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_mgmt_interview", label: "Management Interview",              path: "/bod/approvals/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: ["BOD", "Director"] as Role[] },
+      { id: "approvals_open_lock",      label: "Open Lock",                         path: "/hr/settings/open-lock",              icon: "LockOpen",    isVisible: true, order: 4, roles: HR_ADMIN },
+      { id: "approvals_calibration",    label: "Calibration",                       path: "/bod/approvals/calibration",          icon: "BarChart2",   isVisible: true, order: 5, roles: ["BOD"] as Role[] },
+    ],
+  },
+  {
+    id: "pa_monitoring", label: "Performance Appraisal Monitoring", path: "", icon: "ClipboardCheck",
+    isVisible: true, order: 7, roles: ["Administrator", "BOD", "Director", "HR Unit", "HR ICF", "Supervisor"] as Role[],
+    children: [
+      { id: "pa_monitoring_kpi",        label: "KPI",                       path: "/monitoring/kpi",                    icon: "TrendingUp",    isVisible: true, order: 1, roles: HR_ADMIN },
+      { id: "pa_monitoring_smart",      label: "SMART Goals",               path: "/monitoring/smart-goals",            icon: "Lightbulb",     isVisible: true, order: 2, roles: HR_ADMIN },
+      { id: "pa_monitoring_appraisal",  label: "Appraisal Form",            path: "/monitoring/appraisal-form",         icon: "ClipboardList", isVisible: true, order: 3, roles: HR_ADMIN },
+      { id: "pa_monitoring_managerial", label: "Managerial Skill",          path: "/monitoring/managerial-skill",       icon: "Briefcase",     isVisible: true, order: 4, roles: HR_ADMIN },
+      { id: "pa_monitoring_project",    label: "Project Outside Job Scope", path: "/monitoring/project",                icon: "FolderKanban",  isVisible: true, order: 5, roles: HR_ADMIN },
+      { id: "pa_monitoring_interview",  label: "Management Interview",      path: "/monitoring/management-interview",   icon: "MessageSquare", isVisible: true, order: 6, roles: HR_ADMIN },
+      { id: "pa_monitoring_feedback",   label: "Inter-Department Feedback", path: "/monitoring/inter-department-feedback", icon: "Users",      isVisible: true, order: 7, roles: ["Administrator", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+    ],
+  },
+  {
+    id: "pa_summary", label: "Performance Appraisal Summary", path: "/summary", icon: "LayoutList",
+    isVisible: true, order: 8, roles: ALL_ROLES,
+  },
+  {
+    id: "calibration", label: "Calibration", path: "", icon: "Target",
+    isVisible: true, order: 9, roles: HR_ROLES,
+    children: [
+      { id: "calibration_setting",          label: "Setting",              path: "/calibration/setting",              icon: "Settings",      isVisible: true, order: 1, roles: HR_ADMIN },
+      { id: "calibration_verification", label: "Verification", path: "/hr/calibration/verification", icon: "CheckSquare", isVisible: true, order: 2, roles: HR_ADMIN },
+      { id: "calibration_adjustment",       label: "Adjustment",           path: "/calibration/adjustment",           icon: "RefreshCw",     isVisible: true, order: 3, roles: HR_ROLES },
+      { id: "calibration_interview",        label: "Management Interview", path: "/calibration/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: HR_ADMIN },
+      { id: "calibration_team_performance", label: "Team Performance",     path: "/supervisor/calibration/team-performance", icon: "Users", isVisible: true, order: 5, roles: ["Supervisor"] as Role[] },
     ],
   },
   {
     id: "history", label: "PA Cycle History", path: "/hr/history", icon: "BookOpen",
-    isVisible: true, order: 11, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
+    isVisible: true, order: 10, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
   },
   {
     id: "documents", label: "Documents", path: "/documents", icon: "BookOpen",
     isVisible: true, order: 11, roles: ALL_ROLES,
+  },
+  {
+    id: "evidence", label: "Evidence", path: "", icon: "FolderOpen",
+    isVisible: true, order: 12, roles: HR_ADMIN,
+    children: [
+      { id: "evidence_kpi",       label: "KPI Tracking",         path: "/evidence/kpi-tracking",         icon: "TrendingUp",    isVisible: true, order: 1, roles: HR_ADMIN },
+      { id: "evidence_rca",       label: "RCA",                  path: "/evidence/rca",                  icon: "RefreshCw",     isVisible: true, order: 2, roles: HR_ADMIN },
+      { id: "evidence_smart",     label: "SMART Goals",          path: "/evidence/smart-goals",          icon: "Lightbulb",     isVisible: true, order: 3, roles: HR_ADMIN },
+      { id: "evidence_interview", label: "Management Interview", path: "/evidence/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: HR_ADMIN },
+    ],
+  },
+  {
+    id: "management_interview", label: "Management Interview", path: "", icon: "UserSquare",
+    isVisible: true, order: 13, roles: ["BOD", "Director"] as Role[],
+    children: [
+      { id: "mgmt_interview_assessment", label: "Assessment", path: "/bod/management-interview/assessment", icon: "ClipboardList", isVisible: true, order: 1, roles: ["BOD"] as Role[] },
+      { id: "mgmt_interview_invitation", label: "Invitation", path: "/hr/management-interview/invitation",  icon: "MessageSquare", isVisible: true, order: 2, roles: HR_ADMIN },
+    ],
   },
   {
     id: "override", label: "Management Override", path: "/hr/override", icon: "Shield",

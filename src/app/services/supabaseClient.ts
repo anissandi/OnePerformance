@@ -1108,16 +1108,19 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     }
 
     // 12. Hydrate Access Management role permissions if present
-    const rolePermissions = data.rolePermissions as Array<{ role?: string; permissions?: unknown }> | undefined;
+    const rolePermissions = data.rolePermissions as Array<{ role?: string; permissions?: Record<string, unknown> }> | undefined;
     if (Array.isArray(rolePermissions) && rolePermissions.length > 0) {
-      const existingRaw = localStorage.getItem("pa_access_permissions_v1");
+      const existingRaw = localStorage.getItem("pa_access_permissions_v2");
       const map: Record<string, unknown> = existingRaw ? JSON.parse(existingRaw) : {};
       for (const rp of rolePermissions) {
-        if (rp.role && rp.permissions) {
+        // Hanya gunakan data dari tabel pa_role_permissions jika sudah memiliki struktur v2 (ada field dashboard & profile)
+        if (rp.role && rp.permissions && typeof rp.permissions === "object" && "dashboard" in rp.permissions && "profile" in rp.permissions) {
           map[String(rp.role)] = rp.permissions;
         }
       }
-      localStorage.setItem("pa_access_permissions_v1", JSON.stringify(map));
+      if (Object.keys(map).length > 0) {
+        localStorage.setItem("pa_access_permissions_v2", JSON.stringify(map));
+      }
     }
 
     // 13. Hydrate Menu Management configuration if present
