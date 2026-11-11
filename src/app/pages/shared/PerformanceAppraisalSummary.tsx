@@ -424,17 +424,23 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
 
   const activeUser = getActiveUser();
   const scopedMeta = getScopedFilterOptionsForUser(activeUser);
+  const isHrUnitScoped = activeUser.role === "HR Unit";
+  const effectiveLockedUnits =
+    lockedUnits ??
+    (isHrUnitScoped
+      ? Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
+      : undefined);
   const supervisorAllowedIds = new Set(
-    role === "supervisor"
+    role === "supervisor" || isHrUnitScoped
       ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
       : [],
   );
 
   const filtered = mockEmployees.filter(emp => {
-    if (role === "supervisor") {
+    if (role === "supervisor" || isHrUnitScoped) {
       if (!supervisorAllowedIds.has(emp.id.toLowerCase())) return false;
     }
-    if (lockedUnits && !lockedUnits.includes(emp.companyUnit)) return false;
+    if (effectiveLockedUnits && !effectiveLockedUnits.includes(emp.companyUnit)) return false;
     if (companyUnit !== "All Units"       && emp.companyUnit !== companyUnit) return false;
     if (division    !== "All Divisions"   && emp.division    !== division)    return false;
     if (department  !== "All Departments" && emp.department  !== department)  return false;
@@ -473,7 +479,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
               ? "Consolidated appraisal results for all employees with completed approvals"
               : "Appraisal results for employees under your hierarchical & approval authority"}
           </p>
-          {role === "supervisor" && (
+          {(role === "supervisor" || isHrUnitScoped) && (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-[#1A284F] border border-blue-200">
               Cakupan Wewenang: {scopedMeta.authorityLabel}
             </span>
@@ -487,8 +493,8 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           <FilterSelect
             label="Company Unit"
             options={
-              lockedUnits
-                ? ["All Units", ...lockedUnits]
+              effectiveLockedUnits
+                ? ["All Units", ...effectiveLockedUnits]
                 : role === "supervisor" && scopedMeta.units.length > 0
                 ? ["All Units", ...scopedMeta.units]
                 : filterOptions.companyUnit

@@ -1872,6 +1872,10 @@ function ScoreSummaryBanner({ year }: { year: string }) {
     { label: "Management Interview", score: null,                                                  weight: 10,   icon: <MessageCircle className="w-4 h-4" />,  color: "text-indigo-700",  bg: "bg-indigo-50",  border: "border-indigo-200"  },
   ];
   const cards = allCards.filter((c) => {
+    if (c.label === "KPI") return allowedModules.includes("KPI (Setting/Measurement)");
+    if (c.label === "SMART Goals") return allowedModules.includes("SMART Goals (Setting/Measurement)");
+    if (c.label === "Appraisal Form") return allowedModules.includes("Appraisals Form");
+    if (c.label === "Project") return allowedModules.includes("Project Outside Job Scope");
     if (c.label === "Managerial Skill") return allowedModules.includes("Managerial Skill");
     if (c.label === "Inter-Dept Feedback") return allowedModules.includes("Inter-Departement Feedback");
     if (c.label === "Management Interview") return allowedModules.includes("Management Interview");
@@ -2633,6 +2637,10 @@ export function SupervisorMyPerformanceAppraisal() {
   const revision = useAppraisalRevision();
   const { activeUser, allowedModules } = useAuthStore();
   const visibleTabs = TABS.filter((t) => {
+    if (t.id === "KPI" || t.id === "RCA") return allowedModules.includes("KPI (Setting/Measurement)");
+    if (t.id === "SMART Goals") return allowedModules.includes("SMART Goals (Setting/Measurement)");
+    if (t.id === "Appraisal Form") return allowedModules.includes("Appraisals Form");
+    if (t.id === "Project Outside Job Scope") return allowedModules.includes("Project Outside Job Scope");
     if (t.id === "Managerial Skill") return allowedModules.includes("Managerial Skill");
     if (t.id === "Inter-Dept Feedback") return allowedModules.includes("Inter-Departement Feedback");
     if (t.id === "Management Interview") return allowedModules.includes("Management Interview");

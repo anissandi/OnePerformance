@@ -3,6 +3,7 @@
 import {
   getActiveUser,
   getAuthorizedSubordinates,
+  isAdminOrHrIcfRole,
   loadManagedUsers,
   resolveUserAllowedModules,
   type AppraisalModuleName,
@@ -27,7 +28,10 @@ export interface MonitoringEmployee {
 export function getMonitoringEmployees(): MonitoringEmployee[] {
   const users = loadManagedUsers();
   const activeUser = getActiveUser();
-  const mapped = users.map((u) => {
+  const isGlobalViewer =
+    isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD" || activeUser.role === "Director";
+  const scopedUsers = isGlobalViewer ? users : getAuthorizedSubordinates(activeUser, users);
+  const mapped = scopedUsers.map((u) => {
     const allowed = resolveUserAllowedModules(u);
     const isSelf = u.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase();
     return {
@@ -85,7 +89,7 @@ export const SUPERVISOR_TEAM_EMPLOYEES: MonitoringEmployee[] = new Proxy([] as M
   },
 });
 
-export const COMPANY_UNITS = [
+const ALL_COMPANY_UNITS = [
   "PT RSUP (Industry)",
   "PT RSUP (Perkebunan)",
   "PT Pulau Sambu (Jakarta)",
@@ -95,3 +99,19 @@ export const COMPANY_UNITS = [
   "PT GHS",
   "ASD",
 ];
+
+function getScopedCompanyUnits(): string[] {
+  const activeUser = getActiveUser();
+  if (activeUser.role === "HR Unit") {
+    return Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+  }
+  return ALL_COMPANY_UNITS;
+}
+
+export const COMPANY_UNITS: string[] = new Proxy([] as string[], {
+  get(_target, prop, receiver) {
+    const list = getScopedCompanyUnits();
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});

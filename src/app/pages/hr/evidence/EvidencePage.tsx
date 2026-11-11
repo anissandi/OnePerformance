@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { loadUploadedEvidenceList, UploadedEvidenceRecord } from "../../../services/supabaseClient";
 import { toast } from "sonner";
+import { useAuthStore } from "../../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -285,6 +286,8 @@ function FilterDropdown({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function EvidencePage({ type }: { type: EvidenceType }) {
+  const { lockedUnits: authLockedUnits } = useAuthStore();
+  const allowedUnitOptions = authLockedUnits && authLockedUnits.length > 0 ? authLockedUnits : COMPANY_UNITS;
   const isRCA = type === "RCA";
   const showMonthFilter = type === "KPI Tracking";
   const [uploadedList, setUploadedList] = useState<UploadedEvidenceRecord[]>(() => loadUploadedEvidenceList());
@@ -344,6 +347,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return sourceRows.filter((r) => {
+      if (authLockedUnits && authLockedUnits.length > 0 && !authLockedUnits.includes(r.companyUnit)) return false;
       if (filterYears.length    && !filterYears.includes(r.year))              return false;
       if (filterMonths.length   && !filterMonths.includes(r.month))            return false;
       if (filterUnits.length    && !filterUnits.includes(r.companyUnit))       return false;
@@ -419,7 +423,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
           {showMonthFilter && (
             <FilterDropdown label="Period" options={MONTHS} selected={filterMonths} onChange={setFilterMonths} />
           )}
-          <FilterDropdown label="Company Unit"    options={COMPANY_UNITS} selected={filterUnits}   onChange={setFilterUnits}    />
+          <FilterDropdown label="Company Unit"    options={allowedUnitOptions} selected={filterUnits}   onChange={setFilterUnits}    />
           <FilterDropdown label="Division"        options={DIVISIONS}    selected={filterDivs}     onChange={setFilterDivs}     />
           <FilterDropdown label="Department"      options={DEPARTMENTS}  selected={filterDepts}    onChange={setFilterDepts}    />
           <FilterDropdown label="Approval Status" options={isRCA ? ["Pending","Closed"] : STATUSES} selected={filterStatuses} onChange={setFilterStatuses} />

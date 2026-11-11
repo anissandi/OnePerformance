@@ -7,7 +7,7 @@ import {
   getLiveTransactionalEmployees, GRADE_ORDER,
   readCalibrationTargets, getModuleScoreGrade,
 } from "../../data/mockEmployees";
-import { loadManagedUsers, resolveUserAllowedModules, type ManagedUser } from "../../store/authStore";
+import { loadManagedUsers, resolveUserAllowedModules, useAuthStore, type ManagedUser } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
 
@@ -501,6 +501,8 @@ function SectionHeading({ icon, title, subtitle }: { icon: React.ReactNode; titl
 // ── Main Component ─────────────────────────────────────────────────────────────
 export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const { t } = useLanguage();
+  const { lockedUnits: authLockedUnits } = useAuthStore();
+  const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
   const [companyUnit, setCompanyUnit] = useState("All Units");
   const [module, setModule] = useState("All Modules");
   const [year, setYear] = useState("2026");
@@ -535,21 +537,21 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const liveEmployees = useMemo(() => getLiveTransactionalEmployees(), [tick]);
   const filteredEmployees = useMemo(
     () => {
-      const unitEmployees = lockedUnits
-        ? liveEmployees.filter(e => lockedUnits.includes(e.companyUnit))
+      const unitEmployees = effectiveLockedUnits
+        ? liveEmployees.filter(e => effectiveLockedUnits.includes(e.companyUnit))
         : liveEmployees;
       return companyUnit === "All Units"
         ? unitEmployees
         : unitEmployees.filter(e => e.companyUnit === companyUnit);
     },
-    [companyUnit, lockedUnits, liveEmployees],
+    [companyUnit, effectiveLockedUnits, liveEmployees],
   );
 
   const scopedUsers = useMemo(() => {
     const all = loadManagedUsers().filter((u) => u.status === "Active");
-    const unitFiltered = lockedUnits ? all.filter((u) => lockedUnits.includes(u.company)) : all;
+    const unitFiltered = effectiveLockedUnits ? all.filter((u) => effectiveLockedUnits.includes(u.company)) : all;
     return companyUnit === "All Units" ? unitFiltered : unitFiltered.filter((u) => u.company === companyUnit);
-  }, [companyUnit, lockedUnits, tick]);
+  }, [companyUnit, effectiveLockedUnits, tick]);
 
   const workflows = useMemo(() => loadWorkflowRecords(), [tick]);
 
@@ -617,7 +619,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         <div className="grid gap-4 grid-cols-4">
           <FilterSelect
             label={t("Company Unit")}
-            options={lockedUnits ? ["All Units", ...lockedUnits] : filterOptions.companyUnit}
+            options={effectiveLockedUnits ? ["All Units", ...effectiveLockedUnits] : filterOptions.companyUnit}
             value={companyUnit}
             onChange={setCompanyUnit}
           />

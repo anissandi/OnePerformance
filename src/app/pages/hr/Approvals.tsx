@@ -11,6 +11,13 @@ import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
 import { SettingApprovalDrawer } from "../../components/SettingApprovalDrawer";
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
 import { applyOverrides, saveOverride } from "../shared/approvalsStore";
+import {
+  canUserAccessEmployeeData,
+  getAllowedApprovalTypesForUser,
+  getScopedFilterOptionsForUser,
+  shouldBypassCheckerForSubmission,
+  useAuthStore,
+} from "../../store/authStore";
 
 const BASE_CHECKIN: ApprovalRow[] = [];
 const BASE_SETTING: ApprovalRow[] = [];
@@ -45,18 +52,22 @@ const HISTORY_STATUSES = new Set(["Approved", "Assessed-Approver 1", "Assessed-A
 export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const location = useLocation();
   const { tab } = useParams();
+  const { activeUser, lockedUnits: authLockedUnits } = useAuthStore();
+  const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
+  const scopedFilterMeta = getScopedFilterOptionsForUser(activeUser);
   const mainTab: MainTab = /\/setting(\/|$)/.test(location.pathname) ? "setting" : "checkin";
-  const moduleTypes = mainTab === "checkin" ? filterOptionsCheckin.approvalType : filterOptionsSetting.approvalType;
+  const moduleTypes = getAllowedApprovalTypesForUser(activeUser, mainTab);
+  const allowedTypeSet = new Set(moduleTypes);
   const routeType = moduleTypes.find((type) => tabSlug(type) === tab);
   const moduleBase = routeBase(location.pathname, routeType ? tab : undefined);
 
-  const baseCheckin = lockedUnits ? BASE_CHECKIN.filter(r => lockedUnits.includes(r.companyUnit)) : BASE_CHECKIN;
-  const baseSetting = lockedUnits ? BASE_SETTING.filter(r => lockedUnits.includes(r.companyUnit)) : BASE_SETTING;
+  const baseCheckin = effectiveLockedUnits ? BASE_CHECKIN.filter(r => effectiveLockedUnits.includes(r.companyUnit)) : BASE_CHECKIN;
+  const baseSetting = effectiveLockedUnits ? BASE_SETTING.filter(r => effectiveLockedUnits.includes(r.companyUnit)) : BASE_SETTING;
 
-  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => [...applyOverrides(baseCheckin, "approver2", "measurement"), ...projectApprovalRows("approver2").filter((row) => !lockedUnits || lockedUnits.includes(row.companyUnit)), ...feedbackApprovalRows("approver2").filter((row) => !lockedUnits || lockedUnits.includes(row.companyUnit))]);
+  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => [...applyOverrides(baseCheckin, "approver2", "measurement"), ...projectApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit)), ...feedbackApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit))]);
   useEffect(() => {
     const refresh = () => {
-      setCheckinData([...applyOverrides(baseCheckin, "approver2", "measurement"), ...projectApprovalRows("approver2").filter((row) => !lockedUnits || lockedUnits.includes(row.companyUnit)), ...feedbackApprovalRows("approver2").filter((row) => !lockedUnits || lockedUnits.includes(row.companyUnit))]);
+      setCheckinData([...applyOverrides(baseCheckin, "approver2", "measurement"), ...projectApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit)), ...feedbackApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit))]);
       setSettingData(applyOverrides(baseSetting, "approver2", "setting"));
     };
     refresh();
@@ -64,7 +75,7 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
     window.addEventListener("appraisal-updated", refresh);
     window.addEventListener("storage", refresh);
     return () => { window.removeEventListener("feedback-updated", refresh); window.removeEventListener("appraisal-updated", refresh); window.removeEventListener("storage", refresh); };
-  }, [location.pathname, lockedUnits]);
+  }, [location.pathname, effectiveLockedUnits]);
   const [settingData, setSettingData] = useState<ApprovalRow[]>(() => {
     const base = applyOverrides(baseSetting, "approver2", "setting");
     const live = loadSubmittedGoals();
@@ -74,12 +85,42 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
     return base;
   });
 
-  const checkinFilterOpts = lockedUnits
-    ? { ...filterOptionsCheckin, companyUnit: lockedUnits }
-    : filterOptionsCheckin;
-  const settingFilterOpts = lockedUnits
-    ? { ...filterOptionsSetting, companyUnit: lockedUnits }
-    : filterOptionsSetting;
+  const checkinFilterOpts = {
+    ...filterOptionsCheckin,
+    companyUnit: effectiveLockedUnits ?? filterOptionsCheckin.companyUnit,
+    approvalType: moduleTypes,
+  };
+  const settingFilterOpts = {
+    ...filterOptionsSetting,
+    companyUnit: effectiveLockedUnits ?? filterOptionsSetting.companyUnit,
+    approvalType: moduleTypes,
+  };
+
+  const filterRowsForActiveUser = (rows: ApprovalRow[]): ApprovalRow[] => {
+    return rows.filter((row) => {
+      if (!allowedTypeSet.has(row.type)) return false;
+      if (effectiveLockedUnits && !effectiveLockedUnits.includes(row.companyUnit)) return false;
+      if (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) {
+        if (
+          (row.type === "KPI" || row.type === "SMART Goals") &&
+          (row.employeeId.toLowerCase().replace(/^emp-?0*/i, "") === activeUser.employeeId.toLowerCase().replace(/^e0*/i, "") ||
+            row.name.toLowerCase() === activeUser.name.toLowerCase()) &&
+          shouldBypassCheckerForSubmission(activeUser.employeeId)
+        ) {
+          return false;
+        }
+        if (
+          activeUser.role === "HR Unit" &&
+          !canUserAccessEmployeeData(activeUser, row.employeeId) &&
+          !canUserAccessEmployeeData(activeUser, row.name) &&
+          row.companyUnit !== activeUser.company
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
+  };
 
   useEffect(() => {
     const live = loadSubmittedGoals();
@@ -94,13 +135,20 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
         <h1 className="text-3xl font-bold text-[#1A284F]">
           {mainTab === "checkin" ? "Performance Appraisal Measurement" : "Performance Appraisal Setting"}
         </h1>
-        <p className="text-gray-500 mt-2 text-sm">Review and approve submitted KPI & SMART Goals</p>
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <p className="text-gray-500 text-sm">Review and approve submitted KPI & SMART Goals</p>
+          {activeUser.role === "HR Unit" && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-[#1A284F] border border-blue-200">
+              Cakupan Wewenang: {scopedFilterMeta.authorityLabel}
+            </span>
+          )}
+        </div>
       </div>
       <ModuleRouteNav base={moduleBase} modules={moduleTypes} label="Modul approval" />
       {mainTab === "checkin" ? (
-        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={checkinData} onDataChange={setCheckinData} filterOptions={checkinFilterOpts} reviewerRole="approver2" isSetting={false} />
+        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={filterRowsForActiveUser(checkinData)} onDataChange={setCheckinData} filterOptions={checkinFilterOpts} reviewerRole="approver2" isSetting={false} />
       ) : (
-        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={settingData} onDataChange={setSettingData} filterOptions={settingFilterOpts} reviewerRole="approver2" isSetting={true} />
+        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={filterRowsForActiveUser(settingData)} onDataChange={setSettingData} filterOptions={settingFilterOpts} reviewerRole="approver2" isSetting={true} />
       )}
     </div>
   );

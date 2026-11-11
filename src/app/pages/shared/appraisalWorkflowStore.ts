@@ -1,6 +1,6 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
 import { savePersistedState } from "../../services/supabaseClient";
-import { getActiveUser, shouldBypassCheckerForSubmission } from "../../store/authStore";
+import { getActiveUser, resolveUserAllowedModules, shouldBypassCheckerForSubmission } from "../../store/authStore";
 
 export const MOCK_EMPLOYEE_ID = "EMP-002";
 const KEY = "appraisal_workflow_v1";
@@ -148,6 +148,7 @@ export interface LiveModuleApprovalData {
 
 export function getLiveUserModuleApprovals(includeManagerial = false): LiveModuleApprovalData[] {
   const activeUser = getActiveUser();
+  const allowed = resolveUserAllowedModules(activeUser);
   const normId = normalizeEmployeeId(activeUser.employeeId);
   const records = loadWorkflowRecords().filter(
     (r) => r.year === "2026" && (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
@@ -207,15 +208,26 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
     };
   };
 
-  const list: LiveModuleApprovalData[] = [
-    buildFourStep("KPI (Setting)", "KPI", "setting"),
-    buildFourStep("SMART Goals (Setting)", "SMART Goals", "setting"),
-    buildFourStep("KPI (Tracking)", "KPI", "measurement"),
-    buildFourStep("SMART Goals (Tracking)", "SMART Goals", "measurement"),
-    buildTwoStep("Appraisal Form", "Appraisal Form"),
-    buildTwoStep("Project OJS", "Project"),
-  ];
-  if (includeManagerial) {
+  const list: LiveModuleApprovalData[] = [];
+  if (allowed.includes("KPI (Setting/Measurement)")) {
+    list.push(buildFourStep("KPI (Setting)", "KPI", "setting"));
+  }
+  if (allowed.includes("SMART Goals (Setting/Measurement)")) {
+    list.push(buildFourStep("SMART Goals (Setting)", "SMART Goals", "setting"));
+  }
+  if (allowed.includes("KPI (Setting/Measurement)")) {
+    list.push(buildFourStep("KPI (Tracking)", "KPI", "measurement"));
+  }
+  if (allowed.includes("SMART Goals (Setting/Measurement)")) {
+    list.push(buildFourStep("SMART Goals (Tracking)", "SMART Goals", "measurement"));
+  }
+  if (allowed.includes("Appraisals Form")) {
+    list.push(buildTwoStep("Appraisal Form", "Appraisal Form"));
+  }
+  if (allowed.includes("Project Outside Job Scope")) {
+    list.push(buildTwoStep("Project OJS", "Project"));
+  }
+  if (includeManagerial && allowed.includes("Managerial Skill")) {
     list.push(buildTwoStep("Managerial Skill", "Managerial Skill"));
   }
   return list;

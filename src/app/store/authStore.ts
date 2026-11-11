@@ -656,10 +656,50 @@ export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleNam
     // fallback to grouping defaults
   }
   if (user.role === "HR Unit") {
-    // Dual-role HR Unit: acts as appraisal participant at Ka./Wa.Ka.Bagian level
-    return defaultAllowedModulesForGrouping(effectiveGrouping !== "Operasional" ? effectiveGrouping : "Ka./Wa.Ka.Bagian");
+    return defaultAllowedModulesForGrouping(effectiveGrouping);
   }
   return defaultAllowedModulesForGrouping(effectiveGrouping);
+}
+
+export function getAllowedApprovalTypesForUser(
+  user: ManagedUser,
+  mode: "setting" | "checkin",
+): string[] {
+  const allCheckin = [
+    "KPI",
+    "SMART Goals",
+    "Appraisal Form",
+    "Managerial Skill",
+    "Project",
+    "RCA",
+    "Inter-Department Feedback",
+  ];
+  const allSetting = [
+    "KPI",
+    "SMART Goals",
+    "Appraisal Form",
+    "Managerial Skill",
+    "RCA",
+  ];
+  const baseList = mode === "setting" ? allSetting : allCheckin;
+
+  if (user.role === "HR Unit") {
+    const effectiveGrouping = resolveEffectiveUserGrouping(user);
+    if (effectiveGrouping === "Operasional") {
+      return ["KPI", "SMART Goals", "RCA"];
+    }
+    const allowed = resolveUserAllowedModules(user);
+    return baseList.filter((type) => {
+      if (type === "KPI" || type === "SMART Goals" || type === "RCA") return true;
+      if (type === "Appraisal Form") return allowed.includes("Appraisals Form");
+      if (type === "Managerial Skill") return allowed.includes("Managerial Skill");
+      if (type === "Project") return allowed.includes("Project Outside Job Scope");
+      if (type === "Inter-Department Feedback") return allowed.includes("Inter-Departement Feedback");
+      return false;
+    });
+  }
+
+  return baseList;
 }
 
 export function loginWithCompanyAndEmployeeId(
@@ -746,7 +786,9 @@ export function useAuthStore() {
   const allUsers = loadManagedUsers();
   const allowedModules = resolveUserAllowedModules(activeUser);
   const isHrUnitLocked = activeUser.role === "HR Unit";
-  const lockedUnits = isHrUnitLocked ? [activeUser.company] : undefined;
+  const lockedUnits = isHrUnitLocked
+    ? Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
+    : undefined;
 
   return {
     activeUser,

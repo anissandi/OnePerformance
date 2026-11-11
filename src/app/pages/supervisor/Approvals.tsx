@@ -14,6 +14,7 @@ import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
 import { projectApprovalRows } from "../../store/projectStore";
 import {
   canUserAccessEmployeeData,
+  getAllowedApprovalTypesForUser,
   getDirectApprovalRoleForTarget,
   getScopedFilterOptionsForUser,
   shouldBypassCheckerForSubmission,
@@ -48,7 +49,8 @@ export function SupervisorApprovals() {
   const { tab } = useParams();
   const { activeUser } = useAuthStore();
   const mainTab: MainTab = /\/setting(\/|$)/.test(location.pathname) ? "setting" : "checkin";
-  const moduleTypes = mainTab === "checkin" ? CHECKIN_FILTER_OPTIONS.approvalType : SETTING_FILTER_OPTIONS.approvalType;
+  const moduleTypes = getAllowedApprovalTypesForUser(activeUser, mainTab);
+  const allowedTypeSet = new Set(moduleTypes);
   const routeType = moduleTypes.find((type) => tabSlug(type) === tab);
   const moduleBase = routeBase(location.pathname, routeType ? tab : undefined);
   const scopedFilterMeta = getScopedFilterOptionsForUser(activeUser);
@@ -57,16 +59,19 @@ export function SupervisorApprovals() {
     companyUnit: scopedFilterMeta.units.length > 0 ? scopedFilterMeta.units : [activeUser.company],
     division: scopedFilterMeta.divisions.length > 0 ? scopedFilterMeta.divisions : [activeUser.division],
     department: scopedFilterMeta.departments.length > 0 ? scopedFilterMeta.departments : [activeUser.department],
+    approvalType: moduleTypes,
   };
   const dynamicSettingFilterOpts = {
     ...SETTING_FILTER_OPTIONS,
     companyUnit: scopedFilterMeta.units.length > 0 ? scopedFilterMeta.units : [activeUser.company],
     division: scopedFilterMeta.divisions.length > 0 ? scopedFilterMeta.divisions : [activeUser.division],
     department: scopedFilterMeta.departments.length > 0 ? scopedFilterMeta.departments : [activeUser.department],
+    approvalType: moduleTypes,
   };
 
   const filterByScopeAndSelfCheckerRule = (rows: ApprovalRow[]): ApprovalRow[] => {
     return rows.filter((row) => {
+      if (!allowedTypeSet.has(row.type)) return false;
       // Bagian XII Poin 2: HR Unit Checker tidak bisa melakukan Checker pada pengajuan KPI & SMART Goals miliknya sendiri
       if (
         (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) &&
