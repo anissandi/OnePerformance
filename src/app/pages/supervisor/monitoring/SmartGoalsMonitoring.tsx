@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { Search, Lightbulb, CheckCircle2, AlertCircle, Clock, ChevronUp, ChevronDown, Eye, X, Filter, Users, Target, ListChecks, ShieldCheck, BarChart2, TrendingUp } from "lucide-react";
-import { SUPERVISOR_TEAM_EMPLOYEES } from "../../hr/monitoring/monitoringData";
+import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 
 // ─── Team scope ───────────────────────────────────────────────────────────────
 
@@ -237,8 +237,9 @@ export function SupervisorMonitoringSmartGoals() {
   const settingStatuses = ["Unsubmitted", "Draft", "Pending-Approver", "Revision", "Validated"];
   const measureStatuses = ["Pending-Assessment", "Revision", "Validated"];
 
+  const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "SMART Goals (Setting/Measurement)");
   const rows = useMemo(() => {
-    const base = TEAM_EMPLOYEES.map(emp => ({
+    const base = allowedTeamEmployees.map(emp => ({
       emp,
       sg: SG_DATA.find(k => k.employeeId === emp.id) ?? {
         employeeId: emp.id, totalGoals: 0, totalAPs: 0, completedAPs: 0,
@@ -259,6 +260,7 @@ export function SupervisorMonitoringSmartGoals() {
     });
 
     filtered.sort((a, b) => {
+      if (a.emp.isSelf !== b.emp.isSelf) return a.emp.isSelf ? -1 : 1;
       let av: string | number = 0, bv: string | number = 0;
       switch (sortKey) {
         case "employeeId":        av = a.emp.id;                       bv = b.emp.id;                       break;
@@ -437,7 +439,7 @@ export function SupervisorMonitoringSmartGoals() {
                 const showMeasurement   = sg.settingStatus === "Validated";
 
                 return (
-                  <tr key={emp.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3 px-4 text-center text-xs text-gray-400 font-medium">{idx + 1}</td>
                     <td className="py-3 px-4 text-center">
                       <button
@@ -450,7 +452,14 @@ export function SupervisorMonitoringSmartGoals() {
                     </td>
                     <td className="py-3 px-4 font-mono text-xs text-gray-500">{emp.id}</td>
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                        {emp.isSelf && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Data Saya
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-xs text-gray-600 max-w-[140px]"><span className="block truncate">{emp.unit}</span></td>
                     <td className="py-3 px-4 text-xs text-gray-600 max-w-[140px]"><span className="block truncate">{emp.division}</span></td>

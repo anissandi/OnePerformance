@@ -4,7 +4,7 @@ import {
   Search, Filter, Eye, FileText, Download, AlertCircle,
 } from "lucide-react";
 import { loadFeedbackSubmissions } from "../../shared/interDepartmentFeedbackStore";
-import { getActiveUser, getStrictSubordinateUsers } from "../../../store/authStore";
+import { getActiveUser, getAuthorizedSubordinates, resolveUserAllowedModules } from "../../../store/authStore";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -564,7 +564,13 @@ export function SupervisorMonitoringInterDeptFeedback() {
     approver: { a1: submission.followUps.approver1 ?? [], a2: submission.followUps.approver2 ?? [] }, evaluasi: {}, summarySubmitted: !!submission.summarySubmittedAt,
   }));
   const activeUser = getActiveUser();
-  const subordinateUsers = getStrictSubordinateUsers(activeUser);
+  const subordinateUsers = getAuthorizedSubordinates(activeUser)
+    .filter((u) => resolveUserAllowedModules(u).includes("Inter-Departement Feedback"))
+    .sort((a, b) => {
+      const aSelf = a.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase();
+      const bSelf = b.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase();
+      return aSelf === bSelf ? 0 : aSelf ? -1 : 1;
+    });
   const subIds = new Set(subordinateUsers.map((u) => u.employeeId.toLowerCase()));
   const records = subordinateUsers.map((u) => {
     const found = workflowRecords.find((w) => w.id.toLowerCase() === u.employeeId.toLowerCase());
@@ -702,8 +708,9 @@ export function SupervisorMonitoringInterDeptFeedback() {
               {filtered.map((rec, idx) => {
                 const posCount = rec.feedbacks.length * INDICATORS.filter(i => !NEGATIVE_IND.has(i.key)).length;
                 const negCount = rec.feedbacks.length * INDICATORS.filter(i => NEGATIVE_IND.has(i.key)).length;
+                const isSelf = rec.id.toLowerCase() === activeUser.employeeId.toLowerCase();
                 return (
-                  <tr key={rec.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={rec.id} className={isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3 px-4 text-center text-xs font-semibold text-gray-400">{idx + 1}</td>
                     <td className="py-3 px-4 text-center">
                       <button
@@ -717,7 +724,14 @@ export function SupervisorMonitoringInterDeptFeedback() {
                       <span className="text-[11px] font-mono font-semibold text-[#1A284F] bg-[#1A284F]/8 px-1.5 py-0.5 rounded">{rec.id}</span>
                     </td>
                     <td className="py-3 px-4">
-                      <p className="text-sm font-semibold text-gray-800 whitespace-nowrap">{rec.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-800 whitespace-nowrap">{rec.name}</p>
+                        {isSelf && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Data Saya
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-4"><p className="text-xs text-gray-600 whitespace-nowrap">{rec.unit}</p></td>
                     <td className="py-3 px-4"><p className="text-xs text-gray-600 whitespace-nowrap">{rec.division}</p></td>

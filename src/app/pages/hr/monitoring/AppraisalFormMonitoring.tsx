@@ -2,7 +2,7 @@ import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../../shared/appra
 import { useAppraisalRevision } from "../../shared/useAppraisalRevision";
 import { useState } from "react";
 import { Search, ClipboardList, CheckCircle2, AlertCircle, Clock, Filter } from "lucide-react";
-import { EMPLOYEES, COMPANY_UNITS } from "./monitoringData";
+import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 
 // ─── Mock Appraisal Form data ─────────────────────────────────────────────────
 
@@ -215,7 +215,10 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
 
-  const filteredEmployees = lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES;
+  const filteredEmployees = filterMonitoringByModuleAccess(
+    lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
+    "Appraisals Form",
+  );
   const allRows = filteredEmployees.map((emp) => ({
     emp,
     af: data.find((k) => k.employeeId === emp.id) ?? {
@@ -319,9 +322,16 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
                 const SelfIcon = selfSt.icon;
                 const SupIcon  = supSt.icon;
                 return (
-                  <tr key={emp.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3.5 px-5">
-                      <p className="text-sm font-semibold text-gray-800">{emp.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-800">{emp.name}</p>
+                        {emp.isSelf && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Data Saya
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-gray-400">{emp.position}</p>
                     </td>
                     <td className="py-3.5 px-5">

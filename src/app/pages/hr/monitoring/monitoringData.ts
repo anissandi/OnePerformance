@@ -1,6 +1,12 @@
 // Shared mock data for all HR Monitoring pages
 
-import { getActiveUser, getStrictSubordinateUsers, loadManagedUsers, resolveUserAllowedModules } from "../../../store/authStore";
+import {
+  getActiveUser,
+  getAuthorizedSubordinates,
+  loadManagedUsers,
+  resolveUserAllowedModules,
+  type AppraisalModuleName,
+} from "../../../store/authStore";
 
 export interface MonitoringEmployee {
   id: string;
@@ -11,6 +17,8 @@ export interface MonitoringEmployee {
   unit: string;
   grade: string;
   isSupervisor: boolean;
+  isSelf?: boolean;
+  allowedModules?: AppraisalModuleName[];
   hasManagementInterview?: boolean;
   hasManagerialSkill?: boolean;
   hasInterDeptFeedback?: boolean;
@@ -18,8 +26,10 @@ export interface MonitoringEmployee {
 
 export function getMonitoringEmployees(): MonitoringEmployee[] {
   const users = loadManagedUsers();
-  return users.map((u) => {
+  const activeUser = getActiveUser();
+  const mapped = users.map((u) => {
     const allowed = resolveUserAllowedModules(u);
+    const isSelf = u.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase();
     return {
       id: u.employeeId,
       name: u.name,
@@ -29,18 +39,34 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
       unit: u.company,
       grade: u.grade || "Grade 5",
       isSupervisor: allowed.includes("Managerial Skill") || u.role === "Supervisor" || u.role === "GM" || u.role === "Director",
+      isSelf,
+      allowedModules: allowed,
       hasManagementInterview: allowed.includes("Management Interview"),
       hasManagerialSkill: allowed.includes("Managerial Skill"),
       hasInterDeptFeedback: allowed.includes("Inter-Departement Feedback"),
     };
   });
+  return mapped.sort((a, b) => (a.isSelf === b.isSelf ? 0 : a.isSelf ? -1 : 1));
 }
 
 export function getSupervisorScopedMonitoringEmployees(): MonitoringEmployee[] {
   const activeUser = getActiveUser();
-  const subs = getStrictSubordinateUsers(activeUser);
-  const subIds = new Set(subs.map((s) => s.employeeId.toLowerCase()));
-  return getMonitoringEmployees().filter((e) => subIds.has(e.id.toLowerCase()));
+  const authorized = getAuthorizedSubordinates(activeUser);
+  const allowedIds = new Set(authorized.map((s) => s.employeeId.toLowerCase()));
+  return getMonitoringEmployees().filter((e) => allowedIds.has(e.id.toLowerCase()));
+}
+
+/**
+ * Memfilter karyawan Monitoring (termasuk Data Owner yang sedang login) agar hanya menampilkan
+ * mereka yang di-allow pada modul tersebut sesuai User Groupings, dengan Data Owner di urutan teratas.
+ */
+export function filterMonitoringByModuleAccess(
+  employees: MonitoringEmployee[],
+  moduleName: AppraisalModuleName,
+): MonitoringEmployee[] {
+  return employees
+    .filter((e) => (e.allowedModules ? e.allowedModules.includes(moduleName) : true))
+    .sort((a, b) => (a.isSelf === b.isSelf ? 0 : a.isSelf ? -1 : 1));
 }
 
 export const EMPLOYEES: MonitoringEmployee[] = new Proxy([] as MonitoringEmployee[], {

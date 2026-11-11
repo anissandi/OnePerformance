@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Search, Briefcase, CheckCircle2, AlertCircle, Clock } from "lucide-react";
-import { SUPERVISOR_TEAM_EMPLOYEES } from "../../hr/monitoring/monitoringData";
+import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
@@ -70,12 +70,13 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 export function SupervisorMonitoringManagerialSkill() {
   const [search, setSearch] = useState("");
 
-  const rows = TEAM_EMPLOYEES.map((emp) => ({
+  const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "Managerial Skill");
+  const rows = allowedTeamEmployees.map((emp) => ({
     emp,
     ms: MS_DATA.find((k) => k.employeeId === emp.id),
   })).filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
 
-  const supervisorCount = TEAM_EMPLOYEES.filter((e) => e.isSupervisor).length;
+  const supervisorCount = allowedTeamEmployees.length;
   const selfDone  = MS_DATA.filter((k) => k.selfStatus === "Selesai").length;
   const supDone   = MS_DATA.filter((k) => k.supervisorStatus === "Selesai").length;
   const bothDone  = MS_DATA.filter((k) => k.selfStatus === "Selesai" && k.supervisorStatus === "Selesai").length;
@@ -156,13 +157,20 @@ export function SupervisorMonitoringManagerialSkill() {
                 const finalAvg  = ms?.selfStatus === "Selesai" && ms.supervisorStatus === "Selesai" && ms.items.length
                   ? (selfAvg + approver1) / 2 : 0;
                 return (
-                  <tr key={emp.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3.5 px-5 text-center text-xs font-semibold text-gray-400">{rowIdx + 1}</td>
                     <td className="py-3.5 px-5">
                       <span className="text-[11px] font-mono font-semibold text-[#1A284F] bg-[#1A284F]/8 px-1.5 py-0.5 rounded">{emp.id}</span>
                     </td>
                     <td className="py-3.5 px-5">
-                      <p className="text-sm font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                        {emp.isSelf && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Data Saya
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3.5 px-5">
                       <p className="text-sm text-gray-700 whitespace-nowrap">{emp.unit}</p>

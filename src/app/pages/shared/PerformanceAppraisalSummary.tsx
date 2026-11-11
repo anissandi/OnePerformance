@@ -7,7 +7,7 @@ import {
 import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
-import { getActiveUser, getScopedFilterOptionsForUser, getStrictSubordinateUsers } from "../../store/authStore";
+import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser } from "../../store/authStore";
 
 type Role = "hr" | "supervisor";
 
@@ -426,7 +426,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   const scopedMeta = getScopedFilterOptionsForUser(activeUser);
   const supervisorAllowedIds = new Set(
     role === "supervisor"
-      ? getStrictSubordinateUsers(activeUser).map((u) => u.employeeId.toLowerCase())
+      ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
       : [],
   );
 
@@ -444,6 +444,9 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
 
   const GRADE_SORT_ORDER = ["A+", "A", "B", "C", "D", "E"];
   const sorted = [...filtered].sort((a, b) => {
+    const aSelf = a.id.toLowerCase() === activeUser.employeeId.toLowerCase();
+    const bSelf = b.id.toLowerCase() === activeUser.employeeId.toLowerCase();
+    if (aSelf !== bSelf) return aSelf ? -1 : 1;
     let cmp = 0;
     if (sortKey === "totalScore") cmp = a.totalScore - b.totalScore;
     else if (sortKey === "grade") cmp = GRADE_SORT_ORDER.indexOf(a.grade) - GRADE_SORT_ORDER.indexOf(b.grade);
@@ -616,8 +619,10 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                   </td>
                 </tr>
               ) : (
-                sorted.map(emp => (
-                  <tr key={emp.id} className="hover:bg-gray-50/50 transition-colors">
+                sorted.map(emp => {
+                  const isSelf = emp.id.toLowerCase() === activeUser.employeeId.toLowerCase();
+                  return (
+                  <tr key={emp.id} className={isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/50 transition-colors"}>
                     <td className="px-4 py-2.5 border border-gray-100 text-center">
                       <button
                         onClick={() => setSelectedEmployee(emp)}
@@ -628,7 +633,16 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                       </button>
                     </td>
                     <td className="px-4 py-2.5 border border-gray-100 font-mono text-xs text-gray-500 whitespace-nowrap">{emp.id}</td>
-                    <td className="px-4 py-2.5 border border-gray-100 font-semibold text-gray-900 whitespace-nowrap">{emp.fullName}</td>
+                    <td className="px-4 py-2.5 border border-gray-100 font-semibold text-gray-900 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <span>{emp.fullName}</span>
+                        {isSelf && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Data Saya
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.position}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.department}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.division}</td>
@@ -651,7 +665,8 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                       <span className={`inline-block px-2.5 py-0.5 rounded-lg text-xs font-bold ${gradeColor(emp.grade)}`}>{emp.grade}</span>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { Search, Lightbulb, CheckCircle2, AlertCircle, Clock, ChevronUp, ChevronDown, Eye, X, Filter, Users, Target, ListChecks, ShieldCheck, BarChart2, TrendingUp } from "lucide-react";
-import { EMPLOYEES } from "./monitoringData";
+import { EMPLOYEES, filterMonitoringByModuleAccess } from "./monitoringData";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -253,7 +253,10 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
   const [sortDir, setSortDir]             = useState<SortDir>("asc");
   const [viewRecord, setViewRecord]       = useState<{ empName: string; sg: SGRecord } | null>(null);
 
-  const baseEmployees = lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES;
+  const baseEmployees = filterMonitoringByModuleAccess(
+    lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
+    "SMART Goals (Setting/Measurement)",
+  );
 
   // derive unique filter options
   const units      = useMemo(() => [...new Set(baseEmployees.map(e => e.unit))].sort(), [baseEmployees]);
@@ -284,6 +287,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
     });
 
     filtered.sort((a, b) => {
+      if (a.emp.isSelf !== b.emp.isSelf) return a.emp.isSelf ? -1 : 1;
       let av: string | number = 0, bv: string | number = 0;
       switch (sortKey) {
         case "employeeId":     av = a.emp.id;            bv = b.emp.id;            break;
@@ -443,7 +447,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
                 const showMeasurementStatus = sg.settingStatus === "Validated";
 
                 return (
-                  <tr key={emp.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3 px-4 text-center text-xs text-gray-400 font-medium">{idx + 1}</td>
                     <td className="py-3 px-4 text-center">
                       <button onClick={() => setViewRecord({ empName: emp.name, sg })}
@@ -453,7 +457,14 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
                     </td>
                     <td className="py-3 px-4 font-mono text-xs text-gray-500">{emp.id}</td>
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                        {emp.isSelf && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Data Saya
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-xs text-gray-600 max-w-[140px]"><span className="block truncate">{emp.unit}</span></td>
                     <td className="py-3 px-4 text-xs text-gray-600 max-w-[140px]"><span className="block truncate">{emp.division}</span></td>

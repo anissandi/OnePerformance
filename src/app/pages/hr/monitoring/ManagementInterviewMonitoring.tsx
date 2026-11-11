@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Search, MessageSquare, CheckCircle2, AlertCircle, Filter, Calendar } from "lucide-react";
-import { EMPLOYEES, COMPANY_UNITS } from "./monitoringData";
+import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 import { getPenilai1Score, subscribeScores } from "../../supervisor/managementInterviewScoreStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -112,10 +112,10 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
 
   useEffect(() => subscribeScores(() => forceUpdate(n => n + 1)), []);
 
-  const filteredEmployees = (lockedUnits
-    ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit))
-    : EMPLOYEES
-  ).filter((e) => Boolean(e.hasManagementInterview));
+  const filteredEmployees = filterMonitoringByModuleAccess(
+    lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
+    "Management Interview",
+  );
 
   // Merge static MI_DATA with live Score Penilai 1 from BOD assessment
   const mergedMI = MI_DATA.map(rec => {
@@ -155,6 +155,7 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
 
   // Sort: rows with a live Score Penilai 1 (most recently updated) first
   baseRows.sort((a, b) => {
+    if (a.emp.isSelf !== b.emp.isSelf) return a.emp.isSelf ? -1 : 1;
     const aHasScore = getPenilai1Score(a.emp.id) !== null ? 0 : 1;
     const bHasScore = getPenilai1Score(b.emp.id) !== null ? 0 : 1;
     if (aHasScore !== bHasScore) return aHasScore - bHasScore;
@@ -263,13 +264,20 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
                 const Icon        = st.icon;
                 const finalScore  = computeFinalScore(mi.penilaiScores);
                 return (
-                  <tr key={emp.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3 px-3 text-center text-xs font-semibold text-gray-400">{no}</td>
                     <td className="py-3 px-3">
                       <span className="text-[11px] font-mono font-semibold text-[#1A284F] bg-[#1A284F]/8 px-1.5 py-0.5 rounded">{emp.id}</span>
                     </td>
                     <td className="py-3 px-4">
-                      <p className="text-sm font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-800 whitespace-nowrap">{emp.name}</p>
+                        {emp.isSelf && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Data Saya
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-4">
                       <p className="text-xs text-gray-600 leading-snug">{emp.unit}</p>
