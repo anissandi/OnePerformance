@@ -1,9 +1,119 @@
 import { useState, useRef, useEffect } from "react";
-import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2 } from "lucide-react";
+import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2, Layers, CheckCircle2 } from "lucide-react";
 import { loadPersistedState, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
 
 export type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
 export type Role = BuiltinRole | string;
+
+export type BuiltinGroup = "Operasional" | "Ka./Wa.Ka.Seksi" | "Ka./Wa.Ka.Bagian" | "Ka./Wa.Ka.Dept" | "Ka./Wa.Ka.Div ke atas";
+export type GroupName = BuiltinGroup | string;
+export type GroupAuthorityTier = "operational" | "seksi" | "bagian" | "department" | "division";
+export type AccessAppraisalModule =
+  | "KPI (Setting/Measurement)"
+  | "SMART Goals (Setting/Measurement)"
+  | "Appraisals Form"
+  | "Project Outside Job Scope"
+  | "Managerial Skill"
+  | "Inter-Departement Feedback"
+  | "Management Interview";
+
+export interface AccessGroupConfig {
+  name: GroupName;
+  description: string;
+  authorityLevel: GroupAuthorityTier;
+  allowedModules: AccessAppraisalModule[];
+}
+
+export const ALL_APPRAISAL_MODULES: AccessAppraisalModule[] = [
+  "KPI (Setting/Measurement)",
+  "SMART Goals (Setting/Measurement)",
+  "Appraisals Form",
+  "Project Outside Job Scope",
+  "Managerial Skill",
+  "Inter-Departement Feedback",
+  "Management Interview",
+];
+
+export const BUILTIN_GROUPS: BuiltinGroup[] = [
+  "Operasional",
+  "Ka./Wa.Ka.Seksi",
+  "Ka./Wa.Ka.Bagian",
+  "Ka./Wa.Ka.Dept",
+  "Ka./Wa.Ka.Div ke atas",
+];
+
+export const BUILTIN_GROUP_DEFAULTS: Record<BuiltinGroup, AccessGroupConfig> = {
+  "Operasional": {
+    name: "Operasional",
+    description: "Karyawan level operasional / pelaksana (Operator, Staff, Officer).",
+    authorityLevel: "operational",
+    allowedModules: [
+      "KPI (Setting/Measurement)",
+      "SMART Goals (Setting/Measurement)",
+      "Appraisals Form",
+      "Project Outside Job Scope",
+    ],
+  },
+  "Ka./Wa.Ka.Seksi": {
+    name: "Ka./Wa.Ka.Seksi",
+    description: "Kepala / Wakil Kepala Seksi atau Shift.",
+    authorityLevel: "seksi",
+    allowedModules: [
+      "KPI (Setting/Measurement)",
+      "SMART Goals (Setting/Measurement)",
+      "Appraisals Form",
+      "Project Outside Job Scope",
+    ],
+  },
+  "Ka./Wa.Ka.Bagian": {
+    name: "Ka./Wa.Ka.Bagian",
+    description: "Kepala / Wakil Kepala Bagian, Pengawas, Mandor, atau Supervisor.",
+    authorityLevel: "bagian",
+    allowedModules: [
+      "KPI (Setting/Measurement)",
+      "SMART Goals (Setting/Measurement)",
+      "Appraisals Form",
+      "Project Outside Job Scope",
+      "Managerial Skill",
+      "Inter-Departement Feedback",
+    ],
+  },
+  "Ka./Wa.Ka.Dept": {
+    name: "Ka./Wa.Ka.Dept",
+    description: "Kepala / Wakil Kepala Departemen atau Manager / Wakil Manager Departemen.",
+    authorityLevel: "department",
+    allowedModules: [
+      "KPI (Setting/Measurement)",
+      "SMART Goals (Setting/Measurement)",
+      "Appraisals Form",
+      "Project Outside Job Scope",
+      "Managerial Skill",
+      "Inter-Departement Feedback",
+    ],
+  },
+  "Ka./Wa.Ka.Div ke atas": {
+    name: "Ka./Wa.Ka.Div ke atas",
+    description: "Manager / Wakil Manager Divisi, General Manager (GM), dan Direktur.",
+    authorityLevel: "division",
+    allowedModules: [
+      "KPI (Setting/Measurement)",
+      "SMART Goals (Setting/Measurement)",
+      "Appraisals Form",
+      "Project Outside Job Scope",
+      "Managerial Skill",
+      "Inter-Departement Feedback",
+      "Management Interview",
+    ],
+  },
+};
+
+const AUTHORITY_TIER_LABELS: Record<GroupAuthorityTier, string> = {
+  operational: "Level Operasional / Individu (Hanya melihat data sendiri)",
+  seksi: "Level Seksi / Shift (Melihat bawahan di Seksi/Shift)",
+  bagian: "Level Bagian (Melihat semua posisi di dalam Bagiannya)",
+  department: "Level Departemen (Melihat semua posisi & bagian di dalam Departemennya)",
+  division: "Level Divisi ke atas (Melihat semua posisi, bagian & departemen di dalam Divisinya)",
+};
 
 export interface Permission {
   view: boolean;
@@ -1049,6 +1159,8 @@ function IndeterminateCheckbox({ state, onChange }: { state: "all" | "none" | "i
 
 const ACCESS_ROLES_KEY = "pa_access_roles_v1";
 const ACCESS_PERMS_KEY = "pa_access_permissions_v1";
+const ACCESS_GROUPS_KEY = "pa_access_groups_v1";
+const ACCESS_GROUP_CONFIGS_KEY = "pa_access_group_configs_v1";
 
 function getAllExpandableIds(items: MenuItem[] = MENU_STRUCTURE): string[] {
   const ids: string[] = [];
@@ -1202,6 +1314,89 @@ export function updateMenuViewRolesFromMenuManagement(
   window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
 }
 
+export function loadAccessGroups(): GroupName[] {
+  const saved = loadPersistedState<GroupName[]>(ACCESS_GROUPS_KEY, [...BUILTIN_GROUPS]);
+  const merged: GroupName[] = [...BUILTIN_GROUPS];
+  if (Array.isArray(saved)) {
+    for (const g of saved) {
+      if (g && typeof g === "string" && !merged.includes(g)) {
+        merged.push(g);
+      }
+    }
+  }
+  return merged;
+}
+
+function buildDefaultGroupConfigsMap(): Record<GroupName, AccessGroupConfig> {
+  return {
+    "Operasional":           deepClone(BUILTIN_GROUP_DEFAULTS["Operasional"]),
+    "Ka./Wa.Ka.Seksi":       deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Seksi"]),
+    "Ka./Wa.Ka.Bagian":      deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Bagian"]),
+    "Ka./Wa.Ka.Dept":        deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Dept"]),
+    "Ka./Wa.Ka.Div ke atas": deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Div ke atas"]),
+  };
+}
+
+export function loadAccessGroupConfigs(): Record<GroupName, AccessGroupConfig> {
+  const defaults = buildDefaultGroupConfigsMap();
+  const saved = loadPersistedState<Record<GroupName, AccessGroupConfig>>(ACCESS_GROUP_CONFIGS_KEY, {});
+  const groups = loadAccessGroups();
+  const result: Record<GroupName, AccessGroupConfig> = {};
+
+  for (const g of groups) {
+    const base: AccessGroupConfig = defaults[g]
+      ? deepClone(defaults[g])
+      : {
+          name: g,
+          description: `Custom user grouping: ${g}`,
+          authorityLevel: "operational",
+          allowedModules: [
+            "KPI (Setting/Measurement)",
+            "SMART Goals (Setting/Measurement)",
+            "Appraisals Form",
+            "Project Outside Job Scope",
+          ],
+        };
+    const savedCfg = saved?.[g];
+    if (savedCfg && typeof savedCfg === "object") {
+      result[g] = {
+        ...base,
+        ...savedCfg,
+        name: g,
+        allowedModules: Array.isArray(savedCfg.allowedModules)
+          ? savedCfg.allowedModules.filter((m): m is AccessAppraisalModule =>
+              ALL_APPRAISAL_MODULES.includes(m as AccessAppraisalModule),
+            )
+          : base.allowedModules,
+      };
+    } else {
+      result[g] = base;
+    }
+  }
+  return result;
+}
+
+export function getGroupConfig(group: GroupName): AccessGroupConfig {
+  const map = loadAccessGroupConfigs();
+  const trimmed = (group ?? "").trim();
+  const exact = map[trimmed];
+  if (exact) return exact;
+  const ciKey = Object.keys(map).find((k) => k.toLowerCase() === trimmed.toLowerCase());
+  if (ciKey) return map[ciKey];
+  return map["Operasional"] ?? BUILTIN_GROUP_DEFAULTS["Operasional"];
+}
+
+export function getGroupAllowedModules(group: GroupName): AccessAppraisalModule[] {
+  if (group === "TEAM_DIV") {
+    return [...BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Div ke atas"].allowedModules];
+  }
+  return [...getGroupConfig(group).allowedModules];
+}
+
+export function getGroupAuthorityLevel(group: GroupName): GroupAuthorityTier {
+  return getGroupConfig(group).authorityLevel ?? "operational";
+}
+
 export function useAccessManagement() {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -1218,18 +1413,134 @@ export function useAccessManagement() {
 
   const roles = loadAccessRoles();
   const permissionsMap = loadRolePermissionsMap();
+  const groups = loadAccessGroups();
+  const groupConfigs = loadAccessGroupConfigs();
 
   return {
     roles,
     permissionsMap,
+    groups,
+    groupConfigs,
     getRolePermissions: (role: Role) => permissionsMap[role === "HR Admin" ? "Administrator" : role] ?? emptyPermissions(),
     canView: (role: Role, menuId: string) => canRoleViewMenu(role, menuId),
     hasPermission: (role: Role, menuId: string, action: keyof Permission = "view") =>
       hasRolePermission(role, menuId, action),
+    getGroupConfig: (group: GroupName) => getGroupConfig(group),
+    getGroupAllowedModules: (group: GroupName) => getGroupAllowedModules(group),
+    getGroupAuthorityLevel: (group: GroupName) => getGroupAuthorityLevel(group),
   };
 }
 
+interface AddGroupModalProps {
+  existingGroups: GroupName[];
+  onAdd: (name: string, authorityLevel: GroupAuthorityTier, baseGroup?: GroupName, description?: string) => void;
+  onClose: () => void;
+}
+
+function AddGroupModal({ existingGroups, onAdd, onClose }: AddGroupModalProps) {
+  const [name, setName] = useState("");
+  const [authorityLevel, setAuthorityLevel] = useState<GroupAuthorityTier>("operational");
+  const [baseGroup, setBaseGroup] = useState<string>("Operasional");
+  const [description, setDescription] = useState("");
+  const duplicate = name.trim() && existingGroups.map((g) => g.toLowerCase()).includes(name.trim().toLowerCase());
+  const valid = name.trim().length > 0 && !duplicate;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center">
+              <Layers size={18} className="text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-gray-800">Add New Group</h2>
+              <p className="text-sm text-gray-500">Create a new User Grouping level</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="mb-5 space-y-3.5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Group Name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Specialist / Asisten Manager"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            {duplicate && (
+              <p className="text-xs text-red-500 mt-1">A group with this name already exists.</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Hierarchy Authority Level</label>
+            <select
+              value={authorityLevel}
+              onChange={(e) => setAuthorityLevel(e.target.value as GroupAuthorityTier)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+            >
+              {(Object.keys(AUTHORITY_TIER_LABELS) as GroupAuthorityTier[]).map((tier) => (
+                <option key={tier} value={tier}>
+                  {AUTHORITY_TIER_LABELS[tier]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Copy Initial Module Access From</label>
+            <select
+              value={baseGroup}
+              onChange={(e) => setBaseGroup(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+            >
+              {existingGroups.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Description</label>
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Deskripsi singkat cakupan jabatan pada group ini..."
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            <p className="text-xs text-gray-400 mt-1.5">
+              Group baru ini akan otomatis tersedia di User Management (User & User Groupings) serta Data Sync.
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
+            Cancel
+          </button>
+          <button
+            disabled={!valid}
+            onClick={() => {
+              if (valid) {
+                onAdd(name.trim(), authorityLevel, baseGroup || undefined, description.trim() || undefined);
+                onClose();
+              }
+            }}
+            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Plus size={14} /> Create Group
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AccessManagementPage() {
+  const [mainTab, setMainTab] = useState<"role" | "group">("role");
   const [roles, setRoles] = useState<Role[]>(() => loadAccessRoles());
   const [activeRole, setActiveRole] = useState<Role>("Administrator");
   const [permissions, setPermissions] = useState<Record<Role, RolePermissions>>(() => loadRolePermissionsMap());
@@ -1239,10 +1550,19 @@ export function AccessManagementPage() {
   const [showAddAccess, setShowAddAccess] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Group tab states
+  const [groups, setGroups] = useState<GroupName[]>(() => loadAccessGroups());
+  const [activeGroup, setActiveGroup] = useState<GroupName>("Operasional");
+  const [groupConfigs, setGroupConfigs] = useState<Record<GroupName, AccessGroupConfig>>(() => loadAccessGroupConfigs());
+  const [showAddGroup, setShowAddGroup] = useState(false);
+  const [groupSaved, setGroupSaved] = useState(false);
+
   useEffect(() => {
     const onHydrated = () => {
       setRoles(loadAccessRoles());
       setPermissions(loadRolePermissionsMap());
+      setGroups(loadAccessGroups());
+      setGroupConfigs(loadAccessGroupConfigs());
     };
     window.addEventListener("pa-db-hydrated", onHydrated);
     window.addEventListener(ACCESS_UPDATED_EVENT, onHydrated);
@@ -1419,16 +1739,150 @@ export function AccessManagementPage() {
   }
 
   const isBuiltinActive = (BUILTIN_ROLES as string[]).includes(activeRole);
+  const isBuiltinGroupActive = (BUILTIN_GROUPS as string[]).includes(activeGroup);
+  const activeGroupCfg: AccessGroupConfig = groupConfigs[activeGroup] ?? {
+    name: activeGroup,
+    description: "",
+    authorityLevel: "operational",
+    allowedModules: [],
+  };
+
+  function handleToggleGroupModule(mod: AccessAppraisalModule) {
+    setGroupSaved(false);
+    setGroupConfigs((prev) => {
+      const curr = prev[activeGroup] ?? activeGroupCfg;
+      const exists = curr.allowedModules.includes(mod);
+      const nextMods = exists
+        ? curr.allowedModules.filter((m) => m !== mod)
+        : [...curr.allowedModules, mod];
+      return {
+        ...prev,
+        [activeGroup]: {
+          ...curr,
+          allowedModules: nextMods,
+        },
+      };
+    });
+  }
+
+  function handleGroupFieldChange<K extends keyof AccessGroupConfig>(field: K, value: AccessGroupConfig[K]) {
+    setGroupSaved(false);
+    setGroupConfigs((prev) => ({
+      ...prev,
+      [activeGroup]: {
+        ...(prev[activeGroup] ?? activeGroupCfg),
+        [field]: value,
+      },
+    }));
+  }
+
+  function handleSaveGroupConfig() {
+    savePersistedState(ACCESS_GROUPS_KEY, groups);
+    savePersistedState(ACCESS_GROUP_CONFIGS_KEY, groupConfigs, {
+      kind: "kv-state",
+      stateKey: ACCESS_GROUP_CONFIGS_KEY,
+      stateValue: groupConfigs,
+      audit: {
+        action: "Update",
+        module: "HR Settings",
+        subModule: "Access Management (Group)",
+        description: `Updated group configuration and allowed modules for ${activeGroup}`,
+      },
+    });
+    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+    window.dispatchEvent(new Event("pa-auth-updated"));
+    setGroupSaved(true);
+  }
+
+  function handleResetGroupConfig() {
+    setGroupSaved(false);
+    const resetCfg: AccessGroupConfig = isBuiltinGroupActive
+      ? deepClone(BUILTIN_GROUP_DEFAULTS[activeGroup as BuiltinGroup])
+      : {
+          name: activeGroup,
+          description: `Custom user grouping: ${activeGroup}`,
+          authorityLevel: "operational",
+          allowedModules: [
+            "KPI (Setting/Measurement)",
+            "SMART Goals (Setting/Measurement)",
+            "Appraisals Form",
+            "Project Outside Job Scope",
+          ],
+        };
+    setGroupConfigs((prev) => {
+      const next = { ...prev, [activeGroup]: resetCfg };
+      savePersistedState(ACCESS_GROUP_CONFIGS_KEY, next);
+      window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+      window.dispatchEvent(new Event("pa-auth-updated"));
+      return next;
+    });
+  }
+
+  function handleAddGroup(
+    name: string,
+    authorityLevel: GroupAuthorityTier,
+    baseGroup?: GroupName,
+    description?: string,
+  ) {
+    const nextGroups = [...groups, name];
+    const baseMods = baseGroup && groupConfigs[baseGroup]
+      ? [...groupConfigs[baseGroup].allowedModules]
+      : [...BUILTIN_GROUP_DEFAULTS["Operasional"].allowedModules];
+    const newCfg: AccessGroupConfig = {
+      name,
+      description: description || `Custom user grouping: ${name}`,
+      authorityLevel,
+      allowedModules: baseMods,
+    };
+    const nextConfigs = { ...groupConfigs, [name]: newCfg };
+    setGroups(nextGroups);
+    setGroupConfigs(nextConfigs);
+    savePersistedState(ACCESS_GROUPS_KEY, nextGroups);
+    savePersistedState(ACCESS_GROUP_CONFIGS_KEY, nextConfigs, {
+      kind: "kv-state",
+      stateKey: ACCESS_GROUP_CONFIGS_KEY,
+      stateValue: nextConfigs,
+      audit: {
+        action: "Create",
+        module: "HR Settings",
+        subModule: "Access Management (Group)",
+        description: `Created new user group ${name}`,
+      },
+    });
+    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+    window.dispatchEvent(new Event("pa-auth-updated"));
+    setActiveGroup(name);
+    setGroupSaved(false);
+  }
+
+  function handleDeleteGroup(group: GroupName) {
+    const idx = groups.indexOf(group);
+    const nextGroups = groups.filter((g) => g !== group);
+    setGroups(nextGroups);
+    savePersistedState(ACCESS_GROUPS_KEY, nextGroups);
+    setGroupConfigs((prev) => {
+      const copy = { ...prev };
+      delete copy[group];
+      savePersistedState(ACCESS_GROUP_CONFIGS_KEY, copy);
+      return copy;
+    });
+    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+    window.dispatchEvent(new Event("pa-auth-updated"));
+    setActiveGroup(nextGroups[Math.min(idx, nextGroups.length - 1)] ?? "Operasional");
+    setGroupSaved(false);
+  }
 
   const roleColor = ROLE_COLORS[activeRole] ?? "bg-gray-100 text-gray-700 border-gray-200";
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto">
       {/* Header */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-6 py-4 mb-5 flex items-center justify-between">
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-6 py-4 mb-4 flex items-center justify-between">
         <div>
           <h1 className="font-bold text-gray-800 text-xl">Access Management</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Configure role-based access permissions for each menu</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Configure system Roles (menu permissions) and User Groupings (module access & authority levels)
+          </p>
         </div>
         <div className="text-sm text-gray-400 flex items-center gap-1">
           <span>&#8962;</span>
@@ -1440,7 +1894,31 @@ export function AccessManagementPage() {
         </div>
       </div>
 
-      {/* Role tabs */}
+      {/* Main Switcher: Role vs Group */}
+      <div className="flex gap-1 border-b border-gray-200 mb-4">
+        <button
+          onClick={() => setMainTab("role")}
+          className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+            mainTab === "role"
+              ? "border-[#1A284F] text-[#1A284F]"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Shield size={15} /> Role ({roles.length})
+        </button>
+        <button
+          onClick={() => setMainTab("group")}
+          className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+            mainTab === "group"
+              ? "border-[#1A284F] text-[#1A284F]"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Layers size={15} /> Group ({groups.length})
+        </button>
+      </div>
+
+      {mainTab === "role" && (
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm mb-4">
         <div className="flex items-center gap-1 p-3 border-b border-gray-100 flex-wrap">
           {roles.map(role => (
@@ -1569,6 +2047,182 @@ export function AccessManagementPage() {
           ))}
         </div>
       </div>
+      )}
+
+      {mainTab === "group" && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm mb-4">
+          {/* Group selector bar */}
+          <div className="flex items-center gap-1 p-3 border-b border-gray-100 flex-wrap">
+            {groups.map((grp) => (
+              <button
+                key={grp}
+                onClick={() => {
+                  setActiveGroup(grp);
+                  setGroupSaved(false);
+                }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeGroup === grp
+                    ? "bg-[#1A284F] text-white shadow-sm"
+                    : "text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                <Layers size={14} />
+                {grp}
+              </button>
+            ))}
+            <div className="flex-1" />
+            <button
+              onClick={() => setShowAddGroup(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium rounded-lg border border-dashed border-indigo-300 text-indigo-600 hover:bg-indigo-50 transition-colors"
+            >
+              <Plus size={14} />
+              Add New Group
+            </button>
+            <span className="ml-2 text-xs font-medium px-2.5 py-1 rounded-full border bg-blue-50 text-[#1A284F] border-blue-200">
+              Editing Group: {activeGroup}
+            </span>
+          </div>
+
+          {/* Group toolbar */}
+          <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-100 flex-wrap">
+            <div className="text-xs text-gray-500">
+              Atur modul appraisal default dan level kewenangan berjenjang untuk group <strong>{activeGroup}</strong>. Perubahan otomatis terhubung ke <strong>User Management</strong>, <strong>User Groupings</strong>, dan <strong>Data Sync</strong>.
+            </div>
+            <div className="flex items-center gap-2">
+              {!isBuiltinGroupActive && (
+                <button
+                  onClick={() => handleDeleteGroup(activeGroup)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-red-200 rounded-lg text-red-500 hover:bg-red-50"
+                >
+                  <Trash2 size={13} /> Delete Group
+                </button>
+              )}
+              <button
+                onClick={handleResetGroupConfig}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+              >
+                <RefreshCw size={13} /> Reset to Default
+              </button>
+              <button
+                onClick={handleSaveGroupConfig}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                <Save size={13} /> Save Group Changes
+              </button>
+            </div>
+          </div>
+
+          {groupSaved && (
+            <div className="mx-5 mt-4 px-4 py-2.5 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700 flex items-center gap-2">
+              <CheckCircle2 size={16} />
+              <span>
+                <span className="font-medium">Saved!</span> Konfigurasi Group <strong>{activeGroup}</strong> berhasil diperbarui dan disinkronkan ke User Management.
+              </span>
+            </div>
+          )}
+
+          <div className="p-5 grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left column: Metadata & Authority Level */}
+            <div className="lg:col-span-5 space-y-4">
+              <div className="rounded-xl border border-gray-200 p-4 space-y-3.5 bg-gray-50/40">
+                <h3 className="text-sm font-bold text-[#1A284F]">Informasi & Level Kewenangan Group</h3>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Nama Group</label>
+                  <input
+                    readOnly
+                    value={activeGroupCfg.name}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">
+                    Level Kewenangan Berjenjang (Data Visibility Scope)
+                  </label>
+                  <select
+                    value={activeGroupCfg.authorityLevel}
+                    onChange={(e) => handleGroupFieldChange("authorityLevel", e.target.value as GroupAuthorityTier)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {(Object.keys(AUTHORITY_TIER_LABELS) as GroupAuthorityTier[]).map((tier) => (
+                      <option key={tier} value={tier}>
+                        {AUTHORITY_TIER_LABELS[tier]}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Menentukan cakupan otomatis data karyawan yang dapat dilihat oleh pejabat pada group ini (selain rantai Reg No AP1 / AP2).
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Deskripsi Group</label>
+                  <textarea
+                    rows={3}
+                    value={activeGroupCfg.description}
+                    onChange={(e) => handleGroupFieldChange("description", e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Deskripsi jabatan yang masuk ke dalam group ini..."
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Right column: Allowed Appraisal Modules */}
+            <div className="lg:col-span-7">
+              <div className="rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50/70 border-b border-gray-200 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-[#1A284F]">Default Appraisal Modules ({activeGroupCfg.allowedModules.length} / {ALL_APPRAISAL_MODULES.length})</h3>
+                    <p className="text-xs text-gray-500">
+                      Modul yang dicentang akan menjadi akses modul default bagi karyawan yang dipetakan ke group <strong>{activeGroup}</strong>.
+                    </p>
+                  </div>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {ALL_APPRAISAL_MODULES.map((mod) => {
+                    const checked = activeGroupCfg.allowedModules.includes(mod);
+                    return (
+                      <label
+                        key={mod}
+                        className="flex items-center justify-between px-4 py-3 hover:bg-gray-50/60 cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleToggleGroupModule(mod)}
+                            className="w-4 h-4 rounded accent-blue-600 cursor-pointer"
+                          />
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">{mod}</p>
+                            <p className="text-xs text-gray-400">
+                              {mod === "KPI (Setting/Measurement)" && "Mencakup KPI Setting, KPI Tracking, dan RCA (Root Cause Analysis)"}
+                              {mod === "SMART Goals (Setting/Measurement)" && "Mencakup SMART Goals Setting dan SMART Goals Measurement"}
+                              {mod === "Appraisals Form" && "Penilaian kompetensi perilaku tahunan"}
+                              {mod === "Project Outside Job Scope" && "Penilaian kontribusi proyek SS / QCC / QCP"}
+                              {mod === "Managerial Skill" && "Penilaian kepemimpinan & manajerial (umumnya Ka.Bagian ke atas)"}
+                              {mod === "Inter-Departement Feedback" && "Umpan balik lintas departemen (tanpa bobot nilai)"}
+                              {mod === "Management Interview" && "Wawancara manajemen (umumnya Ka.Divisi ke atas)"}
+                            </p>
+                          </div>
+                        </div>
+                        <span
+                          className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                            checked
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : "bg-gray-100 text-gray-400"
+                          }`}
+                        >
+                          {checked ? "Active" : "Disabled"}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showSave && (
         <SaveModal
@@ -1583,6 +2237,14 @@ export function AccessManagementPage() {
           existingRoles={roles}
           onAdd={handleAddRole}
           onClose={() => setShowAddAccess(false)}
+        />
+      )}
+
+      {showAddGroup && (
+        <AddGroupModal
+          existingGroups={groups}
+          onAdd={handleAddGroup}
+          onClose={() => setShowAddGroup(false)}
         />
       )}
     </div>

@@ -117,12 +117,12 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
 }
 
 // ─── Edit / Add Modal ──────────────────────────────────────────────────────────
-function EditModal({ user, availableRoles, onClose, onSave }: { user: User | null; availableRoles: Role[]; onClose: () => void; onSave: (u: User) => void }) {
+function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: { user: User | null; availableRoles: Role[]; availableGroups: string[]; onClose: () => void; onSave: (u: User) => void }) {
   const isNew = !user || !user.name;
   const [form, setForm] = useState<User>(user ?? {
     id: String(Date.now()), regNo: "", name: "", employeeId: "", position: "", company: COMPANIES[0],
     division: "", department: "", bagian: "", joinDate: "", telegramNo: "", grade: "Grade 5", role: "Employee",
-    groupings: GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "", regNoAp1: "", regNoAp2: "",
+    groupings: availableGroups[0] ?? GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "", regNoAp1: "", regNoAp2: "",
     isHrUnitChecker: false, isHrIcfValidator: false,
   });
 
@@ -166,7 +166,7 @@ function EditModal({ user, availableRoles, onClose, onSave }: { user: User | nul
 
           {[
             { label: "Role (from Access Management)", key: "role" as keyof User, options: ["", ...availableRoles], labels: { "": "— No Role —" } },
-            { label: "Groupings Scores",key: "groupings"as keyof User, options: GROUPINGS_SCORES },
+            { label: "Groupings Scores (from Access Management)", key: "groupings" as keyof User, options: availableGroups },
             { label: "Status",          key: "status"   as keyof User, options: ["Active", "Inactive"] },
           ].map(({ label, key, options, labels = {} }) => (
             <div key={key}>
@@ -430,9 +430,20 @@ interface GroupRuleModalProps {
   onSave: (r: GroupRule) => void;
 }
 
-function GroupRuleModal({ rule, companyName, weights, onClose, onSave }: GroupRuleModalProps & { companyName: string; weights: ReturnType<typeof loadUnitScoreWeights> }) {
+function GroupRuleModal({ rule, companyName, availableGroups, weights, onClose, onSave }: GroupRuleModalProps & { companyName: string; availableGroups: string[]; weights: ReturnType<typeof loadUnitScoreWeights> }) {
   const isNew = !rule;
-  const [form, setForm] = useState<GroupRule>(() => rule ? normalizeGroupRule(rule) : { id: String(Date.now()), position: "", group: ALL_GROUPS[0], description: "", allowedModules: [] });
+  const defaultGroup = availableGroups[0] ?? ALL_GROUPS[0];
+  const [form, setForm] = useState<GroupRule>(() =>
+    rule
+      ? normalizeGroupRule(rule)
+      : {
+          id: String(Date.now()),
+          position: "",
+          group: defaultGroup,
+          description: "",
+          allowedModules: defaultAllowedModulesForGrouping(defaultGroup),
+        },
+  );
   function f(k: keyof GroupRule, v: string) { setForm(p => ({ ...p, [k]: v })); }
   function toggleModule(module: AppraisalModule) {
     setForm(previous => {
@@ -467,13 +478,20 @@ function GroupRuleModal({ rule, companyName, weights, onClose, onSave }: GroupRu
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Group</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Group (from Access Management)</label>
             <select
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
               value={form.group}
-              onChange={e => f("group", e.target.value)}
+              onChange={e => {
+                const nextGrp = e.target.value;
+                setForm(p => ({
+                  ...p,
+                  group: nextGrp,
+                  allowedModules: defaultAllowedModulesForGrouping(nextGrp),
+                }));
+              }}
             >
-              {ALL_GROUPS.map(g => <option key={g}>{g}</option>)}
+              {availableGroups.map(g => <option key={g}>{g}</option>)}
             </select>
             <div className="mt-2">
               <GroupBadge group={form.group} />
@@ -546,6 +564,7 @@ function DeleteGroupModal({ rule, onClose, onConfirm }: { rule: GroupRule; onClo
 }
 
 function UserGroupingTab({ companyName }: { companyName: string }) {
+  const { groups: accessGroups } = useAccessManagement();
   const [rulesByCompany, setRulesByCompany] = useState<Record<string, GroupRule[]>>(() =>
     Object.fromEntries(COMPANIES.map(company => [company, loadUnitGroupRules(company, structuredClone(INITIAL_GROUP_RULES))])),
   );
@@ -610,7 +629,7 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
       const posKey = u.position.trim().toLowerCase();
       if (!existingPositions.has(posKey)) {
         existingPositions.add(posKey);
-        const group = ALL_GROUPS.includes(u.groupings) ? u.groupings : "Operasional";
+        const group = accessGroups.includes(u.groupings) ? u.groupings : "Operasional";
         addedRules.push({
           id: `sync-${Date.now()}-${idx}`,
           position: u.position.trim(),
@@ -629,7 +648,7 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
   }
 
   // Summary: count per group
-  const groupCounts = ALL_GROUPS.map(g => ({ group: g, count: rules.filter(r => r.group === g).length }));
+  const groupCounts = accessGroups.map(g => ({ group: g, count: rules.filter(r => r.group === g).length }));
 
   return (
     <div className="space-y-4">
@@ -667,7 +686,7 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
               onChange={e => setGroupFilter(e.target.value)}
             >
               <option>All Groups</option>
-              {ALL_GROUPS.map(g => <option key={g}>{g}</option>)}
+              {accessGroups.map(g => <option key={g}>{g}</option>)}
             </select>
             <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
@@ -754,6 +773,7 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
         <GroupRuleModal
           rule={addOpen ? null : editRule}
           companyName={companyName}
+          availableGroups={accessGroups}
           weights={weights}
           onClose={() => { setAddOpen(false); setEditRule(null); }}
           onSave={handleSave}
@@ -854,7 +874,7 @@ export function UserManagementPage() {
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useRouteTab<"users" | "grouping">(["users", "grouping"], "users");
   const [users, setUsers] = useState<User[]>(() => loadManagedUsers());
-  const { roles: accessRoles } = useAccessManagement();
+  const { roles: accessRoles, groups: accessGroups } = useAccessManagement();
   const [pageSize, setPageSize] = useState(10);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [statusFilter, setStatusFilter] = useState("All Status");
@@ -1133,8 +1153,9 @@ export function UserManagementPage() {
       {viewUser && <ViewModal user={viewUser} onClose={() => setViewUser(null)} />}
       {(editUser || addOpen) && (
         <EditModal
-          user={addOpen ? { id: String(Date.now()), name: "", employeeId: "", position: "", company: selectedCompany, division: "", department: "", grade: "", role: "Employee", groupings: GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "" } : editUser}
+          user={addOpen ? { id: String(Date.now()), name: "", employeeId: "", position: "", company: selectedCompany, division: "", department: "", grade: "", role: "Employee", groupings: accessGroups[0] ?? GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "" } : editUser}
           availableRoles={accessRoles}
+          availableGroups={accessGroups}
           onClose={() => { setEditUser(null); setAddOpen(false); }}
           onSave={handleSave}
         />

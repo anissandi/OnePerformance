@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { notifyLoginToSupabase, savePersistedState, syncToSupabase } from "../services/supabaseClient";
-import { ACCESS_UPDATED_EVENT, getRolePermissions } from "../pages/hr/settings/AccessManagement";
+import {
+  ACCESS_UPDATED_EVENT,
+  getGroupAllowedModules,
+  getGroupAuthorityLevel,
+  getRolePermissions,
+  loadAccessGroups,
+} from "../pages/hr/settings/AccessManagement";
 
 export type AppUserRole =
   | "Employee"
@@ -20,7 +26,8 @@ export type UserGrouping =
   | "Ka./Wa.Ka.Seksi"
   | "Ka./Wa.Ka.Bagian"
   | "Ka./Wa.Ka.Dept"
-  | "Ka./Wa.Ka.Div ke atas";
+  | "Ka./Wa.Ka.Div ke atas"
+  | string;
 
 export type AppraisalModuleName =
   | "KPI (Setting/Measurement)"
@@ -166,6 +173,9 @@ export function resolveGroupingForCompanyAndPosition(
   const normalizeToUserGrouping = (val: string): UserGrouping | null => {
     const v = val.trim().toLowerCase();
     if (!v) return null;
+    const configuredGroups = loadAccessGroups();
+    const exactGroup = configuredGroups.find((g) => g.toLowerCase() === v);
+    if (exactGroup) return exactGroup;
     if (val.trim() === "Ka./Wa.Ka.Div ke atas" || /div|gm|direktur|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
     if (val.trim() === "Ka./Wa.Ka.Dept" || /dept|departemen/i.test(v)) return "Ka./Wa.Ka.Dept";
     if (val.trim() === "Ka./Wa.Ka.Bagian" || /bagian/i.test(v)) return "Ka./Wa.Ka.Bagian";
@@ -216,6 +226,10 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
 
   // Penentuan level kewenangan berjenjang murni dari Effective Grouping (bebas dari perbedaan nama posisi seperti 'Mandor' vs 'Kepala Bagian')
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
+  const configuredTier = getGroupAuthorityLevel(effectiveGrouping);
+  if (configuredTier === "division" || configuredTier === "department" || configuredTier === "bagian" || configuredTier === "seksi" || configuredTier === "operational") {
+    return configuredTier;
+  }
   if (effectiveGrouping === "Ka./Wa.Ka.Div ke atas") return "division";
   if (effectiveGrouping === "Ka./Wa.Ka.Dept") return "department";
   if (effectiveGrouping === "Ka./Wa.Ka.Bagian") return "bagian";
@@ -488,6 +502,10 @@ export function shouldBypassCheckerForSubmission(
 
 export function defaultAllowedModulesForGrouping(group: string): AppraisalModuleName[] {
   const normalized = group.trim();
+  const fromAccessMgmt = getGroupAllowedModules(normalized);
+  if (Array.isArray(fromAccessMgmt) && fromAccessMgmt.length > 0) {
+    return fromAccessMgmt;
+  }
   if (normalized === "Operasional" || normalized === "Ka./Wa.Ka.Seksi") {
     return [
       "KPI (Setting/Measurement)",
