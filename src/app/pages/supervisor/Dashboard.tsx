@@ -6,10 +6,14 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { useNavigate } from "react-router";
-import { getAuthorizedSubordinates, useAuthStore } from "../../store/authStore";
+import { getActiveUser, getAllowedApprovalTypesForUser, getAuthorizedSubordinates, useAuthStore } from "../../store/authStore";
 import { getLiveUserModuleApprovals, loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
+import { projectApprovalRows } from "../../store/projectStore";
+import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
+import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
+import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,11 +62,11 @@ function formatDate(iso: string) {
 
 // Map module → Approvals route with the right tab
 const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
-  "KPI":            "/supervisor/appraisals?tab=check-in",
-  "SMART Goals":    "/supervisor/appraisals?tab=check-in",
-  "Appraisal Form": "/supervisor/appraisals?tab=check-in",
-  "Project":        "/supervisor/appraisals?tab=check-in",
-  "RCA":            "/supervisor/appraisals?tab=setting",
+  "KPI":            "/supervisor/approvals/measurement/kpi",
+  "SMART Goals":    "/supervisor/approvals/measurement/smart-goals",
+  "Appraisal Form": "/supervisor/approvals/measurement/appraisal-form",
+  "Project":        "/supervisor/approvals/measurement/project",
+  "RCA":            "/supervisor/approvals/measurement/rca",
 };
 
 function ApprovalDashboard() {
@@ -76,14 +80,25 @@ function ApprovalDashboard() {
   useEffect(() => {
     const onRefresh = () => setTick((v) => v + 1);
     window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("feedback-updated", onRefresh);
     window.addEventListener("pa-auth-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+    window.addEventListener("storage", onRefresh);
     return () => {
       window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("feedback-updated", onRefresh);
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+      window.removeEventListener("storage", onRefresh);
     };
   }, []);
+
+  const allowedApprovalModules = useMemo(() => {
+    const allowed = new Set(getAllowedApprovalTypesForUser(activeUser, "checkin"));
+    return (["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"] as Module[]).filter((m) => allowed.has(m));
+  }, [activeUser, tick]);
 
   const subordinates = useMemo(
     () => getAuthorizedSubordinates(activeUser, allUsers).filter((u) => u.employeeId !== activeUser.employeeId),
@@ -92,7 +107,10 @@ function ApprovalDashboard() {
 
   const pendingItems = useMemo<PendingItem[]>(() => {
     const workflows = loadWorkflowRecords();
+    const allowedSet = new Set<string>(allowedApprovalModules);
     const list: PendingItem[] = [];
+    const seenKeys = new Set<string>();
+
     for (const rec of workflows) {
       const sub = subordinates.find(
         (u) => normalizeEmployeeId(u.employeeId) === rec.employeeId || u.employeeId.toLowerCase() === rec.employeeId.toLowerCase(),
@@ -101,6 +119,8 @@ function ApprovalDashboard() {
       const a1 = rec.decisions.approver1?.status ?? "";
       if (a1 === "Approved" || a1.startsWith("Assessed")) continue;
       const mod = (["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"].includes(rec.module) ? rec.module : "KPI") as Module;
+      if (!allowedSet.has(mod)) continue;
+      seenKeys.add(`${normalizeEmployeeId(sub.employeeId)}:${mod}:${rec.phase}`);
       list.push({
         id: rec.key,
         employeeId: sub.employeeId,
@@ -116,8 +136,48 @@ function ApprovalDashboard() {
         urgent: false,
       });
     }
+
+    if (allowedSet.has("Project")) {
+      for (const prjRow of projectApprovalRows("approver1")) {
+        if (prjRow.status !== "Pending") continue;
+        const sub = subordinates.find(
+          (u) =>
+            normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(prjRow.employeeId) ||
+            u.employeeId.toLowerCase() === prjRow.employeeId.toLowerCase(),
+        );
+        if (!sub) continue;
+        const key = `${normalizeEmployeeId(sub.employeeId)}:Project:measurement`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        list.push({
+          id: prjRow.no,
+          employeeId: sub.employeeId,
+          employeeName: sub.name,
+          position: sub.position,
+          unit: sub.company,
+          division: sub.division,
+          module: "Project",
+          submissionType: "Project Outside Job Scope (Measurement)",
+          actionNeeded: "Approve",
+          submittedDate: prjRow.submittedDate && prjRow.submittedDate !== "-" ? prjRow.submittedDate.split("/").reverse().join("-") : "2026-06-10",
+          notes: `Pengajuan Project Outside Job Scope dari ${sub.name} menunggu persetujuan Anda.`,
+          urgent: false,
+        });
+      }
+    }
+
+    for (const fbRow of feedbackApprovalRows("approver1")) {
+      if (fbRow.status !== "Pending") continue;
+      const sub = subordinates.find(
+        (u) =>
+          normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(fbRow.employeeId) ||
+          u.employeeId.toLowerCase() === fbRow.employeeId.toLowerCase(),
+      );
+      if (!sub) continue;
+    }
+
     return list;
-  }, [subordinates, tick]);
+  }, [subordinates, allowedApprovalModules, tick]);
 
   const top5OldestIds = useMemo(
     () =>
@@ -603,8 +663,9 @@ const MY_APPRAISAL_SUMMARY = new Proxy(
   {
     get(_target, prop: string) {
       const mods = getLiveUserModuleApprovals(true);
+      const activeUser = getActiveUser();
       const emps = getLiveTransactionalEmployees();
-      const me = emps[0];
+      const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase()) ?? emps[0];
       const summary = {
         currentScore: me?.totalScore ?? 0,
         currentGrade: me?.grade && me.grade !== "N/A" ? me.grade : "—",
@@ -739,7 +800,26 @@ function scoreToGrade(s: number) {
 
 function AppraisalSummaryCards() {
   const [showPopup, setShowPopup] = useState(false);
+  const [tick, setTick] = useState(0);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const onRefresh = () => setTick((v) => v + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
 
   const liveKPI = useMemo(() => {
     const { months, cellsMap } = loadKPITracking();
@@ -749,12 +829,14 @@ function AppraisalSummaryCards() {
       return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
     }, 0);
     return total > 0 ? parseFloat(total.toFixed(1)) : null;
-  }, []);
+  }, [tick]);
 
-  // Supervisor weights: KPI 40%, SMART 15%, Appraisal 15%, Project 15%, Managerial 10%, Interview 5%
-  const kpiScore = liveKPI ?? 98;
-  const currentScore = parseFloat((kpiScore * 0.40 + 92 * 0.15 + 95 * 0.15 + 91 * 0.15 + 0 * 0.10 + 0 * 0.05).toFixed(1));
-  const currentGrade = scoreToGrade(currentScore);
+  const activeUser = getActiveUser();
+  const emps = getLiveTransactionalEmployees();
+  const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase());
+  const baseScore = me?.totalScore ?? 0;
+  const currentScore = baseScore > 0 ? baseScore : liveKPI ? parseFloat((liveKPI * 0.4).toFixed(1)) : 0;
+  const currentGrade = currentScore > 0 ? scoreToGrade(currentScore) : "—";
   const modulesApproved = MODULE_APPROVALS.filter(m => m.overallStatus === "Approved").length;
   const modulesTotal = MODULE_APPROVALS.length;
   const s = { ...MY_APPRAISAL_SUMMARY, currentScore, currentGrade, modulesApproved, modulesTotal };

@@ -10,6 +10,8 @@ import {
 import { loadManagedUsers, resolveUserAllowedModules, useAuthStore, type ManagedUser } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
+import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
+import { ACCESS_UPDATED_EVENT } from "./settings/AccessManagement";
 
 // ── Live Transactional Completion Calculator ──────────────────────────────────
 function computeModuleStatsForUsers(
@@ -21,12 +23,29 @@ function computeModuleStatsForUsers(
   const eligibleUsers = users.filter((u) => {
     if (u.status !== "Active") return false;
     const allowed = resolveUserAllowedModules(u);
+    if (modLabel === "KPI (Setting)" || modLabel === "KPI (Tracking)") {
+      return allowed.includes("KPI (Setting/Measurement)");
+    }
+    if (modLabel === "SMART Goals (Setting)" || modLabel === "SMART Goals (Tracking)") {
+      return allowed.includes("SMART Goals (Setting/Measurement)");
+    }
+    if (modLabel === "Appraisal Form") return allowed.includes("Appraisals Form");
+    if (modLabel === "Project OJS") return allowed.includes("Project Outside Job Scope");
     if (modLabel === "Managerial Skill") return allowed.includes("Managerial Skill");
     if (modLabel === "Management Interview") return allowed.includes("Management Interview");
     return true;
   });
   const total = eligibleUsers.length;
   if (total === 0) return { total: 0, completed: 0, inProgress: 0, pending: 0 };
+
+  let projectByEmp: Record<string, { rows?: unknown[]; submitted?: boolean }> = {};
+  if (modLabel === "Project OJS") {
+    try {
+      projectByEmp = JSON.parse(localStorage.getItem("pa_project_icf_by_emp_v1") ?? "{}");
+    } catch {
+      projectByEmp = {};
+    }
+  }
 
   const mapModPhase = (m: string): { moduleName: string; phase: "setting" | "measurement" } => {
     if (m === "KPI (Setting)") return { moduleName: "KPI", phase: "setting" };
@@ -52,6 +71,13 @@ function computeModuleStatsForUsers(
         (w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
     );
     if (!rec) {
+      if (modLabel === "Project OJS") {
+        const prj = projectByEmp[normId] ?? projectByEmp[u.employeeId];
+        if (prj && Array.isArray(prj.rows) && prj.rows.length > 0) {
+          inProgress++;
+          continue;
+        }
+      }
       pending++;
       continue;
     }
@@ -266,13 +292,14 @@ function ScoreGradeDistributionDashboard({
       .filter(Boolean) as Employee[];
   }, [employees, module]);
 
-  const total    = derivedEmployees.length || 1;
+  const evaluatedEmployees = derivedEmployees.filter((e) => e.grade && e.grade !== "N/A" && e.grade !== "—");
+  const total = evaluatedEmployees.length || 1;
   const gradeMap = Object.fromEntries(calibrationTargets.map(cg => [cg.grade, cg]));
 
   const bellData = GRADE_ORDER.map(g => {
     const cg          = gradeMap[g] ?? { target: 0, color: "#6B7280" };
-    const actualCount = derivedEmployees.filter(e => e.grade === g).length;
-    const actualPct   = Math.round((actualCount / total) * 100);
+    const actualCount = evaluatedEmployees.filter(e => e.grade === g).length;
+    const actualPct   = evaluatedEmployees.length > 0 ? Math.round((actualCount / total) * 100) : 0;
     return {
       grade: g,
       areaTarget: cg.target,
@@ -286,8 +313,8 @@ function ScoreGradeDistributionDashboard({
 
   const actualCounts = calibrationTargets.map(cg => ({
     ...cg,
-    actual:    derivedEmployees.filter(e => e.grade === cg.grade).length,
-    actualPct: Math.round((derivedEmployees.filter(e => e.grade === cg.grade).length / total) * 100),
+    actual:    evaluatedEmployees.filter(e => e.grade === cg.grade).length,
+    actualPct: evaluatedEmployees.length > 0 ? Math.round((evaluatedEmployees.filter(e => e.grade === cg.grade).length / total) * 100) : 0,
   }));
 
   const moduleLabel = module !== "All Modules" ? ` — ${module}` : "";
@@ -517,6 +544,9 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     window.addEventListener("pa-db-hydrated", onRefresh);
     window.addEventListener("pa-module-activation-updated", onRefresh);
     window.addEventListener("feedback-activation-changed", onRefresh);
+    window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+    window.addEventListener("storage", onRefresh);
     return () => {
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("pa-employees-imported", onRefresh);
@@ -524,6 +554,9 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       window.removeEventListener("pa-db-hydrated", onRefresh);
       window.removeEventListener("pa-module-activation-updated", onRefresh);
       window.removeEventListener("feedback-activation-changed", onRefresh);
+      window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+      window.removeEventListener("storage", onRefresh);
     };
   }, []);
 

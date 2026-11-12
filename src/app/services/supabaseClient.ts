@@ -571,7 +571,8 @@ export function savePersistedState<T>(
 ): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-    window.dispatchEvent(new Event("pa-db-hydrated"));
+    // Ditunda agar listener (mis. Sidebar) tidak melakukan setState saat komponen lain sedang render
+    queueMicrotask(() => window.dispatchEvent(new Event("pa-db-hydrated")));
     void syncToSupabase({
       kind: "kv-state",
       stateKey: key,

@@ -8,6 +8,9 @@ import { useNavigate } from "react-router";
 import { getLiveUserModuleApprovals } from "../shared/appraisalWorkflowStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
+import { getActiveUser } from "../../store/authStore";
+import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
+import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,8 +64,9 @@ const MY_APPRAISAL_SUMMARY = new Proxy(
   {
     get(_target, prop: string) {
       const mods = getLiveUserModuleApprovals(false);
+      const activeUser = getActiveUser();
       const emps = getLiveTransactionalEmployees();
-      const me = emps[0];
+      const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase()) ?? emps[0];
       const summary = {
         currentScore: me?.totalScore ?? 0,
         currentGrade: me?.grade && me.grade !== "N/A" ? me.grade : "—",
@@ -337,7 +341,26 @@ function scoreToGrade(s: number) {
 
 function AppraisalSummaryCards() {
   const [showPopup, setShowPopup] = useState(false);
+  const [tick, setTick] = useState(0);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const onRefresh = () => setTick((v) => v + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
 
   const liveKPI = useMemo(() => {
     const { months, cellsMap } = loadKPITracking();
@@ -347,11 +370,14 @@ function AppraisalSummaryCards() {
       return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
     }, 0);
     return total > 0 ? parseFloat(total.toFixed(1)) : null;
-  }, []);
+  }, [tick]);
 
-  const kpiScore  = liveKPI ?? 94.2;
-  const currentScore = parseFloat((kpiScore * 0.50 + 87.5 * 0.20 + 80.2 * 0.15 + 75.0 * 0.15).toFixed(1));
-  const currentGrade = scoreToGrade(currentScore);
+  const activeUser = getActiveUser();
+  const emps = getLiveTransactionalEmployees();
+  const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase());
+  const baseScore = me?.totalScore ?? 0;
+  const currentScore = baseScore > 0 ? baseScore : liveKPI ? parseFloat((liveKPI * 0.5).toFixed(1)) : 0;
+  const currentGrade = currentScore > 0 ? scoreToGrade(currentScore) : "—";
   const modulesApproved = MODULE_APPROVALS.filter(m => m.overallStatus === "Approved").length;
   const modulesTotal = MODULE_APPROVALS.length;
   const s = { ...MY_APPRAISAL_SUMMARY, currentScore, currentGrade, modulesApproved, modulesTotal };

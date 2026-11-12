@@ -1,7 +1,10 @@
 import { TrendingUp, Lightbulb, ClipboardList, Briefcase, FolderKanban, MessageSquare } from "lucide-react";
 import React from "react";
-import { loadManagedUsers, resolveUserAllowedModules } from "../store/authStore";
+import { getActiveUser, loadManagedUsers, resolveEffectiveUserGrouping, resolveUserAllowedModules } from "../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
+import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
+import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../pages/shared/appraisalFormStore";
+import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export interface ScoreGrade { score: number; grade: string; }
@@ -111,16 +114,24 @@ function averageNumbers(nums: number[]): number {
 export function getLiveTransactionalEmployees(): Employee[] {
   try {
     const users = loadManagedUsers();
+    const activeUser = getActiveUser();
     const workflows = loadWorkflowRecords();
-    let projectByEmp: Record<string, { rows?: Array<{ finalScore?: number }> }> = {};
+    let projectByEmp: Record<string, { rows?: Array<{ finalScore?: number }>; submittedDate?: string }> = {};
     try {
       projectByEmp = JSON.parse(localStorage.getItem("pa_project_icf_by_emp_v1") ?? "{}");
     } catch {
       projectByEmp = {};
     }
+    let calAdjScores: Record<string, Record<string, number>> = {};
+    try {
+      calAdjScores = JSON.parse(localStorage.getItem("pa_calibration_adj_scores_v1") ?? "{}");
+    } catch {
+      calAdjScores = {};
+    }
 
     return users.map((u) => {
       const normId = normalizeEmployeeId(u.employeeId);
+      const isSelf = u.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase();
       const empWorkflows = workflows.filter(
         (w) => w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase(),
       );
@@ -136,31 +147,73 @@ export function getLiveTransactionalEmployees(): Employee[] {
         return avg <= 5 ? Math.round((avg / 5) * 100) : Math.round(avg);
       };
 
-      const kpiScore = extractAssessmentScore("KPI");
+      let kpiScore = extractAssessmentScore("KPI");
       const sgScore = extractAssessmentScore("SMART Goals");
-      const afScore = extractAssessmentScore("Appraisal Form");
-      const msScore = extractAssessmentScore("Managerial Skill");
+      let afScore = extractAssessmentScore("Appraisal Form");
+      let msScore = extractAssessmentScore("Managerial Skill");
       const miScore = extractAssessmentScore("Management Interview");
+
+      // Jika user sedang aktif dan sudah mengisi self/approver rating di modul lokal
+      if (isSelf) {
+        if (afScore === 0) {
+          const afApprovers = loadAllAppraisalApprovers();
+          const afSelf = loadAppraisalSelf();
+          if (afApprovers.length > 0) {
+            const latest = afApprovers[afApprovers.length - 1];
+            const avg = averageNumbers(latest.forms.map((f) => f.avgScore));
+            afScore = avg <= 5 ? Math.round((avg / 5) * 100) : Math.round(avg);
+          } else if (afSelf && afSelf.forms.length > 0) {
+            const avg = averageNumbers(afSelf.forms.map((f) => f.avgScore));
+            afScore = avg <= 5 ? Math.round((avg / 5) * 100) : Math.round(avg);
+          }
+        }
+        if (msScore === 0) {
+          const msApprovers = loadAllMSApprovers();
+          const msSelf = loadMSSelfRatings();
+          if (msApprovers.length > 0) {
+            const latest = msApprovers[msApprovers.length - 1];
+            msScore = latest.totalScore <= 5 ? Math.round((latest.totalScore / 5) * 100) : Math.round(latest.totalScore);
+          } else if (msSelf && msSelf.totalScore > 0) {
+            msScore = msSelf.totalScore <= 5 ? Math.round((msSelf.totalScore / 5) * 100) : Math.round(msSelf.totalScore);
+          }
+        }
+      }
 
       const prjRows = projectByEmp[normId]?.rows ?? projectByEmp[u.employeeId]?.rows ?? [];
       const prjScore = prjRows.length > 0 ? Math.max(...prjRows.map((r) => Number(r.finalScore ?? 0))) : 0;
 
-      const grouping = u.groupings || "Operasional";
+      const grouping = resolveEffectiveUserGrouping(u);
       const allowedMods = resolveUserAllowedModules(u);
-      const isDivUp = grouping === "Ka./Wa.Ka.Div ke atas";
-      const isDept = grouping === "Ka./Wa.Ka.Dept";
-      const isBagian = grouping === "Ka./Wa.Ka.Bagian";
       const hasManagerial = allowedMods.includes("Managerial Skill");
       const hasInterview = allowedMods.includes("Management Interview");
 
-      const wKpi = isDivUp || isDept || isBagian ? 0.4 : 0.5;
-      const wSg = isDivUp ? 0.1 : isDept || isBagian ? 0.15 : 0.2;
-      const wAf = isDivUp ? 0.1 : 0.15;
-      const wPrj = isDivUp || isDept ? 0.1 : 0.15;
-      const wMs = isDivUp || isDept ? 0.2 : isBagian ? 0.15 : 0;
-      const wMi = isDivUp ? 0.1 : 0;
+      const unitWeights = loadUnitScoreWeights(u.company);
+      const weightCol: ScoreWeightColumn =
+        grouping === "Ka./Wa.Ka.Div ke atas"
+          ? "kepalaDivisi"
+          : grouping === "Ka./Wa.Ka.Dept"
+          ? "kepalaDepartement"
+          : grouping === "Ka./Wa.Ka.Bagian"
+          ? "pengawasKepalaBagian"
+          : grouping === "Ka./Wa.Ka.Seksi"
+          ? "kaWaKaSeksi"
+          : "operasional";
+      const parseWeightPct = (indikator: string, fallback: number): number => {
+        const raw = unitWeights[indikator]?.[weightCol];
+        if (!raw || raw === "-") return 0;
+        const num = parseFloat(String(raw).replace("%", "").trim());
+        return Number.isFinite(num) ? num / 100 : fallback;
+      };
 
-      const totalScore = parseFloat(
+      const wKpi = allowedMods.includes("KPI (Setting/Measurement)") ? parseWeightPct("KPI", 0.5) : 0;
+      const wSg  = allowedMods.includes("SMART Goals (Setting/Measurement)") ? parseWeightPct("SMART Goals", 0.2) : 0;
+      const wAf  = allowedMods.includes("Appraisals Form") ? parseWeightPct("Appraisal Form", 0.15) : 0;
+      const wPrj = allowedMods.includes("Project Outside Job Scope") ? parseWeightPct("Project Outside Job Scope", 0.15) : 0;
+      const wMs  = hasManagerial ? parseWeightPct("Managerial Skill", 0.15) : 0;
+      const wMi  = hasInterview ? parseWeightPct("Management Interview", 0.1) : 0;
+
+      const adjOverride = calAdjScores[u.employeeId]?.total ?? calAdjScores[normId]?.total;
+      const computedScore = parseFloat(
         (
           kpiScore * wKpi +
           sgScore * wSg +
@@ -170,6 +223,7 @@ export function getLiveTransactionalEmployees(): Employee[] {
           miScore * wMi
         ).toFixed(1),
       );
+      const totalScore = typeof adjOverride === "number" && adjOverride > 0 ? adjOverride : computedScore;
       const grade = totalScore > 0 ? gradeFromScore(totalScore).grade : "N/A";
 
       const joinYear = u.joinDate ? parseInt(u.joinDate.slice(0, 4), 10) : 2026;
@@ -186,6 +240,13 @@ export function getLiveTransactionalEmployees(): Employee[] {
         ...(hasInterview ? [{ name: "Management Interview", icon: React.createElement(MessageSquare, { className: "w-4 h-4" }), score: miScore, grade: miScore > 0 ? gradeFromScore(miScore).grade : "—", weight: Math.round(wMi * 100) }] : []),
       ];
 
+      const latestWorkflowDate = empWorkflows
+        .map((w) => w.decisions.approver2?.date || w.decisions.approver1?.date || w.submittedDate)
+        .filter(Boolean)
+        .sort()
+        .pop();
+      const prjDate = projectByEmp[normId]?.submittedDate || projectByEmp[u.employeeId]?.submittedDate;
+
       return {
         id: u.employeeId,
         fullName: u.name,
@@ -196,7 +257,7 @@ export function getLiveTransactionalEmployees(): Employee[] {
         companyUnit: u.company,
         joined: u.joinDate || "—",
         tenure: `${tenureYrs} year${tenureYrs !== 1 ? "s" : ""}`,
-        approvalCompleteDate: empWorkflows[0]?.submittedDate || "—",
+        approvalCompleteDate: latestWorkflowDate || prjDate || "—",
         totalScore,
         grade,
         modules,

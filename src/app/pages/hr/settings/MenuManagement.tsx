@@ -40,15 +40,15 @@ const ROLE_COLORS: Record<string, string> = {
 // Mirrors MENU_STRUCTURE from AccessManagement — same IDs, same hierarchy
 const INITIAL_MENUS: MenuItem[] = [
   {
-    id: "dashboard", label: "Dashboard", path: "/supervisor", icon: "ListTodo",
+    id: "dashboard", label: "Dashboard", path: "/supervisor; /employee", icon: "ListTodo",
     isVisible: true, order: 1, roles: ["GM", "Supervisor", "Employee"],
     children: [
-      { id: "dashboard_my",       label: "My Dashboard",     path: "/supervisor/dashboard/my",       icon: "BarChart2", isVisible: true, order: 1, roles: ["GM", "Supervisor", "Employee"] },
+      { id: "dashboard_my",       label: "My Dashboard",     path: "/supervisor/dashboard/my; /employee", icon: "BarChart2", isVisible: true, order: 1, roles: ["GM", "Supervisor", "Employee"] },
       { id: "dashboard_approval", label: "Approval Summary", path: "/supervisor/dashboard/approval", icon: "CheckSquare", isVisible: true, order: 2, roles: ["GM", "Supervisor"] },
     ],
   },
   {
-    id: "analytics", label: "Analytics Dashboard", path: "/hr", icon: "BarChart2",
+    id: "analytics", label: "Analytics Dashboard", path: "/hr; /bod", icon: "BarChart2",
     isVisible: true, order: 1, roles: HR_ROLES,
   },
   {
@@ -92,13 +92,13 @@ const INITIAL_MENUS: MenuItem[] = [
     id: "approvals", label: "Approvals", path: "", icon: "CheckSquare",
     isVisible: true, order: 6, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
     children: [
-      { id: "approvals_kpi_business",   label: "KPI Business",                      path: "/hr/settings/kpi",                    icon: "TrendingUp",  isVisible: true, order: 1, roles: [...HR_ADMIN, "GM", "Director"] as Role[] },
-      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement", path: "/hr/approvals/measurement",               icon: "Clock",       isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/hr/approvals/measurement/inter-department-feedback", icon: "Users", isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",     path: "/hr/approvals/setting",               icon: "Target",      isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_mgmt_interview", label: "Management Interview",              path: "/bod/approvals/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: ["BOD", "Director"] as Role[] },
-      { id: "approvals_open_lock",      label: "Open Lock",                         path: "/hr/settings/open-lock",              icon: "LockOpen",    isVisible: true, order: 4, roles: HR_ADMIN },
-      { id: "approvals_calibration",    label: "Calibration",                       path: "/bod/approvals/calibration",          icon: "BarChart2",   isVisible: true, order: 5, roles: ["BOD"] as Role[] },
+      { id: "approvals_kpi_business",   label: "KPI Business",                        path: "/settings/kpi",                                    icon: "TrendingUp",    isVisible: true, order: 1, roles: [...HR_ADMIN, "GM", "Director"] as Role[] },
+      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement",   path: "/approvals/measurement",                           icon: "Clock",         isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/approvals/measurement/inter-department-feedback", icon: "Users",         isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",       path: "/approvals/setting",                               icon: "Target",        isVisible: true, order: 4, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_mgmt_interview", label: "Management Interview",                path: "/approvals/management-interview",                  icon: "MessageSquare", isVisible: true, order: 5, roles: ["BOD", "Director"] as Role[] },
+      { id: "approvals_open_lock",      label: "Open Lock",                           path: "/settings/open-lock",                              icon: "LockOpen",      isVisible: true, order: 6, roles: HR_ADMIN },
+      { id: "approvals_calibration",    label: "Calibration",                         path: "/approvals/calibration",                           icon: "BarChart2",     isVisible: true, order: 7, roles: ["BOD"] as Role[] },
     ],
   },
   {
@@ -123,14 +123,14 @@ const INITIAL_MENUS: MenuItem[] = [
     isVisible: true, order: 9, roles: HR_ROLES,
     children: [
       { id: "calibration_setting",          label: "Setting",              path: "/calibration/setting",              icon: "Settings",      isVisible: true, order: 1, roles: HR_ADMIN },
-      { id: "calibration_verification", label: "Verification", path: "/hr/calibration/verification", icon: "CheckSquare", isVisible: true, order: 2, roles: HR_ADMIN },
+      { id: "calibration_verification",     label: "Verification",         path: "/calibration/verification",         icon: "CheckSquare",   isVisible: true, order: 2, roles: HR_ADMIN },
       { id: "calibration_adjustment",       label: "Adjustment",           path: "/calibration/adjustment",           icon: "RefreshCw",     isVisible: true, order: 3, roles: HR_ROLES },
       { id: "calibration_interview",        label: "Management Interview", path: "/calibration/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: HR_ADMIN },
-      { id: "calibration_team_performance", label: "Team Performance",     path: "/supervisor/calibration/team-performance", icon: "Users", isVisible: true, order: 5, roles: ["Supervisor"] as Role[] },
+      { id: "calibration_team_performance", label: "Team Performance",     path: "/calibration/team-performance",     icon: "Users",         isVisible: true, order: 5, roles: ["Supervisor"] as Role[] },
     ],
   },
   {
-    id: "history", label: "PA Cycle History", path: "/hr/history", icon: "BookOpen",
+    id: "history", label: "PA Cycle History", path: "/history", icon: "BookOpen",
     isVisible: true, order: 10, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
   },
   {
@@ -151,12 +151,12 @@ const INITIAL_MENUS: MenuItem[] = [
     id: "management_interview", label: "Management Interview", path: "", icon: "UserSquare",
     isVisible: true, order: 13, roles: ["BOD", "Director"] as Role[],
     children: [
-      { id: "mgmt_interview_assessment", label: "Assessment", path: "/bod/management-interview/assessment", icon: "ClipboardList", isVisible: true, order: 1, roles: ["BOD"] as Role[] },
-      { id: "mgmt_interview_invitation", label: "Invitation", path: "/hr/management-interview/invitation",  icon: "MessageSquare", isVisible: true, order: 2, roles: HR_ADMIN },
+      { id: "mgmt_interview_assessment", label: "Assessment", path: "/management-interview/assessment", icon: "ClipboardList", isVisible: true, order: 1, roles: ["BOD"] as Role[] },
+      { id: "mgmt_interview_invitation", label: "Invitation", path: "/management-interview/invitation", icon: "MessageSquare", isVisible: true, order: 2, roles: HR_ADMIN },
     ],
   },
   {
-    id: "override", label: "Management Override", path: "/hr/override", icon: "Shield",
+    id: "override", label: "Management Override", path: "/override", icon: "Shield",
     isVisible: false, order: 12, roles: HR_ADMIN,
   },
   {
@@ -429,11 +429,9 @@ export function MenuManagementPage() {
 
   function toggleVisibility(id: string) {
     setSaved(false);
-    setMenus(prev => {
-      const next = updateNested(prev, id, m => ({ ...m, isVisible: !m.isVisible }));
-      persistMenus(next, `Toggled visibility for menu ${id}`);
-      return next;
-    });
+    const next = updateNested(menus, id, m => ({ ...m, isVisible: !m.isVisible }));
+    setMenus(next);
+    persistMenus(next, `Toggled visibility for menu ${id}`);
   }
 
   function syncMenuRolesWithAccessManagement(items: MenuItem[]): MenuItem[] {
@@ -455,29 +453,23 @@ export function MenuManagementPage() {
   function handleSave(updated: MenuItem) {
     setSaved(false);
     updateMenuViewRolesFromMenuManagement(updated.id, updated.roles);
-    setMenus(prev => {
-      const next = updateNested(prev, updated.id, () => updated);
-      persistMenus(next, `Updated menu item ${updated.label} (${updated.id})`);
-      return next;
-    });
+    const next = updateNested(menus, updated.id, () => updated);
+    setMenus(next);
+    persistMenus(next, `Updated menu item ${updated.label} (${updated.id})`);
   }
 
   function handleAdd(item: MenuItem) {
     setSaved(false);
-    setMenus(prev => {
-      const next = [...prev, item];
-      persistMenus(next, `Added new menu item ${item.label} (${item.id})`);
-      return next;
-    });
+    const next = [...menus, item];
+    setMenus(next);
+    persistMenus(next, `Added new menu item ${item.label} (${item.id})`);
   }
 
   function handleDelete(id: string) {
     setSaved(false);
-    setMenus(prev => {
-      const next = deleteNested(prev, id);
-      persistMenus(next, `Deleted menu item ${id}`);
-      return next;
-    });
+    const next = deleteNested(menus, id);
+    setMenus(next);
+    persistMenus(next, `Deleted menu item ${id}`);
   }
 
   function matchSearch(item: MenuItem, q: string): boolean {

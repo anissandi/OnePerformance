@@ -1311,7 +1311,7 @@ export function updateMenuViewRolesFromMenuManagement(
   }
 
   savePersistedState(ACCESS_PERMS_KEY, nextMap);
-  window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+  queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
 }
 
 export function loadAccessGroups(): GroupName[] {
@@ -1642,7 +1642,7 @@ export function AccessManagementPage() {
           description: `Reset access permissions for role ${activeRole} to default`,
         },
       });
-      window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+      queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
       return next;
     });
   }
@@ -1661,7 +1661,7 @@ export function AccessManagementPage() {
         description: `Saved access permissions for role ${activeRole}`,
       },
     });
-    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+    queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
     setSaved(true);
   }
 
@@ -1706,7 +1706,7 @@ export function AccessManagementPage() {
         description: `Created custom access role ${name}`,
       },
     });
-    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+    queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
     setActiveRole(name);
     setSaved(false);
   }
@@ -1733,7 +1733,7 @@ export function AccessManagementPage() {
         description: `Deleted custom access role ${role}`,
       },
     });
-    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
+    queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
     setActiveRole(next[Math.min(idx, next.length - 1)]);
     setSaved(false);
   }
@@ -1789,8 +1789,8 @@ export function AccessManagementPage() {
         description: `Updated group configuration and allowed modules for ${activeGroup}`,
       },
     });
-    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
-    window.dispatchEvent(new Event("pa-auth-updated"));
+    queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
+    queueMicrotask(() => window.dispatchEvent(new Event("pa-auth-updated")));
     setGroupSaved(true);
   }
 
@@ -1812,8 +1812,8 @@ export function AccessManagementPage() {
     setGroupConfigs((prev) => {
       const next = { ...prev, [activeGroup]: resetCfg };
       savePersistedState(ACCESS_GROUP_CONFIGS_KEY, next);
-      window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
-      window.dispatchEvent(new Event("pa-auth-updated"));
+      queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
+      queueMicrotask(() => window.dispatchEvent(new Event("pa-auth-updated")));
       return next;
     });
   }
@@ -1849,8 +1849,8 @@ export function AccessManagementPage() {
         description: `Created new user group ${name}`,
       },
     });
-    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
-    window.dispatchEvent(new Event("pa-auth-updated"));
+    queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
+    queueMicrotask(() => window.dispatchEvent(new Event("pa-auth-updated")));
     setActiveGroup(name);
     setGroupSaved(false);
   }
@@ -1866,8 +1866,8 @@ export function AccessManagementPage() {
       savePersistedState(ACCESS_GROUP_CONFIGS_KEY, copy);
       return copy;
     });
-    window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT));
-    window.dispatchEvent(new Event("pa-auth-updated"));
+    queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
+    queueMicrotask(() => window.dispatchEvent(new Event("pa-auth-updated")));
     setActiveGroup(nextGroups[Math.min(idx, nextGroups.length - 1)] ?? "Operasional");
     setGroupSaved(false);
   }

@@ -13,7 +13,7 @@ export function FeedbackApprovalsPage({
 }) {
   useAppraisalRevision()
   const location = useLocation()
-  const role = location.pathname.startsWith("/supervisor/")
+  const role = location.pathname.startsWith("/supervisor/") || location.pathname.startsWith("/employee/")
     ? "approver1"
     : "approver2"
   const moduleBase = location.pathname.replace(/\/inter-department-feedback\/?$/, "")
