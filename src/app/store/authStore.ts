@@ -758,8 +758,13 @@ export function getAllowedApprovalTypesForUser(
   ];
   const baseList = mode === "setting" ? allSetting : allCheckin;
 
+  // Administrator, HR ICF, dan BOD melihat seluruh modul approval
+  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD") {
+    return baseList;
+  }
+
+  const effectiveGrouping = resolveEffectiveUserGrouping(user);
   if (user.role === "HR Unit") {
-    const effectiveGrouping = resolveEffectiveUserGrouping(user);
     if (effectiveGrouping === "Operasional") {
       return ["KPI", "SMART Goals", "RCA"];
     }
@@ -774,7 +779,17 @@ export function getAllowedApprovalTypesForUser(
     });
   }
 
-  return baseList;
+  // Untuk setiap Approver (Supervisor, GM, Director, dll.), sesuaikan modul yang muncul dengan setup Groupings masing-masing approver
+  const allowed = resolveUserAllowedModules(user);
+  return baseList.filter((type) => {
+    if (type === "KPI" || type === "RCA") return allowed.includes("KPI (Setting/Measurement)");
+    if (type === "SMART Goals") return allowed.includes("SMART Goals (Setting/Measurement)");
+    if (type === "Appraisal Form") return allowed.includes("Appraisals Form");
+    if (type === "Managerial Skill") return allowed.includes("Managerial Skill");
+    if (type === "Project") return allowed.includes("Project Outside Job Scope");
+    if (type === "Inter-Department Feedback") return allowed.includes("Inter-Departement Feedback");
+    return false;
+  });
 }
 
 export function loginWithCompanyAndEmployeeId(

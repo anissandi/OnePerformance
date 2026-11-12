@@ -1310,12 +1310,18 @@ export function updateMenuViewRolesFromMenuManagement(
   const currentMap = loadRolePermissionsMap();
   const allRoles = loadAccessRoles();
   const nextMap: Record<Role, RolePermissions> = { ...currentMap };
+  const descendants = findDescendantIds(menuId);
 
   for (const role of allRoles) {
     const rolePerm = { ...(nextMap[role] ?? emptyPermissions()) };
     const shouldView = allowedRoles.includes(role);
     const prevPerm = rolePerm[menuId] ?? { ...EMPTY_PERM };
     rolePerm[menuId] = { ...prevPerm, view: shouldView };
+    // Cascade perubahan visibilitas ke seluruh sub-item (mis. approvals_kpi_business_group & unit)
+    for (const descId of descendants) {
+      const descPerm = rolePerm[descId] ?? { ...EMPTY_PERM };
+      rolePerm[descId] = { ...descPerm, view: shouldView };
+    }
     if (shouldView) {
       for (const ancestorId of findAncestorIds(menuId)) {
         const ancPerm = rolePerm[ancestorId] ?? { ...EMPTY_PERM };

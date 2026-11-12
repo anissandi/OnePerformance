@@ -31,6 +31,7 @@ import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import { useAuthStore } from "../store/authStore";
 import { useAccessManagement } from "../pages/hr/settings/AccessManagement";
+import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../pages/hr/settings/MenuManagement";
 
 type Role = "hr" | "employee" | "supervisor" | "bod";
 
@@ -254,8 +255,15 @@ const employeeLinks = [
 export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean }) {
   const { activeUser, allowedModules } = useAuthStore();
   const { getRolePermissions } = useAccessManagement();
+  const [, setMenuTick] = useState(0);
+  useEffect(() => {
+    const onMenuUpdate = () => setMenuTick((t) => t + 1);
+    window.addEventListener(MENU_UPDATED_EVENT, onMenuUpdate);
+    return () => window.removeEventListener(MENU_UPDATED_EVENT, onMenuUpdate);
+  }, []);
   const rolePerms = getRolePermissions(activeUser.role || "Employee");
-  const canView = (menuId: string) => Boolean(rolePerms[menuId]?.view);
+  const canView = (menuId: string) =>
+    isMenuVisibleInMenuManagement(menuId) && Boolean(rolePerms[menuId]?.view);
 
   const hasKpi = allowedModules.includes("KPI (Setting/Measurement)");
   const hasSmart = allowedModules.includes("SMART Goals (Setting/Measurement)");

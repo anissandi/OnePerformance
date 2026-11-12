@@ -1,18 +1,26 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import {
   Briefcase, Building2, MapPin, Mail, Phone, Calendar,
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
   ChevronRight, Award,
-  BarChart2, Star, Activity, MessageSquare, Clock, CheckCircle2, ChevronDown,
+  BarChart2, Star, Activity, MessageSquare, Clock, CheckCircle2, ChevronDown, Users,
   StickyNote, UserCheck,
 } from "lucide-react";
 import {
   KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
 } from "../employee/KPIPage";
 import { SUPERVISOR_PROFILE } from "../../store/profileStore";
-import { getActiveUser, resolveUserAllowedModules } from "../../store/authStore";
+import {
+  getActiveUser,
+  resolveEffectiveUserGrouping,
+  resolveUserAllowedModules,
+  useAuthStore,
+  type AppraisalModuleName,
+} from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { loadUnitScoreWeights, SCORE_WEIGHT_EVENT, type ScoreWeightColumn } from "./scoringWeightStore";
+import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
 
 // ─── User identity (from shared profile store) ─────────────────────────────────
 const USER = SUPERVISOR_PROFILE;
@@ -72,10 +80,12 @@ const STATUS_META: Record<ModuleStatus, { label: string; color: string; bg: stri
   not_applicable: { label: "N/A",            color: "text-gray-400",   bg: "bg-gray-100",  border: "border-gray-200"   },
 };
 
-const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus })[] = [
+const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus; appraisalModuleKey: AppraisalModuleName; weightIndicatorKey?: string })[] = [
   {
     id: "m1",
     module: "KPI",
+    appraisalModuleKey: "KPI (Setting/Measurement)",
+    weightIndicatorKey: "KPI",
     submissionType: "KPI Tracking — Measurement",
     completedDate: "—",
     score: 0,
@@ -92,6 +102,8 @@ const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus })[] = [
   {
     id: "m2",
     module: "SMART Goals",
+    appraisalModuleKey: "SMART Goals (Setting/Measurement)",
+    weightIndicatorKey: "SMART Goals",
     submissionType: "SMART Goals — Measurement",
     completedDate: "—",
     score: 0,
@@ -108,6 +120,8 @@ const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus })[] = [
   {
     id: "m3",
     module: "Appraisal Form",
+    appraisalModuleKey: "Appraisals Form",
+    weightIndicatorKey: "Appraisal Form",
     submissionType: "Appraisal Form — Measurement",
     completedDate: "—",
     score: 0,
@@ -124,6 +138,8 @@ const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus })[] = [
   {
     id: "m4",
     module: "Project Outside Job Scope",
+    appraisalModuleKey: "Project Outside Job Scope",
+    weightIndicatorKey: "Project Outside Job Scope",
     submissionType: "Project Measurement",
     completedDate: "—",
     score: 0,
@@ -140,34 +156,55 @@ const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus })[] = [
   {
     id: "m5",
     module: "Managerial Skill",
+    appraisalModuleKey: "Managerial Skill",
+    weightIndicatorKey: "Managerial Skill",
     submissionType: "Managerial Skill Assessment",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
+    weight: 15,
+    weightedScore: 0,
+    status: "pending",
+    icon: Award,
+    color: "text-purple-700",
+    bg: "bg-purple-50",
+    border: "border-purple-200",
+    detail: "Belum ada transaksi Managerial Skill pada periode ini.",
+  },
+  {
+    id: "m6_idf",
+    module: "Inter-Department Feedback",
+    appraisalModuleKey: "Inter-Departement Feedback",
+    submissionType: "Inter-Department Feedback — Measurement",
+    completedDate: "—",
+    score: 0,
+    grade: "N/A",
+    weight: 0,
+    weightedScore: 0,
+    status: "pending",
+    icon: Users,
+    color: "text-indigo-700",
+    bg: "bg-indigo-50",
+    border: "border-indigo-200",
+    detail: "Inter-Department Feedback (tidak memiliki bobot nilai).",
+  },
+  {
+    id: "m7",
+    module: "Management Interview",
+    appraisalModuleKey: "Management Interview",
+    weightIndicatorKey: "Management Interview",
+    submissionType: "Management Interview",
     completedDate: "—",
     score: 0,
     grade: "N/A",
     weight: 10,
     weightedScore: 0,
-    status: "not_applicable",
-    icon: Award,
-    color: "text-gray-400",
-    bg: "bg-gray-50",
-    border: "border-gray-200",
-    detail: "Not applicable — staff level position does not require managerial skill assessment.",
-  },
-  {
-    id: "m6",
-    module: "Management Interview",
-    submissionType: "Management Interview",
-    completedDate: "—",
-    score: 0,
-    grade: "N/A",
-    weight: 5,
-    weightedScore: 0,
-    status: "not_applicable",
+    status: "pending",
     icon: MessageSquare,
-    color: "text-gray-400",
-    bg: "bg-gray-50",
-    border: "border-gray-200",
-    detail: "Not applicable — staff level position does not require management interview.",
+    color: "text-rose-700",
+    bg: "bg-rose-50",
+    border: "border-rose-200",
+    detail: "Belum ada transaksi Management Interview pada periode ini.",
   },
 ];
 
@@ -281,10 +318,30 @@ type Tab = "overview" | "results" | "kpi";
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function ViewProfile() {
+  const { activeUser } = useAuthStore();
   const [tab, setTab] = useRouteTab<Tab>(["overview", "results", "kpi"], "overview");
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState<number>(CURRENT_YEAR);
   const [yearOpen, setYearOpen] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const onRefresh = () => setTick((v) => v + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+    window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);
+      window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
 
   const isCurrent = selectedYear === CURRENT_YEAR;
   const yearData = YEAR_DATA[selectedYear];
@@ -298,23 +355,47 @@ export function ViewProfile() {
       return s + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
     }, 0);
     return total > 0 ? parseFloat(total.toFixed(1)) : null;
-  }, []);
+  }, [tick]);
 
   // Inject live KPI score into 2026 module results
   const activeModules = useMemo(() => {
-    const activeUser = getActiveUser();
     const allowed = resolveUserAllowedModules(activeUser);
+    const grouping = resolveEffectiveUserGrouping(activeUser);
+    const unitWeights = loadUnitScoreWeights(activeUser.company);
+    const weightCol: ScoreWeightColumn =
+      grouping === "Ka./Wa.Ka.Div ke atas" || grouping === "Direktur / Director"
+        ? "kepalaDivisi"
+        : grouping === "Ka./Wa.Ka.Dept"
+        ? "kepalaDepartement"
+        : grouping === "Ka./Wa.Ka.Bagian"
+        ? "pengawasKepalaBagian"
+        : grouping === "Ka./Wa.Ka.Seksi"
+        ? "kaWaKaSeksi"
+        : "operasional";
+
+    const resolveWeight = (indicatorKey?: string, fallback = 0): number => {
+      if (!indicatorKey) return 0;
+      const raw = unitWeights[indicatorKey]?.[weightCol];
+      if (!raw || raw === "-") return 0;
+      const num = parseFloat(String(raw).replace("%", "").trim());
+      return Number.isFinite(num) ? num : fallback;
+    };
+
     const liveEmp = getLiveTransactionalEmployees().find(
       (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
     );
-    const base = getModuleResults(selectedYear);
-    if (!isCurrent) return base;
+    // Hanya tampilkan modul yang di-allow pada setup Groupings masing-masing karyawan
+    const base = getModuleResults(selectedYear).filter((m) =>
+      allowed.includes(m.appraisalModuleKey),
+    );
     return base.map((m) => {
-      if (m.module === "Managerial Skill" && !allowed.includes("Managerial Skill")) {
-        return { ...m, status: "not_applicable" as const, score: 0, grade: "N/A", weightedScore: 0 };
-      }
-      if (m.module === "Management Interview" && !allowed.includes("Management Interview")) {
-        return { ...m, status: "not_applicable" as const, score: 0, grade: "N/A", weightedScore: 0 };
+      const weight = resolveWeight(m.weightIndicatorKey, m.weight);
+      if (!isCurrent) {
+        return {
+          ...m,
+          weight,
+          weightedScore: parseFloat(((m.score * weight) / 100).toFixed(2)),
+        };
       }
       let score = 0;
       if (m.module === "KPI") score = liveKPIScore2026 ?? liveEmp?.kpi.score ?? 0;
@@ -325,12 +406,15 @@ export function ViewProfile() {
       else if (m.module === "Management Interview") score = liveEmp?.managementInterview?.score ?? 0;
       const grade = score === 0 ? "N/A" : score >= 90 ? "A+" : score >= 80 ? "A" : score >= 70 ? "B" : score >= 60 ? "C" : score >= 50 ? "D" : "E";
       const status: ModuleStatus = score > 0 ? "approved" : "pending";
-      return { ...m, score, grade, status, weightedScore: parseFloat(((score * m.weight) / 100).toFixed(2)) };
+      return { ...m, weight, score, grade, status, weightedScore: parseFloat(((score * weight) / 100).toFixed(2)) };
     });
-  }, [selectedYear, isCurrent, liveKPIScore2026]);
+  }, [activeUser, selectedYear, isCurrent, liveKPIScore2026, tick]);
 
   const yearsOfService = new Date().getFullYear() - new Date(USER.joinDate).getFullYear();
   const totalWeighted = activeModules.reduce((s, m) => s + m.weightedScore, 0);
+  const dynamicModulesTotal = activeModules.length;
+  const dynamicModulesApproved = activeModules.filter((m) => m.status === "approved").length;
+  const kpiModuleWeight = activeModules.find((m) => m.module === "KPI")?.weight ?? 40;
 
   // For current year, derive display score/grade from live module scores
   function scoreToGrade(s: number) {
@@ -469,10 +553,10 @@ export function ViewProfile() {
         <div className="bg-blue-50 rounded-2xl border border-blue-100 shadow-sm px-5 py-4">
           <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">Modules Approved</p>
           <p className="text-3xl font-bold text-blue-700">
-            {yearData.modulesApproved}<span className="text-lg text-blue-300">/{yearData.modulesTotal}</span>
+            {dynamicModulesApproved}<span className="text-lg text-blue-300">/{dynamicModulesTotal}</span>
           </p>
           <p className="text-[11px] text-gray-400 mt-0.5">
-            {isCurrent ? `${yearData.modulesTotal - yearData.modulesApproved} pending approval` : "All modules finalized"}
+            {isCurrent ? `${Math.max(0, dynamicModulesTotal - dynamicModulesApproved)} pending approval` : "All modules finalized"}
           </p>
         </div>
         <div className={`rounded-2xl border shadow-sm px-5 py-4 ${isCurrent ? "bg-amber-50 border-amber-100" : "bg-green-50 border-green-100"}`}>
@@ -632,7 +716,7 @@ export function ViewProfile() {
               </div>
               <p className="text-4xl font-bold text-white">{displayScore} <span className="text-lg font-normal text-blue-200">/ 100</span></p>
               <p className="text-sm text-blue-200 mt-1">
-                Last updated {yearData.lastUpdated} · {yearData.modulesApproved} of {yearData.modulesTotal} modules approved
+                Last updated {yearData.lastUpdated} · {dynamicModulesApproved} of {dynamicModulesTotal} modules approved
               </p>
             </div>
             <div className="text-center shrink-0">
@@ -785,7 +869,7 @@ export function ViewProfile() {
             <div className={`rounded-2xl border shadow-sm px-5 py-4 ${gradeColor(displayKPIGrade)} border-current/20`}>
               <p className="text-[11px] uppercase tracking-wide mb-1 opacity-70">KPI Grade</p>
               <p className="text-2xl font-bold">{displayKPIGrade}</p>
-              <p className="text-[11px] opacity-60 mt-0.5">Weight 40%</p>
+              <p className="text-[11px] opacity-60 mt-0.5">Weight {kpiModuleWeight}%</p>
             </div>
             <div className="bg-green-50 rounded-2xl border border-green-100 shadow-sm px-5 py-4">
               <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">On Track</p>

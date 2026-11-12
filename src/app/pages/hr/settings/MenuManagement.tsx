@@ -393,13 +393,82 @@ function deleteNested(items: MenuItem[], id: string): MenuItem[] {
     .map(m => m.children ? { ...m, children: deleteNested(m.children, id) } : m);
 }
 
-const MENU_CONFIGS_KEY = "pa_menu_configs_v1";
+export const MENU_CONFIGS_KEY = "pa_menu_configs_v1";
+export const MENU_UPDATED_EVENT = "pa-menu-configs-updated";
+
+function mergeWithInitialMenus(saved: MenuItem[]): MenuItem[] {
+  const savedById = new Map<string, MenuItem>();
+  function collect(list: MenuItem[]) {
+    for (const item of list) {
+      savedById.set(item.id, item);
+      if (item.children) collect(item.children);
+    }
+  }
+  if (Array.isArray(saved)) collect(saved);
+
+  function mergeTree(defaults: MenuItem[]): MenuItem[] {
+    return defaults.map((def) => {
+      const s = savedById.get(def.id);
+      return {
+        ...def,
+        ...(s ? { label: s.label || def.label, isVisible: s.isVisible ?? def.isVisible, order: s.order ?? def.order, icon: s.icon || def.icon } : {}),
+        ...(def.children ? { children: mergeTree(def.children) } : {}),
+      };
+    });
+  }
+
+  const merged = mergeTree(deepClone(INITIAL_MENUS));
+  // Tambahkan custom menu top-level yang dibuat lewat "+ Add Menu"
+  const builtinIds = new Set(INITIAL_MENUS.map((m) => m.id));
+  if (Array.isArray(saved)) {
+    for (const s of saved) {
+      if (s && s.id && !builtinIds.has(s.id)) {
+        merged.push(s);
+      }
+    }
+  }
+  return merged;
+}
+
+export function loadMenuConfigs(): MenuItem[] {
+  const raw = loadPersistedState<MenuItem[]>(MENU_CONFIGS_KEY, deepClone(INITIAL_MENUS));
+  return mergeWithInitialMenus(raw);
+}
+
+export function getMenuLabelFromMenuManagement(menuId: string, fallback: string): string {
+  const items = loadMenuConfigs();
+  function findLabel(list: MenuItem[]): string | null {
+    for (const item of list) {
+      if (item.id === menuId) return item.label || fallback;
+      if (item.children) {
+        const sub = findLabel(item.children);
+        if (sub) return sub;
+      }
+    }
+    return null;
+  }
+  return findLabel(items) ?? fallback;
+}
+
+export function isMenuVisibleInMenuManagement(menuId: string): boolean {
+  const items = loadMenuConfigs();
+  function check(list: MenuItem[]): boolean | null {
+    for (const item of list) {
+      if (item.id === menuId) return item.isVisible !== false;
+      if (item.children) {
+        const sub = check(item.children);
+        if (sub !== null) return item.isVisible !== false && sub;
+      }
+    }
+    return null;
+  }
+  const found = check(items);
+  return found === null ? true : found;
+}
 
 export function MenuManagementPage() {
   const { roles: accessRoles } = useAccessManagement();
-  const [menus, setMenus] = useState<MenuItem[]>(() =>
-    loadPersistedState<MenuItem[]>(MENU_CONFIGS_KEY, deepClone(INITIAL_MENUS)),
-  );
+  const [menus, setMenus] = useState<MenuItem[]>(() => loadMenuConfigs());
   const [editItem, setEditItem] = useState<MenuItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -407,7 +476,7 @@ export function MenuManagementPage() {
 
   useEffect(() => {
     const onHydrated = () => {
-      setMenus(loadPersistedState<MenuItem[]>(MENU_CONFIGS_KEY, deepClone(INITIAL_MENUS)));
+      setMenus(loadMenuConfigs());
     };
     window.addEventListener("pa-db-hydrated", onHydrated);
     return () => window.removeEventListener("pa-db-hydrated", onHydrated);
@@ -424,6 +493,7 @@ export function MenuManagementPage() {
         description,
       },
     });
+    queueMicrotask(() => window.dispatchEvent(new Event(MENU_UPDATED_EVENT)));
   }
 
   function toggleVisibility(id: string) {
@@ -459,6 +529,7 @@ export function MenuManagementPage() {
 
   function handleAdd(item: MenuItem) {
     setSaved(false);
+    updateMenuViewRolesFromMenuManagement(item.id, item.roles);
     const next = [...menus, item];
     setMenus(next);
     persistMenus(next, `Added new menu item ${item.label} (${item.id})`);
@@ -466,6 +537,7 @@ export function MenuManagementPage() {
 
   function handleDelete(id: string) {
     setSaved(false);
+    updateMenuViewRolesFromMenuManagement(id, []);
     const next = deleteNested(menus, id);
     setMenus(next);
     persistMenus(next, `Deleted menu item ${id}`);

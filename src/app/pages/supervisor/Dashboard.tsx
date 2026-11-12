@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking } from "../employee/KPIPage";
-import { ArrowRight, TrendingUp, Lightbulb, ClipboardList, FolderKanban, Target, Clock, CheckCircle2, Search, AlertTriangle, LayoutDashboard, ClipboardCheck, Star, X } from "lucide-react";
+import { ArrowRight, TrendingUp, Lightbulb, ClipboardList, FolderKanban, Target, Clock, CheckCircle2, Search, AlertTriangle, LayoutDashboard, ClipboardCheck, Star, X, Briefcase, Users } from "lucide-react";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -17,7 +17,14 @@ import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Module = "KPI" | "SMART Goals" | "Appraisal Form" | "Project" | "RCA";
+type Module =
+  | "KPI"
+  | "SMART Goals"
+  | "Appraisal Form"
+  | "Project"
+  | "Managerial Skill"
+  | "Inter-Department Feedback"
+  | "RCA";
 type ActionType = "Approve" | "Complete Assessment" | "Review & Validate";
 
 interface PendingItem {
@@ -37,12 +44,14 @@ interface PendingItem {
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
-const MODULE_META: Record<Module, { icon: React.ElementType; color: string; bg: string; border: string }> = {
-  "KPI":            { icon: TrendingUp,    color: "text-blue-700",  bg: "bg-blue-50",  border: "border-blue-200"  },
-  "SMART Goals":    { icon: Lightbulb,     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200" },
-  "Appraisal Form": { icon: ClipboardList, color: "text-green-700", bg: "bg-green-50", border: "border-green-200" },
-  "Project":        { icon: FolderKanban,  color: "text-teal-700",  bg: "bg-teal-50",  border: "border-teal-200"  },
-  "RCA":            { icon: Target,        color: "text-rose-700",  bg: "bg-rose-50",  border: "border-rose-200"  },
+const MODULE_META: Record<Module, { icon: React.ElementType; color: string; bg: string; border: string; hex: string }> = {
+  "KPI":                       { icon: TrendingUp,    color: "text-blue-700",   bg: "bg-blue-50",   border: "border-blue-200",   hex: "#1A284F" },
+  "SMART Goals":               { icon: Lightbulb,     color: "text-amber-700",  bg: "bg-amber-50",  border: "border-amber-200",  hex: "#d97706" },
+  "Appraisal Form":            { icon: ClipboardList, color: "text-green-700",  bg: "bg-green-50",  border: "border-green-200",  hex: "#15803d" },
+  "Project":                   { icon: FolderKanban,  color: "text-teal-700",   bg: "bg-teal-50",   border: "border-teal-200",   hex: "#0f766e" },
+  "Managerial Skill":          { icon: Briefcase,     color: "text-purple-700", bg: "bg-purple-50", border: "border-purple-200", hex: "#7e22ce" },
+  "Inter-Department Feedback": { icon: Users,         color: "text-indigo-700", bg: "bg-indigo-50", border: "border-indigo-200", hex: "#4f46e5" },
+  "RCA":                       { icon: Target,        color: "text-rose-700",   bg: "bg-rose-50",   border: "border-rose-200",   hex: "#be123c" },
 };
 
 const ACTION_STYLE: Record<ActionType, string> = {
@@ -62,11 +71,13 @@ function formatDate(iso: string) {
 
 // Map module → Approvals route with the right tab
 const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
-  "KPI":            "/supervisor/approvals/measurement/kpi",
-  "SMART Goals":    "/supervisor/approvals/measurement/smart-goals",
-  "Appraisal Form": "/supervisor/approvals/measurement/appraisal-form",
-  "Project":        "/supervisor/approvals/measurement/project",
-  "RCA":            "/supervisor/approvals/measurement/rca",
+  "KPI":                       "/supervisor/approvals/measurement/kpi",
+  "SMART Goals":               "/supervisor/approvals/measurement/smart-goals",
+  "Appraisal Form":            "/supervisor/approvals/measurement/appraisal-form",
+  "Project":                   "/supervisor/approvals/measurement/project",
+  "Managerial Skill":          "/supervisor/approvals/measurement/managerial-skill",
+  "Inter-Department Feedback": "/supervisor/approvals/measurement/inter-department-feedback",
+  "RCA":                       "/supervisor/approvals/measurement/rca",
 };
 
 function ApprovalDashboard() {
@@ -97,7 +108,16 @@ function ApprovalDashboard() {
 
   const allowedApprovalModules = useMemo(() => {
     const allowed = new Set(getAllowedApprovalTypesForUser(activeUser, "checkin"));
-    return (["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"] as Module[]).filter((m) => allowed.has(m));
+    const allOrder: Module[] = [
+      "KPI",
+      "SMART Goals",
+      "Appraisal Form",
+      "Project",
+      "Managerial Skill",
+      "Inter-Department Feedback",
+      "RCA",
+    ];
+    return allOrder.filter((m) => allowed.has(m));
   }, [activeUser, tick]);
 
   const subordinates = useMemo(
@@ -118,7 +138,7 @@ function ApprovalDashboard() {
       if (!sub) continue;
       const a1 = rec.decisions.approver1?.status ?? "";
       if (a1 === "Approved" || a1.startsWith("Assessed")) continue;
-      const mod = (["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"].includes(rec.module) ? rec.module : "KPI") as Module;
+      const mod = (["KPI", "SMART Goals", "Appraisal Form", "Project", "Managerial Skill", "Inter-Department Feedback", "RCA"].includes(rec.module) ? rec.module : "KPI") as Module;
       if (!allowedSet.has(mod)) continue;
       seenKeys.add(`${normalizeEmployeeId(sub.employeeId)}:${mod}:${rec.phase}`);
       list.push({
@@ -166,14 +186,33 @@ function ApprovalDashboard() {
       }
     }
 
-    for (const fbRow of feedbackApprovalRows("approver1")) {
-      if (fbRow.status !== "Pending") continue;
-      const sub = subordinates.find(
-        (u) =>
-          normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(fbRow.employeeId) ||
-          u.employeeId.toLowerCase() === fbRow.employeeId.toLowerCase(),
-      );
-      if (!sub) continue;
+    if (allowedSet.has("Inter-Department Feedback")) {
+      for (const fbRow of feedbackApprovalRows("approver1")) {
+        if (fbRow.status !== "Pending") continue;
+        const sub = subordinates.find(
+          (u) =>
+            normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(fbRow.employeeId) ||
+            u.employeeId.toLowerCase() === fbRow.employeeId.toLowerCase(),
+        );
+        if (!sub) continue;
+        const key = `${normalizeEmployeeId(sub.employeeId)}:Inter-Department Feedback:measurement`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        list.push({
+          id: fbRow.no,
+          employeeId: sub.employeeId,
+          employeeName: sub.name,
+          position: sub.position,
+          unit: sub.company,
+          division: sub.division,
+          module: "Inter-Department Feedback",
+          submissionType: "Inter-Department Feedback (Measurement)",
+          actionNeeded: "Approve",
+          submittedDate: fbRow.submittedDate && fbRow.submittedDate !== "-" ? fbRow.submittedDate.split("/").reverse().join("-") : "2026-06-10",
+          notes: `Pengajuan Inter-Department Feedback dari ${sub.name} menunggu persetujuan Anda.`,
+          urgent: false,
+        });
+      }
     }
 
     return list;
@@ -234,28 +273,29 @@ function ApprovalDashboard() {
             <div style={{ width: 110, height: 110, flexShrink: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={[
-                    { name: "KPI",            value: byModule("KPI")            },
-                    { name: "SMART Goals",    value: byModule("SMART Goals")    },
-                    { name: "Appraisal Form", value: byModule("Appraisal Form") },
-                    { name: "Project",        value: byModule("Project")        },
-                    { name: "RCA",            value: byModule("RCA")            },
-                  ]} cx="50%" cy="50%" innerRadius={30} outerRadius={48} dataKey="value" strokeWidth={2}>
-                    {["#1A284F","#d97706","#15803d","#0f766e","#be123c"].map((c, i) => (
-                      <Cell key={`mod-cell-${i}`} fill={c} />
+                  <Pie
+                    data={allowedApprovalModules.map((m) => ({ name: m, value: byModule(m) }))}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={30}
+                    outerRadius={48}
+                    dataKey="value"
+                    strokeWidth={2}
+                  >
+                    {allowedApprovalModules.map((m, i) => (
+                      <Cell key={`mod-cell-${i}`} fill={MODULE_META[m].hex} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(v: number, n: string) => [v, n]} contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb" }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="flex flex-col justify-center gap-1.5 flex-1 min-w-0">
-              {(["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"] as Module[]).map((m, i) => {
-                const colors = ["#1A284F","#d97706","#15803d","#0f766e","#be123c"];
+            <div className="flex flex-col justify-center gap-1 flex-1 min-w-0 overflow-y-auto max-h-32">
+              {allowedApprovalModules.map((m) => {
                 const pct = pendingItems.length > 0 ? Math.round((byModule(m) / pendingItems.length) * 100) : 0;
                 return (
                   <div key={m} className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: colors[i] }} />
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: MODULE_META[m].hex }} />
                     <span className="text-[10px] text-gray-600 truncate flex-1">{m}</span>
                     <span className="text-[10px] font-bold text-gray-700">{byModule(m)}</span>
                     <span className="text-[10px] text-gray-400">({pct}%)</span>
@@ -292,7 +332,7 @@ function ApprovalDashboard() {
 
       {/* Module pills */}
       <div className="flex flex-wrap gap-3">
-        {(["KPI", "SMART Goals", "Appraisal Form", "Project", "RCA"] as Module[]).map((m) => {
+        {allowedApprovalModules.map((m) => {
           const meta = MODULE_META[m];
           const Icon = meta.icon;
           return (
