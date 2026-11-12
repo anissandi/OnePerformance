@@ -2912,6 +2912,8 @@ export function KPIPage() {
   const navigate = useNavigate();
   const activeUser = getActiveUser();
   const isDirectorMode = isDirectorRoleOrGrouping(activeUser);
+  const isGmMode = !isDirectorMode && activeUser.role === "GM";
+  const hasDualKpiTabs = isDirectorMode || isGmMode;
   const [directorKpiTab, setDirectorKpiTab] = useState<"business" | "personal">("business");
   const groupName = getGroupNameForUnit(activeUser.company);
   const groupUnits = getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits);
@@ -3201,7 +3203,12 @@ export function KPIPage() {
             <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
             {isDirectorMode && (
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                Role Director ({groupName}: {groupUnits.join(", ")}) — 2 Tab: KPI (Business) &amp; KPI (Personal)
+                Role Director ({groupName}: {groupUnits.join(", ")}) — 2 Tab: KPI (Group) &amp; KPI (Personal)
+              </span>
+            )}
+            {isGmMode && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                Role GM ({activeUser.company}) — 2 Tab: KPI (Unit) &amp; KPI (Personal)
               </span>
             )}
           </div>
@@ -3427,7 +3434,7 @@ export function KPIPage() {
         </div>
       )}
 
-      {isDirectorMode && (
+      {hasDualKpiTabs && (
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between border-b border-gray-200 flex-wrap gap-2">
             <div className="flex gap-1">
@@ -3440,7 +3447,7 @@ export function KPIPage() {
                     : "border-transparent text-gray-500 hover:text-gray-700"
                 }`}
               >
-                KPI (Business)
+                {isDirectorMode ? "KPI (Group)" : "KPI (Unit)"}
               </button>
               <button
                 type="button"
@@ -3454,7 +3461,7 @@ export function KPIPage() {
                 KPI (Personal)
               </button>
             </div>
-            {directorKpiTab === "business" && (
+            {isDirectorMode && directorKpiTab === "business" && (
               <div className="flex items-center gap-2 pb-2">
                 <span className="text-xs text-gray-500">
                   Cakupan Konsolidasi: <strong>{groupName}</strong> ({groupUnits.length} Unit Usaha)
@@ -3472,13 +3479,17 @@ export function KPIPage() {
         </div>
       )}
 
-      {isDirectorMode && directorKpiTab === "business" ? (
+      {hasDualKpiTabs && directorKpiTab === "business" ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
           <div className="px-4 py-3 bg-[#1A284F] text-white flex items-center justify-between">
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider">KPI Measurement (Business) — {groupName}</p>
+              <p className="text-xs font-bold uppercase tracking-wider">
+                {isDirectorMode ? `KPI Measurement (Group) — ${groupName}` : `KPI Measurement (Unit) — ${activeUser.company}`}
+              </p>
               <p className="text-[11px] text-blue-200">
-                Format Tracking KPI Business Group (mendukung cascading nilai realisasi dari indikator KPI Unit: {groupUnits.join(", ")})
+                {isDirectorMode
+                  ? `Format Tracking KPI (Group) (mendukung cascading nilai realisasi dari indikator KPI (Unit): ${groupUnits.join(", ")})`
+                  : `Format Tracking KPI (Unit) milik ${activeUser.company}`}
               </p>
             </div>
           </div>

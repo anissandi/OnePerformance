@@ -93,12 +93,12 @@ const INITIAL_MENUS: MenuItem[] = [
     isVisible: true, order: 6, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
     children: [
       { id: "approvals_kpi_business",   label: "KPI Business",                        path: "/settings/kpi",                                    icon: "TrendingUp",    isVisible: true, order: 1, roles: [...HR_ADMIN, "GM", "Director"] as Role[] },
-      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement",   path: "/approvals/measurement",                           icon: "Clock",         isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/approvals/measurement/inter-department-feedback", icon: "Users",         isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",       path: "/approvals/setting",                               icon: "Target",        isVisible: true, order: 4, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_pa_setting",     label: "Performance Appraisal Setting",       path: "/approvals/setting",                               icon: "Target",        isVisible: true, order: 2, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement",   path: "/approvals/measurement",                           icon: "Clock",         isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
+      { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/approvals/measurement/inter-department-feedback", icon: "Users",         isVisible: true, order: 4, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
       { id: "approvals_mgmt_interview", label: "Management Interview",                path: "/approvals/management-interview",                  icon: "MessageSquare", isVisible: true, order: 5, roles: ["BOD", "Director"] as Role[] },
-      { id: "approvals_open_lock",      label: "Open Lock",                           path: "/settings/open-lock",                              icon: "LockOpen",      isVisible: true, order: 6, roles: HR_ADMIN },
-      { id: "approvals_calibration",    label: "Calibration",                         path: "/approvals/calibration",                           icon: "BarChart2",     isVisible: true, order: 7, roles: ["BOD"] as Role[] },
+      { id: "approvals_calibration",    label: "Calibration",                         path: "/approvals/calibration",                           icon: "BarChart2",     isVisible: true, order: 6, roles: ["BOD"] as Role[] },
+      { id: "approvals_open_lock",      label: "Open Lock",                           path: "/settings/open-lock",                              icon: "LockOpen",      isVisible: true, order: 7, roles: HR_ADMIN },
     ],
   },
   {

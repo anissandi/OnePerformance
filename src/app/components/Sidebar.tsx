@@ -367,11 +367,11 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
           ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
           : []),
-        ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+        ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/hr/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-        ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
         ...(canView("approvals_calibration") ? [{ to: "/hr/approvals/calibration", label: "Calibration", icon: Target }] : []),
+        ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
       if (canView("approvals") && approvalSubs.length > 0) {
         list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
@@ -478,11 +478,11 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
           ? [{ to: "/bod/settings/kpi", label: "KPI Business", icon: TrendingUp }]
           : []),
-        ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+        ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-        ...(canView("approvals_open_lock") ? [{ to: "/bod/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
         ...(canView("approvals_calibration") ? [{ to: "/bod/approvals/calibration", label: "Calibration", icon: Target }] : []),
+        ...(canView("approvals_open_lock") ? [{ to: "/bod/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
       if (canView("approvals") && approvalSubs.length > 0) {
         list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
@@ -608,11 +608,11 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
         ? [{ to: `${prefix}/settings/kpi`, label: "KPI Business", icon: TrendingUp }]
         : []),
-      ...(canView("approvals_pa_measurement") ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }] : []),
       ...(canView("approvals_pa_setting") ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: Target }] : []),
+      ...(canView("approvals_pa_measurement") ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }] : []),
       ...(canView("approvals_mgmt_interview") ? [{ to: `${prefix}/approvals/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
-      ...(canView("approvals_open_lock") ? [{ to: `${prefix}/settings/open-lock`, label: "Open Lock", icon: LockOpen }] : []),
       ...(canView("approvals_calibration") ? [{ to: `${prefix}/approvals/calibration`, label: "Calibration", icon: Target }] : []),
+      ...(canView("approvals_open_lock") ? [{ to: `${prefix}/settings/open-lock`, label: "Open Lock", icon: LockOpen }] : []),
     ];
     if (canView("approvals") && approvalSubs.length > 0) {
       list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });

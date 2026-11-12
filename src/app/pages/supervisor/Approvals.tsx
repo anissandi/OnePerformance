@@ -36,7 +36,7 @@ const CHECKIN_FILTER_OPTIONS = {
 };
 const SETTING_FILTER_OPTIONS = {
   companyUnit: [TEAM_UNIT], year: ["2026", "2025", "2024"], month: MONTHS, division: [TEAM_DIV],
-  department: ["SDM"], approvalType: ["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "RCA"],
+  department: ["SDM"], approvalType: ["KPI", "SMART Goals", "RCA"],
 };
 
 const PENDING_STATUSES  = new Set(["Pending", "Edit Request"]);

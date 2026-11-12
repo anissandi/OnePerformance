@@ -3,7 +3,14 @@ import { useRouteTab } from "../../../utils/useRouteTab";
 import { CheckCircle2, X, RotateCcw, Download, FileSearch, Copy, UserCheck, ShieldCheck, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
-import { loadManagedUsers, RSUP_GROUP_COMPANIES } from "../../../store/authStore";
+import {
+  getActiveUser,
+  getGroupCompaniesForUnit,
+  isAdminOrHrIcfRole,
+  isDirectorRoleOrGrouping,
+  loadManagedUsers,
+  RSUP_GROUP_COMPANIES,
+} from "../../../store/authStore";
 import {
   loadKpiValidationChecklist,
   saveKpiValidationChecklist,
@@ -235,7 +242,7 @@ function RevisionModal({ onCancel, onConfirm }: { onCancel: () => void; onConfir
 // ─── KPI Table ────────────────────────────────────────────────────────────────
 
 
-type ApprovalStatus = "pending" | "approved" | "revision";
+type ApprovalStatus = "pending" | "director_approved" | "approved" | "revision";
 
 // (KPISection preserved for reference — BusinessKPITable + HRSettingKPIPage handle the business tab)
 
@@ -510,10 +517,25 @@ const CURRENT_YEAR = 2026;
 const YEAR_OPTIONS = [2024, 2025, 2026, 2027];
 
 export function HRSettingKPIPage() {
+  const activeUser = getActiveUser();
+  const isDirector = isDirectorRoleOrGrouping(activeUser);
+  const isValidator = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
+  const allowedUnits = React.useMemo(
+    () =>
+      isDirector
+        ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
+        : COMPANY_UNITS_BIZ,
+    [isDirector, activeUser.company, activeUser.managedUnits],
+  );
   const [items] = useState<KPISetting[]>(CORPORATE_KPI);
-  const [companyUnit, setCompanyUnit] = useState("PT RSUP (Industry)");
+  const [companyUnit, setCompanyUnit] = useState(() => allowedUnits[0] ?? "PT RSUP (Industry)");
   const [selectedYear, setSelectedYear] = useState(CURRENT_YEAR);
-  const [kpiTab, setKpiTab] = useRouteTab<"group" | "gm">(["group", "gm"], "group");
+  const [routeKpiTab, setKpiTab] = useRouteTab<"group" | "gm">(
+    ["group", "gm"],
+    isDirector ? "gm" : "group",
+  );
+  // Untuk Role Director, tab KPI (Group) di-hide karena KPI (Group) dibuat oleh level Director
+  const kpiTab: "group" | "gm" = isDirector ? "gm" : routeKpiTab;
   const [checklist, setChecklist] = useState<KpiHierarchyValidationChecklist>(() =>
     loadKpiValidationChecklist(String(CURRENT_YEAR)),
   );
@@ -575,7 +597,7 @@ export function HRSettingKPIPage() {
 
   const handleCompanyUnitChange = (unit: string) => {
     setCompanyUnit(unit);
-    if (unit !== "PT RSUP (Industry)") setKpiTab("gm");
+    if (isDirector || unit !== "PT RSUP (Industry)") setKpiTab("gm");
   };
   const currentKey = `${kpiTab}::${companyUnit}`;
   const approvalStatus: ApprovalStatus = validationMap[currentKey] ?? "pending";
@@ -629,6 +651,29 @@ export function HRSettingKPIPage() {
     toast.success(`${adopted.length} indikator KPI Group berhasil diambil ke KPI Unit ${companyUnit} untuk disesuaikan oleh GM.`);
   };
 
+  const handleDirectorApprove = () => {
+    setApprovalStatus("director_approved");
+    setPendingAction(null);
+    void savePersistedState("pa_kpi_business_validation_2026", {
+      ...validationMap,
+      [currentKey]: "director_approved",
+    }, {
+      kind: "kv-state",
+      stateKey: "pa_kpi_business_validation_2026",
+      stateValue: { ...validationMap, [currentKey]: "director_approved" },
+      audit: {
+        action: "Approve",
+        module: "KPI Business",
+        subModule: "KPI (Unit)",
+        description: `Director ${activeUser.name} approved KPI (Unit) for ${companyUnit} (awaiting HR ICF Validate)`,
+      },
+    });
+    setSuccessMessage(
+      `KPI (Unit) (${companyUnit}) telah disetujui oleh Director (Approved by Director) dan diteruskan ke HR ICF untuk tahap Validate.`,
+    );
+    setShowSuccess(true);
+  };
+
   const handleValidate = () => {
     setApprovalStatus("approved");
     if (kpiTab === "group") {
@@ -670,16 +715,20 @@ export function HRSettingKPIPage() {
   };
 
   const handleCancelValidate = () => {
-    setApprovalStatus("pending");
+    setApprovalStatus(isDirector ? "pending" : kpiTab === "gm" ? "director_approved" : "pending");
     setShowCancelValidate(false);
-    setSuccessMessage(`Validation has been cancelled. KPI ${kpiTab === "group" ? "Group" : "Unit"} is back to Pending Validation.`);
+    setSuccessMessage(
+      isDirector
+        ? `Approval Director telah dibatalkan. KPI (Unit) kembali ke status Pending Approval.`
+        : `Validation has been cancelled. KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"} is back to Pending Validation.`,
+    );
     setShowSuccess(true);
   };
 
   const handleRevision = (note: string) => {
     setApprovalStatus("revision");
     setShowRevisionModal(false);
-    setSuccessMessage("Revision request sent for KPI Group.");
+    setSuccessMessage(`Revision request sent for KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"}.`);
     setShowSuccess(true);
   };
 
@@ -694,16 +743,28 @@ export function HRSettingKPIPage() {
   };
 
   const statusBadge = () => {
-    if (approvalStatus === "approved") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Validated</span>;
+    if (approvalStatus === "approved") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Validated (HR ICF)</span>;
+    if (approvalStatus === "director_approved") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Approved by Director · Pending HR ICF Validate</span>;
     if (approvalStatus === "revision") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-bold"><RotateCcw className="w-3.5 h-3.5" />Revision Requested</span>;
-    return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-bold">Pending Validation</span>;
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-bold">
+        {kpiTab === "group" ? "Pending HR ICF Validate" : "Pending Director Approve"}
+      </span>
+    );
   };
 
   return (
     <div className="w-full flex flex-col gap-6">
       <div>
-        <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">KPI Setting</h1>
-        <p className="text-gray-500 text-sm">2026 Performance Appraisal — KPI Configuration & Approval</p>
+        <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">KPI Business — Approval &amp; Validation</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-gray-500 text-sm">2026 Performance Appraisal — KPI Configuration &amp; Approval</p>
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-[#1A284F] border border-indigo-200">
+            {kpiTab === "group"
+              ? "Alur Approval KPI (Group): Director Submit → HR ICF Validate"
+              : "Alur Approval KPI (Unit): GM Submit → Director Approve → HR ICF Validate"}
+          </span>
+        </div>
       </div>
 
       {/* Filters */}
@@ -715,7 +776,7 @@ export function HRSettingKPIPage() {
             onChange={(e) => handleCompanyUnitChange(e.target.value)}
             className="text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-700 bg-white outline-none focus:border-[#1A284F] focus:ring-1 focus:ring-[#1A284F]/20 transition-all min-w-[200px]"
           >
-            {COMPANY_UNITS_BIZ.map((u) => (
+            {allowedUnits.map((u) => (
               <option key={u} value={u}>{u}</option>
             ))}
           </select>
@@ -743,7 +804,7 @@ export function HRSettingKPIPage() {
 
       {/* Tab header */}
       <div className="flex gap-1 border-b border-gray-200">
-        {(companyUnit === "PT RSUP (Industry)" ? ["group", "gm"] as const : ["gm"] as const).map((tab) => (
+        {(!isDirector && companyUnit === "PT RSUP (Industry)" ? (["group", "gm"] as const) : (["gm"] as const)).map((tab) => (
           <button
             key={tab}
             onClick={() => setKpiTab(tab)}
@@ -753,7 +814,7 @@ export function HRSettingKPIPage() {
                 : "border-transparent text-gray-500 hover:text-gray-700"
             }`}
           >
-            {tab === "group" ? "KPI Group" : "KPI Unit"}
+            {tab === "group" ? "KPI (Group)" : "KPI (Unit)"}
           </button>
         ))}
       </div>
@@ -812,22 +873,57 @@ export function HRSettingKPIPage() {
                 Ambil Indikator dari KPI Group
               </button>
             )}
-            {approvalStatus === "approved" ? (
-              <button onClick={() => setShowCancelValidate(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-red-400 text-red-600 hover:bg-red-50 transition-colors">
-                <X className="w-4 h-4" /> Cancel Validate
-              </button>
+            {isDirector ? (
+              // Untuk Role Director pada tab KPI (Unit): bertindak sebagai Approver (bukan Validator)
+              approvalStatus === "approved" ? null : approvalStatus === "director_approved" ? (
+                <button
+                  onClick={() => setShowCancelValidate(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-red-400 text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  <X className="w-4 h-4" /> Cancel Approve
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setShowRevisionModal(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-orange-400 text-orange-600 hover:bg-orange-50 transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4" /> Revision
+                  </button>
+                  <button
+                    onClick={() => setPendingAction("approve")}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#243869] transition-colors"
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Approve
+                  </button>
+                </>
+              )
+            ) : approvalStatus === "approved" ? (
+              isValidator && (
+                <button
+                  onClick={() => setShowCancelValidate(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-red-400 text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  <X className="w-4 h-4" /> Cancel Validate
+                </button>
+              )
             ) : (
-              <>
-                <button onClick={() => setShowRevisionModal(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-orange-400 text-orange-600 hover:bg-orange-50 transition-colors">
-                  <RotateCcw className="w-4 h-4" /> Revision
-                </button>
-                <button onClick={() => setPendingAction("approve")}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors">
-                  <CheckCircle2 className="w-4 h-4" /> Validate
-                </button>
-              </>
+              isValidator && (
+                <>
+                  <button
+                    onClick={() => setShowRevisionModal(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-orange-400 text-orange-600 hover:bg-orange-50 transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4" /> Revision
+                  </button>
+                  <button
+                    onClick={() => setPendingAction("approve")}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors"
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Validate
+                  </button>
+                </>
+              )
             )}
             <button onClick={handleExport}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 transition-all">
@@ -901,21 +997,32 @@ export function HRSettingKPIPage() {
             <div className="flex items-center justify-center w-14 h-14 rounded-full bg-green-50 mx-auto mb-5">
               <CheckCircle2 className="w-7 h-7 text-green-600" />
             </div>
-            <h3 className="text-lg font-bold text-gray-900 text-center mb-1">Validate KPI Setting</h3>
+            <h3 className="text-lg font-bold text-gray-900 text-center mb-1">
+              {isDirector ? "Approve KPI (Unit) Setting" : `Validate KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"} Setting`}
+            </h3>
             <p className="text-sm text-gray-500 text-center mb-1">
-              You are about to validate the <span className="font-semibold text-gray-800">{kpiTab === "group" ? "KPI Group" : "KPI Unit"}</span> setting for
+              You are about to {isDirector ? "approve" : "validate"} the <span className="font-semibold text-gray-800">{kpiTab === "group" ? "KPI (Group)" : "KPI (Unit)"}</span> setting for
             </p>
             <p className="text-sm font-semibold text-[#1A284F] text-center mb-6">{companyUnit} · {selectedYear}</p>
             <div className="flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl mb-6">
               <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
-              <p className="text-xs text-green-800">Once validated, this KPI setting will be marked as <span className="font-bold">Validated</span> and will be used as the official performance reference for this period.</p>
+              <p className="text-xs text-green-800">
+                {isDirector
+                  ? <>Setelah disetujui oleh Director (<span className="font-bold">Approved by Director</span>), KPI (Unit) ini akan diteruskan ke <span className="font-bold">HR ICF</span> untuk tahap <span className="font-bold">Validate</span>.</>
+                  : <>Once validated by HR ICF, this KPI setting will be marked as <span className="font-bold">Validated</span> and auto-created in Measurement → KPI Tracking.</>}
+              </p>
             </div>
             <div className="flex gap-3">
               <button onClick={() => setPendingAction(null)} className="flex-1 py-2.5 rounded-full border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
-              <button onClick={handleValidate} className="flex-1 py-2.5 rounded-full bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors flex items-center justify-center gap-2">
-                <CheckCircle2 className="w-4 h-4" /> Confirm Validate
+              <button
+                onClick={isDirector ? handleDirectorApprove : handleValidate}
+                className={`flex-1 py-2.5 rounded-full text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${
+                  isDirector ? "bg-[#1A284F] hover:bg-[#243869]" : "bg-green-600 hover:bg-green-700"
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4" /> {isDirector ? "Confirm Approve" : "Confirm Validate"}
               </button>
             </div>
           </div>

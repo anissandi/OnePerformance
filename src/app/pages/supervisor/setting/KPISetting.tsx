@@ -4478,12 +4478,19 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
   const activeUser = getActiveUser();
   const effectiveGrouping = resolveEffectiveUserGrouping(activeUser);
   const isDirectorMode = !personalOnlyProp && isDirectorRoleOrGrouping(activeUser);
+  const isGmMode = !personalOnlyProp && !isDirectorMode && activeUser.role === "GM";
   const personalOnly =
     personalOnlyProp ||
     (!isDirectorMode &&
+      !isGmMode &&
       (effectiveGrouping === "Operasional" ||
         effectiveGrouping === "Ka./Wa.Ka.Seksi"));
-  const [routeKpiTab, setActiveTab]         = useRouteTab<KPITab>(["corporate", "pak-anton", "pak-amir", "division", "department", "personal"], personalOnly ? "personal" : "corporate");
+  const defaultFirstTab: KPITab = personalOnly
+    ? "personal"
+    : isGmMode
+    ? "pak-amir"
+    : "corporate";
+  const [routeKpiTab, setActiveTab]         = useRouteTab<KPITab>(["corporate", "pak-anton", "pak-amir", "division", "department", "personal"], defaultFirstTab);
   const activeTab: KPITab                   = personalOnly ? "personal" : routeKpiTab;
   const [personalTabStatus, setPersonalTabStatus]   = useState<TabStatus>("idle");
   const [divisionTabStatus, setDivisionTabStatus]   = useState<TabStatus>("idle");
@@ -4606,15 +4613,15 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
   const tabLocked: Record<KPITab, boolean> = {
     corporate:   false,
     "pak-anton": !corpValidated,
-    "pak-amir":  !corpValidated || !pakAntonValidated,
+    "pak-amir":  isGmMode ? false : (!corpValidated || !pakAntonValidated),
     division:    !corpValidated || !pakAntonValidated || !pakAmirApproved,
-    personal:    isDirectorMode ? false : (!corpValidated || !pakAntonValidated || !pakAmirApproved || !divisionApproved),
+    personal:    isDirectorMode || isGmMode ? false : (!corpValidated || !pakAntonValidated || !pakAmirApproved || !divisionApproved),
     department:  false,
   };
 
   // validate-mode tabs (Business + Pak Anton) use "Validated" terminology
   const useValidateMap: Record<KPITab, boolean> = {
-    corporate: true, "pak-anton": true,
+    corporate: !isDirectorMode, "pak-anton": true,
     "pak-amir": false, division: false, personal: false, department: false,
   };
 
@@ -4625,13 +4632,20 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
   // A locked tab opened directly by URL falls back to the first (always open) tab.
   const activeTabLocked = tabLocked[activeTab];
   useEffect(() => {
-    if (!personalOnly && activeTabLocked) setActiveTab("corporate");
-  }, [personalOnly, activeTabLocked, setActiveTab]);
+    if (!personalOnly && activeTabLocked) setActiveTab(isGmMode ? "pak-amir" : "corporate");
+    if (isGmMode && activeTab !== "pak-amir" && activeTab !== "personal") setActiveTab("pak-amir");
+    if (isDirectorMode && activeTab !== "corporate" && activeTab !== "personal") setActiveTab("corporate");
+  }, [personalOnly, activeTabLocked, activeTab, isGmMode, isDirectorMode, setActiveTab]);
 
   const visibleTabDefs: { id: KPITab; label: string }[] = isDirectorMode
     ? [
-        { id: "corporate", label: "KPI (Business)" },
+        { id: "corporate", label: "KPI (Group)" },
         { id: "personal",  label: "KPI (Personal)" },
+      ]
+    : isGmMode
+    ? [
+        { id: "pak-amir", label: "KPI (Unit)" },
+        { id: "personal", label: "KPI (Personal)" },
       ]
     : TAB_DEFS;
 
@@ -4643,7 +4657,12 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
           <p className="text-gray-500 text-sm">2026 Performance Appraisal — KPI Configuration</p>
           {isDirectorMode && (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-              Role Director ({getGroupNameForUnit(activeUser.company)}) — 2 Tab: KPI (Business) &amp; KPI (Personal)
+              Role Director ({getGroupNameForUnit(activeUser.company)}) — 2 Tab: KPI (Group) [Director Submit → HR ICF Validate] &amp; KPI (Personal)
+            </span>
+          )}
+          {isGmMode && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+              Role GM ({activeUser.company}) — 2 Tab: KPI (Unit) [GM Submit → Director Approve → HR ICF Validate] &amp; KPI (Personal)
             </span>
           )}
         </div>
@@ -4687,7 +4706,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
           initialItems={CORPORATE_KPI}
           isPersonal={false}
           isCorporate={true}
-          useValidateTerms={true}
+          useValidateTerms={!isDirectorMode}
           onTabStatusChange={setCorporateTabStatus}
           onItemsChange={setBusinessItems}
           sectionCascadeMap={sectionCascadeMap}
@@ -4712,8 +4731,8 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
       )}
       {activeTab === "pak-amir" && (
         <KPISection
-          key={`pak-amir-${pakAntonValidated ? "validated" : "pending"}-${pakAmirInitialItems.map(i => i.id).join("|")}`}
-          initialItems={pakAmirInitialItems}
+          key={`pak-amir-${isGmMode ? "gm" : pakAntonValidated ? "validated" : "pending"}-${pakAmirInitialItems.map(i => i.id).join("|")}`}
+          initialItems={isGmMode ? CORPORATE_KPI : pakAmirInitialItems}
           isPersonal={false}
           isCorporate={true}
           useValidateTerms={false}
@@ -4733,12 +4752,12 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
       {activeTab === "personal" && (
         <KPISection
           key="personal"
-          initialItems={personalOnly || isDirectorMode ? PERSONAL_KPI : []}
+          initialItems={personalOnly || isDirectorMode || isGmMode ? PERSONAL_KPI : []}
           isPersonal={true}
           isCorporate={false}
-          divisionApproved={personalOnly || isDirectorMode ? true : divisionApproved}
+          divisionApproved={personalOnly || isDirectorMode || isGmMode ? true : divisionApproved}
           useValidateTerms={false}
-          hideCascading={personalOnly || isDirectorMode}
+          hideCascading={personalOnly || isDirectorMode || isGmMode}
           onTabStatusChange={setPersonalTabStatus}
         />
       )}

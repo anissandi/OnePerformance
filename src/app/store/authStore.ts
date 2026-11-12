@@ -4,6 +4,7 @@ import {
   ACCESS_UPDATED_EVENT,
   getGroupAllowedModules,
   getGroupAuthorityLevel,
+  getRoleMetadata,
   getRolePermissions,
   loadAccessGroups,
 } from "../pages/hr/settings/AccessManagement";
@@ -138,6 +139,7 @@ export function isDirectorRoleOrGrouping(user?: { role?: string; groupings?: str
 
 export function isExcludedFromAppraisalCalibration(user?: { role?: string; groupings?: string; position?: string; company?: string } | null): boolean {
   if (!user) return false;
+  if (user.role && getRoleMetadata(user.role).excludeFromCalibrationHC) return true;
   if (user.role === "Director" || user.role === "BOD") return true;
   if (isDirectorRoleOrGrouping(user)) return true;
   // Jika Groupings karyawan di-setup tidak memiliki modul appraisal sama sekali (uncheck semua modul),
@@ -161,6 +163,12 @@ export function isExcludedFromAppraisalCalibration(user?: { role?: string; group
     if (allowed.length === 0) return true;
   }
   return false;
+}
+
+export function isExcludedFromVerification(user?: { role?: string; groupings?: string; position?: string; company?: string } | null): boolean {
+  if (!user) return false;
+  if (user.role && getRoleMetadata(user.role).excludeFromVerification) return true;
+  return isExcludedFromAppraisalCalibration(user);
 }
 
 export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
@@ -787,8 +795,6 @@ export function getAllowedApprovalTypesForUser(
   const allSetting = [
     "KPI",
     "SMART Goals",
-    "Appraisal Form",
-    "Managerial Skill",
     "RCA",
   ];
   const baseList = mode === "setting" ? allSetting : allCheckin;

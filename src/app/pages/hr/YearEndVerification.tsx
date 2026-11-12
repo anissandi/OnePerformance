@@ -5,7 +5,7 @@ import { useNavigate } from "react-router";
 import { loadYearEndState, saveYearEndState, canProceedToInterview } from "../shared/yearEndWorkflowStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
-import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
+import { isExcludedFromVerification, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 
 interface VerificationCompanyUnit {
@@ -47,7 +47,7 @@ interface Employee {
 
 function buildImportedVerificationEmployees(): Employee[] {
   return loadManagedUsers()
-    .filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u))
+    .filter((u) => u.status === "Active" && !isExcludedFromVerification(u))
     .map((u) => {
       const allowed = resolveUserAllowedModules(u);
       const hasMs = allowed.includes("Managerial Skill");

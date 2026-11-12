@@ -1,9 +1,14 @@
 import { useState, useRef, useEffect } from "react";
-import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2, Layers, CheckCircle2 } from "lucide-react";
+import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2, Layers, CheckCircle2, Edit2 } from "lucide-react";
 import { loadPersistedState, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
 
 export type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
 export type Role = BuiltinRole | string;
+
+export interface AccessRoleMetadata {
+  excludeFromCalibrationHC: boolean;
+  excludeFromVerification: boolean;
+}
 
 export type BuiltinGroup =
   | "Operasional"
@@ -212,12 +217,12 @@ export const MENU_STRUCTURE: MenuItem[] = [
           { id: "approvals_kpi_business_unit",  label: "KPI Unit (GM)" },
         ],
       },
+      { id: "approvals_pa_setting",      label: "Performance Appraisal Setting" },
       { id: "approvals_pa_measurement",  label: "Performance Appraisal Measurement" },
       { id: "approvals_feedback",        label: "Inter-Department Feedback Approvals" },
-      { id: "approvals_pa_setting",      label: "Performance Appraisal Setting" },
       { id: "approvals_mgmt_interview",  label: "Management Interview" },
-      { id: "approvals_open_lock",       label: "Open Lock" },
       { id: "approvals_calibration",     label: "Calibration" },
+      { id: "approvals_open_lock",       label: "Open Lock" },
     ]
   },
   {
@@ -1078,19 +1083,21 @@ function SaveModal({ role, onConfirm, onClose }: SaveModalProps) {
 
 interface AddAccessModalProps {
   existingRoles: Role[];
-  onAdd: (name: string, baseRole?: Role) => void;
+  onAdd: (name: string, baseRole?: Role, meta?: AccessRoleMetadata) => void;
   onClose: () => void;
 }
 
 function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) {
   const [name, setName] = useState("");
   const [baseRole, setBaseRole] = useState<string>("");
+  const [excludeFromCalibrationHC, setExcludeFromCalibrationHC] = useState(false);
+  const [excludeFromVerification, setExcludeFromVerification] = useState(false);
   const duplicate = name.trim() && existingRoles.map(r => r.toLowerCase()).includes(name.trim().toLowerCase());
   const valid = name.trim().length > 0 && !duplicate;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center">
@@ -1112,7 +1119,12 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
               autoFocus
               value={name}
               onChange={e => setName(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter" && valid) { onAdd(name.trim(), baseRole || undefined); onClose(); } }}
+              onKeyDown={e => {
+                if (e.key === "Enter" && valid) {
+                  onAdd(name.trim(), baseRole || undefined, { excludeFromCalibrationHC, excludeFromVerification });
+                  onClose();
+                }
+              }}
               placeholder="e.g. Finance Manager"
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             />
@@ -1132,6 +1144,31 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
                 <option key={r} value={r}>{r}</option>
               ))}
             </select>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">
+            <p className="text-xs font-semibold text-[#1A284F]">Pengaturan Headcount Kalibrasi &amp; Verification</p>
+            <label className="flex items-start gap-2.5 cursor-pointer text-xs text-gray-700">
+              <input
+                type="checkbox"
+                checked={excludeFromCalibrationHC}
+                onChange={e => setExcludeFromCalibrationHC(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded accent-indigo-600 cursor-pointer shrink-0"
+              />
+              <span>
+                <strong>Tidak masuk dalam Headcount</strong> pada Grade Distribution, Calibration Setting, &amp; Calibration Adjustment
+              </span>
+            </label>
+            <label className="flex items-start gap-2.5 cursor-pointer text-xs text-gray-700">
+              <input
+                type="checkbox"
+                checked={excludeFromVerification}
+                onChange={e => setExcludeFromVerification(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded accent-indigo-600 cursor-pointer shrink-0"
+              />
+              <span>
+                <strong>Tidak masuk dalam Verification</strong> (/calibration/verification)
+              </span>
+            </label>
             <p className="text-xs text-gray-400 mt-1.5">
               This role will immediately become available in User Management, Menu Management, and Data Sync.
             </p>
@@ -1141,10 +1178,112 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
           <button
             disabled={!valid}
-            onClick={() => { if (valid) { onAdd(name.trim(), baseRole || undefined); onClose(); } }}
+            onClick={() => {
+              if (valid) {
+                onAdd(name.trim(), baseRole || undefined, { excludeFromCalibrationHC, excludeFromVerification });
+                onClose();
+              }
+            }}
             className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Plus size={14} /> Create Role
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface EditRoleModalProps {
+  role: Role;
+  isBuiltin: boolean;
+  existingRoles: Role[];
+  initialMeta: AccessRoleMetadata;
+  onSave: (oldRole: Role, newName: Role, meta: AccessRoleMetadata) => void;
+  onClose: () => void;
+}
+
+function EditRoleModal({ role, isBuiltin, existingRoles, initialMeta, onSave, onClose }: EditRoleModalProps) {
+  const [name, setName] = useState(role);
+  const [excludeFromCalibrationHC, setExcludeFromCalibrationHC] = useState(initialMeta.excludeFromCalibrationHC);
+  const [excludeFromVerification, setExcludeFromVerification] = useState(initialMeta.excludeFromVerification);
+  const duplicate =
+    name.trim().toLowerCase() !== role.toLowerCase() &&
+    existingRoles.map(r => r.toLowerCase()).includes(name.trim().toLowerCase());
+  const valid = name.trim().length > 0 && !duplicate;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
+              <Edit2 size={18} className="text-blue-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-gray-800">Edit Role Settings</h2>
+              <p className="text-sm text-gray-500">Configure role settings for <span className="font-medium">{role}</span></p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="mb-5 space-y-3.5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Role Name</label>
+            <input
+              value={name}
+              disabled={isBuiltin}
+              onChange={e => setName(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-500"
+            />
+            {isBuiltin && (
+              <p className="text-[11px] text-gray-400 mt-1">Nama role sistem bawaan tidak dapat diubah, namun pengaturan Headcount &amp; Verification di bawah dapat disesuaikan.</p>
+            )}
+            {duplicate && (
+              <p className="text-xs text-red-500 mt-1">A role with this name already exists.</p>
+            )}
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">
+            <p className="text-xs font-semibold text-[#1A284F]">Pengaturan Headcount Kalibrasi &amp; Verification</p>
+            <label className="flex items-start gap-2.5 cursor-pointer text-xs text-gray-700">
+              <input
+                type="checkbox"
+                checked={excludeFromCalibrationHC}
+                onChange={e => setExcludeFromCalibrationHC(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded accent-blue-600 cursor-pointer shrink-0"
+              />
+              <span>
+                <strong>Tidak masuk dalam Headcount</strong> pada Grade Distribution, Calibration Setting, &amp; Calibration Adjustment
+              </span>
+            </label>
+            <label className="flex items-start gap-2.5 cursor-pointer text-xs text-gray-700">
+              <input
+                type="checkbox"
+                checked={excludeFromVerification}
+                onChange={e => setExcludeFromVerification(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded accent-blue-600 cursor-pointer shrink-0"
+              />
+              <span>
+                <strong>Tidak masuk dalam Verification</strong> (/calibration/verification)
+              </span>
+            </label>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
+          <button
+            disabled={!valid}
+            onClick={() => {
+              if (valid) {
+                onSave(role, name.trim(), { excludeFromCalibrationHC, excludeFromVerification });
+                onClose();
+              }
+            }}
+            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Save size={14} /> Save Role Settings
           </button>
         </div>
       </div>
@@ -1174,9 +1313,42 @@ function IndeterminateCheckbox({ state, onChange }: { state: "all" | "none" | "i
 
 const ACCESS_ROLES_KEY = "pa_access_roles_v1";
 const ACCESS_PERMS_KEY = "pa_access_permissions_v3";
+const ACCESS_ROLE_META_KEY = "pa_access_role_meta_v1";
 const ACCESS_GROUPS_KEY = "pa_access_groups_v1";
 const ACCESS_GROUP_CONFIGS_KEY = "pa_access_group_configs_v1";
 
+export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
+  const defaults: Record<Role, AccessRoleMetadata> = {
+    "Administrator": { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "BOD":           { excludeFromCalibrationHC: true,  excludeFromVerification: true  },
+    "Director":      { excludeFromCalibrationHC: true,  excludeFromVerification: true  },
+    "GM":            { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "HR Unit":       { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "HR ICF":        { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "Supervisor":    { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "Employee":      { excludeFromCalibrationHC: false, excludeFromVerification: false },
+  };
+  const saved = loadPersistedState<Record<Role, AccessRoleMetadata>>(ACCESS_ROLE_META_KEY, {});
+  const roles = loadAccessRoles();
+  const result: Record<Role, AccessRoleMetadata> = {};
+  for (const r of roles) {
+    const base = defaults[r] ?? { excludeFromCalibrationHC: false, excludeFromVerification: false };
+    const s = saved?.[r];
+    result[r] = s && typeof s === "object"
+      ? {
+          excludeFromCalibrationHC: Boolean(s.excludeFromCalibrationHC ?? base.excludeFromCalibrationHC),
+          excludeFromVerification: Boolean(s.excludeFromVerification ?? base.excludeFromVerification),
+        }
+      : base;
+  }
+  return result;
+}
+
+export function getRoleMetadata(role: Role): AccessRoleMetadata {
+  if (!role) return { excludeFromCalibrationHC: false, excludeFromVerification: false };
+  const map = loadAccessRoleMetadataMap();
+  return map[role] ?? { excludeFromCalibrationHC: false, excludeFromVerification: false };
+}
 function getAllExpandableIds(items: MenuItem[] = MENU_STRUCTURE): string[] {
   const ids: string[] = [];
   function walk(list: MenuItem[]) {
@@ -1580,10 +1752,12 @@ export function AccessManagementPage() {
   const [roles, setRoles] = useState<Role[]>(() => loadAccessRoles());
   const [activeRole, setActiveRole] = useState<Role>("Administrator");
   const [permissions, setPermissions] = useState<Record<Role, RolePermissions>>(() => loadRolePermissionsMap());
+  const [roleMetaMap, setRoleMetaMap] = useState<Record<Role, AccessRoleMetadata>>(() => loadAccessRoleMetadataMap());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(getAllExpandableIds()));
   const [search, setSearch] = useState("");
   const [showSave, setShowSave] = useState(false);
   const [showAddAccess, setShowAddAccess] = useState(false);
+  const [showEditRole, setShowEditRole] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Group tab states
@@ -1597,6 +1771,7 @@ export function AccessManagementPage() {
     const onHydrated = () => {
       setRoles(loadAccessRoles());
       setPermissions(loadRolePermissionsMap());
+      setRoleMetaMap(loadAccessRoleMetadataMap());
       setGroups(loadAccessGroups());
       setGroupConfigs(loadAccessGroupConfigs());
     };
@@ -1722,15 +1897,19 @@ export function AccessManagementPage() {
     return "indeterminate";
   }
 
-  function handleAddRole(name: string, baseRole?: Role) {
+  function handleAddRole(name: string, baseRole?: Role, meta?: AccessRoleMetadata) {
     const nextRoles = [...roles, name];
     const initPerm = baseRole && permissions[baseRole]
       ? deepClone(permissions[baseRole])
       : emptyPermissions();
     const nextPerms = { ...permissions, [name]: initPerm };
+    const initMeta: AccessRoleMetadata = meta ?? { excludeFromCalibrationHC: false, excludeFromVerification: false };
+    const nextMeta = { ...roleMetaMap, [name]: initMeta };
     setRoles(nextRoles);
     setPermissions(nextPerms);
+    setRoleMetaMap(nextMeta);
     savePersistedState(ACCESS_ROLES_KEY, nextRoles);
+    savePersistedState(ACCESS_ROLE_META_KEY, nextMeta);
     savePersistedState(ACCESS_PERMS_KEY, nextPerms, {
       kind: "role-permissions",
       role: name,
@@ -1743,10 +1922,44 @@ export function AccessManagementPage() {
       },
     });
     queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
+    queueMicrotask(() => window.dispatchEvent(new Event("pa-auth-updated")));
     setActiveRole(name);
     setSaved(false);
   }
 
+  function handleEditRoleSave(oldRole: Role, newName: Role, meta: AccessRoleMetadata) {
+    const nextRoles = roles.map(r => (r === oldRole ? newName : r));
+    const nextPerms = { ...permissions };
+    if (oldRole !== newName) {
+      nextPerms[newName] = nextPerms[oldRole] ?? emptyPermissions();
+      delete nextPerms[oldRole];
+    }
+    const nextMeta = { ...roleMetaMap };
+    if (oldRole !== newName) {
+      delete nextMeta[oldRole];
+    }
+    nextMeta[newName] = meta;
+    setRoles(nextRoles);
+    setPermissions(nextPerms);
+    setRoleMetaMap(nextMeta);
+    savePersistedState(ACCESS_ROLES_KEY, nextRoles);
+    savePersistedState(ACCESS_PERMS_KEY, nextPerms);
+    savePersistedState(ACCESS_ROLE_META_KEY, nextMeta, {
+      kind: "kv-state",
+      stateKey: ACCESS_ROLE_META_KEY,
+      stateValue: nextMeta,
+      audit: {
+        action: "Update",
+        module: "HR Settings",
+        subModule: "Access Management",
+        description: `Updated role settings for ${newName} (Exclude HC: ${meta.excludeFromCalibrationHC}, Exclude Verification: ${meta.excludeFromVerification})`,
+      },
+    });
+    queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
+    queueMicrotask(() => window.dispatchEvent(new Event("pa-auth-updated")));
+    setActiveRole(newName);
+    setSaved(true);
+  }
   function handleDeleteRole(role: Role) {
     const idx = roles.indexOf(role);
     const next = roles.filter(r => r !== role);
@@ -2008,6 +2221,13 @@ export function AccessManagementPage() {
             Collapse All
           </button>
           <div className="flex-1" />
+          <button
+            onClick={() => setShowEditRole(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-indigo-200 bg-indigo-50/60 rounded-lg text-indigo-700 hover:bg-indigo-100"
+            title="Edit Role Settings (Headcount & Verification)"
+          >
+            <Edit2 size={13} /> Edit Role
+          </button>
           {!isBuiltinActive && (
             <button
               onClick={() => handleDeleteRole(activeRole)}
@@ -2273,6 +2493,17 @@ export function AccessManagementPage() {
           existingRoles={roles}
           onAdd={handleAddRole}
           onClose={() => setShowAddAccess(false)}
+        />
+      )}
+
+      {showEditRole && (
+        <EditRoleModal
+          role={activeRole}
+          isBuiltin={isBuiltinActive}
+          existingRoles={roles}
+          initialMeta={roleMetaMap[activeRole] ?? getRoleMetadata(activeRole)}
+          onSave={handleEditRoleSave}
+          onClose={() => setShowEditRole(false)}
         />
       )}
 
