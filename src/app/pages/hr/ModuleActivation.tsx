@@ -670,7 +670,19 @@ function ModuleCard({
             <fieldset disabled={!module.active} className="flex flex-col gap-2">
               <legend className="text-xs font-semibold text-gray-700">Bulan Tracking Tertinggal</legend>
               <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
-                {["Januari", "Februari", "Maret", "April"].map((month, index) => {
+                {[
+                  "Januari",
+                  "Februari",
+                  "Maret",
+                  "April",
+                  "Mei",
+                  "Juni",
+                  "Juli",
+                  "Agustus",
+                  "September",
+                  "Oktober",
+                  "November",
+                ].map((month, index) => {
                   const monthValue = String(index + 1);
                   const selectedMonths = module.backlogMonths ?? [];
                   return (
@@ -865,11 +877,8 @@ export function HRModuleActivation() {
             </div>
             <div>
               <h2 className="text-base font-bold text-[#1A284F]">
-                Checklist Validasi Berjenjang & Mode Pembuatan KPI Paralel ({year})
+                Checklist Validasi Berjenjang &amp; Mode Pembuatan KPI Paralel
               </h2>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Aturan Bagian IV & V: Mengatur urutan validasi pembuatan KPI Business (KPI Group & KPI Unit) dan KPI Individu (Direktur → GM → Divisi → Departemen ke bawah), dilengkapi checklist mode paralel khusus tahun ini.
-              </p>
             </div>
           </div>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
@@ -886,7 +895,7 @@ export function HRModuleActivation() {
               validatedKey: "kpiGroupValidated" as const,
               validatedLabel: "Status KPI Group: Validated",
               parallelKey: "allowParallelKpiUnit" as const,
-              parallelLabel: "Izinkan Pembuatan KPI Unit & Direktur Paralel (Khusus Tahun Ini)",
+              parallelLabel: "Izinkan Pembuatan KPI Unit & Direktur Paralel",
             },
             {
               step: "2. KPI Unit & KPI Direktur → KPI Individu Level GM",
@@ -894,7 +903,7 @@ export function HRModuleActivation() {
               validatedKey: "kpiUnitAndDirectorValidated" as const,
               validatedLabel: "Status KPI Unit & KPI Individu Direktur: Validated",
               parallelKey: "allowParallelKpiGm" as const,
-              parallelLabel: "Izinkan Pembuatan KPI Individu Level GM Paralel (Khusus Tahun Ini)",
+              parallelLabel: "Izinkan Pembuatan KPI Individu Level GM Paralel",
             },
             {
               step: "3. KPI Individu GM → KPI Individu Level Divisi",
@@ -902,7 +911,7 @@ export function HRModuleActivation() {
               validatedKey: "kpiGmValidated" as const,
               validatedLabel: "Status KPI Individu Level GM: Validated",
               parallelKey: "allowParallelKpiDivision" as const,
-              parallelLabel: "Izinkan Pembuatan KPI Individu Level Divisi Paralel (Khusus Tahun Ini)",
+              parallelLabel: "Izinkan Pembuatan KPI Individu Level Divisi Paralel",
             },
             {
               step: "4. KPI Individu Divisi → KPI Individu Level Departemen ke Bawah",
@@ -910,7 +919,7 @@ export function HRModuleActivation() {
               validatedKey: "kpiDivisionValidated" as const,
               validatedLabel: "Status KPI Individu Level Divisi: Validated",
               parallelKey: "allowParallelKpiDepartmentBelow" as const,
-              parallelLabel: "Izinkan Pembuatan KPI Level Departemen ke Bawah Paralel (Khusus Tahun Ini)",
+              parallelLabel: "Izinkan Pembuatan KPI Level Departemen ke Bawah Paralel",
             },
           ].map((item) => (
             <div

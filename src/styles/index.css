@@ -1,2 +1,44 @@
 @import './tailwind.css';
 @import './theme.css';
+
+@keyframes paBarGrow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes paFadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pa-bar-animate {
+  transform-origin: left center;
+  animation: paBarGrow 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.3s ease;
+}
+
+.pa-card-motion {
+  animation: paFadeSlideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease;
+}
+
+.pa-card-motion:hover {
+  transform: translateY(-2px);
+}
+
+/* Smooth global bar fill animation for progress bars inside dashboards, profile & monitoring */
+div[class*="rounded-full"][style*="width:"] {
+  transform-origin: left center;
+  animation: paBarGrow 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+}

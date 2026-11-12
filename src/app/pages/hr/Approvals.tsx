@@ -39,7 +39,7 @@ const filterOptionsSetting = {
   month: MONTHS,
   division: ["Divisi Produksi & Operasional", "Divisi Sumber Daya Manusia", "Divisi Keuangan & Akuntansi", "Divisi Pemasaran & Penjualan"],
   department: ["Produksi", "SDM", "Keuangan", "Pemasaran"],
-  approvalType: ["KPI", "SMART Goals", "RCA"],
+  approvalType: ["KPI", "SMART Goals"],
 };
 
 const TODAY = "08/06/2026";

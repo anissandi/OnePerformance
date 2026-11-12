@@ -150,6 +150,7 @@ function ModuleCompletionOverview({
   year: string;
 }) {
   const isAllUnits = companyUnit === "All Units";
+  const [collapsed, setCollapsed] = useState(false);
 
   const rows = ALL_MODULES.map((mod) => {
     const { total, completed, inProgress, pending } = computeModuleStatsForUsers(scopedUsers, workflows, mod, year);
@@ -160,9 +161,13 @@ function ModuleCompletionOverview({
   const isFiltered = module !== "All Modules";
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+    <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm transition-all duration-300">
       {/* Header */}
-      <div className="flex items-center gap-3 pb-1 border-b border-gray-100 mb-5">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className={`w-full flex items-center gap-3 text-left transition-all ${collapsed ? "" : "pb-3 border-b border-gray-100 mb-5"}`}
+      >
         <div className="w-8 h-8 rounded-lg bg-[#1A284F]/8 flex items-center justify-center text-[#1A284F]">
           <Layers className="w-4 h-4" />
         </div>
@@ -179,8 +184,13 @@ function ModuleCompletionOverview({
             Filtered: {MODULE_SHORT[module] ?? module}
           </span>
         )}
-      </div>
+        <div className="w-7 h-7 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors shrink-0">
+          <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "-rotate-90" : "rotate-0"}`} />
+        </div>
+      </button>
 
+      {!collapsed && (
+        <div className="pa-card-motion">
       {/* Rows */}
       <div className="flex flex-col gap-2">
         {rows.map(({ mod, total, completed, inProgress, pending, rate }) => {
@@ -212,14 +222,14 @@ function ModuleCompletionOverview({
                 <div className="flex-1 flex h-4 rounded-full overflow-hidden bg-gray-100">
                   {cPct > 0 && (
                     <div
-                      className="h-full bg-emerald-500 transition-all duration-500"
+                      className="h-full bg-emerald-500 pa-bar-animate"
                       style={{ width: `${cPct}%` }}
                       title={`Completed: ${completed}`}
                     />
                   )}
                   {iPct > 0 && (
                     <div
-                      className="h-full bg-orange-400 transition-all duration-500"
+                      className="h-full bg-orange-400 pa-bar-animate"
                       style={{ width: `${iPct}%` }}
                       title={`In Progress: ${inProgress}`}
                     />
@@ -266,6 +276,8 @@ function ModuleCompletionOverview({
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-orange-400 inline-block" />In Progress</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-gray-200 inline-block" />Not Started</span>
       </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -280,6 +292,7 @@ function ScoreGradeDistributionDashboard({
   calibrationTargets: CalibrationTarget[];
   module: string;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   // Re-derive grade based on selected module's score field
   const derivedEmployees = useMemo(() => {
     if (module === "All Modules") return employees;
@@ -320,8 +333,12 @@ function ScoreGradeDistributionDashboard({
   const moduleLabel = module !== "All Modules" ? ` — ${module}` : "";
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-6">
-      <div className="flex items-center gap-3 pb-1 border-b border-gray-100 mb-6">
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-6 transition-all duration-300">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className={`w-full flex items-center gap-3 text-left transition-all ${collapsed ? "" : "pb-3 border-b border-gray-100 mb-6"}`}
+      >
         <div className="w-8 h-8 rounded-lg bg-[#1A284F]/8 flex items-center justify-center text-[#1A284F]">
           <Award className="w-4 h-4" />
         </div>
@@ -336,9 +353,13 @@ function ScoreGradeDistributionDashboard({
             {module}
           </span>
         )}
-      </div>
+        <div className="w-7 h-7 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors shrink-0">
+          <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "-rotate-90" : "rotate-0"}`} />
+        </div>
+      </button>
 
-      <div className="grid grid-cols-2 gap-8">
+      {!collapsed && (
+      <div className="grid grid-cols-2 gap-8 pa-card-motion">
         {/* ── Bell Curve ─────────────────────────────────────────────────── */}
         <div>
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
@@ -395,7 +416,9 @@ function ScoreGradeDistributionDashboard({
                   fill="#6366F1" fillOpacity={0.12}
                   dot={false}
                   activeDot={{ r: 4, fill: "#6366F1" }}
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={900}
+                  animationEasing="ease-out"
                 />
                 <Area
                   key="area-actual"
@@ -407,7 +430,9 @@ function ScoreGradeDistributionDashboard({
                   fill="#06B6D4" fillOpacity={0.28}
                   dot={{ r: 4, fill: "#06B6D4", strokeWidth: 0 }}
                   activeDot={{ r: 5, fill: "#06B6D4" }}
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={950}
+                  animationEasing="ease-out"
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -458,8 +483,8 @@ function ScoreGradeDistributionDashboard({
                 />
                 <YAxis key="yaxis" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#9CA3AF" }} tickFormatter={v => `${v}%`} />
                 <Tooltip key="tooltip" formatter={(v: number) => `${v}%`} />
-                <Bar key="bar-target" dataKey="barTarget" name="Target" radius={[3, 3, 0, 0]} fill="#C7D2FE" isAnimationActive={false} />
-                <Bar key="bar-actual" dataKey="barActual" name="Actual" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                <Bar key="bar-target" dataKey="barTarget" name="Target" radius={[4, 4, 0, 0]} fill="#C7D2FE" isAnimationActive={true} animationDuration={850} animationEasing="ease-out" />
+                <Bar key="bar-actual" dataKey="barActual" name="Actual" radius={[4, 4, 0, 0]} isAnimationActive={true} animationDuration={950} animationEasing="ease-out">
                   {bellData.map((d, i) => (
                     <Cell key={`ad-bar-cell-${i}`} fill={d.color} />
                   ))}
@@ -480,6 +505,7 @@ function ScoreGradeDistributionDashboard({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -513,15 +539,36 @@ function FilterSelect({ label, options, value, onChange, highlight }: { label: s
   );
 }
 
-function SectionHeading({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
+function SectionHeading({
+  icon,
+  title,
+  subtitle,
+  collapsed,
+  onToggle,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   return (
-    <div className="flex items-center gap-3 pb-1 border-b border-gray-100 mb-6">
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`w-full flex items-center gap-3 text-left transition-all ${collapsed ? "" : "pb-3 border-b border-gray-100 mb-6"}`}
+    >
       <div className="w-8 h-8 rounded-lg bg-[#1A284F]/8 flex items-center justify-center text-[#1A284F]">{icon}</div>
-      <div>
+      <div className="flex-1">
         <h3 className="font-bold text-gray-900 text-base">{title}</h3>
         <p className="text-xs text-gray-500">{subtitle}</p>
       </div>
-    </div>
+      {onToggle && (
+        <div className="w-7 h-7 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors shrink-0">
+          <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "-rotate-90" : "rotate-0"}`} />
+        </div>
+      )}
+    </button>
   );
 }
 
@@ -530,6 +577,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const { t } = useLanguage();
   const { lockedUnits: authLockedUnits } = useAuthStore();
   const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
+  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
   const [companyUnit, setCompanyUnit] = useState("All Units");
   const [module, setModule] = useState("All Modules");
   const [year, setYear] = useState("2026");
@@ -692,7 +740,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       </div>
 
       {/* ── PA Cycle Timeline ──────────────────────────────────────────────── */}
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm transition-all duration-300">
         <SectionHeading
           icon={<Clock className="w-4 h-4" />}
           title="PA Cycle Timeline"
@@ -701,8 +749,11 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
               ? `Showing: ${module} — ${PHASE_META[activeTimelineInfo.phase].label} (highlighted row)`
               : `Jadwal otomatis mengikuti setup tanggal di Module Activation (/hr/modules) — posisi saat ini: ${todayLabel}`
           }
+          collapsed={timelineCollapsed}
+          onToggle={() => setTimelineCollapsed((c) => !c)}
         />
-        <div className="overflow-x-auto">
+        {!timelineCollapsed && (
+        <div className="overflow-x-auto pa-card-motion">
           <div className="min-w-[760px]">
 
             {/* Year band */}
@@ -793,7 +844,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                           <div key={mi} className="flex-1 h-8 relative">
                             {activeSeg && (
                               <div
-                                className={`absolute inset-y-1.5 inset-x-0 transition-opacity duration-300 ${isFirst ? "rounded-l-md" : ""} ${isLast ? "rounded-r-md" : ""}`}
+                                className={`absolute inset-y-1.5 inset-x-0 pa-bar-animate transition-opacity duration-300 ${isFirst ? "rounded-l-md" : ""} ${isLast ? "rounded-r-md" : ""}`}
                                 style={{ background: activeSeg.color, opacity: 0.85 }}
                               >
                                 {isFirst && (
@@ -844,6 +895,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             </div>
           </div>
         </div>
+        )}
       </div>
 
       {/* ── Score / Grade Distribution + Target vs Actual ──────────────────── */}
@@ -873,7 +925,7 @@ function StatCard({ title, value, icon, gradient, border, valueColor }: {
   gradient: string; border: string; valueColor: string;
 }) {
   return (
-    <div className={`bg-gradient-to-br ${gradient} border ${border} rounded-xl px-4 py-3 shadow-sm flex items-center gap-3`}>
+    <div className={`bg-gradient-to-br ${gradient} border ${border} rounded-xl px-4 py-3 shadow-sm flex items-center gap-3 pa-card-motion`}>
       <div className="w-8 h-8 rounded-lg bg-white/70 flex items-center justify-center shadow-sm shrink-0">
         {icon}
       </div>

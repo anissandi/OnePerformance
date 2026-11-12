@@ -828,7 +828,6 @@ export function getAllowedApprovalTypesForUser(
   const allSetting = [
     "KPI",
     "SMART Goals",
-    "RCA",
   ];
   const baseList = mode === "setting" ? allSetting : allCheckin;
 
@@ -847,7 +846,7 @@ export function getAllowedApprovalTypesForUser(
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
   if (user.role === "HR Unit") {
     if (effectiveGrouping === "Operasional") {
-      return ["KPI", "SMART Goals", "RCA"];
+      return mode === "setting" ? ["KPI", "SMART Goals"] : ["KPI", "SMART Goals", "RCA"];
     }
     const allowed = resolveUserAllowedModules(user);
     return baseList.filter((type) => {
