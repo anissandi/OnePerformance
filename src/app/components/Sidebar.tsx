@@ -423,7 +423,10 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
     if (role === "bod") {
       const list: NavTopLink[] = [];
-      if (canView("analytics") || canView("dashboard")) {
+      if (canView("dashboard")) {
+        list.push({ to: "/bod/dashboard", icon: ListTodo, label: "Dashboard", exact: true });
+      }
+      if (canView("analytics")) {
         list.push({ to: "/bod", icon: BarChart2, label: "Analytics Dashboard", exact: true });
       }
       if (canView("profile")) {
@@ -519,12 +522,20 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     const prefix = isEmployeePortal ? "/employee" : "/supervisor";
     const list: NavTopLink[] = [];
 
-    // 1. Dashboard
-    if (canView("dashboard") || canView("analytics")) {
+    // 1. Dashboard & Analytics Dashboard (tidak saling menimpa jika keduanya di-allow)
+    if (canView("dashboard")) {
       list.push({
         to: isEmployeePortal ? "/employee" : "/supervisor",
         icon: isEmployeePortal ? BarChart2 : ListTodo,
         label: "Dashboard",
+        exact: true,
+      });
+    }
+    if (canView("analytics")) {
+      list.push({
+        to: `${prefix}/analytics`,
+        icon: BarChart2,
+        label: "Analytics Dashboard",
         exact: true,
       });
     }
@@ -588,15 +599,15 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
     }
 
-    // 6. Performance Appraisal Monitoring
+    // 6. Performance Appraisal Monitoring (mengikuti akses Role di Menu/Access Management, tidak ter-trigger oleh PA Setting/Measurement pribadi)
     const monitoringSubs: NavSubLink[] = [
-      ...(canView("pa_monitoring_kpi") && hasKpi ? [{ to: `${prefix}/monitoring/kpi`, label: "KPI", icon: TrendingUp }] : []),
-      ...(canView("pa_monitoring_smart") && hasSmart ? [{ to: `${prefix}/monitoring/smart-goals`, label: "SMART Goals", icon: Lightbulb }] : []),
-      ...(canView("pa_monitoring_appraisal") && hasAppraisalForm ? [{ to: `${prefix}/monitoring/appraisal-form`, label: "Appraisal Form", icon: ClipboardList }] : []),
-      ...(canView("pa_monitoring_managerial") && hasManagerial ? [{ to: `${prefix}/monitoring/managerial-skill`, label: "Managerial Skill", icon: Briefcase }] : []),
-      ...(canView("pa_monitoring_project") && hasProject ? [{ to: `${prefix}/monitoring/project`, label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-      ...(canView("pa_monitoring_interview") && hasMi ? [{ to: `${prefix}/monitoring/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
-      ...(canView("pa_monitoring_feedback") && hasIdf ? [{ to: `${prefix}/monitoring/inter-department-feedback`, label: "Inter-Department Feedback", icon: Users }] : []),
+      ...(canView("pa_monitoring_kpi") && (!isHrUnitUser || hasKpi) ? [{ to: `${prefix}/monitoring/kpi`, label: "KPI", icon: TrendingUp }] : []),
+      ...(canView("pa_monitoring_smart") && (!isHrUnitUser || hasSmart) ? [{ to: `${prefix}/monitoring/smart-goals`, label: "SMART Goals", icon: Lightbulb }] : []),
+      ...(canView("pa_monitoring_appraisal") && (!isHrUnitUser || hasAppraisalForm) ? [{ to: `${prefix}/monitoring/appraisal-form`, label: "Appraisal Form", icon: ClipboardList }] : []),
+      ...(canView("pa_monitoring_managerial") && (!isHrUnitUser || hasManagerial) ? [{ to: `${prefix}/monitoring/managerial-skill`, label: "Managerial Skill", icon: Briefcase }] : []),
+      ...(canView("pa_monitoring_project") && (!isHrUnitUser || hasProject) ? [{ to: `${prefix}/monitoring/project`, label: "Project Outside Job Scope", icon: FolderKanban }] : []),
+      ...(canView("pa_monitoring_interview") && (!isHrUnitUser || hasMi) ? [{ to: `${prefix}/monitoring/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
+      ...(canView("pa_monitoring_feedback") && (!isHrUnitUser || hasIdf) ? [{ to: `${prefix}/monitoring/inter-department-feedback`, label: "Inter-Department Feedback", icon: Users }] : []),
     ];
     if (canView("pa_monitoring") && monitoringSubs.length > 0) {
       list.push({ label: "Performance Appraisal Monitoring", icon: ClipboardCheck, subLinks: monitoringSubs });
@@ -613,7 +624,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("calibration_verification") ? [{ to: `${prefix}/calibration/verification`, label: "Verification", icon: CheckSquare }] : []),
       ...(canView("calibration_adjustment") ? [{ to: `${prefix}/calibration/adjustment`, label: "Adjustment", icon: RefreshCw }] : []),
       ...(canView("calibration_team_performance") ? [{ to: `${prefix}/calibration/team-performance`, label: "Team Performance", icon: BarChart2 }] : []),
-      ...(canView("calibration_interview") && hasMi ? [{ to: `${prefix}/calibration/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
+      ...(canView("calibration_interview") ? [{ to: `${prefix}/calibration/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
     ];
     if (canView("calibration") && calSubs.length > 0) {
       list.push({ label: "Calibration", icon: Target, subLinks: calSubs });

@@ -759,7 +759,14 @@ export function getAllowedApprovalTypesForUser(
   const baseList = mode === "setting" ? allSetting : allCheckin;
 
   // Administrator, HR ICF, dan BOD melihat seluruh modul approval
-  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD") {
+  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || isDirectorRoleOrGrouping(user)) {
+    return baseList;
+  }
+
+  // Jika sebuah Role disetup tidak memiliki akses ke PA Setting & PA Measurement sama sekali
+  // namun diberi akses Approvals, jangan batasi tab Approvals dari PA Setting/Measurement pribadinya
+  const rolePerms = getRolePermissions(user.role || "Employee");
+  if (!rolePerms.pa_setting?.view && !rolePerms.pa_measurement?.view) {
     return baseList;
   }
 
