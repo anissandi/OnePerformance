@@ -13,7 +13,9 @@ import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
 import { projectApprovalRows } from "../../store/projectStore";
 import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
-import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
+import { ACCESS_UPDATED_EVENT, useAccessManagement } from "../hr/settings/AccessManagement";
+import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../hr/settings/MenuManagement";
+import { useLocation } from "react-router";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -972,19 +974,50 @@ function MyDashboard() {
 type DashTab = "approval" | "my";
 
 export function SupervisorDashboard() {
-  const [activeTab, setActiveTab] = useRouteTab<DashTab>(["my", "approval"], "my", { base: "/supervisor/dashboard" });
+  const location = useLocation();
+  const { activeUser } = useAuthStore();
+  const { getRolePermissions } = useAccessManagement();
+  const [, setMenuTick] = useState(0);
+  useEffect(() => {
+    const onMenuUpdate = () => setMenuTick((t) => t + 1);
+    window.addEventListener(MENU_UPDATED_EVENT, onMenuUpdate);
+    return () => window.removeEventListener(MENU_UPDATED_EVENT, onMenuUpdate);
+  }, []);
 
-  const TABS: { key: DashTab; label: string; icon: React.ElementType }[] = [
-    { key: "my",       label: "My Dashboard",        icon: LayoutDashboard  },
-    { key: "approval", label: "Approval Dashboard", icon: ClipboardCheck   },
+  const rolePerms = getRolePermissions(activeUser.role || "Employee");
+  const canViewMy =
+    isMenuVisibleInMenuManagement("dashboard_my") && Boolean(rolePerms.dashboard_my?.view);
+  const canViewApproval =
+    isMenuVisibleInMenuManagement("dashboard_approval") && Boolean(rolePerms.dashboard_approval?.view);
+
+  const portalPrefix = `/${location.pathname.split("/")[1] || "supervisor"}`;
+  const defaultTab: DashTab = canViewMy ? "my" : canViewApproval ? "approval" : "my";
+  const [activeTab, setActiveTab] = useRouteTab<DashTab>(["my", "approval"], defaultTab, {
+    base: `${portalPrefix}/dashboard`,
+  });
+
+  const visibleTabs: { key: DashTab; label: string; icon: React.ElementType }[] = [
+    ...(canViewMy || (!canViewMy && !canViewApproval)
+      ? [{ key: "my" as DashTab, label: "My Dashboard", icon: LayoutDashboard }]
+      : []),
+    ...(canViewApproval
+      ? [{ key: "approval" as DashTab, label: "Approval Dashboard", icon: ClipboardCheck }]
+      : []),
   ];
+
+  const effectiveTab: DashTab =
+    !canViewMy && canViewApproval
+      ? "approval"
+      : !canViewApproval && canViewMy
+      ? "my"
+      : activeTab;
 
   return (
     <div className="w-full flex flex-col gap-6">
       {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-100">
-        {TABS.map(({ key, label, icon: Icon }) => {
-          const isActive = activeTab === key;
+        {visibleTabs.map(({ key, label, icon: Icon }) => {
+          const isActive = effectiveTab === key;
           return (
             <button
               key={key}
@@ -1002,7 +1035,7 @@ export function SupervisorDashboard() {
         })}
       </div>
 
-      {activeTab === "approval" ? <ApprovalDashboard /> : <MyDashboard />}
+      {effectiveTab === "approval" ? <ApprovalDashboard /> : <MyDashboard />}
     </div>
   );
 }

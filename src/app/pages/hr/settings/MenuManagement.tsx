@@ -40,16 +40,16 @@ const ROLE_COLORS: Record<string, string> = {
 // Mirrors MENU_STRUCTURE from AccessManagement — same IDs, same hierarchy
 const INITIAL_MENUS: MenuItem[] = [
   {
+    id: "analytics", label: "Analytics Dashboard", path: "/hr; /bod", icon: "BarChart2",
+    isVisible: true, order: 1, roles: HR_ROLES,
+  },
+  {
     id: "dashboard", label: "Dashboard", path: "/supervisor; /employee", icon: "ListTodo",
-    isVisible: true, order: 1, roles: ["GM", "Supervisor", "Employee"],
+    isVisible: true, order: 2, roles: ["GM", "Supervisor", "Employee"],
     children: [
       { id: "dashboard_my",       label: "My Dashboard",     path: "/supervisor/dashboard/my; /employee", icon: "BarChart2", isVisible: true, order: 1, roles: ["GM", "Supervisor", "Employee"] },
       { id: "dashboard_approval", label: "Approval Summary", path: "/supervisor/dashboard/approval", icon: "CheckSquare", isVisible: true, order: 2, roles: ["GM", "Supervisor"] },
     ],
-  },
-  {
-    id: "analytics", label: "Analytics Dashboard", path: "/hr; /bod", icon: "BarChart2",
-    isVisible: true, order: 1, roles: HR_ROLES,
   },
   {
     id: "profile", label: "My Profile", path: "/profile", icon: "UserCog",

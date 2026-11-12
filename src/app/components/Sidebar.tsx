@@ -316,13 +316,23 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       activeUser.role === "GM" ||
       activeUser.role === "HR Unit";
 
+    const canViewDashboard =
+      canView("dashboard") || canView("dashboard_my") || canView("dashboard_approval");
+    const onlyApprovalDashboard =
+      !canView("dashboard_my") && canView("dashboard_approval");
+
     if (role === "hr" && !isStandardParticipantRole) {
       const list: NavTopLink[] = [];
       if (canView("analytics")) {
         list.push({ to: "/hr", icon: BarChart2, label: "Analytics Dashboard", exact: true });
       }
-      if (canView("dashboard")) {
-        list.push({ to: "/hr/dashboard", icon: ListTodo, label: "Dashboard", exact: true });
+      if (canViewDashboard) {
+        list.push({
+          to: onlyApprovalDashboard ? "/hr/dashboard/approval" : "/hr/dashboard",
+          icon: ListTodo,
+          label: "Dashboard",
+          exact: !onlyApprovalDashboard,
+        });
       }
       if (canView("profile")) {
         list.push({ to: "/hr/profile", icon: UserCog, label: "My Profile" });
@@ -423,11 +433,16 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
     if (role === "bod") {
       const list: NavTopLink[] = [];
-      if (canView("dashboard")) {
-        list.push({ to: "/bod/dashboard", icon: ListTodo, label: "Dashboard", exact: true });
-      }
       if (canView("analytics")) {
         list.push({ to: "/bod", icon: BarChart2, label: "Analytics Dashboard", exact: true });
+      }
+      if (canViewDashboard) {
+        list.push({
+          to: onlyApprovalDashboard ? "/bod/dashboard/approval" : "/bod/dashboard",
+          icon: ListTodo,
+          label: "Dashboard",
+          exact: !onlyApprovalDashboard,
+        });
       }
       if (canView("profile")) {
         list.push({ to: "/bod/profile", icon: UserCog, label: "My Profile" });
@@ -522,21 +537,25 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     const prefix = isEmployeePortal ? "/employee" : "/supervisor";
     const list: NavTopLink[] = [];
 
-    // 1. Dashboard & Analytics Dashboard (tidak saling menimpa jika keduanya di-allow)
-    if (canView("dashboard")) {
-      list.push({
-        to: isEmployeePortal ? "/employee" : "/supervisor",
-        icon: isEmployeePortal ? BarChart2 : ListTodo,
-        label: "Dashboard",
-        exact: true,
-      });
-    }
+    // 1. Analytics Dashboard selalu urutan pertama, dilanjutkan dengan Dashboard (untuk role yang diberi akses)
     if (canView("analytics")) {
       list.push({
         to: `${prefix}/analytics`,
         icon: BarChart2,
         label: "Analytics Dashboard",
         exact: true,
+      });
+    }
+    if (canViewDashboard) {
+      list.push({
+        to: isEmployeePortal
+          ? "/employee"
+          : onlyApprovalDashboard
+          ? `${prefix}/dashboard/approval`
+          : "/supervisor",
+        icon: isEmployeePortal ? BarChart2 : ListTodo,
+        label: "Dashboard",
+        exact: !onlyApprovalDashboard,
       });
     }
 

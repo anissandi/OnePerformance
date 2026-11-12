@@ -152,6 +152,7 @@ export interface RolePermissions {
 export const ACCESS_UPDATED_EVENT = "pa-access-updated";
 
 export const MENU_STRUCTURE: MenuItem[] = [
+  { id: "analytics", label: "Analytics Dashboard" },
   {
     id: "dashboard", label: "Dashboard",
     children: [
@@ -159,7 +160,6 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "dashboard_approval", label: "Approval Summary" },
     ],
   },
-  { id: "analytics", label: "Analytics Dashboard" },
   {
     id: "profile", label: "My Profile",
     children: [
@@ -1317,10 +1317,21 @@ export function updateMenuViewRolesFromMenuManagement(
     const shouldView = allowedRoles.includes(role);
     const prevPerm = rolePerm[menuId] ?? { ...EMPTY_PERM };
     rolePerm[menuId] = { ...prevPerm, view: shouldView };
-    // Cascade perubahan visibilitas ke seluruh sub-item (mis. approvals_kpi_business_group & unit)
-    for (const descId of descendants) {
-      const descPerm = rolePerm[descId] ?? { ...EMPTY_PERM };
-      rolePerm[descId] = { ...descPerm, view: shouldView };
+    if (!shouldView) {
+      // Jika parent di-nonaktifkan untuk role ini, matikan seluruh sub-item di bawahnya
+      for (const descId of descendants) {
+        const descPerm = rolePerm[descId] ?? { ...EMPTY_PERM };
+        rolePerm[descId] = { ...descPerm, view: false };
+      }
+    } else if (descendants.length > 0) {
+      // Jika parent diaktifkan dan belum ada satu pun sub-item yang aktif, aktifkan sub-itemnya
+      const anyDescendantActive = descendants.some((dId) => Boolean(rolePerm[dId]?.view));
+      if (!anyDescendantActive) {
+        for (const descId of descendants) {
+          const descPerm = rolePerm[descId] ?? { ...EMPTY_PERM };
+          rolePerm[descId] = { ...descPerm, view: true };
+        }
+      }
     }
     if (shouldView) {
       for (const ancestorId of findAncestorIds(menuId)) {
