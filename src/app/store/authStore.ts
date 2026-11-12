@@ -129,13 +129,38 @@ export function isDirectorRoleOrGrouping(user?: { role?: string; groupings?: str
   if (user.role === "Director") return true;
   const g = (user.groupings ?? "").trim().toLowerCase();
   if (g === "direktur / director" || g === "director" || g === "direktur") return true;
+  if (g) {
+    const tier = getGroupAuthorityLevel(user.groupings ?? "");
+    if (tier === "director_group") return true;
+  }
   return false;
 }
 
-export function isExcludedFromAppraisalCalibration(user?: { role?: string; groupings?: string; position?: string } | null): boolean {
+export function isExcludedFromAppraisalCalibration(user?: { role?: string; groupings?: string; position?: string; company?: string } | null): boolean {
   if (!user) return false;
   if (user.role === "Director" || user.role === "BOD") return true;
-  return isDirectorRoleOrGrouping(user);
+  if (isDirectorRoleOrGrouping(user)) return true;
+  // Jika Groupings karyawan di-setup tidak memiliki modul appraisal sama sekali (uncheck semua modul),
+  // maka tidak masuk dalam penilaian kinerja, monitoring, summary, maupun kalibrasi.
+  if (user.groupings || user.company || user.position) {
+    const allowed = resolveUserAllowedModules({
+      id: "",
+      name: "",
+      employeeId: "",
+      position: user.position ?? "",
+      company: user.company ?? "",
+      division: "",
+      department: "",
+      grade: "",
+      role: user.role ?? "",
+      groupings: user.groupings ?? "",
+      status: "Active",
+      lastLogin: "",
+      email: "",
+    });
+    if (allowed.length === 0) return true;
+  }
+  return false;
 }
 
 export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
@@ -558,9 +583,12 @@ export function shouldBypassCheckerForSubmission(
 
 export function defaultAllowedModulesForGrouping(group: string): AppraisalModuleName[] {
   const normalized = group.trim();
-  const fromAccessMgmt = getGroupAllowedModules(normalized);
-  if (Array.isArray(fromAccessMgmt) && fromAccessMgmt.length > 0) {
-    return fromAccessMgmt;
+  const configuredGroups = loadAccessGroups();
+  if (
+    configuredGroups.some((g) => g.toLowerCase() === normalized.toLowerCase()) ||
+    /^(direktur|director)$/i.test(normalized)
+  ) {
+    return getGroupAllowedModules(normalized);
   }
   if (normalized === "Operasional" || normalized === "Ka./Wa.Ka.Seksi") {
     return [
@@ -711,6 +739,10 @@ export function resolvePortalPathForRole(role: AppUserRole, _position = "", grou
 
 export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleName[] {
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
+  const configuredGroups = loadAccessGroups();
+  const isConfiguredInAccessMgmt = configuredGroups.some(
+    (g) => g.toLowerCase() === effectiveGrouping.toLowerCase(),
+  );
   try {
     const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
     if (raw) {
@@ -722,13 +754,16 @@ export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleNam
             r.position.toLowerCase() === user.position.toLowerCase() ||
             r.group.toLowerCase() === effectiveGrouping.toLowerCase(),
         );
-        if (matched && matched.allowedModules.length > 0) {
+        if (matched && Array.isArray(matched.allowedModules)) {
           return matched.allowedModules;
         }
       }
     }
   } catch {
     // fallback to grouping defaults
+  }
+  if (isConfiguredInAccessMgmt) {
+    return getGroupAllowedModules(effectiveGrouping);
   }
   if (user.role === "HR Unit") {
     return defaultAllowedModulesForGrouping(effectiveGrouping);

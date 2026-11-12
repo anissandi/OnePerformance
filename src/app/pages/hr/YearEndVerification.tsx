@@ -1,12 +1,30 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { CheckCircle2, XCircle, Clock, Users, AlertTriangle, Bell, BellRing, UserX } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Users, AlertTriangle, Bell, BellRing, UserX, Building2, ChevronRight, ArrowLeft } from "lucide-react";
 
 import { useNavigate } from "react-router";
 import { loadYearEndState, saveYearEndState, canProceedToInterview } from "../shared/yearEndWorkflowStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
-import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
+import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
+
+interface VerificationCompanyUnit {
+  id: string;
+  name: string;
+  code: string;
+  industry: string;
+}
+
+const VERIFICATION_COMPANY_UNITS: VerificationCompanyUnit[] = [
+  { id: "1", name: "PT RSUP (Industry)",          code: "RSUP-IND", industry: "Industry" },
+  { id: "2", name: "PT RSUP (Perkebunan)",        code: "RSUP-PKB", industry: "Perkebunan" },
+  { id: "3", name: "PT Pulau Sambu (Jakarta)",    code: "PS-JKT",   industry: "Jakarta" },
+  { id: "4", name: "PT Pulau Sambu (Guntung)",    code: "PS-GTG",   industry: "Guntung" },
+  { id: "5", name: "PT Pulau Sambu (Kuala Enok)", code: "PS-KE",    industry: "Kuala Enok" },
+  { id: "6", name: "PT RSTM",                     code: "RSTM",     industry: "" },
+  { id: "7", name: "PT GHS",                      code: "GHS",      industry: "" },
+  { id: "8", name: "ASD",                         code: "ASD",      industry: "" },
+];
 
 type ModuleStatus = "complete" | "incomplete" | "pending" | "na";
 type OverallStatus = "Complete" | "Incomplete" | "Pending";
@@ -227,8 +245,16 @@ function ConfirmModal({ open, title, message, confirmLabel, confirmCls, icon, on
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
 export function YearEndVerification() {
+  const { lockedUnits } = useAuthStore();
+  const availableCompanyUnits = useMemo(
+    () =>
+      lockedUnits && lockedUnits.length > 0
+        ? VERIFICATION_COMPANY_UNITS.filter((u) => lockedUnits.includes(u.name))
+        : VERIFICATION_COMPANY_UNITS,
+    [lockedUnits],
+  );
+  const [selectedUnit,   setSelectedUnit]   = useState<VerificationCompanyUnit | null>(null);
   const [search,         setSearch]         = useState("");
-  const [unitFilter,     setUnitFilter]     = useState("All");
   const [divFilter,      setDivFilter]      = useState("All");
   const [deptFilter,     setDeptFilter]     = useState("All");
   const [posFilter,      setPosFilter]      = useState("All");
@@ -288,17 +314,25 @@ export function YearEndVerification() {
     const completion = Object.fromEntries(currentEmployees.map((employee) => [normalizeEmployeeId(employee.id), { kpi: employee.kpi === "complete", smartGoals: employee.smartGoals === "complete", appraisalForm: employee.appraisalForm === "complete", managerialSkill: employee.managerialSkill === "complete", projectOutsideJobScope: employee.projectOJS === "complete" }]));
     saveYearEndState({ ...loadYearEndState(), reminded: [...remindedSet], inactive: [...inactiveSet], ignored: [...ignoredSet], completion });
   }, [remindedSet, inactiveSet, ignoredSet, currentEmployees]);
-  const TOTAL_EMPLOYEES = currentEmployees.length;
-  const FULLY_COMPLETE = currentEmployees.filter((employee) => employee.overall === "Complete" && !inactiveSet.has(employee.id)).length;
-  const INCOMPLETE = currentEmployees.filter((employee) => employee.overall === "Incomplete" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
-  const PENDING_REVIEW = currentEmployees.filter((employee) => employee.overall === "Pending" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
-  const handled = currentEmployees.filter((employee) => employee.overall === "Complete" || inactiveSet.has(employee.id) || ignoredSet.has(employee.id)).length;
+  // Hanya karyawan pada Company Unit yang dipilih yang masuk dalam perhitungan & tabel
+  const unitEmployees = useMemo(
+    () =>
+      selectedUnit
+        ? currentEmployees.filter((e) => e.unit === selectedUnit.name)
+        : [],
+    [currentEmployees, selectedUnit],
+  );
+
+  const TOTAL_EMPLOYEES = unitEmployees.length;
+  const FULLY_COMPLETE = unitEmployees.filter((employee) => employee.overall === "Complete" && !inactiveSet.has(employee.id)).length;
+  const INCOMPLETE = unitEmployees.filter((employee) => employee.overall === "Incomplete" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
+  const PENDING_REVIEW = unitEmployees.filter((employee) => employee.overall === "Pending" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
+  const handled = unitEmployees.filter((employee) => employee.overall === "Complete" || inactiveSet.has(employee.id) || ignoredSet.has(employee.id)).length;
   const READINESS_PCT = TOTAL_EMPLOYEES > 0 ? Math.round((handled / TOTAL_EMPLOYEES) * 100) : 0;
 
-  const unitOptions     = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.unit)))], [currentEmployees]);
-  const divisionOptions = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.division)))], [currentEmployees]);
-  const deptOptions     = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.department)))], [currentEmployees]);
-  const positionOptions = useMemo(() => ["All", ...Array.from(new Set(currentEmployees.map((e) => e.position)))], [currentEmployees]);
+  const divisionOptions = useMemo(() => ["All", ...Array.from(new Set(unitEmployees.map((e) => e.division)))], [unitEmployees]);
+  const deptOptions     = useMemo(() => ["All", ...Array.from(new Set(unitEmployees.map((e) => e.department)))], [unitEmployees]);
+  const positionOptions = useMemo(() => ["All", ...Array.from(new Set(unitEmployees.map((e) => e.position)))], [unitEmployees]);
 
   type ModalState =
     | { type: "reminder_one"; id: string; name: string }
@@ -311,18 +345,17 @@ export function YearEndVerification() {
     | null;
   const [modal, setModal] = useState<ModalState>(null);
 
-  const filtered = useMemo(() => currentEmployees.filter((e) => {
+  const filtered = useMemo(() => unitEmployees.filter((e) => {
     const q = search.toLowerCase();
     const matchSearch = !q || e.name.toLowerCase().includes(q) || e.id.toLowerCase().includes(q) || e.position.toLowerCase().includes(q);
-    const matchUnit   = unitFilter   === "All" || e.unit       === unitFilter;
     const matchDiv    = divFilter    === "All" || e.division   === divFilter;
     const matchDept   = deptFilter   === "All" || e.department === deptFilter;
     const matchPos    = posFilter    === "All" || e.position   === posFilter;
     const matchStatus = statusFilter === "All" || (inactiveSet.has(e.id) ? "Inactivated" : ignoredSet.has(e.id) ? "Ignored" : e.overall) === statusFilter;
-    return matchSearch && matchUnit && matchDiv && matchDept && matchPos && matchStatus;
-  }), [search, unitFilter, divFilter, deptFilter, posFilter, statusFilter, currentEmployees, inactiveSet, ignoredSet]);
+    return matchSearch && matchDiv && matchDept && matchPos && matchStatus;
+  }), [search, divFilter, deptFilter, posFilter, statusFilter, unitEmployees, inactiveSet, ignoredSet]);
 
-  const canProceed = canProceedToInterview(currentEmployees, { ...loadYearEndState(), inactive: [...inactiveSet], ignored: [...ignoredSet] });
+  const canProceed = canProceedToInterview(unitEmployees, { ...loadYearEndState(), inactive: [...inactiveSet], ignored: [...ignoredSet] });
 
   function confirmSendReminder(id: string, name: string) { setModal({ type: "reminder_one", id, name }); }
   function doSendReminder(id: string) { setRemindedSet((prev) => new Set([...prev, id])); }
@@ -348,12 +381,115 @@ export function YearEndVerification() {
 
   const pendingCount = filtered.filter((e) => !inactiveSet.has(e.id) && !ignoredSet.has(e.id) && (e.overall === "Pending" || e.overall === "Incomplete") && !remindedSet.has(e.id)).length;
 
+  const TabBar = ({ onTabClick }: { onTabClick?: () => void }) => (
+    <div className="border-b border-gray-200">
+      <div className="flex gap-1">
+        <button
+          onClick={onTabClick}
+          className="px-6 py-3 text-sm font-medium border-b-2 border-[#1A284F] text-[#1A284F]"
+        >
+          Company Units
+        </button>
+      </div>
+    </div>
+  );
+
+  if (!selectedUnit) {
+    return (
+      <div className="w-full flex flex-col gap-6">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Verification</h2>
+          <p className="text-sm text-gray-500">
+            Performance Year 2026 · Pre-Management Interview Gate per Company Unit
+          </p>
+        </div>
+        <TabBar />
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-gray-500">
+            Select a company unit to review and verify employee appraisal completion status.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {availableCompanyUnits.map((unit, idx) => {
+              const gradients = [
+                "from-blue-600 to-blue-800",
+                "from-emerald-600 to-emerald-800",
+                "from-violet-600 to-violet-800",
+                "from-amber-500 to-orange-700",
+                "from-sky-500 to-cyan-700",
+                "from-rose-500 to-red-700",
+                "from-teal-500 to-teal-700",
+                "from-indigo-500 to-indigo-700",
+              ];
+              const gradient = gradients[idx % gradients.length];
+              const unitEmpCount = currentEmployees.filter((e) => e.unit === unit.name).length;
+              return (
+                <button
+                  key={unit.id}
+                  onClick={() => {
+                    setSelectedUnit(unit);
+                    setSearch("");
+                    setDivFilter("All");
+                    setDeptFilter("All");
+                    setPosFilter("All");
+                    setStatusFilter("All");
+                  }}
+                  className="group text-left rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5"
+                >
+                  <div className={`bg-gradient-to-br ${gradient} px-5 py-4`}>
+                    <Building2 className="w-5 h-5 text-white/80 mb-2" />
+                    <p className="text-white font-semibold text-sm leading-tight">{unit.name}</p>
+                  </div>
+                  <div className="bg-white px-5 py-3 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-gray-700 truncate max-w-[120px]">
+                        {unit.industry || `${unitEmpCount} Employees`}
+                      </p>
+                      <span className="inline-block mt-0.5 font-mono text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">
+                        {unit.code}
+                      </span>
+                      <span className="block mt-0.5 text-[10px] font-medium text-blue-600">
+                        ● {unitEmpCount} Active HC
+                      </span>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors shrink-0" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50 p-6 space-y-6">
+    <div className="w-full flex flex-col gap-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-[#1A284F]">Verification Checklist</h1>
-        <p className="text-gray-500 mt-1 text-sm">Performance Year 2026 · Pre-Management Interview Gate</p>
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Verification</h2>
+        <p className="text-sm text-gray-500">Performance Year 2026 · Pre-Management Interview Gate</p>
+      </div>
+      <TabBar onTabClick={() => setSelectedUnit(null)} />
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => setSelectedUnit(null)}
+          className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-[#1A284F] transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />Back to Company Units
+        </button>
+      </div>
+      {/* Unit header */}
+      <div className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl px-6 py-4 shadow-sm">
+        <div className="w-12 h-12 rounded-xl bg-[#1A284F]/10 flex items-center justify-center shrink-0">
+          <Building2 className="w-6 h-6 text-[#1A284F]" />
+        </div>
+        <div>
+          <p className="font-bold text-gray-900">{selectedUnit.name}</p>
+          <p className="text-sm text-gray-500">
+            {selectedUnit.industry}{selectedUnit.industry ? " · " : ""}
+            <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{selectedUnit.code}</span>
+          </p>
+        </div>
       </div>
 
       {/* Overall Readiness Card */}
@@ -407,15 +543,14 @@ export function YearEndVerification() {
               className="border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]"
             />
           </div>
-          <FilterSelect label="Company Unit" value={unitFilter}   options={unitOptions}     onChange={setUnitFilter} />
           <FilterSelect label="Division"     value={divFilter}    options={divisionOptions} onChange={setDivFilter}  />
           <FilterSelect label="Department"   value={deptFilter}   options={deptOptions}     onChange={setDeptFilter} />
           <FilterSelect label="Position"     value={posFilter}    options={positionOptions} onChange={setPosFilter}  />
           <FilterSelect label="Status"       value={statusFilter} options={[...statusOptions]} onChange={setStatusFilter} />
           {/* Reset */}
-          {(unitFilter !== "All" || divFilter !== "All" || deptFilter !== "All" || posFilter !== "All" || statusFilter !== "All" || search) && (
+          {(divFilter !== "All" || deptFilter !== "All" || posFilter !== "All" || statusFilter !== "All" || search) && (
             <button
-              onClick={() => { setSearch(""); setUnitFilter("All"); setDivFilter("All"); setDeptFilter("All"); setPosFilter("All"); setStatusFilter("All"); }}
+              onClick={() => { setSearch(""); setDivFilter("All"); setDeptFilter("All"); setPosFilter("All"); setStatusFilter("All"); }}
               className="text-xs text-gray-400 hover:text-gray-600 underline self-end pb-2"
             >
               Reset filters

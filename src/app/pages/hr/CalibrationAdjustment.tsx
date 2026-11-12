@@ -49,6 +49,10 @@ type EmpScores = {
 type Employee = {
   id: string; employeeId: string; name: string; nip: string; level: EmpLevel;
   bagianId: string; departemenenId: string; divisiId: string;
+  companyUnit?: string;
+  divisionName?: string;
+  departmentName?: string;
+  bagianName?: string;
   base: EmpScores;
 };
 
@@ -285,6 +289,10 @@ function buildLiveCalibrationEmployees(): Employee[] {
       bagianId,
       departemenenId: deptId,
       divisiId,
+      companyUnit: u.company,
+      divisionName: divName,
+      departmentName: deptName,
+      bagianName: bagName,
       base: {
         kpi: live?.kpi.score ?? 0,
         smartGoals: live?.smartGoals.score ?? 0,
@@ -1337,6 +1345,7 @@ function AppraisalDetailCard({
 // ─── Employee Adjustment Section ──────────────────────────────────────────────
 
 function EmployeeAdjustmentSection({
+  unitName,
   editMode,
   adjustments,
   setAdjustments,
@@ -1349,6 +1358,7 @@ function EmployeeAdjustmentSection({
   canSubmit,
   onSubmit,
 }: {
+  unitName?: string;
   editMode: boolean;
   adjustments: Record<string, number>;
   setAdjustments: React.Dispatch<React.SetStateAction<Record<string, number>>>;
@@ -1399,18 +1409,51 @@ function EmployeeAdjustmentSection({
     return subscribeScores(() => setMIScores(buildMIScores()));
   }, [buildMIScores]);
 
-  const deptOptions   = DEPT_DEFS.filter(([,divId]) =>
-    selDivisi === "__all__" || divId === selDivisi);
+  const unitEmployees = useMemo(
+    () => ALL_EMPLOYEES.filter((e) => !unitName || e.companyUnit === unitName),
+    [unitName, adjustments],
+  );
 
-  const bagianOptions = BAGIAN_DEFS.filter(([,deptId]) => {
-    const dept = DEPT_DEFS.find(([dId]) => dId === deptId);
+  const dynamicDivDefs = useMemo(() => {
+    const map = new Map<string, string>();
+    unitEmployees.forEach((e) => {
+      const label = e.divisionName ?? DIV_DEFS.find((d) => d.id === e.divisiId)?.divisi ?? e.divisiId;
+      if (e.divisiId && label) map.set(e.divisiId, label);
+    });
+    return Array.from(map.entries()).map(([id, divisi]) => ({ id, divisi }));
+  }, [unitEmployees]);
+
+  const dynamicDeptDefs = useMemo(() => {
+    const map = new Map<string, [string, string, string]>();
+    unitEmployees.forEach((e) => {
+      const label = e.departmentName ?? DEPT_DEFS.find(([id]) => id === e.departemenenId)?.[2] ?? e.departemenenId;
+      if (e.departemenenId && label) map.set(e.departemenenId, [e.departemenenId, e.divisiId, label]);
+    });
+    return Array.from(map.values());
+  }, [unitEmployees]);
+
+  const dynamicBagianDefs = useMemo(() => {
+    const map = new Map<string, [string, string, string]>();
+    unitEmployees.forEach((e) => {
+      const label = e.bagianName ?? BAGIAN_DEFS.find(([id]) => id === e.bagianId)?.[2] ?? e.bagianId;
+      if (e.bagianId && label) map.set(e.bagianId, [e.bagianId, e.departemenenId, label]);
+    });
+    return Array.from(map.values());
+  }, [unitEmployees]);
+
+  const deptOptions = dynamicDeptDefs.filter(([, divId]) =>
+    selDivisi === "__all__" || divId === selDivisi,
+  );
+
+  const bagianOptions = dynamicBagianDefs.filter(([, deptId]) => {
+    const dept = dynamicDeptDefs.find(([dId]) => dId === deptId);
     if (!dept) return false;
     if (selDivisi !== "__all__" && dept[1] !== selDivisi) return false;
-    if (selDept   !== "__all__" && deptId !== selDept) return false;
+    if (selDept !== "__all__" && deptId !== selDept) return false;
     return true;
   });
 
-  const filtered = ALL_EMPLOYEES.filter(e => {
+  const filtered = unitEmployees.filter(e => {
     if (isYearEndInactive(e.employeeId)) return false;
     const query = search.trim().toLowerCase();
     if (query && !e.name.toLowerCase().includes(query) && !e.employeeId.toLowerCase().replace(/-/g, "").includes(query.replace(/-/g, ""))) return false;
@@ -1424,7 +1467,7 @@ function EmployeeAdjustmentSection({
 
   const posisiOptions: EmpLevel[] = ["Kepala Bagian", "Pengawas", "Operasional", "Kepala Departemen", "Kepala Divisi"];
 
-  const adjustedCount = Object.keys(adjustments).filter(id => ALL_EMPLOYEES.find(e => e.id === id)).length;
+  const adjustedCount = Object.keys(adjustments).filter(id => unitEmployees.find(e => e.id === id)).length;
 
   const getEffectiveScores = (emp: Employee): EmpScores => {
     if (emp.id in miScores && miScores[emp.id] !== null) {
@@ -1490,9 +1533,9 @@ function EmployeeAdjustmentSection({
   const handleExport = () => {
     const headers = ["Nama","ID Karyawan","Level","Divisi","Departemen","Bagian","KPI","Project","Smart Goals","Appraisal Form","Managerial Skill","Mgmt Interview","Nilai Akhir","Grade"];
     const rows = sorted.map(emp => {
-      const divisiName = DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "";
-      const deptName   = DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "";
-      const bagianName = BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "";
+      const divisiName = emp.divisionName ?? DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "";
+      const deptName   = emp.departmentName ?? DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "";
+      const bagianName = emp.bagianName ?? BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "";
       const final      = getFinal(emp);
       return [
         emp.name, emp.employeeId, emp.level, divisiName, deptName, bagianName,
@@ -1567,7 +1610,7 @@ function EmployeeAdjustmentSection({
         {[
           {
             label: "Divisi", value: selDivisi,
-            options: [["__all__","Semua Divisi"], ...DIV_DEFS.map(d => [d.id, d.divisi])],
+            options: [["__all__","Semua Divisi"], ...dynamicDivDefs.map(d => [d.id, d.divisi])],
             onChange: (v: string) => { setSelDivisi(v); setSelDept("__all__"); setSelBagian("__all__"); setSelPosisi("__all__"); },
           },
           {
@@ -1817,9 +1860,9 @@ function EmployeeAdjustmentSection({
               const canDec    = freeEdit ? final > 0   : final > minFinal + 0.001;
               const canInc    = freeEdit ? final < 100 : final < maxFinal - 0.001;
 
-              const divisiName = DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "—";
-              const deptName   = DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "—";
-              const bagianName = BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "—";
+              const divisiName = emp.divisionName ?? DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "—";
+              const deptName   = emp.departmentName ?? DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "—";
+              const bagianName = emp.bagianName ?? BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "—";
 
               const posColor =
                 emp.level === "Kepala Bagian"     ? "bg-purple-50 text-purple-700 border-purple-200" :
@@ -2038,10 +2081,12 @@ function EmployeeAdjustmentSection({
 // ─── Calibration Panel ────────────────────────────────────────────────────────
 
 function CalibrationPanel({
+  unitName,
   calibrationGrades, divisionProportions, departemenenProportions, bagianProportions,
   editMode, setEditMode, saveVersion, setSaveVersion, setIsSaved, pageMode,
   onPreview, onBackToEdit, canSubmit, onSubmit,
 }: {
+  unitName?: string;
   calibrationGrades: CalibrationGrade[];
   divisionProportions: DivisionProportion[];
   departemenenProportions: DepartemenenProportion[];
@@ -2134,7 +2179,7 @@ function CalibrationPanel({
     const bagianCounts: Record<string, number[]> = {};
 
     const effectiveAdj = pageMode === "preview" ? liveAdjustments : savedAdjustments;
-    ALL_EMPLOYEES.forEach(emp => {
+    ALL_EMPLOYEES.filter(emp => !unitName || emp.companyUnit === unitName).forEach(emp => {
       if (isYearEndInactive(emp.employeeId)) return;
       const finalScore = effectiveAdj[emp.id] ?? calcFinalScore(emp.level, applyYearEndScorePolicy(emp.employeeId, emp.base));
       const { grade } = gradeFromScore(finalScore);
@@ -2239,6 +2284,7 @@ function CalibrationPanel({
               />
 
               <EmployeeAdjustmentSection
+                unitName={unitName}
                 editMode={editMode}
                 adjustments={liveAdjustments}
                 setAdjustments={setLiveAdjustments}
@@ -2371,6 +2417,7 @@ function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBa
       )}
 
       <CalibrationPanel
+        unitName={unit.name}
         calibrationGrades={unit.calibrationGrades}
         divisionProportions={unit.divisionProportions}
         departemenenProportions={unit.departemenenProportions}

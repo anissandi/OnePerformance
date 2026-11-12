@@ -224,29 +224,27 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                 </span>
               </label>
             </div>
-            {(form.role === "Director" || form.groupings === "Direktur / Director") && (
-              <div className="pt-2 border-t border-gray-200 flex items-center justify-between gap-3 flex-wrap">
-                <div>
-                  <p className="text-xs font-semibold text-[#1A284F]">Peran Calibration Approval (Khusus Role Director)</p>
-                  <p className="text-[11px] text-gray-500">
-                    Menentukan tombol dan fungsi Direktur pada halaman Calibration Approval (/approvals/calibration).
-                  </p>
-                </div>
-                <select
-                  value={form.directorCalibrationRole ?? "approver"}
-                  onChange={(e) =>
-                    setForm((p) => ({
-                      ...p,
-                      directorCalibrationRole: e.target.value as "approver" | "mengetahui",
-                    }))
-                  }
-                  className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold bg-white text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="approver">Approver (Approve / Revision Calibration)</option>
-                  <option value="mengetahui">Mengetahui (Acknowledge Calibration)</option>
-                </select>
+            <div className="pt-2 border-t border-gray-200 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-xs font-semibold text-[#1A284F]">Peran Approval Calibration</p>
+                <p className="text-[11px] text-gray-500">
+                  Menentukan tombol dan fungsi pada halaman Calibration Approval (/approvals/calibration).
+                </p>
               </div>
-            )}
+              <select
+                value={form.directorCalibrationRole ?? "approver"}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    directorCalibrationRole: e.target.value as "approver" | "mengetahui",
+                  }))
+                }
+                className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold bg-white text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="approver">Approver (Approve / Revision Calibration)</option>
+                <option value="mengetahui">Mengetahui (Acknowledge Calibration)</option>
+              </select>
+            </div>
           </div>
 
           <div className="col-span-2 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3.5 space-y-2.5">
@@ -1145,7 +1143,7 @@ export function UserManagementPage() {
                           Validate HR ICF (= Admin)
                         </span>
                       )}
-                      {user.role === "Director" && (
+                      {(user.role === "Director" || user.directorCalibrationRole) && (
                         <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
                           (user.directorCalibrationRole ?? "approver") === "mengetahui"
                             ? "bg-sky-100 text-sky-800"
