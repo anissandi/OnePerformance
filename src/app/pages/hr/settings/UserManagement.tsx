@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT } from "../../shared/scoringWeightStore";
-import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight } from "lucide-react";
+import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check } from "lucide-react";
 import {
   defaultAllowedModulesForGrouping,
   loadManagedUsers,
@@ -10,7 +10,8 @@ import {
   saveUnitGroupRules,
   type ManagedUser,
 } from "../../../store/authStore";
-import { useAccessManagement } from "./AccessManagement";
+import { HIERARCHICAL_COMPANY_GROUPS, useAccessManagement } from "./AccessManagement";
+import { loadCalibrationOrgOptions } from "../CalibrationSetting";
 
 type Role = "Employee" | "Supervisor" | "GM" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "" | string;
 type Status = "Active" | "Inactive";
@@ -116,6 +117,144 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
   );
 }
 
+// ─── Multi-Select Checkbox Dropdown ───────────────────────────────────────────
+function MultiCheckboxDropdown({
+  label,
+  options,
+  selected,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const mergedOptions = useMemo(() => {
+    const set = new Set([...options, ...selected]);
+    return Array.from(set).filter(Boolean);
+  }, [options, selected]);
+
+  const filteredOptions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return mergedOptions;
+    return mergedOptions.filter((o) => o.toLowerCase().includes(q));
+  }, [mergedOptions, query]);
+
+  const toggleItem = (val: string) => {
+    if (selected.includes(val)) {
+      onChange(selected.filter((x) => x !== val));
+    } else {
+      onChange([...selected, val]);
+    }
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <label className="block text-[11px] font-medium text-gray-600 mb-1">{label}</label>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white text-left focus:outline-none focus:ring-2 focus:ring-blue-500 hover:border-gray-300"
+      >
+        <span className={selected.length > 0 ? "text-gray-800 font-medium truncate pr-2" : "text-gray-400 truncate pr-2"}>
+          {selected.length === 0
+            ? placeholder
+            : selected.length === 1
+            ? selected[0]
+            : `${selected.length} dipilih (${selected.join(", ")})`}
+        </span>
+        <ChevronDown size={13} className={`text-gray-400 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+          <div className="p-2 border-b border-gray-100 flex items-center gap-1.5 bg-gray-50/60">
+            <Search size={12} className="text-gray-400 shrink-0 ml-1" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Cari..."
+              className="w-full text-xs bg-transparent outline-none text-gray-700"
+            />
+            {selected.length > 0 && (
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="text-[10px] text-red-500 hover:underline shrink-0 px-1"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="max-h-48 overflow-y-auto py-1">
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-gray-400 text-center">Tidak ditemukan</div>
+            ) : (
+              filteredOptions.map((opt) => {
+                const checked = selected.includes(opt);
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => toggleItem(opt)}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-left hover:bg-indigo-50/60 transition-colors"
+                  >
+                    <span
+                      className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                        checked ? "bg-[#1A284F] border-[#1A284F]" : "border-gray-300 bg-white"
+                      }`}
+                    >
+                      {checked && <Check size={10} className="text-white" />}
+                    </span>
+                    <span className={checked ? "font-semibold text-[#1A284F] truncate" : "text-gray-700 truncate"}>
+                      {opt}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {selected.map((item) => (
+            <span
+              key={item}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200"
+            >
+              <span className="truncate max-w-[140px]">{item}</span>
+              <button
+                type="button"
+                onClick={() => toggleItem(item)}
+                className="hover:text-indigo-950"
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Edit / Add Modal ──────────────────────────────────────────────────────────
 function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: { user: User | null; availableRoles: Role[]; availableGroups: string[]; onClose: () => void; onSave: (u: User) => void }) {
   const isNew = !user || !user.name;
@@ -127,6 +266,45 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
   });
 
   function f(key: keyof User, val: string) { setForm(p => ({ ...p, [key]: val })); }
+
+  const calibrationOrgOpts = useMemo(
+    () => loadCalibrationOrgOptions([form.company, ...(form.managedUnits ?? [])].filter(Boolean)),
+    [form.company, form.managedUnits],
+  );
+
+  const calRoleMap: Record<string, "approver" | "mengetahui" | ""> = form.calibrationRoleByUnit ?? {};
+
+  const setUnitCalRole = (unitName: string, val: "approver" | "mengetahui" | "") => {
+    setForm((p) => {
+      const nextMap: Record<string, "approver" | "mengetahui" | ""> = {
+        ...(p.calibrationRoleByUnit ?? {}),
+        [unitName]: val,
+      };
+      const firstNonEmpty = Object.values(nextMap).find((v) => v === "approver" || v === "mengetahui") ?? "";
+      return {
+        ...p,
+        calibrationRoleByUnit: nextMap,
+        directorCalibrationRole: firstNonEmpty,
+      };
+    });
+  };
+
+  const setGroupCalRole = (units: readonly string[], val: "approver" | "mengetahui" | "") => {
+    setForm((p) => {
+      const nextMap: Record<string, "approver" | "mengetahui" | ""> = {
+        ...(p.calibrationRoleByUnit ?? {}),
+      };
+      for (const u of units) {
+        nextMap[u] = val;
+      }
+      const firstNonEmpty = Object.values(nextMap).find((v) => v === "approver" || v === "mengetahui") ?? "";
+      return {
+        ...p,
+        calibrationRoleByUnit: nextMap,
+        directorCalibrationRole: firstNonEmpty,
+      };
+    });
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
@@ -224,26 +402,71 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                 </span>
               </label>
             </div>
-            <div className="pt-2 border-t border-gray-200 flex items-center justify-between gap-3 flex-wrap">
+            <div className="pt-2.5 border-t border-gray-200 space-y-2.5">
               <div>
                 <p className="text-xs font-semibold text-[#1A284F]">Peran Approval Calibration</p>
                 <p className="text-[11px] text-gray-500">
-                  Menentukan tombol dan fungsi pada halaman Calibration Approval (/approvals/calibration).
+                  Atur peran pada halaman Calibration Approval (/approvals/calibration) per Group &amp; Unit Usaha. Memilih pada baris Group akan otomatis mengisi seluruh Unit Usaha di dalamnya (pilih kosong jika tidak terlibat).
                 </p>
               </div>
-              <select
-                value={form.directorCalibrationRole ?? "approver"}
-                onChange={(e) =>
-                  setForm((p) => ({
-                    ...p,
-                    directorCalibrationRole: e.target.value as "approver" | "mengetahui",
-                  }))
-                }
-                className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold bg-white text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="approver">Approver (Approve / Revision Calibration)</option>
-                <option value="mengetahui">Mengetahui (Acknowledge Calibration)</option>
-              </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {HIERARCHICAL_COMPANY_GROUPS.map((grp, gIdx) => {
+                  const unitVals = grp.units.map((u) => calRoleMap[u] ?? "");
+                  const allSame = unitVals.every((v) => v === unitVals[0]);
+                  const groupDropdownVal = allSame ? unitVals[0] : "";
+                  return (
+                    <div key={grp.groupName} className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                      {/* Group header row with inline dropdown */}
+                      <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-100">
+                        <span className="text-xs font-bold text-[#1A284F]">
+                          {gIdx + 1}. {grp.groupName}:
+                        </span>
+                        <select
+                          value={groupDropdownVal}
+                          onChange={(e) =>
+                            setGroupCalRole(grp.units, e.target.value as "approver" | "mengetahui" | "")
+                          }
+                          className="border border-indigo-200 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-50/50 text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">— Tidak Terlibat (Kosong) —</option>
+                          <option value="approver">Approver</option>
+                          <option value="mengetahui">Mengetahui</option>
+                        </select>
+                      </div>
+                      {/* Unit rows with inline dropdown */}
+                      <div className="space-y-1.5 pl-2">
+                        {grp.units.map((unit) => {
+                          const unitVal = calRoleMap[unit] ?? "";
+                          return (
+                            <div key={unit} className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-gray-700 truncate">
+                                - {unit}
+                              </span>
+                              <select
+                                value={unitVal}
+                                onChange={(e) =>
+                                  setUnitCalRole(unit, e.target.value as "approver" | "mengetahui" | "")
+                                }
+                                className={`border rounded-lg px-2 py-1 text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0 ${
+                                  unitVal === "approver"
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-800 font-semibold"
+                                    : unitVal === "mengetahui"
+                                    ? "border-sky-200 bg-sky-50 text-sky-800 font-semibold"
+                                    : "border-gray-200 bg-white text-gray-400"
+                                }`}
+                              >
+                                <option value="">— Kosong —</option>
+                                <option value="approver">Approver</option>
+                                <option value="mengetahui">Mengetahui</option>
+                              </select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -253,70 +476,38 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                 Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian)
               </p>
               <p className="text-[11px] text-gray-500 mt-0.5">
-                Opsional: Isi dengan pemisah koma (<code>,</code>) apabila pejabat ini membawahi lebih dari 1 Unit Usaha, Divisi, Departemen, atau Bagian.
+                Opsional: Pilih lebih dari 1 menggunakan dropdown checkbox di bawah apabila pejabat ini membawahi beberapa Unit Usaha, Divisi, Departemen, atau Bagian (data bersumber dari sistem &amp; tabel Proportion /calibration/setting).
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-medium text-gray-600 mb-1">Unit Usaha Tambahan</label>
-                <input
-                  type="text"
-                  placeholder="Contoh: PT RSUP (Perkebunan), PT RSTM"
-                  value={(form.managedUnits ?? []).join(", ")}
-                  onChange={(e) =>
-                    setForm((p) => ({
-                      ...p,
-                      managedUnits: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                    }))
-                  }
-                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-gray-600 mb-1">Divisi Tambahan</label>
-                <input
-                  type="text"
-                  placeholder="Contoh: Coconut Production, Pineapple Production"
-                  value={(form.managedDivisions ?? []).join(", ")}
-                  onChange={(e) =>
-                    setForm((p) => ({
-                      ...p,
-                      managedDivisions: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                    }))
-                  }
-                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-gray-600 mb-1">Departemen Tambahan</label>
-                <input
-                  type="text"
-                  placeholder="Contoh: Produksi Kelapa A, Produksi Kelapa B"
-                  value={(form.managedDepartments ?? []).join(", ")}
-                  onChange={(e) =>
-                    setForm((p) => ({
-                      ...p,
-                      managedDepartments: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                    }))
-                  }
-                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-gray-600 mb-1">Bagian Tambahan</label>
-                <input
-                  type="text"
-                  placeholder="Contoh: Proses Kelapa A, Packing Kelapa A"
-                  value={(form.managedBagians ?? []).join(", ")}
-                  onChange={(e) =>
-                    setForm((p) => ({
-                      ...p,
-                      managedBagians: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                    }))
-                  }
-                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+              <MultiCheckboxDropdown
+                label="Unit Usaha Tambahan"
+                options={COMPANIES}
+                selected={form.managedUnits ?? []}
+                onChange={(next) => setForm((p) => ({ ...p, managedUnits: next }))}
+                placeholder="— Pilih Unit Usaha Tambahan —"
+              />
+              <MultiCheckboxDropdown
+                label="Divisi Tambahan (dari Proportion /calibration/setting)"
+                options={calibrationOrgOpts.divisions}
+                selected={form.managedDivisions ?? []}
+                onChange={(next) => setForm((p) => ({ ...p, managedDivisions: next }))}
+                placeholder="— Pilih Divisi Tambahan —"
+              />
+              <MultiCheckboxDropdown
+                label="Departemen Tambahan (dari Proportion /calibration/setting)"
+                options={calibrationOrgOpts.departments}
+                selected={form.managedDepartments ?? []}
+                onChange={(next) => setForm((p) => ({ ...p, managedDepartments: next }))}
+                placeholder="— Pilih Departemen Tambahan —"
+              />
+              <MultiCheckboxDropdown
+                label="Bagian Tambahan (dari Proportion /calibration/setting)"
+                options={calibrationOrgOpts.bagians}
+                selected={form.managedBagians ?? []}
+                onChange={(next) => setForm((p) => ({ ...p, managedBagians: next }))}
+                placeholder="— Pilih Bagian Tambahan —"
+              />
             </div>
           </div>
         </div>

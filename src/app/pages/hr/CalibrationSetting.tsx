@@ -107,6 +107,70 @@ export function orgSlug(text: string): string {
 }
 
 /**
+ * Mengambil daftar Divisi, Departemen, dan Bagian dari tabel Proportion di /calibration/setting
+ * (menggabungkan data yang sudah disimpan di Calibration Setting, hasil distribusi karyawan, dan definisi standar).
+ */
+export function loadCalibrationOrgOptions(companyNames?: string[]): {
+  divisions: string[];
+  departments: string[];
+  bagians: string[];
+} {
+  const divSet = new Set<string>(DIV_DEFS.map((d) => d.divisi));
+  const deptSet = new Set<string>(DEPT_DEFS.map(([, , name]) => name));
+  const bagSet = new Set<string>(BAGIAN_DEFS.map(([, , name]) => name));
+
+  try {
+    const raw =
+      localStorage.getItem("calibration_submitted_units") ??
+      localStorage.getItem("calibration_hc_settings_2026");
+    const savedUnits: CompanyUnit[] = raw ? JSON.parse(raw) : [];
+    const baseUnits = defaultCompanyUnits.map((def) => {
+      const synced = applyImportedEmployeesDistribution(def);
+      const saved = savedUnits.find((s) => s.id === def.id || s.name === def.name);
+      return {
+        ...synced,
+        divisionProportions: [
+          ...(saved?.divisionProportions ?? []),
+          ...synced.divisionProportions,
+        ],
+        departemenenProportions: [
+          ...(saved?.departemenenProportions ?? []),
+          ...synced.departemenenProportions,
+        ],
+        bagianProportions: [
+          ...(saved?.bagianProportions ?? []),
+          ...synced.bagianProportions,
+        ],
+      };
+    });
+
+    const filteredUnits =
+      companyNames && companyNames.length > 0
+        ? baseUnits.filter((u) => companyNames.includes(u.name))
+        : baseUnits;
+
+    for (const u of filteredUnits) {
+      for (const d of u.divisionProportions) {
+        if (d.divisi?.trim()) divSet.add(d.divisi.trim());
+      }
+      for (const dep of u.departemenenProportions) {
+        if (dep.departemen?.trim()) deptSet.add(dep.departemen.trim());
+      }
+      for (const bag of u.bagianProportions) {
+        if (bag.bagian?.trim()) bagSet.add(bag.bagian.trim());
+      }
+    }
+  } catch {
+    // ignore and use defaults
+  }
+
+  return {
+    divisions: Array.from(divSet).sort(),
+    departments: Array.from(deptSet).sort(),
+    bagians: Array.from(bagSet).sort(),
+  };
+}
+/**
  * Bagian III Poin 3:
  * Membangun daftar Divisi, Departemen, dan Bagian beserta jumlah HC secara dinamis
  * langsung dari data karyawan hasil Import Excel pada unit usaha terkait.

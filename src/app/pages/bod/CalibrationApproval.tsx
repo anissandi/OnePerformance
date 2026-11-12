@@ -6,6 +6,8 @@ import {
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import {
   getActiveUser,
+  getCalibrationInvolvedUnits,
+  getCalibrationRoleForUnit,
   getGroupCompaniesForUnit,
   getGroupNameForUnit,
   getRoleAllowedCompanyUnits,
@@ -387,6 +389,13 @@ export function BODCalibrationApproval() {
   );
   const allowedUnitNames = useMemo(
     () => {
+      const calUnits = getCalibrationInvolvedUnits(
+        activeUser,
+        COMPANY_UNITS.map((u) => u.name),
+      );
+      if (activeUser.calibrationRoleByUnit && Object.keys(activeUser.calibrationRoleByUnit).length > 0) {
+        return calUnits;
+      }
       const roleUnits = getRoleAllowedCompanyUnits(activeUser.role);
       if (roleUnits.length > 0) {
         return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
@@ -395,7 +404,7 @@ export function BODCalibrationApproval() {
         ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
         : COMPANY_UNITS.map((u) => u.name);
     },
-    [isDirector, activeUser.role, activeUser.company, activeUser.managedUnits],
+    [isDirector, activeUser],
   );
   const visibleUnits = useMemo(
     () => COMPANY_UNITS.filter((u) => allowedUnitNames.includes(u.name)),
@@ -433,13 +442,20 @@ export function BODCalibrationApproval() {
     const all = loadManagedUsers();
     const idx = all.findIndex((u) => u.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase());
     if (idx >= 0) {
-      const updated = { ...all[idx], directorCalibrationRole: nextRole };
+      const currentUnitName = (visibleUnits.find((u) => u.id === selectedUnitId) ?? visibleUnits[0] ?? COMPANY_UNITS[0]).name;
+      const nextMap = { ...(all[idx].calibrationRoleByUnit ?? {}), [currentUnitName]: nextRole };
+      const updated = { ...all[idx], directorCalibrationRole: nextRole, calibrationRoleByUnit: nextMap };
       all[idx] = updated;
       saveManagedUsers(all, updated);
     }
   };
 
   const baseUnit = visibleUnits.find(u => u.id === selectedUnitId) ?? visibleUnits[0] ?? COMPANY_UNITS[0];
+  const unitSpecificRole = getCalibrationRoleForUnit(activeUser, baseUnit.name);
+  const effectiveCalRole: "approver" | "mengetahui" =
+    unitSpecificRole === "approver" || unitSpecificRole === "mengetahui"
+      ? unitSpecificRole
+      : directorCalRole;
   const liveUnitCount = loadManagedUsers().filter(
     (u) => u.status === "Active" && u.company === baseUnit.name && !isExcludedFromAppraisalCalibration(u),
   ).length;
@@ -544,19 +560,19 @@ export function BODCalibrationApproval() {
                 </span>
               )}
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                directorCalRole === "mengetahui"
+                effectiveCalRole === "mengetahui"
                   ? "bg-sky-50 text-sky-700 border-sky-200"
                   : "bg-emerald-50 text-emerald-700 border-emerald-200"
               }`}>
-                Peran Director: {directorCalRole === "mengetahui" ? "Mengetahui (Acknowledge)" : "Approver (Approve / Revision)"}
+                Peran pada {baseUnit.name}: {effectiveCalRole === "mengetahui" ? "Mengetahui (Acknowledge)" : "Approver (Approve / Revision)"}
               </span>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm">
-              <span className="text-[11px] font-semibold text-gray-500">Setup Peran Director:</span>
+              <span className="text-[11px] font-semibold text-gray-500">Peran Unit Ini:</span>
               <select
-                value={directorCalRole}
+                value={effectiveCalRole}
                 onChange={(e) => handleUpdateDirectorCalRole(e.target.value as "approver" | "mengetahui")}
                 className="text-xs font-bold text-[#1A284F] bg-transparent outline-none cursor-pointer"
               >
@@ -840,7 +856,11 @@ export function BODCalibrationApproval() {
         </Section>
 
         {/* ── Approval Action ── */}
-        {directorCalRole === "mengetahui" ? (
+        {visibleUnits.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center text-sm text-gray-500">
+            Akun Anda disetup <strong>Tidak Terlibat (Kosong)</strong> pada Peran Approval Calibration untuk seluruh Unit Usaha.
+          </div>
+        ) : effectiveCalRole === "mengetahui" ? (
           ackInfo ? (
             <div className="bg-sky-50 border border-sky-200 rounded-2xl p-6 flex gap-4">
               <CheckCircle2 className="w-6 h-6 text-sky-600 shrink-0 mt-0.5" />

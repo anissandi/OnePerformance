@@ -64,7 +64,9 @@ export interface ManagedUser {
   isHrUnitChecker?: boolean;
   isHrIcfValidator?: boolean;
   /** Peran khusus Role Director pada Calibration Approval: "approver" (Approve/Revision) atau "mengetahui" (Acknowledge) */
-  directorCalibrationRole?: "approver" | "mengetahui";
+  directorCalibrationRole?: "approver" | "mengetahui" | "";
+  /** Mapping Peran Approval Calibration per Company Unit ("approver" | "mengetahui" | "") */
+  calibrationRoleByUnit?: Record<string, "approver" | "mengetahui" | "">;
   /** Cakupan tambahan jika pejabat membawahi >1 Unit / Divisi / Departemen / Bagian */
   managedUnits?: string[];
   managedDivisions?: string[];
@@ -398,8 +400,14 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   }
 
   // 2. Collect structural hierarchy scope
+  const calInvolvedUnits =
+    user.calibrationRoleByUnit && typeof user.calibrationRoleByUnit === "object"
+      ? Object.entries(user.calibrationRoleByUnit)
+          .filter(([, v]) => v === "approver" || v === "mengetahui")
+          .map(([k]) => k)
+      : [];
   const allowedUnits = new Set<string>(
-    [user.company, ...roleAllowedUnits, ...(user.managedUnits ?? [])].map(normOrgName).filter(Boolean),
+    [user.company, ...roleAllowedUnits, ...calInvolvedUnits, ...(user.managedUnits ?? [])].map(normOrgName).filter(Boolean),
   );
   const allowedDivisions = new Set<string>(
     [user.division, ...(user.managedDivisions ?? [])].map(normOrgName).filter(Boolean),
@@ -964,4 +972,53 @@ export function useAuthStore() {
     lockedUnits,
     portalPath: resolvePortalPathForRole(activeUser.role, activeUser.position, resolveEffectiveUserGrouping(activeUser)),
   };
+}
+export function getCalibrationRoleForUnit(
+  user: ManagedUser | null | undefined,
+  unitName: string,
+): "approver" | "mengetahui" | "" {
+  if (!user) return "";
+  if (user.calibrationRoleByUnit && typeof user.calibrationRoleByUnit === "object") {
+    const hasAnyKey = Object.keys(user.calibrationRoleByUnit).length > 0;
+    if (hasAnyKey) {
+      return user.calibrationRoleByUnit[unitName] ?? "";
+    }
+  }
+  if (user.directorCalibrationRole === "") return "";
+  if (user.role === "BOD" || isAdminOrHrIcfRole(user.role)) {
+    return user.directorCalibrationRole || "approver";
+  }
+  if (isDirectorRoleOrGrouping(user)) {
+    const groupUnits = getGroupCompaniesForUnit(user.company, user.managedUnits);
+    if (groupUnits.includes(unitName)) {
+      return user.directorCalibrationRole || "approver";
+    }
+    return "";
+  }
+  return user.directorCalibrationRole || "";
+}
+
+export function getCalibrationInvolvedUnits(
+  user: ManagedUser | null | undefined,
+  allUnitNames: string[],
+): string[] {
+  if (!user) return [];
+  if (user.calibrationRoleByUnit && typeof user.calibrationRoleByUnit === "object") {
+    const keys = Object.keys(user.calibrationRoleByUnit);
+    if (keys.length > 0) {
+      return allUnitNames.filter((u) => {
+        const r = user.calibrationRoleByUnit?.[u];
+        return r === "approver" || r === "mengetahui";
+      });
+    }
+  }
+  if (user.directorCalibrationRole === "") return [];
+  const roleUnits = getRoleAllowedCompanyUnits(user.role);
+  if (roleUnits.length > 0) {
+    return Array.from(new Set([...roleUnits, ...(user.managedUnits ?? [])].filter(Boolean)));
+  }
+  if (isDirectorRoleOrGrouping(user)) {
+    return getGroupCompaniesForUnit(user.company, user.managedUnits);
+  }
+  return allUnitNames;
 }
