@@ -3,7 +3,9 @@
 import {
   getActiveUser,
   getAuthorizedSubordinates,
+  getGroupCompaniesForUnit,
   isAdminOrHrIcfRole,
+  isDirectorRoleOrGrouping,
   loadManagedUsers,
   resolveUserAllowedModules,
   type AppraisalModuleName,
@@ -29,7 +31,7 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
   const users = loadManagedUsers();
   const activeUser = getActiveUser();
   const isGlobalViewer =
-    isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD" || activeUser.role === "Director";
+    isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
   const scopedUsers = isGlobalViewer ? users : getAuthorizedSubordinates(activeUser, users);
   const mapped = scopedUsers.map((u) => {
     const allowed = resolveUserAllowedModules(u);
@@ -104,6 +106,9 @@ function getScopedCompanyUnits(): string[] {
   const activeUser = getActiveUser();
   if (activeUser.role === "HR Unit") {
     return Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+  }
+  if (isDirectorRoleOrGrouping(activeUser)) {
+    return getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits);
   }
   return ALL_COMPANY_UNITS;
 }

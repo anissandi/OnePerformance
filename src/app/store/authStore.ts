@@ -27,6 +27,7 @@ export type UserGrouping =
   | "Ka./Wa.Ka.Bagian"
   | "Ka./Wa.Ka.Dept"
   | "Ka./Wa.Ka.Div ke atas"
+  | "Direktur / Director"
   | string;
 
 export type AppraisalModuleName =
@@ -61,6 +62,8 @@ export interface ManagedUser {
   regNoAp2?: string;
   isHrUnitChecker?: boolean;
   isHrIcfValidator?: boolean;
+  /** Peran khusus Role Director pada Calibration Approval: "approver" (Approve/Revision) atau "mengetahui" (Acknowledge) */
+  directorCalibrationRole?: "approver" | "mengetahui";
   /** Cakupan tambahan jika pejabat membawahi >1 Unit / Divisi / Departemen / Bagian */
   managedUnits?: string[];
   managedDivisions?: string[];
@@ -95,13 +98,56 @@ export const RSUP_GROUP_COMPANIES = [
   "ASD",
 ] as const;
 
+export const SAMBU_GROUP_COMPANIES = [
+  "PT Pulau Sambu (Jakarta)",
+  "PT Pulau Sambu (Guntung)",
+  "PT Pulau Sambu (Kuala Enok)",
+] as const;
+
+export function getGroupNameForUnit(company: string): "RSUP Group" | "Sambu Group" {
+  const c = (company ?? "").trim().toLowerCase();
+  if (
+    (SAMBU_GROUP_COMPANIES as readonly string[]).some((u) => u.toLowerCase() === c) ||
+    c.includes("pulau sambu")
+  ) {
+    return "Sambu Group";
+  }
+  return "RSUP Group";
+}
+
+export function getGroupCompaniesForUnit(company: string, extraUnits?: string[]): string[] {
+  const groupName = getGroupNameForUnit(company);
+  const base =
+    groupName === "Sambu Group"
+      ? [...SAMBU_GROUP_COMPANIES]
+      : [...RSUP_GROUP_COMPANIES];
+  return Array.from(new Set([...base, ...(extraUnits ?? [])].filter(Boolean)));
+}
+
+export function isDirectorRoleOrGrouping(user?: { role?: string; groupings?: string; position?: string } | null): boolean {
+  if (!user) return false;
+  if (user.role === "Director") return true;
+  const g = (user.groupings ?? "").trim().toLowerCase();
+  if (g === "direktur / director" || g === "director" || g === "direktur") return true;
+  return false;
+}
+
+export function isExcludedFromAppraisalCalibration(user?: { role?: string; groupings?: string; position?: string } | null): boolean {
+  if (!user) return false;
+  if (user.role === "Director" || user.role === "BOD") return true;
+  return isDirectorRoleOrGrouping(user);
+}
+
 export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
   { id: "1", no: "1", regNo: "REG-001", name: "Administrator PA", employeeId: "ADMIN", position: "System Administrator", company: "PT RSUP (Industry)", division: "Staff Management", department: "Sumber Daya Manusia", bagian: "Pengembangan SDM", joinDate: "2020-01-01", telegramNo: "", grade: "Grade 6", role: "Administrator", groupings: "Ka./Wa.Ka.Bagian", status: "Active", lastLogin: "", email: "admin@sambugroup.com", regNoAp1: "", regNoAp2: "", isHrIcfValidator: true },
 ];
 
 export function inferGroupingFromPosition(position: string): UserGrouping {
   const p = position.toLowerCase();
-  if (/direktur|director|bod|gm|general manager|koordinator|divisi/i.test(p)) {
+  if (/direktur|director/i.test(p)) {
+    return "Direktur / Director";
+  }
+  if (/bod|gm|general manager|koordinator|divisi/i.test(p)) {
     return "Ka./Wa.Ka.Div ke atas";
   }
   if (/departemen|dept/i.test(p)) {
@@ -173,10 +219,13 @@ export function resolveGroupingForCompanyAndPosition(
   const normalizeToUserGrouping = (val: string): UserGrouping | null => {
     const v = val.trim().toLowerCase();
     if (!v) return null;
+    if (v === "direktur / director" || v === "direktur" || v === "director") {
+      return "Direktur / Director";
+    }
     const configuredGroups = loadAccessGroups();
     const exactGroup = configuredGroups.find((g) => g.toLowerCase() === v);
     if (exactGroup) return exactGroup;
-    if (val.trim() === "Ka./Wa.Ka.Div ke atas" || /div|gm|direktur|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
+    if (val.trim() === "Ka./Wa.Ka.Div ke atas" || /div|gm|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
     if (val.trim() === "Ka./Wa.Ka.Dept" || /dept|departemen/i.test(v)) return "Ka./Wa.Ka.Dept";
     if (val.trim() === "Ka./Wa.Ka.Bagian" || /bagian/i.test(v)) return "Ka./Wa.Ka.Bagian";
     if (val.trim() === "Ka./Wa.Ka.Seksi" || /seksi|shift/i.test(v)) return "Ka./Wa.Ka.Seksi";
@@ -214,6 +263,9 @@ export function resolveGroupingForCompanyAndPosition(
 }
 
 export function resolveEffectiveUserGrouping(user: ManagedUser): UserGrouping {
+  if (user.role === "Director" && (!user.groupings || user.groupings === "Ka./Wa.Ka.Div ke atas")) {
+    return "Direktur / Director";
+  }
   return resolveGroupingForCompanyAndPosition(user.company, user.position, user.groupings);
 }
 
@@ -227,6 +279,9 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
   // Penentuan level kewenangan berjenjang murni dari Effective Grouping (bebas dari perbedaan nama posisi seperti 'Mandor' vs 'Kepala Bagian')
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
   const configuredTier = getGroupAuthorityLevel(effectiveGrouping);
+  if (configuredTier === "director_group" || effectiveGrouping === "Direktur / Director") {
+    return "director_group";
+  }
   if (configuredTier === "division" || configuredTier === "department" || configuredTier === "bagian" || configuredTier === "seksi" || configuredTier === "operational") {
     return configuredTier;
   }
@@ -259,7 +314,9 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   }
 
   const myRank = HIERARCHY_RANK[level];
-  const isRsupMember = (RSUP_GROUP_COMPANIES as readonly string[]).includes(user.company);
+  const directorGroupUnits = new Set(
+    getGroupCompaniesForUnit(user.company, user.managedUnits).map(normOrgName),
+  );
 
   // 1. Collect transitive AP1 / AP2 subordinate chain
   const transitiveSubIds = new Set<string>();
@@ -308,12 +365,9 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];
 
-    // 1. Level Direktur pada Group: melihat semua unit dalam Group-nya (contoh: RSUP Group)
+    // 1. Level Direktur pada Group: melihat semua unit dalam Group-nya (RSUP Group atau Sambu Group), GM, Divisi, Departemen, Bagian, All Posisi
     if (level === "director_group") {
-      if (isRsupMember) {
-        return (RSUP_GROUP_COMPANIES as readonly string[]).includes(target.company) && targetRank <= myRank;
-      }
-      return allowedUnits.has(normOrgName(target.company)) && targetRank <= myRank;
+      return directorGroupUnits.has(normOrgName(target.company)) && targetRank <= myRank;
     }
 
     // 2. Level GM & HR Unit: melihat semua karyawan pada Unit Usahanya
@@ -428,10 +482,12 @@ export function getScopedFilterOptionsForUser(
   const uniq = (arr: (string | undefined)[]) =>
     Array.from(new Set(arr.map((v) => (v ?? "").trim()).filter(Boolean))).sort();
 
+  const groupName = getGroupNameForUnit(user.company);
+  const groupUnitsCount = getGroupCompaniesForUnit(user.company, user.managedUnits).length;
   const LABEL_BY_LEVEL: Record<HierarchyAuthorityLevel, string> = {
     admin: "Administrator / HR ICF (Semua Unit Usaha)",
     bod: "Board of Directors (Semua Unit Group)",
-    director_group: `Level Direktur Group (${(RSUP_GROUP_COMPANIES as readonly string[]).includes(user.company) ? "RSUP Group — 5 Unit Usaha" : user.company})`,
+    director_group: `Level Direktur Group (${groupName} — ${groupUnitsCount} Unit Usaha, GM, Divisi, Dept, Bagian & All Posisi)`,
     gm_unit: `Level GM Unit Usaha (${user.company})`,
     hr_unit: `HR Unit Usaha (${user.company})`,
     division: `Level Divisi (${user.division} — ${user.company})`,
@@ -456,7 +512,7 @@ export function canUserAccessEmployeeData(
   targetEmployeeIdOrName: string,
   allUsers = loadManagedUsers(),
 ): boolean {
-  if (isAdminOrHrIcfRole(viewer.role) || viewer.role === "BOD" || viewer.role === "Director") {
+  if (isAdminOrHrIcfRole(viewer.role) || viewer.role === "BOD") {
     return true;
   }
   const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");

@@ -13,7 +13,12 @@ import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } fro
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
 import { savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
-import { getActiveUser } from "../../store/authStore";
+import {
+  getActiveUser,
+  getGroupCompaniesForUnit,
+  getGroupNameForUnit,
+  isDirectorRoleOrGrouping,
+} from "../../store/authStore";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -2837,8 +2842,79 @@ function KPIHistorySection({ months }: { months: MonthEntry[] }) {
   );
 }
 
+const BUSINESS_KPI_ITEMS: KPIItem[] = [
+  {
+    no: "B-1",
+    perspektif: "Financial",
+    kpi: "Pencapaian EBITDA & Efisiensi Biaya Operasional Group",
+    satuan: "%",
+    formula: "(Realisasi EBITDA Group / Target EBITDA Group) x 100%",
+    bobot: "30%",
+    definisi: "Mengukur pencapaian target finansial konsolidasi seluruh unit usaha dalam Group.",
+    source: "Laporan Keuangan Konsolidasi Group",
+    baseline2025: "96%",
+    target2026: "100%",
+    polaritas: "Maximize",
+    detailFormula: "Cascading dari capaian finansial masing-masing Unit Usaha dalam Group.",
+    keterangan: "KPI Business Group — Section A (Objective KPI)",
+    section: "A",
+    subRows: [
+      { label: "Realisasi Konsolidasi Unit (%)" },
+      { label: "Target Group (%)" },
+      { label: "% Pencapaian", bold: true, compute: { type: "ratio", actualIdx: 0, targetIdx: 1 } },
+    ],
+  },
+  {
+    no: "B-2",
+    perspektif: "Internal Business Process",
+    kpi: "Produktivitas & Yield Rata-Rata Unit Usaha Group",
+    satuan: "%",
+    formula: "Rata-rata tertimbang capaian produktivitas seluruh unit usaha",
+    bobot: "35%",
+    definisi: "Mengukur efektivitas operasional dan produktivitas pabrik/perkebunan lintas unit usaha.",
+    source: "Laporan Operasional Bulanan Unit Usaha (Cascading KPI Unit)",
+    baseline2025: "94%",
+    target2026: "100%",
+    polaritas: "Maximize",
+    detailFormula: "Cascading otomatis/manual dari indikator KPI Unit masing-masing GM.",
+    keterangan: "KPI Business Group — Section B (Functional KPI)",
+    section: "B",
+    subRows: [
+      { label: "Realisasi Yield Group (%)" },
+      { label: "Target Yield Group (%)" },
+      { label: "% Pencapaian", bold: true, compute: { type: "ratio", actualIdx: 0, targetIdx: 1 } },
+    ],
+  },
+  {
+    no: "B-3",
+    perspektif: "EHS & Quality",
+    kpi: "Zero Major Accident & Pemenuhan Standar Mutu Ekspor Group",
+    satuan: "%",
+    formula: "(Jumlah Audit/Pengiriman Lulus Standar / Total) x 100%",
+    bobot: "35%",
+    definisi: "Memastikan kepatuhan K3L dan standar mutu produk di seluruh unit usaha Group.",
+    source: "Laporan QA & EHS Konsolidasi Group",
+    baseline2025: "98%",
+    target2026: "100%",
+    polaritas: "Maximize",
+    detailFormula: "Evaluasi bulanan lintas unit usaha dalam Group.",
+    keterangan: "KPI Business Group — Section B (Functional KPI)",
+    section: "B",
+    subRows: [
+      { label: "Realisasi Kepatuhan Mutu & EHS (%)" },
+      { label: "Target Standar (%)" },
+      { label: "% Pencapaian", bold: true, compute: { type: "ratio", actualIdx: 0, targetIdx: 1 } },
+    ],
+  },
+];
+
 export function KPIPage() {
   const navigate = useNavigate();
+  const activeUser = getActiveUser();
+  const isDirectorMode = isDirectorRoleOrGrouping(activeUser);
+  const [directorKpiTab, setDirectorKpiTab] = useState<"business" | "personal">("business");
+  const groupName = getGroupNameForUnit(activeUser.company);
+  const groupUnits = getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits);
   const [view, setView] = useState<PageView>("input");
   const [months, setMonths] = useState<MonthEntry[]>(() => loadKPITracking().months);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -3067,6 +3143,47 @@ export function KPIPage() {
     setView("preview");
   };
 
+  const [businessCellsMap, setBusinessCellsMap] = useState<Record<string, Record<CellKey, string>>>(() => {
+    try {
+      const raw = localStorage.getItem("kpi_business_tracking_cells_v1");
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+    return {};
+  });
+  const updateBusinessCell = (monthId: string, key: CellKey, val: string) => {
+    setBusinessCellsMap((prev) => {
+      const next = {
+        ...prev,
+        [monthId]: { ...(prev[monthId] ?? {}), [key]: val },
+      };
+      savePersistedState("kpi_business_tracking_cells_v1", next);
+      return next;
+    });
+  };
+  const handlePullCascadingFromUnits = () => {
+    if (months.length === 0) {
+      toast.error("Tambahkan bulan tracking terlebih dahulu.");
+      return;
+    }
+    const next: Record<string, Record<CellKey, string>> = { ...businessCellsMap };
+    for (const m of months) {
+      next[m.id] = {
+        ...(next[m.id] ?? {}),
+        [ck("B-1", 0)]: "98",
+        [ck("B-1", 1)]: "100",
+        [ck("B-2", 0)]: "96",
+        [ck("B-2", 1)]: "100",
+        [ck("B-3", 0)]: "100",
+        [ck("B-3", 1)]: "100",
+      };
+    }
+    setBusinessCellsMap(next);
+    savePersistedState("kpi_business_tracking_cells_v1", next);
+    toast.success(`Nilai realisasi indikator turunan berhasil di-cascade dari ${groupUnits.length} Unit Usaha (${groupName}).`);
+  };
+
   return (
     <div className="w-full flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -3080,7 +3197,14 @@ export function KPIPage() {
               </span>
             )}
           </div>
-          <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
+            {isDirectorMode && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                Role Director ({groupName}: {groupUnits.join(", ")}) — 2 Tab: KPI (Business) &amp; KPI (Personal)
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {view === "input" && !isLockedByDeadline && (
@@ -3303,6 +3427,137 @@ export function KPIPage() {
         </div>
       )}
 
+      {isDirectorMode && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-gray-200 flex-wrap gap-2">
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => setDirectorKpiTab("business")}
+                className={`px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                  directorKpiTab === "business"
+                    ? "border-[#1A284F] text-[#1A284F] bg-white"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                KPI (Business)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDirectorKpiTab("personal")}
+                className={`px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                  directorKpiTab === "personal"
+                    ? "border-[#1A284F] text-[#1A284F] bg-white"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                KPI (Personal)
+              </button>
+            </div>
+            {directorKpiTab === "business" && (
+              <div className="flex items-center gap-2 pb-2">
+                <span className="text-xs text-gray-500">
+                  Cakupan Konsolidasi: <strong>{groupName}</strong> ({groupUnits.length} Unit Usaha)
+                </span>
+                <button
+                  type="button"
+                  onClick={handlePullCascadingFromUnits}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors"
+                >
+                  Ambil Nilai Cascading dari KPI Unit
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isDirectorMode && directorKpiTab === "business" ? (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
+          <div className="px-4 py-3 bg-[#1A284F] text-white flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider">KPI Measurement (Business) — {groupName}</p>
+              <p className="text-[11px] text-blue-200">
+                Format Tracking KPI Business Group (mendukung cascading nilai realisasi dari indikator KPI Unit: {groupUnits.join(", ")})
+              </p>
+            </div>
+          </div>
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-100 text-slate-700 border-b border-gray-200">
+                <th className="border border-gray-200 px-3 py-2.5 text-center w-12">No</th>
+                <th className="border border-gray-200 px-3 py-2.5 text-left w-36">Perspektif</th>
+                <th className="border border-gray-200 px-3 py-2.5 text-left min-w-[220px]">Indikator KPI Business ({groupName})</th>
+                <th className="border border-gray-200 px-3 py-2.5 text-center w-16">Bobot</th>
+                <th className="border border-gray-200 px-3 py-2.5 text-center w-20">Target 2026</th>
+                <th className="border border-gray-200 px-3 py-2.5 text-left w-44">Tracking</th>
+                {months.map((m) => (
+                  <th key={m.id} className="border border-gray-200 px-2.5 py-2.5 text-center min-w-[76px]">
+                    {m.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {BUSINESS_KPI_ITEMS.map((item) =>
+                item.subRows.map((sub, sIdx) => {
+                  const isComputed = Boolean(sub.compute);
+                  return (
+                    <tr key={`${item.no}-${sIdx}`} className={isComputed ? "bg-blue-50/50 font-bold" : "hover:bg-gray-50"}>
+                      {sIdx === 0 && (
+                        <>
+                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-center font-bold text-[#1A284F] align-top">
+                            {item.no}
+                          </td>
+                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-gray-700 font-semibold align-top">
+                            {item.perspektif}
+                          </td>
+                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 align-top">
+                            <p className="font-semibold text-gray-800">{item.kpi}</p>
+                            <p className="text-[10px] text-gray-400 mt-0.5">{item.detailFormula}</p>
+                          </td>
+                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-center font-bold text-[#1A284F] align-top">
+                            {item.bobot}
+                          </td>
+                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-center font-semibold text-gray-700 align-top">
+                            {item.target2026}
+                          </td>
+                        </>
+                      )}
+                      <td className="border border-gray-200 px-3 py-2 text-gray-700">{sub.label}</td>
+                      {months.map((m) => {
+                        const rawVal = businessCellsMap[m.id]?.[ck(item.no, sIdx)] ?? "";
+                        if (isComputed) {
+                          const act = parseFloat(businessCellsMap[m.id]?.[ck(item.no, 0)] ?? "");
+                          const tgt = parseFloat(businessCellsMap[m.id]?.[ck(item.no, 1)] ?? "100");
+                          const pct = Number.isFinite(act) && Number.isFinite(tgt) && tgt > 0 ? `${Math.round((act / tgt) * 100)}%` : "—";
+                          return (
+                            <td key={m.id} className="border border-gray-200 px-2 py-2 text-center text-[#1A284F] font-bold">
+                              {pct}
+                            </td>
+                          );
+                        }
+                        return (
+                          <td key={m.id} className="border border-gray-200 px-1.5 py-1.5 text-center">
+                            <input
+                              type="text"
+                              value={rawVal}
+                              disabled={view !== "input" || submitted || isLockedByDeadline}
+                              onChange={(e) => updateBusinessCell(m.id, ck(item.no, sIdx), e.target.value)}
+                              placeholder="—"
+                              className="w-full text-center border border-gray-200 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50"
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                }),
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
       <KPITable
         months={months}
         editable={view === "input" && !submitted && !isLockedByDeadline}
@@ -3320,6 +3575,7 @@ export function KPIPage() {
         storedRCAStatus={storedRCAStatus}
         approvedEditCells={approvedEditCells}
       />
+      )}
 
       <EvidenceUploadSection
         files={evidenceFiles}

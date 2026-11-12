@@ -4,7 +4,15 @@ import {
   Building2, Search,
 } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
-import { loadManagedUsers } from "../../store/authStore";
+import {
+  getActiveUser,
+  getGroupCompaniesForUnit,
+  getGroupNameForUnit,
+  isDirectorRoleOrGrouping,
+  isExcludedFromAppraisalCalibration,
+  loadManagedUsers,
+  saveManagedUsers,
+} from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 
 // ─── Seeded helpers ────────────────────────────────────────────────────────────
@@ -36,11 +44,14 @@ type CompanyUnit = {
 };
 
 const COMPANY_UNITS: CompanyUnit[] = [
-  { id: "1", name: "PT RSUP (Industry)",   code: "RSUP-IND", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
-  { id: "2", name: "PT RSUP (Perkebunan)", code: "RSUP-PKB", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
-  { id: "3", name: "PT RSTM",              code: "RSTM",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
-  { id: "4", name: "PT GHS",               code: "GHS",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
-  { id: "5", name: "ASD",                  code: "ASD",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "1", name: "PT RSUP (Industry)",          code: "RSUP-IND", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "2", name: "PT RSUP (Perkebunan)",        code: "RSUP-PKB", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "3", name: "PT RSTM",                     code: "RSTM",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "4", name: "PT GHS",                      code: "GHS",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "5", name: "ASD",                         code: "ASD",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "6", name: "PT Pulau Sambu (Jakarta)",    code: "PSJ",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "7", name: "PT Pulau Sambu (Guntung)",    code: "PSG",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "8", name: "PT Pulau Sambu (Kuala Enok)", code: "PSKE",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
 ];
 
 // ─── Seeded grade distribution per unit ──────────────────────────────────────
@@ -368,29 +379,64 @@ function RevisionModal({ unitName, onConfirm, onCancel }: {
 type ApprovalStatus = "pending" | "approved" | "revision";
 
 export function BODCalibrationApproval() {
-  const [selectedUnitId, setSelectedUnitId] = useState(COMPANY_UNITS[0].id);
-  const [modal, setModal]   = useState<"approve" | "revision" | null>(null);
+  const activeUser = getActiveUser();
+  const isDirector = isDirectorRoleOrGrouping(activeUser);
+  const [directorCalRole, setDirectorCalRole] = useState<"approver" | "mengetahui">(
+    () => activeUser.directorCalibrationRole ?? "approver",
+  );
+  const allowedUnitNames = useMemo(
+    () => (isDirector ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits) : COMPANY_UNITS.map((u) => u.name)),
+    [isDirector, activeUser.company, activeUser.managedUnits],
+  );
+  const visibleUnits = useMemo(
+    () => COMPANY_UNITS.filter((u) => allowedUnitNames.includes(u.name)),
+    [allowedUnitNames],
+  );
+  const [selectedUnitId, setSelectedUnitId] = useState(() => visibleUnits[0]?.id ?? COMPANY_UNITS[0].id);
+  const [modal, setModal]   = useState<"approve" | "revision" | "mengetahui" | null>(null);
   const [statusMap, setStatusMap] = useState<Record<string, ApprovalStatus>>(() =>
     loadPersistedState("pa_bod_cal_status_map_v1", {})
   );
   const [approvedAtMap, setApprovedAtMap] = useState<Record<string, string>>(() =>
     loadPersistedState("pa_bod_cal_approved_at_v1", {})
   );
+  const [acknowledgedMap, setAcknowledgedMap] = useState<Record<string, { by: string; at: string }>>(() =>
+    loadPersistedState("pa_bod_cal_acknowledged_map_v1", {})
+  );
   const [empSearch, setEmpSearch] = useState("");
+
+  useEffect(() => {
+    setDirectorCalRole(activeUser.directorCalibrationRole ?? "approver");
+  }, [activeUser.employeeId, activeUser.directorCalibrationRole]);
 
   useEffect(() => {
     const onHydrated = () => {
       setStatusMap(loadPersistedState("pa_bod_cal_status_map_v1", {}));
       setApprovedAtMap(loadPersistedState("pa_bod_cal_approved_at_v1", {}));
+      setAcknowledgedMap(loadPersistedState("pa_bod_cal_acknowledged_map_v1", {}));
     };
     window.addEventListener("pa-db-hydrated", onHydrated);
     return () => window.removeEventListener("pa-db-hydrated", onHydrated);
   }, []);
 
-  const baseUnit = COMPANY_UNITS.find(u => u.id === selectedUnitId)!;
-  const liveUnitCount = loadManagedUsers().filter((u) => u.status === "Active" && u.company === baseUnit.name).length;
+  const handleUpdateDirectorCalRole = (nextRole: "approver" | "mengetahui") => {
+    setDirectorCalRole(nextRole);
+    const all = loadManagedUsers();
+    const idx = all.findIndex((u) => u.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase());
+    if (idx >= 0) {
+      const updated = { ...all[idx], directorCalibrationRole: nextRole };
+      all[idx] = updated;
+      saveManagedUsers(all, updated);
+    }
+  };
+
+  const baseUnit = visibleUnits.find(u => u.id === selectedUnitId) ?? visibleUnits[0] ?? COMPANY_UNITS[0];
+  const liveUnitCount = loadManagedUsers().filter(
+    (u) => u.status === "Active" && u.company === baseUnit.name && !isExcludedFromAppraisalCalibration(u),
+  ).length;
   const unit: CompanyUnit = { ...baseUnit, totalHC: liveUnitCount };
   const status = statusMap[selectedUnitId] ?? "pending";
+  const ackInfo = acknowledgedMap[selectedUnitId];
 
   const employees  = useMemo(() => generateEmployees(selectedUnitId, unit.totalHC), [selectedUnitId, unit.totalHC, statusMap]);
   const gradeDist  = useMemo(() => {
@@ -481,8 +527,34 @@ export function BODCalibrationApproval() {
         <div className="flex items-start justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-3xl font-bold text-[#1A284F]">Calibration Approval</h1>
-            <p className="mt-1 text-sm text-gray-500">Performance Year 2026 · Director Review</p>
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              <p className="text-sm text-gray-500">Performance Year 2026 · Director / BOD Review</p>
+              {isDirector && (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                  Cakupan Calibration Approval: {getGroupNameForUnit(activeUser.company)} ({visibleUnits.length} Unit Usaha)
+                </span>
+              )}
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+                directorCalRole === "mengetahui"
+                  ? "bg-sky-50 text-sky-700 border-sky-200"
+                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
+              }`}>
+                Peran Director: {directorCalRole === "mengetahui" ? "Mengetahui (Acknowledge)" : "Approver (Approve / Revision)"}
+              </span>
+            </div>
           </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm">
+              <span className="text-[11px] font-semibold text-gray-500">Setup Peran Director:</span>
+              <select
+                value={directorCalRole}
+                onChange={(e) => handleUpdateDirectorCalRole(e.target.value as "approver" | "mengetahui")}
+                className="text-xs font-bold text-[#1A284F] bg-transparent outline-none cursor-pointer"
+              >
+                <option value="approver">Approver</option>
+                <option value="mengetahui">Mengetahui</option>
+              </select>
+            </div>
           {status === "approved" && (
             <span className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold px-4 py-2 rounded-xl">
               <CheckCircle2 className="w-4 h-4" /> Approved on {approvedAtMap[selectedUnitId]}
@@ -493,13 +565,19 @@ export function BODCalibrationApproval() {
               <RotateCcw className="w-4 h-4" /> Revision Requested
             </span>
           )}
+          {ackInfo && (
+            <span className="flex items-center gap-2 bg-sky-50 border border-sky-200 text-sky-700 text-xs font-bold px-4 py-2 rounded-xl">
+              <CheckCircle2 className="w-4 h-4" /> Diketahui oleh {ackInfo.by} ({ackInfo.at})
+            </span>
+          )}
+          </div>
         </div>
 
         {/* ── Company Unit Selector ── */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Company Unit</p>
           <div className="flex flex-wrap gap-2">
-            {COMPANY_UNITS.map(u => {
+            {visibleUnits.map(u => {
               const s = statusMap[u.id] ?? "pending";
               return (
                 <button
@@ -753,7 +831,40 @@ export function BODCalibrationApproval() {
         </Section>
 
         {/* ── Approval Action ── */}
-        {status === "pending" && (
+        {directorCalRole === "mengetahui" ? (
+          ackInfo ? (
+            <div className="bg-sky-50 border border-sky-200 rounded-2xl p-6 flex gap-4">
+              <CheckCircle2 className="w-6 h-6 text-sky-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-sky-800">Calibration Telah Diketahui (Acknowledged) — {unit.name}</p>
+                <p className="text-sm text-sky-700 mt-0.5">
+                  Diketahui oleh <strong>{ackInfo.by}</strong> pada {ackInfo.at}.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-[#1A284F]">Director Mengetahui (Acknowledge) — {unit.name}</h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Role Director Anda di-setup sebagai <strong>Mengetahui</strong> pada Calibration Approval unit ini.
+                </p>
+              </div>
+              <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 flex gap-2 text-sm text-sky-800">
+                <Info className="w-4 h-4 shrink-0 mt-0.5 text-sky-500" />
+                Klik tombol Mengetahui di bawah untuk mengonfirmasi bahwa Anda telah meninjau dan mengetahui hasil kalibrasi untuk {unit.name}.
+              </div>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setModal("mengetahui")}
+                  className="flex items-center gap-2 bg-[#1A284F] hover:bg-[#243869] text-white font-semibold rounded-xl px-5 py-2.5 text-sm transition-colors shadow-sm"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Mengetahui Calibration
+                </button>
+              </div>
+            </div>
+          )
+        ) : status === "pending" && (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
             <div>
               <h2 className="text-sm font-semibold text-[#1A284F]">Director Approval — {unit.name}</h2>
@@ -800,6 +911,58 @@ export function BODCalibrationApproval() {
 
       {modal === "approve"   && <ApproveModal  unitName={unit.name} onConfirm={handleApprove}  onCancel={() => setModal(null)} />}
       {modal === "revision"  && <RevisionModal unitName={unit.name} onConfirm={handleRevision} onCancel={() => setModal(null)} />}
+      {modal === "mengetahui" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5 text-sky-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Konfirmasi Mengetahui Calibration</h3>
+                <p className="text-xs text-gray-500">{unit.name}</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Apakah Anda yakin ingin mengonfirmasi <strong>Mengetahui (Acknowledge)</strong> atas hasil kalibrasi untuk unit <strong>{unit.name}</strong>?
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setModal(null)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleAcknowledge}
+                className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-[#1A284F] text-white rounded-xl hover:bg-[#243869]"
+              >
+                <CheckCircle2 className="w-4 h-4" /> Ya, Mengetahui
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+  const handleAcknowledge = () => {
+    const now = new Date().toLocaleString("id-ID", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) + " WIB";
+    const nextAck = {
+      ...acknowledgedMap,
+      [selectedUnitId]: { by: activeUser.name || "Director", at: now },
+    };
+    setAcknowledgedMap(nextAck);
+    savePersistedState("pa_bod_cal_acknowledged_map_v1", nextAck, {
+      kind: "kv-state",
+      stateKey: "pa_bod_cal_acknowledged_map_v1",
+      stateValue: nextAck,
+      audit: {
+        action: "Approve",
+        module: "Performance Appraisal",
+        subModule: "Calibration Approval (Mengetahui)",
+        description: `Director ${activeUser.name} acknowledged (Mengetahui) Calibration results for ${unit.name} (${now})`,
+      },
+    });
+    setModal(null);
+  };

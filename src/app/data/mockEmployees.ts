@@ -1,6 +1,12 @@
 import { TrendingUp, Lightbulb, ClipboardList, Briefcase, FolderKanban, MessageSquare } from "lucide-react";
 import React from "react";
-import { getActiveUser, loadManagedUsers, resolveEffectiveUserGrouping, resolveUserAllowedModules } from "../store/authStore";
+import {
+  getActiveUser,
+  isExcludedFromAppraisalCalibration,
+  loadManagedUsers,
+  resolveEffectiveUserGrouping,
+  resolveUserAllowedModules,
+} from "../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../pages/shared/appraisalFormStore";
@@ -113,7 +119,8 @@ function averageNumbers(nums: number[]): number {
  */
 export function getLiveTransactionalEmployees(): Employee[] {
   try {
-    const users = loadManagedUsers();
+    // Role Director & BOD tidak masuk dalam penilaian kinerja reguler (headcount, grade distribution, calibration adjustment, dll.)
+    const users = loadManagedUsers().filter((u) => !isExcludedFromAppraisalCalibration(u));
     const activeUser = getActiveUser();
     const workflows = loadWorkflowRecords();
     let projectByEmp: Record<string, { rows?: Array<{ finalScore?: number }>; submittedDate?: string }> = {};

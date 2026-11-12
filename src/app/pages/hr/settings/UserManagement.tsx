@@ -22,7 +22,7 @@ const COMPANIES = [
   "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)",
   "PT RSTM", "PT GHS", "ASD",
 ];
-const GROUPINGS_SCORES = ["Operasional", "Ka./Wa.Ka.Seksi", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Div ke atas"];
+const GROUPINGS_SCORES = ["Operasional", "Ka./Wa.Ka.Seksi", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Div ke atas", "Direktur / Director"];
 
 function initials(name: string) {
   return name.split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
@@ -224,6 +224,29 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                 </span>
               </label>
             </div>
+            {(form.role === "Director" || form.groupings === "Direktur / Director") && (
+              <div className="pt-2 border-t border-gray-200 flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="text-xs font-semibold text-[#1A284F]">Peran Calibration Approval (Khusus Role Director)</p>
+                  <p className="text-[11px] text-gray-500">
+                    Menentukan tombol dan fungsi Direktur pada halaman Calibration Approval (/approvals/calibration).
+                  </p>
+                </div>
+                <select
+                  value={form.directorCalibrationRole ?? "approver"}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      directorCalibrationRole: e.target.value as "approver" | "mengetahui",
+                    }))
+                  }
+                  className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold bg-white text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="approver">Approver (Approve / Revision Calibration)</option>
+                  <option value="mengetahui">Mengetahui (Acknowledge Calibration)</option>
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="col-span-2 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3.5 space-y-2.5">
@@ -401,10 +424,10 @@ const INITIAL_GROUP_RULES: GroupRule[] = [
   { id: "g16", position: "Wakil Manager Divisi",  group: "Ka./Wa.Ka.Div ke atas", description: "Deputy division manager, supports Manager Divisi", allowedModules: defaultAllowedModulesForGrouping("Ka./Wa.Ka.Div ke atas") },
   { id: "g17", position: "Manager Divisi",        group: "Ka./Wa.Ka.Div ke atas", description: "Division manager with full divisional authority", allowedModules: defaultAllowedModulesForGrouping("Ka./Wa.Ka.Div ke atas") },
   { id: "g18", position: "General Manager (GM)",  group: "Ka./Wa.Ka.Div ke atas", description: "General Manager overseeing multiple divisions", allowedModules: defaultAllowedModulesForGrouping("Ka./Wa.Ka.Div ke atas") },
-  { id: "g19", position: "Direktur",              group: "Ka./Wa.Ka.Div ke atas", description: "Director with full organisational authority", allowedModules: defaultAllowedModulesForGrouping("Ka./Wa.Ka.Div ke atas") },
+  { id: "g19", position: "Direktur",              group: "Direktur / Director",   description: "Director with full Group authority (RSUP Group / Sambu Group)", allowedModules: defaultAllowedModulesForGrouping("Direktur / Director") },
 ];
 
-const ALL_GROUPS = ["Operasional", "Ka./Wa.Ka.Seksi", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Div ke atas"];
+const ALL_GROUPS = ["Operasional", "Ka./Wa.Ka.Seksi", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Div ke atas", "Direktur / Director"];
 
 const GROUP_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   "Operasional":           { bg: "bg-sky-50",     text: "text-sky-700",     dot: "bg-sky-400"     },
@@ -412,6 +435,7 @@ const GROUP_COLORS: Record<string, { bg: string; text: string; dot: string }> = 
   "Ka./Wa.Ka.Bagian":      { bg: "bg-amber-50",   text: "text-amber-700",   dot: "bg-amber-400"   },
   "Ka./Wa.Ka.Dept":        { bg: "bg-emerald-50", text: "text-emerald-700", dot: "bg-emerald-400" },
   "Ka./Wa.Ka.Div ke atas": { bg: "bg-rose-50",    text: "text-rose-700",    dot: "bg-rose-400"    },
+  "Direktur / Director":   { bg: "bg-purple-50",  text: "text-purple-700",  dot: "bg-purple-500"  },
 };
 
 function GroupBadge({ group }: { group: string }) {
@@ -1119,6 +1143,15 @@ export function UserManagementPage() {
                       {(user.role === "HR ICF" || user.isHrIcfValidator) && (
                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-medium">
                           Validate HR ICF (= Admin)
+                        </span>
+                      )}
+                      {user.role === "Director" && (
+                        <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
+                          (user.directorCalibrationRole ?? "approver") === "mengetahui"
+                            ? "bg-sky-100 text-sky-800"
+                            : "bg-emerald-100 text-emerald-800"
+                        }`}>
+                          Calibration: {(user.directorCalibrationRole ?? "approver") === "mengetahui" ? "Mengetahui" : "Approver"}
                         </span>
                       )}
                     </div>

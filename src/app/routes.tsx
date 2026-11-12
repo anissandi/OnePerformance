@@ -59,7 +59,6 @@ import { EmployeeSettingKPIPage } from "./pages/staff/EmployeeSettingKPIPage"
 import { InterDepartmentFeedback } from "./pages/supervisor/InterDepartmentFeedback"
 import { FeedbackApprovalsPage } from "./pages/shared/FeedbackApprovalsPage"
 import { ManagementInterviewInvitation } from "./pages/hr/ManagementInterviewInvitation"
-import { ManagementInterviewAssessment } from "./pages/bod/ManagementInterviewAssessment"
 import { BODCalibrationApproval } from "./pages/bod/CalibrationApproval"
 import { SupervisorCalibration } from "./pages/supervisor/Calibration"
 import { YearEndVerification } from "./pages/hr/YearEndVerification"
@@ -68,46 +67,51 @@ import {
   HRCycleHistory,
   SupervisorCycleHistory,
 } from "./pages/shared/CycleHistory"
+import {
+  getActiveUser,
+  getGroupCompaniesForUnit,
+  isDirectorRoleOrGrouping,
+} from "./store/authStore"
 
 function HRAppraisalSummary() {
   return <PerformanceAppraisalSummary role="hr" />
 }
-const BOD_UNITS = [
-  "PT RSUP (Industry)",
-  "PT RSUP (Perkebunan)",
-  "PT RSTM",
-  "PT GHS",
-  "ASD",
-]
+function getBodOrDirectorUnits(): string[] | undefined {
+  const activeUser = getActiveUser()
+  if (isDirectorRoleOrGrouping(activeUser)) {
+    return getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
+  }
+  return undefined
+}
 function BODAppraisalSummary() {
-  return <PerformanceAppraisalSummary role="hr" lockedUnits={BOD_UNITS} />
+  return <PerformanceAppraisalSummary role="hr" lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODAnalyticsDashboard() {
-  return <AnalyticsDashboard lockedUnits={BOD_UNITS} />
+  return <AnalyticsDashboard lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODHRApprovals() {
-  return <HRApprovals lockedUnits={BOD_UNITS} />
+  return <HRApprovals lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODMonitoringKPI() {
-  return <HRMonitoringKPI lockedUnits={BOD_UNITS} />
+  return <HRMonitoringKPI lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODMonitoringSmartGoals() {
-  return <HRMonitoringSmartGoals lockedUnits={BOD_UNITS} />
+  return <HRMonitoringSmartGoals lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODMonitoringAppraisalForm() {
-  return <HRMonitoringAppraisalForm lockedUnits={BOD_UNITS} />
+  return <HRMonitoringAppraisalForm lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODMonitoringProject() {
-  return <HRMonitoringProject lockedUnits={BOD_UNITS} />
+  return <HRMonitoringProject lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODMonitoringManagerialSkill() {
-  return <HRMonitoringManagerialSkill lockedUnits={BOD_UNITS} />
+  return <HRMonitoringManagerialSkill lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODMonitoringManagementInterview() {
-  return <HRMonitoringManagementInterview lockedUnits={BOD_UNITS} />
+  return <HRMonitoringManagementInterview lockedUnits={getBodOrDirectorUnits()} />
 }
 function BODCalibrationAdjustment() {
-  return <CalibrationAdjustment lockedUnits={BOD_UNITS} />
+  return <CalibrationAdjustment lockedUnits={getBodOrDirectorUnits()} />
 }
 function SupervisorAppraisalSummary() {
   return <PerformanceAppraisalSummary role="supervisor" />
@@ -251,7 +255,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "management-interview/assessment",
-        Component: ManagementInterviewAssessment,
+        Component: SupervisorMonitoringManagementInterview,
       },
       {
         path: "management-interview/invitation",
@@ -391,7 +395,7 @@ export const router = createBrowserRouter([
       { path: "evidence/management-interview", Component: HREvidenceInterview },
       {
         path: "management-interview/assessment",
-        Component: ManagementInterviewAssessment,
+        Component: SupervisorMonitoringManagementInterview,
       },
       {
         path: "management-interview/invitation",
@@ -509,7 +513,7 @@ export const router = createBrowserRouter([
       { path: "evidence/rca", Component: HREvidenceRCA },
       { path: "evidence/smart-goals", Component: HREvidenceSmart },
       { path: "evidence/management-interview", Component: HREvidenceInterview },
-      { path: "management-interview/assessment", Component: ManagementInterviewAssessment },
+      { path: "management-interview/assessment", Component: SupervisorMonitoringManagementInterview },
       { path: "management-interview/invitation", Component: ManagementInterviewInvitation },
       { path: "modules", Component: HRModuleActivation },
       { path: "override", Component: HRManagementOverride },
@@ -566,7 +570,7 @@ export const router = createBrowserRouter([
       { path: "approvals/measurement/:tab", Component: BODHRApprovals },
       {
         path: "approvals/measurement/inter-department-feedback",
-        Component: () => <FeedbackApprovalsPage lockedUnits={BOD_UNITS} />,
+        Component: () => <FeedbackApprovalsPage lockedUnits={getBodOrDirectorUnits()} />,
       },
       { path: "approvals/setting", Component: BODHRApprovals },
       { path: "approvals/setting/:tab", Component: BODHRApprovals },
@@ -606,7 +610,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "management-interview/assessment",
-        Component: ManagementInterviewAssessment,
+        Component: SupervisorMonitoringManagementInterview,
       },
       {
         path: "management-interview/invitation",

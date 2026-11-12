@@ -9,7 +9,7 @@ import { applyYearEndScorePolicy, isYearEndInactive } from "../shared/yearEndWor
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
-import { loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
+import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { applyImportedEmployeesDistribution, orgSlug } from "./CalibrationSetting";
 
@@ -252,7 +252,7 @@ const MI_LINKED_EMPLOYEES: Employee[] = [
 ];
 
 function buildLiveCalibrationEmployees(): Employee[] {
-  const users = loadManagedUsers().filter((u) => u.status === "Active");
+  const users = loadManagedUsers().filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
   const liveEmps = getLiveTransactionalEmployees();
   return users.map((u) => {
     const live = liveEmps.find((e) => e.id.toLowerCase() === u.employeeId.toLowerCase());

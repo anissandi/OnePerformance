@@ -149,10 +149,9 @@ const INITIAL_MENUS: MenuItem[] = [
   },
   {
     id: "management_interview", label: "Management Interview", path: "", icon: "UserSquare",
-    isVisible: true, order: 13, roles: ["BOD", "Director"] as Role[],
+    isVisible: true, order: 13, roles: HR_ADMIN,
     children: [
-      { id: "mgmt_interview_assessment", label: "Assessment", path: "/management-interview/assessment", icon: "ClipboardList", isVisible: true, order: 1, roles: ["BOD"] as Role[] },
-      { id: "mgmt_interview_invitation", label: "Invitation", path: "/management-interview/invitation", icon: "MessageSquare", isVisible: true, order: 2, roles: HR_ADMIN },
+      { id: "mgmt_interview_invitation", label: "Invitation", path: "/management-interview/invitation", icon: "MessageSquare", isVisible: true, order: 1, roles: HR_ADMIN },
     ],
   },
   {

@@ -10,6 +10,7 @@ import {
   type ScheduleEntry,
 } from "./interviewScheduleStore";
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { loadManagedUsers } from "../../store/authStore";
 
 // ── Master data ───────────────────────────────────────────────────────────────
 
@@ -72,6 +73,25 @@ const ALL_OTHER_USERS: PersonOption[] = [
   { value: "Herman Candra",    position: "Konsultan Eksternal" },
   { value: "Suci Rahayu",      position: "Konsultan Eksternal" },
 ];
+
+function getMergedPersonOptions(base: PersonOption[], filterFn?: (u: ReturnType<typeof loadManagedUsers>[number]) => boolean): PersonOption[] {
+  const users = loadManagedUsers().filter((u) => u.status === "Active" && (!filterFn || filterFn(u)));
+  const seen = new Set<string>();
+  const result: PersonOption[] = [];
+  for (const u of users) {
+    const key = u.name.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push({ value: u.name, position: `${u.position} (${u.employeeId} · ${u.role || "Employee"})` });
+  }
+  for (const b of base) {
+    const key = b.value.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(b);
+  }
+  return result;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -333,6 +353,16 @@ function DetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose: () => 
 
 export function SupervisorManagementInterviewCheckIn() {
   const [entries, setEntries]     = useState<ScheduleEntry[]>(getEntries);
+  const employeeOptions = React.useMemo(() => getMergedPersonOptions(ALL_EMPLOYEES), [entries]);
+  const interviewerOptions = React.useMemo(
+    () =>
+      getMergedPersonOptions(
+        ALL_INTERVIEWERS,
+        (u) => u.role === "Director" || u.role === "BOD" || u.role === "GM" || /direktur|director|gm|divisi/i.test(u.position),
+      ),
+    [entries],
+  );
+  const otherUserOptions = React.useMemo(() => getMergedPersonOptions(ALL_OTHER_USERS), [entries]);
   const [showForm, setShowForm]   = useState(false);
   const [editId, setEditId]       = useState<string | null>(null);
   const [form, setForm]           = useState<FormState>(EMPTY_FORM);
@@ -456,7 +486,7 @@ export function SupervisorManagementInterviewCheckIn() {
             {/* Employee (was Add User) */}
             <MultiSelect
               label={<span className="flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-gray-400" />Employee</span>}
-              options={ALL_EMPLOYEES}
+              options={employeeOptions}
               selected={form.addedUsers}
               onChange={v => setF("addedUsers", v)}
               placeholder="— Pilih Employee —"
@@ -465,7 +495,7 @@ export function SupervisorManagementInterviewCheckIn() {
             {/* Interviewer */}
             <MultiSelect
               label={<span className="flex items-center gap-1.5"><Users className="w-3.5 h-3.5 text-gray-400" />Interviewer</span>}
-              options={ALL_INTERVIEWERS}
+              options={interviewerOptions}
               selected={form.interviewers}
               onChange={v => setF("interviewers", v)}
               placeholder="— Pilih Interviewer —"
@@ -475,7 +505,7 @@ export function SupervisorManagementInterviewCheckIn() {
             {/* Other User */}
             <MultiSelect
               label={<span className="flex items-center gap-1.5"><Users className="w-3.5 h-3.5 text-gray-400" />Other User</span>}
-              options={ALL_OTHER_USERS}
+              options={otherUserOptions}
               selected={form.otherUsers}
               onChange={v => setF("otherUsers", v)}
               placeholder="— Pilih Other User —"

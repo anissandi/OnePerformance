@@ -5,9 +5,15 @@ import { loadPersistedState, savePersistedState, syncToSupabase } from "../../..
 export type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
 export type Role = BuiltinRole | string;
 
-export type BuiltinGroup = "Operasional" | "Ka./Wa.Ka.Seksi" | "Ka./Wa.Ka.Bagian" | "Ka./Wa.Ka.Dept" | "Ka./Wa.Ka.Div ke atas";
+export type BuiltinGroup =
+  | "Operasional"
+  | "Ka./Wa.Ka.Seksi"
+  | "Ka./Wa.Ka.Bagian"
+  | "Ka./Wa.Ka.Dept"
+  | "Ka./Wa.Ka.Div ke atas"
+  | "Direktur / Director";
 export type GroupName = BuiltinGroup | string;
-export type GroupAuthorityTier = "operational" | "seksi" | "bagian" | "department" | "division";
+export type GroupAuthorityTier = "operational" | "seksi" | "bagian" | "department" | "division" | "director_group";
 export type AccessAppraisalModule =
   | "KPI (Setting/Measurement)"
   | "SMART Goals (Setting/Measurement)"
@@ -40,6 +46,7 @@ export const BUILTIN_GROUPS: BuiltinGroup[] = [
   "Ka./Wa.Ka.Bagian",
   "Ka./Wa.Ka.Dept",
   "Ka./Wa.Ka.Div ke atas",
+  "Direktur / Director",
 ];
 
 export const BUILTIN_GROUP_DEFAULTS: Record<BuiltinGroup, AccessGroupConfig> = {
@@ -93,7 +100,7 @@ export const BUILTIN_GROUP_DEFAULTS: Record<BuiltinGroup, AccessGroupConfig> = {
   },
   "Ka./Wa.Ka.Div ke atas": {
     name: "Ka./Wa.Ka.Div ke atas",
-    description: "Manager / Wakil Manager Divisi, General Manager (GM), dan Direktur.",
+    description: "Manager / Wakil Manager Divisi dan General Manager (GM).",
     authorityLevel: "division",
     allowedModules: [
       "KPI (Setting/Measurement)",
@@ -105,6 +112,14 @@ export const BUILTIN_GROUP_DEFAULTS: Record<BuiltinGroup, AccessGroupConfig> = {
       "Management Interview",
     ],
   },
+  "Direktur / Director": {
+    name: "Direktur / Director",
+    description: "Level Direktur Group (RSUP Group / Sambu Group). Melihat seluruh Unit Usaha dalam Group, GM, Divisi, Departemen, Bagian & All Posisi. Secara default hanya memiliki modul KPI (Setting & Measurement: Business & Personal) dan tidak masuk dalam headcount kalibrasi.",
+    authorityLevel: "director_group",
+    allowedModules: [
+      "KPI (Setting/Measurement)",
+    ],
+  },
 };
 
 const AUTHORITY_TIER_LABELS: Record<GroupAuthorityTier, string> = {
@@ -113,6 +128,7 @@ const AUTHORITY_TIER_LABELS: Record<GroupAuthorityTier, string> = {
   bagian: "Level Bagian (Melihat semua posisi di dalam Bagiannya)",
   department: "Level Departemen (Melihat semua posisi & bagian di dalam Departemennya)",
   division: "Level Divisi ke atas (Melihat semua posisi, bagian & departemen di dalam Divisinya)",
+  director_group: "Level Direktur Group (Melihat semua Unit Usaha dalam Group [RSUP / Sambu Group], GM, Divisi, Departemen, Bagian & All Posisi)",
 };
 
 export interface Permission {
@@ -241,7 +257,6 @@ export const MENU_STRUCTURE: MenuItem[] = [
   {
     id: "management_interview", label: "Management Interview",
     children: [
-      { id: "mgmt_interview_assessment", label: "Assessment" },
       { id: "mgmt_interview_invitation", label: "Invitation" },
     ]
   },
@@ -406,14 +421,14 @@ const DEFAULT_DIRECTOR: RolePermissions = {
   dashboard_approval: N,
   calibration_verification: N,
   analytics: V,
-  profile: N,
+  profile: VE,
   profile_overview: VE,
   profile_results: V,
   profile_kpi: V,
   approvals: VA,
-  approvals_kpi_business:   N,
-  approvals_kpi_business_group: N,
-  approvals_kpi_business_unit:  N,
+  approvals_kpi_business:   VCEA,
+  approvals_kpi_business_group: VCEA,
+  approvals_kpi_business_unit:  VA,
   approvals_pa_measurement: VA,
   approvals_feedback:       VA,
   approvals_pa_setting:     VA,
@@ -430,24 +445,24 @@ const DEFAULT_DIRECTOR: RolePermissions = {
   calibration: V,
   calibration_setting:    N,
   calibration_adjustment: V,
-  calibration_interview:  N,
+  calibration_interview:  V,
   evidence: N,
   evidence_kpi:       N,
   evidence_rca:       N,
   evidence_smart:     N,
   evidence_interview: N,
-  pa_setting: N,
-  pa_setting_kpi:   N,
-  pa_setting_smart: N,
-  pa_measurement: N,
-  pa_measurement_kpi:        N,
-  pa_measurement_rca:        N,
-  pa_measurement_smart:      N,
-  pa_measurement_appraisal:  N,
-  pa_measurement_project:    N,
-  pa_measurement_managerial: N,
-  pa_measurement_feedback:   N,
-  pa_measurement_interview:  N,
+  pa_setting: V,
+  pa_setting_kpi:   VCET,
+  pa_setting_smart: VCET,
+  pa_measurement: V,
+  pa_measurement_kpi:        VCET,
+  pa_measurement_rca:        VCET,
+  pa_measurement_smart:      VCET,
+  pa_measurement_appraisal:  VCET,
+  pa_measurement_project:    VCET,
+  pa_measurement_managerial: VCET,
+  pa_measurement_feedback:   VCET,
+  pa_measurement_interview:  VCET,
   history: V,
   documents: V,
   override: N,
@@ -482,8 +497,8 @@ const DEFAULT_DIRECTOR: RolePermissions = {
   approvals_calibration: VA,
   pa_monitoring_feedback:    N,
   calibration_team_performance: N,
-  pa_setting_project:    N,
-  pa_setting_interview:  N,
+  pa_setting_project:    VCET,
+  pa_setting_interview:  VCET,
   management_interview:  V,
   mgmt_interview_assessment: VCEA,
   mgmt_interview_invitation: N,
@@ -1158,7 +1173,7 @@ function IndeterminateCheckbox({ state, onChange }: { state: "all" | "none" | "i
 }
 
 const ACCESS_ROLES_KEY = "pa_access_roles_v1";
-const ACCESS_PERMS_KEY = "pa_access_permissions_v2";
+const ACCESS_PERMS_KEY = "pa_access_permissions_v3";
 const ACCESS_GROUPS_KEY = "pa_access_groups_v1";
 const ACCESS_GROUP_CONFIGS_KEY = "pa_access_group_configs_v1";
 
@@ -1334,6 +1349,7 @@ function buildDefaultGroupConfigsMap(): Record<GroupName, AccessGroupConfig> {
     "Ka./Wa.Ka.Bagian":      deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Bagian"]),
     "Ka./Wa.Ka.Dept":        deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Dept"]),
     "Ka./Wa.Ka.Div ke atas": deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Div ke atas"]),
+    "Direktur / Director":   deepClone(BUILTIN_GROUP_DEFAULTS["Direktur / Director"]),
   };
 }
 
@@ -1381,6 +1397,9 @@ export function getGroupConfig(group: GroupName): AccessGroupConfig {
   const trimmed = (group ?? "").trim();
   const exact = map[trimmed];
   if (exact) return exact;
+  if (/^(direktur|director)$/i.test(trimmed) && map["Direktur / Director"]) {
+    return map["Direktur / Director"];
+  }
   const ciKey = Object.keys(map).find((k) => k.toLowerCase() === trimmed.toLowerCase());
   if (ciKey) return map[ciKey];
   return map["Operasional"] ?? BUILTIN_GROUP_DEFAULTS["Operasional"];

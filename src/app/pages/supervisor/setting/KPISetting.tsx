@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { loadMasterKpi, type MasterKpiStore } from "../../hr/settings/masterKpiStore";
-import { getActiveUser, resolveEffectiveUserGrouping } from "../../../store/authStore";
+import {
+  getActiveUser,
+  getGroupNameForUnit,
+  isDirectorRoleOrGrouping,
+  resolveEffectiveUserGrouping,
+} from "../../../store/authStore";
 import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock } from "lucide-react";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
@@ -4472,10 +4477,12 @@ function TabStatusBadge({ ts, useValidate = false }: { ts: TabStatus; useValidat
 export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = false }: { personalOnly?: boolean } = {}) {
   const activeUser = getActiveUser();
   const effectiveGrouping = resolveEffectiveUserGrouping(activeUser);
+  const isDirectorMode = !personalOnlyProp && isDirectorRoleOrGrouping(activeUser);
   const personalOnly =
     personalOnlyProp ||
-    effectiveGrouping === "Operasional" ||
-    effectiveGrouping === "Ka./Wa.Ka.Seksi";
+    (!isDirectorMode &&
+      (effectiveGrouping === "Operasional" ||
+        effectiveGrouping === "Ka./Wa.Ka.Seksi"));
   const [routeKpiTab, setActiveTab]         = useRouteTab<KPITab>(["corporate", "pak-anton", "pak-amir", "division", "department", "personal"], personalOnly ? "personal" : "corporate");
   const activeTab: KPITab                   = personalOnly ? "personal" : routeKpiTab;
   const [personalTabStatus, setPersonalTabStatus]   = useState<TabStatus>("idle");
@@ -4601,7 +4608,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
     "pak-anton": !corpValidated,
     "pak-amir":  !corpValidated || !pakAntonValidated,
     division:    !corpValidated || !pakAntonValidated || !pakAmirApproved,
-    personal:    !corpValidated || !pakAntonValidated || !pakAmirApproved || !divisionApproved,
+    personal:    isDirectorMode ? false : (!corpValidated || !pakAntonValidated || !pakAmirApproved || !divisionApproved),
     department:  false,
   };
 
@@ -4621,16 +4628,30 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
     if (!personalOnly && activeTabLocked) setActiveTab("corporate");
   }, [personalOnly, activeTabLocked, setActiveTab]);
 
+  const visibleTabDefs: { id: KPITab; label: string }[] = isDirectorMode
+    ? [
+        { id: "corporate", label: "KPI (Business)" },
+        { id: "personal",  label: "KPI (Personal)" },
+      ]
+    : TAB_DEFS;
+
   return (
     <div className="w-full flex flex-col gap-6">
       <div>
         <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">KPI Setting</h1>
-        <p className="text-gray-500 text-sm">2026 Performance Appraisal — KPI Configuration</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-gray-500 text-sm">2026 Performance Appraisal — KPI Configuration</p>
+          {isDirectorMode && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+              Role Director ({getGroupNameForUnit(activeUser.company)}) — 2 Tab: KPI (Business) &amp; KPI (Personal)
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Tab bar */}
       {!personalOnly && <div className="flex gap-1 border-b border-gray-200 flex-wrap">
-        {TAB_DEFS.map((tab) => {
+        {visibleTabDefs.map((tab) => {
           const locked = tabLocked[tab.id];
           const active = activeTab === tab.id;
           return (
@@ -4712,12 +4733,12 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
       {activeTab === "personal" && (
         <KPISection
           key="personal"
-          initialItems={personalOnly ? PERSONAL_KPI : []}
+          initialItems={personalOnly || isDirectorMode ? PERSONAL_KPI : []}
           isPersonal={true}
           isCorporate={false}
-          divisionApproved={personalOnly ? true : divisionApproved}
+          divisionApproved={personalOnly || isDirectorMode ? true : divisionApproved}
           useValidateTerms={false}
-          hideCascading={personalOnly}
+          hideCascading={personalOnly || isDirectorMode}
           onTabStatusChange={setPersonalTabStatus}
         />
       )}

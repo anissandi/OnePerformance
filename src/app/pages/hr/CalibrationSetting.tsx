@@ -3,7 +3,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { toast } from "sonner";
 import { Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send, CheckCircle2, Clock, X, RefreshCw, Users } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
-import { loadManagedUsers } from "../../store/authStore";
+import { isExcludedFromAppraisalCalibration, loadManagedUsers } from "../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ export function orgSlug(text: string): string {
  */
 export function applyImportedEmployeesDistribution(unit: CompanyUnit): CompanyUnit {
   const unitUsers = loadManagedUsers().filter(
-    (u) => u.company === unit.name && u.status === "Active",
+    (u) => u.company === unit.name && u.status === "Active" && !isExcludedFromAppraisalCalibration(u),
   );
   if (unitUsers.length === 0) {
     return {

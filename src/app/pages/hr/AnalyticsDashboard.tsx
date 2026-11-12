@@ -7,7 +7,7 @@ import {
   getLiveTransactionalEmployees, GRADE_ORDER,
   readCalibrationTargets, getModuleScoreGrade,
 } from "../../data/mockEmployees";
-import { loadManagedUsers, resolveUserAllowedModules, useAuthStore, type ManagedUser } from "../../store/authStore";
+import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules, useAuthStore, type ManagedUser } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
@@ -581,7 +581,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   );
 
   const scopedUsers = useMemo(() => {
-    const all = loadManagedUsers().filter((u) => u.status === "Active");
+    const all = loadManagedUsers().filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
     const unitFiltered = effectiveLockedUnits ? all.filter((u) => effectiveLockedUnits.includes(u.company)) : all;
     return companyUnit === "All Units" ? unitFiltered : unitFiltered.filter((u) => u.company === companyUnit);
   }, [companyUnit, effectiveLockedUnits, tick]);
