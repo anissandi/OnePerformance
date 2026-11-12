@@ -1,6 +1,7 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
 import { savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser, resolveUserAllowedModules, shouldBypassCheckerForSubmission } from "../../store/authStore";
+import { triggerApprovalTransactionNotification } from "../../store/notificationStore";
 
 export const MOCK_EMPLOYEE_ID = "EMP-002";
 const KEY = "appraisal_workflow_v1";
@@ -103,6 +104,12 @@ export function submitWorkflowModule(
     decisions: initialDecisions,
     assessments: {},
   });
+  triggerApprovalTransactionNotification({
+    employeeId: normalizeEmployeeId(employeeId),
+    moduleName: `${module} (${phase === "setting" ? "Setting" : "Measurement"})`,
+    rawStatus: "Submitted",
+    approverName: getActiveUser().name,
+  });
 }
 export function saveWorkflowDecision(no: string, status: string, date: string) {
   const alias = workflowAlias(no);
@@ -116,6 +123,13 @@ export function saveWorkflowDecision(no: string, status: string, date: string) {
     delete assessments.approver2;
   }
   write({ ...record, decisions, assessments });
+  triggerApprovalTransactionNotification({
+    employeeId: alias.employeeId,
+    moduleName: `${alias.module} (${alias.phase === "setting" ? "Setting" : "Measurement"})`,
+    rawStatus: status,
+    approverRole: alias.role,
+    approverName: getActiveUser().name,
+  });
 }
 export function saveWorkflowAssessment(no: string, role: ReviewerRole, ratings: Record<string, number>, comments: Record<string, string>, date: string) {
   const alias = workflowAlias(no);

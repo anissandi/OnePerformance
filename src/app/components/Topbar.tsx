@@ -1,8 +1,18 @@
-import { Bell, User, LogOut, ChevronDown, Clock, ArrowRight, X, CheckCheck, Search, LayoutDashboard, BarChart2, CalendarCheck, Settings, FileText, ShieldCheck, Database, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+// @refresh reset
+import { Bell, User, LogOut, ChevronDown, Clock, ArrowRight, X, CheckCheck, Search, LayoutDashboard, BarChart2, CalendarCheck, Settings, FileText, ShieldCheck, Database, PanelLeftClose, PanelLeftOpen, KeyRound, Eye, EyeOff, CheckCircle2, ShieldAlert } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router";
 import { STAFF_PROFILE, SUPERVISOR_PROFILE } from "../store/profileStore";
 import { resolvePortalPathForRole, switchActiveUserByEmployeeId, useAuthStore } from "../store/authStore";
+import {
+  NOTIFICATION_CATEGORY_META,
+  resolveNotificationRouteForUser,
+  useNotificationStore,
+} from "../store/notificationStore";
+import {
+  updateEmployeeNewPassword,
+  validateNewPasswordPolicy,
+} from "../store/loginManagementStore";
 
 // ─── Search data ──────────────────────────────────────────────────────────────
 
@@ -65,6 +75,7 @@ const HR_ITEMS: SearchItem[] = [
   { label: "User Management", path: "/hr/settings/user-management", category: "Settings" },
   { label: "Access Management", path: "/hr/settings/access-management", category: "Settings" },
   { label: "Menu Management", path: "/hr/settings/menu-management", category: "Settings" },
+  { label: "Notification Management", path: "/hr/settings/notification-management", category: "Settings" },
   { label: "Audit Trail", path: "/hr/settings/audit-trail", category: "Settings" },
   { label: "Data Sync", path: "/hr/settings/data-sync", category: "Settings" },
   { label: "Scores Calibration", path: "/hr/settings/scores-calibration", category: "Calibration" },
@@ -281,33 +292,17 @@ function GlobalSearch({ role }: { role: string }) {
   );
 }
 
-// ─── Notification types ───────────────────────────────────────────────────────
-
-interface Notification {
-  id: string;
-  title: string;
-  body: string[];
-  cta: string;
-  ctaRoute: string;
-  time: string;
-  read: boolean;
+function formatNotifTime(iso: string): string {
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return iso;
+  const diffMin = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+  if (diffMin < 1) return "Just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
 }
-
-const KPI_NOTIFICATIONS: Notification[] = [
-  {
-    id: "notif-kpi-jun26",
-    title: "⏰ KPI Tracking Reminder",
-    body: [
-      `Hello ${SUPERVISOR_PROFILE.name},`,
-      "This is a monthly KPI Tracking reminder. The system has detected that your KPI Tracking for the June 2026 period has not been submitted yet.",
-      "Please submit your KPI Tracking promptly for the approval process.",
-    ],
-    cta: "KPI Tracking",
-    ctaRoute: "/supervisor/measurement/kpi-tracking",
-    time: "Today, 08:00",
-    read: false,
-  },
-];
 
 // ─── Topbar ───────────────────────────────────────────────────────────────────
 
@@ -321,26 +316,66 @@ export function Topbar({
   onToggleSidebar?: () => void;
 }) {
   const { activeUser, allUsers } = useAuthStore();
+  const {
+    userNotifications,
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
+    clearOne,
+  } = useNotificationStore(activeUser);
   const [lang, setLang] = useState<"EN" | "ID">("EN");
   const [dropOpen, setDropOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>(
-    role === "supervisor" ? KPI_NOTIFICATIONS : []
-  );
+  const [notifToast, setNotifToast] = useState("");
+
+  // Change Password modal state (from top-right profile menu)
+  const [changePwdModalOpen, setChangePwdModalOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [pwdError, setPwdError] = useState("");
+  const [pwdSuccessPopupOpen, setPwdSuccessPopupOpen] = useState(false);
+
   const dropRef = useRef<HTMLDivElement>(null);
   const bellRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const handleSeeAllNotifications = () => {
+    setBellOpen(false);
+    const validPortal = ["hr", "supervisor", "employee", "bod"].includes(role)
+      ? role
+      : "supervisor";
+    const targetPath = `/${validPortal}/dashboard/my?section=notifications#notification-section`;
+    navigate(targetPath);
+    setTimeout(() => {
+      const el = document.getElementById("notification-section");
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 120);
+  };
 
-  const markAllRead = () =>
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  const handleSaveProfilePassword = () => {
+    setPwdError("");
+    const check = validateNewPasswordPolicy(newPassword);
+    if (!check.valid) {
+      setPwdError(check.message);
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPwdError("Konfirmasi password baru tidak cocok.");
+      return;
+    }
+    const res = updateEmployeeNewPassword(activeUser.employeeId, newPassword);
+    if (!res.ok) {
+      setPwdError(res.error);
+      return;
+    }
+    setChangePwdModalOpen(false);
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setPwdSuccessPopupOpen(true);
+  };
 
-  const markRead = (id: string) =>
-    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
-
-  const dismiss = (id: string) =>
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  const pwdPolicy = validateNewPasswordPolicy(newPassword);
 
   const titles = {
     hr: { title: "Performance Appraisal Hub", subtitle: "Administrator" },
@@ -423,62 +458,97 @@ export function Topbar({
                   )}
                 </div>
                 {unreadCount > 0 && (
-                  <button onClick={markAllRead} className="flex items-center gap-1 text-[11px] text-[#1A284F] font-semibold hover:underline">
+                  <button onClick={markAllAsRead} className="flex items-center gap-1 text-[11px] text-[#1A284F] font-semibold hover:underline">
                     <CheckCheck className="w-3 h-3" />
                     Mark all as read
                   </button>
                 )}
               </div>
 
-              <div className="max-h-[420px] overflow-y-auto">
-                {notifications.length === 0 ? (
+              {notifToast && (
+                <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-[11px] text-rose-700 font-medium">
+                  {notifToast}
+                </div>
+              )}
+
+              <div className="max-h-[380px] overflow-y-auto">
+                {userNotifications.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 gap-2 text-gray-400">
                     <Bell className="w-8 h-8 opacity-30" />
                     <p className="text-xs font-medium">No notifications</p>
                   </div>
                 ) : (
-                  notifications.map((n) => (
-                    <div
-                      key={n.id}
-                      onClick={() => markRead(n.id)}
-                      className={`relative flex flex-col gap-2 px-4 py-4 border-b border-gray-50 cursor-pointer transition-colors ${n.read ? "bg-white" : "bg-amber-50/60"}`}
-                    >
-                      {!n.read && (
-                        <span className="absolute top-4 left-1.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
-                      )}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); dismiss(n.id); }}
-                        className="absolute top-3 right-3 w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
+                  userNotifications.slice(0, 6).map((n) => {
+                    const catMeta = NOTIFICATION_CATEGORY_META[n.category] ?? NOTIFICATION_CATEGORY_META.Info;
+                    const resolvedRoute = resolveNotificationRouteForUser(n.ctaRoute, activeUser);
+                    return (
+                      <div
+                        key={n.id}
+                        onClick={() => markAsRead(n.id)}
+                        className={`relative flex flex-col gap-1.5 px-4 py-3.5 border-b border-gray-100 cursor-pointer transition-colors ${
+                          n.isRead ? "bg-white hover:bg-gray-50/70" : "bg-amber-50/75 hover:bg-amber-100/60"
+                        }`}
                       >
-                        <X className="w-3 h-3" />
-                      </button>
-                      <div className="flex items-center gap-1 text-[10px] text-gray-400 pl-1">
-                        <Clock className="w-3 h-3" />
-                        {n.time}
+                        {!n.isRead && (
+                          <span className="absolute top-4 left-1.5 w-1.5 h-1.5 rounded-full bg-amber-300 ring-2 ring-amber-200" />
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const res = clearOne(n.id);
+                            if (!res.ok && res.error) {
+                              setNotifToast(res.error);
+                              setTimeout(() => setNotifToast(""), 3200);
+                            }
+                          }}
+                          title={n.isRead ? "Clear notification" : "Baca terlebih dahulu sebelum clear"}
+                          className="absolute top-3 right-3 w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                        <div className="flex items-center gap-2 text-[10px] text-gray-400 pl-1 pr-5">
+                          <span className={`px-1.5 py-0.5 rounded font-semibold ${catMeta.badgeBg} ${catMeta.badgeText}`}>
+                            {catMeta.label}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {formatNotifTime(n.createdAt)}
+                          </span>
+                        </div>
+                        <p className="text-xs font-bold text-gray-800 pl-1 pr-4">{n.title}</p>
+                        <p className="text-xs text-gray-600 leading-relaxed pl-1 line-clamp-2">
+                          {n.summary || n.body[0]}
+                        </p>
+                        {resolvedRoute && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              markAsRead(n.id);
+                              setBellOpen(false);
+                              navigate(resolvedRoute);
+                            }}
+                            className="self-start flex items-center gap-1.5 mt-1 px-2.5 py-1 rounded-lg bg-[#1A284F] text-white text-[10px] font-bold hover:bg-[#131d3b] transition-colors"
+                          >
+                            {n.ctaLabel || "Buka"}
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
-                      <p className="text-xs font-bold text-gray-800 pl-1">{n.title}</p>
-                      <div className="flex flex-col gap-1 pl-1">
-                        {n.body.map((line, i) => (
-                          <p key={i} className={`text-xs leading-relaxed ${i === 0 ? "font-semibold text-gray-700" : "text-gray-500"}`}>
-                            {line}
-                          </p>
-                        ))}
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markRead(n.id);
-                          setBellOpen(false);
-                          navigate(n.ctaRoute);
-                        }}
-                        className="self-start flex items-center gap-1.5 mt-1 px-3 py-1.5 rounded-lg bg-[#1A284F] text-white text-[11px] font-bold hover:bg-[#131d3b] transition-colors"
-                      >
-                        {n.cta}
-                        <ArrowRight className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
+              </div>
+
+              {/* See all Notification button */}
+              <div className="p-2.5 bg-gray-50/80 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={handleSeeAllNotifications}
+                  className="w-full py-2 px-3 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  See all Notification
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
           )}
@@ -519,6 +589,19 @@ export function Topbar({
               >
                 <User className="w-4 h-4 text-gray-400" />
                 View Profile
+              </button>
+              <button
+                onClick={() => {
+                  setDropOpen(false);
+                  setNewPassword("");
+                  setConfirmNewPassword("");
+                  setPwdError("");
+                  setChangePwdModalOpen(true);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors border-t border-gray-50"
+              >
+                <KeyRound className="w-4 h-4 text-indigo-500" />
+                Ganti Password
               </button>
               <div className="px-4 py-2 border-t border-gray-100">
                 <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
@@ -567,6 +650,131 @@ export function Topbar({
           </div>
         </button>
       </div>
+
+      {/* Modal Ganti Password dari Menu Profil Kanan Atas */}
+      {changePwdModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 bg-[#1A284F] text-white">
+              <div className="flex items-center gap-2.5">
+                <KeyRound className="w-4 h-4" />
+                <div>
+                  <h3 className="text-sm font-bold">Ganti Password Akun</h3>
+                  <p className="text-[11px] text-white/75">
+                    {activeUser.name} ({activeUser.employeeId})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setChangePwdModalOpen(false)}
+                className="text-white/70 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {pwdError && (
+                <div className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs text-red-700 flex items-start gap-2">
+                  <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+                  <span>{pwdError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  Password Baru
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => { setNewPassword(e.target.value); setPwdError(""); }}
+                    placeholder="Minimal 8 karakter (huruf, angka, simbol)"
+                    className="w-full border border-gray-300 rounded-xl pl-3.5 pr-10 py-2 text-sm text-gray-800 focus:outline-none focus:border-[#1A284F]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword((s) => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  Konfirmasi Password Baru
+                </label>
+                <input
+                  type={showNewPassword ? "text" : "password"}
+                  value={confirmNewPassword}
+                  onChange={(e) => { setConfirmNewPassword(e.target.value); setPwdError(""); }}
+                  placeholder="Ketik ulang password baru"
+                  className="w-full border border-gray-300 rounded-xl px-3.5 py-2 text-sm text-gray-800 focus:outline-none focus:border-[#1A284F]"
+                />
+              </div>
+
+              <div className="rounded-xl bg-gray-50 border border-gray-200 p-3 space-y-1 text-[11px]">
+                <p className="font-semibold text-gray-700 mb-1">Syarat Kombinasi Password:</p>
+                <div className={pwdPolicy.hasMinLength ? "text-emerald-600 font-medium" : "text-gray-400"}>
+                  ✓ Minimal 8 karakter
+                </div>
+                <div className={pwdPolicy.hasLetter ? "text-emerald-600 font-medium" : "text-gray-400"}>
+                  ✓ Mengandung huruf (a–z / A–Z)
+                </div>
+                <div className={pwdPolicy.hasNumber ? "text-emerald-600 font-medium" : "text-gray-400"}>
+                  ✓ Mengandung angka (0–9)
+                </div>
+                <div className={pwdPolicy.hasSymbol ? "text-emerald-600 font-medium" : "text-gray-400"}>
+                  ✓ Mengandung simbol (_#*/-$%@! dll)
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setChangePwdModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveProfilePassword}
+                  className="px-4 py-2 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold"
+                >
+                  Simpan Password Baru
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Popup Konfirmasi Password Berhasil Diperbaharui */}
+      {pwdSuccessPopupOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900">Password Diperbaharui</h3>
+            <p className="text-xs text-gray-600 leading-relaxed">
+              Selamat, password Anda sudah diperbaharui, pastikan anda selalu mengingat password Anda, jangan memberi tahu password anda ke siapapun
+            </p>
+            <button
+              type="button"
+              onClick={() => setPwdSuccessPopupOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold"
+            >
+              Baik, Mengerti
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

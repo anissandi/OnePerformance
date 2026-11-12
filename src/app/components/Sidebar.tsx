@@ -1,5 +1,6 @@
+// @refresh reset
 import { Link, NavLink, useLocation } from "react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   BarChart2,
   Settings,
@@ -26,6 +27,7 @@ import {
   RefreshCw,
   FolderOpen,
   LockOpen,
+  Bell,
 } from "lucide-react";
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
@@ -291,6 +293,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("setting_user_mgmt") ? [{ to: `${p}/settings/user-management`, label: "User Management", icon: Users }] : []),
       ...(canView("setting_access_mgmt") ? [{ to: `${p}/settings/access-management`, label: "Access Management", icon: Shield }] : []),
       ...(canView("setting_menu_mgmt") ? [{ to: `${p}/settings/menu-management`, label: "Menu Management", icon: Menu }] : []),
+      ...(canView("setting_notification") ? [{ to: `${p}/settings/notification-management`, label: "Notification Management", icon: Bell }] : []),
       ...(canView("setting_data_sync") ? [{ to: `${p}/settings/data-sync`, label: "Data Sync", icon: RefreshCw }] : []),
       ...(canView("setting_audit") ? [{ to: `${p}/settings/audit-trail`, label: "Audit Trail", icon: FileSearch }] : []),
     ];
@@ -691,9 +694,12 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
   };
 
   const [expandedMenus, setExpandedMenus] = useState<Set<number>>(getInitialExpanded);
+  const [collapsedFlyout, setCollapsedFlyout] = useState<{ idx: number; top: number } | null>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
 
   // Auto-expand when navigating to a child route (e.g. from notification)
   useEffect(() => {
+    setCollapsedFlyout(null);
     setExpandedMenus((prev) => {
       const next = new Set(prev);
       links.forEach((link, idx) => {
@@ -714,6 +720,34 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     });
   }, [location.pathname]);
 
+  useEffect(() => {
+    if (!collapsed) {
+      setCollapsedFlyout(null);
+    }
+  }, [collapsed]);
+
+  useEffect(() => {
+    if (!collapsedFlyout) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (flyoutRef.current && !flyoutRef.current.contains(e.target as Node)) {
+        setCollapsedFlyout(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [collapsedFlyout]);
+
+  const isSubLinkGroupActive = (link: NavTopLink) => {
+    return Boolean(
+      link.subLinks?.some((sub: any) => {
+        if (sub.children) {
+          return sub.children.some((c: any) => location.pathname.startsWith(c.to));
+        }
+        return sub.to ? location.pathname.startsWith(sub.to) : false;
+      }),
+    );
+  };
+
   const toggleMenu = (idx: number) => {
     setExpandedMenus(prev => {
       const newSet = new Set(prev);
@@ -729,21 +763,67 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
   return (
     <div
       className={`bg-[#F4F6FC] flex flex-col h-full border-r border-gray-100 transition-[width] duration-300 ease-in-out overflow-hidden shrink-0 ${
-        collapsed ? "w-0 border-r-0" : "w-[260px]"
+        collapsed ? "w-[72px]" : "w-[260px]"
       }`}
     >
-      <div className="h-[88px] flex items-end justify-center px-4 pb-1 border-b border-gray-100">
+      <div
+        className={`h-[88px] flex justify-center border-b border-gray-100 ${
+          collapsed ? "items-center px-2" : "items-end px-4 pb-1"
+        }`}
+      >
         <ImageWithFallback
           src={logoSG}
           alt="Company Logo"
-          className="h-16 w-auto max-w-full object-contain"
+          className={
+            collapsed
+              ? "h-10 w-10 object-contain transition-all"
+              : "h-16 w-auto max-w-full object-contain transition-all"
+          }
         />
       </div>
 
-      <div className="py-6 flex flex-col gap-1 px-4 flex-1 overflow-y-auto">
+      <div
+        className={`py-5 flex flex-col gap-1.5 flex-1 overflow-y-auto ${
+          collapsed ? "px-2 items-center" : "px-4"
+        }`}
+      >
         {links.map((link, idx) => {
           if (link.subLinks) {
             const isExpanded = expandedMenus.has(idx);
+            const groupActive = isSubLinkGroupActive(link);
+
+            if (collapsed) {
+              const isFlyoutOpen = collapsedFlyout?.idx === idx;
+              return (
+                <div key={idx} className="w-full flex justify-center">
+                  <button
+                    type="button"
+                    title={link.label}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const safeTop = Math.max(16, Math.min(rect.top, window.innerHeight - 320));
+                      setCollapsedFlyout((prev) =>
+                        prev?.idx === idx ? null : { idx, top: safeTop },
+                      );
+                    }}
+                    className={`w-11 h-11 flex items-center justify-center rounded-xl transition-colors relative ${
+                      groupActive || isFlyoutOpen
+                        ? "bg-[#1A284F] text-white shadow-sm"
+                        : "text-gray-600 hover:bg-gray-200/60 hover:text-gray-900"
+                    }`}
+                  >
+                    <link.icon className="w-5 h-5 shrink-0" />
+                    <span
+                      className={`absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full ${
+                        groupActive || isFlyoutOpen ? "bg-amber-300" : "bg-gray-400/70"
+                      }`}
+                    />
+                  </button>
+                </div>
+              );
+            }
+
             return (
               <div key={idx} className="mb-2">
                 <button
@@ -829,20 +909,96 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
               key={idx}
               to={link.to || ""}
               end={link.exact}
+              title={collapsed ? link.label : undefined}
+              onClick={() => setCollapsedFlyout(null)}
               className={({ isActive }) => 
-                `flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors ${
+                `${
+                  collapsed
+                    ? "w-11 h-11 justify-center"
+                    : "px-4 py-3 gap-3"
+                } flex items-center rounded-xl text-sm font-medium transition-colors ${
                   isActive 
                     ? "bg-[#1A284F] text-white shadow-sm" 
-                    : "text-gray-600 hover:bg-gray-100/50 hover:text-gray-800"
+                    : "text-gray-600 hover:bg-gray-200/60 hover:text-gray-800"
                 }`
               }
             >
-              {link.icon && <link.icon className="w-5 h-5" />}
-              {link.label}
+              {link.icon && <link.icon className="w-5 h-5 shrink-0" />}
+              {!collapsed && link.label}
             </NavLink>
           );
         })}
       </div>
+
+      {/* Flyout Submenu saat mode Collapsed */}
+      {collapsed && collapsedFlyout !== null && links[collapsedFlyout.idx]?.subLinks && (
+        <div
+          ref={flyoutRef}
+          style={{ top: collapsedFlyout.top }}
+          className="fixed left-[76px] z-50 w-64 bg-white rounded-2xl border border-gray-200 shadow-xl py-3 px-2.5 max-h-[80vh] overflow-y-auto"
+        >
+          <div className="px-3 pb-2 mb-1.5 border-b border-gray-100 flex items-center gap-2">
+            {(() => {
+              const ActiveGroupIcon = links[collapsedFlyout.idx].icon;
+              return ActiveGroupIcon ? <ActiveGroupIcon className="w-4 h-4 text-[#1A284F] shrink-0" /> : null;
+            })()}
+            <span className="text-xs font-bold text-[#1A284F] truncate">
+              {links[collapsedFlyout.idx].label}
+            </span>
+          </div>
+          <div className="flex flex-col gap-1">
+            {links[collapsedFlyout.idx].subLinks!.map((sub, sIdx) => {
+              if ((sub as any).children) {
+                const SubIcon = sub.icon;
+                return (
+                  <div key={sIdx} className="py-1">
+                    <div className="px-3 py-1 text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                      {SubIcon && <SubIcon className="w-3.5 h-3.5" />}
+                      <span>{sub.label}</span>
+                    </div>
+                    <div className="flex flex-col gap-0.5 mt-0.5 pl-2">
+                      {(sub as any).children.map((child: any, cIdx: number) => (
+                        <NavLink
+                          key={cIdx}
+                          to={child.to}
+                          onClick={() => setCollapsedFlyout(null)}
+                          className={({ isActive }) =>
+                            `flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-xl transition-colors ${
+                              isActive
+                                ? "bg-[#1A284F] text-white shadow-sm"
+                                : "text-gray-600 hover:text-gray-900 hover:bg-gray-100/70"
+                            }`
+                          }
+                        >
+                          {child.icon && <child.icon className="w-3.5 h-3.5 shrink-0" />}
+                          <span className="truncate">{child.label}</span>
+                        </NavLink>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <NavLink
+                  key={sIdx}
+                  to={sub.to || ""}
+                  onClick={() => setCollapsedFlyout(null)}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-xl transition-colors ${
+                      isActive
+                        ? "bg-[#1A284F] text-white shadow-sm"
+                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100/70"
+                    }`
+                  }
+                >
+                  {sub.icon && <sub.icon className="w-4 h-4 shrink-0" />}
+                  <span className="truncate">{sub.label}</span>
+                </NavLink>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

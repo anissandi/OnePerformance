@@ -731,12 +731,52 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       </div>
 
       {/* ── Stat Cards ─────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-5 gap-4">
-        <StatCard title={t("Total Employees")}      value={String(stats.total)}       icon={<Users       className="w-5 h-5 text-blue-500"    />} gradient="from-blue-50 to-sky-100"       border="border-blue-100"   valueColor="text-blue-700"    />
-        <StatCard title={t("Completed Appraisals")} value={String(stats.completed)}   icon={<CheckCircle className="w-5 h-5 text-emerald-500" />} gradient="from-emerald-50 to-teal-100"   border="border-emerald-100" valueColor="text-emerald-700" />
-        <StatCard title={t("In Progress")}          value={String(stats.inProgress)}  icon={<Clock       className="w-5 h-5 text-orange-500"  />} gradient="from-orange-50 to-amber-100"   border="border-orange-100"  valueColor="text-orange-700"  />
-        <StatCard title={t("Not Started")}          value={String(stats.pending)}     icon={<Clock       className="w-5 h-5 text-gray-400"    />} gradient="from-gray-50 to-slate-100"     border="border-gray-200"    valueColor="text-gray-600"    />
-        <StatCard title={t("Completion Rate")}      value={`${stats.rate}%`}          icon={<TrendingUp  className="w-5 h-5 text-violet-500"  />} gradient="from-violet-50 to-purple-100" border="border-violet-100"  valueColor="text-violet-700"  />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+        <StatCard
+          title={t("Total Employees")}
+          value={String(stats.total)}
+          subtitle="Active headcount in scope"
+          icon={<Users className="w-5 h-5" />}
+          gradient="from-[#EAEFF9] via-[#F6F8FD] to-white"
+          border="border-[#DCE3F2]"
+          accentHex="#1E3A6E"
+        />
+        <StatCard
+          title={t("Completed Appraisals")}
+          value={String(stats.completed)}
+          subtitle="Verified & finalized"
+          icon={<CheckCircle className="w-5 h-5" />}
+          gradient="from-[#E6F4EE] via-[#F4FAF7] to-white"
+          border="border-[#D3EBE1]"
+          accentHex="#2D6A5B"
+        />
+        <StatCard
+          title={t("In Progress")}
+          value={String(stats.inProgress)}
+          subtitle="Under review / approval"
+          icon={<Clock className="w-5 h-5" />}
+          gradient="from-[#FBECE5] via-[#FDF7F4] to-white"
+          border="border-[#F2DCD2]"
+          accentHex="#A85D43"
+        />
+        <StatCard
+          title={t("Not Started")}
+          value={String(stats.pending)}
+          subtitle="Pending submission"
+          icon={<Clock className="w-5 h-5" />}
+          gradient="from-[#ECEFF8] via-[#F7F8FC] to-white"
+          border="border-[#DDE2F0]"
+          accentHex="#142546"
+        />
+        <StatCard
+          title={t("Completion Rate")}
+          value={`${stats.rate}%`}
+          subtitle={`${stats.completed} of ${stats.total} completed`}
+          icon={<TrendingUp className="w-5 h-5" />}
+          gradient="from-[#F2ECF9] via-[#F9F6FD] to-white"
+          border="border-[#E4D8F3]"
+          accentHex="#5B3E86"
+        />
       </div>
 
       {/* ── PA Cycle Timeline ──────────────────────────────────────────────── */}
@@ -920,18 +960,58 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
 }
 
 // ── StatCard ───────────────────────────────────────────────────────────────────
-function StatCard({ title, value, icon, gradient, border, valueColor }: {
-  title: string; value: string; icon: React.ReactNode;
-  gradient: string; border: string; valueColor: string;
+function StatCard({
+  title,
+  value,
+  subtitle,
+  icon,
+  gradient,
+  border,
+  accentHex,
+}: {
+  title: string;
+  value: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  gradient: string;
+  border: string;
+  accentHex: string;
 }) {
   return (
-    <div className={`bg-gradient-to-br ${gradient} border ${border} rounded-xl px-4 py-3 shadow-sm flex items-center gap-3 pa-card-motion`}>
-      <div className="w-8 h-8 rounded-lg bg-white/70 flex items-center justify-center shadow-sm shrink-0">
-        {icon}
+    <div
+      className={`group relative overflow-hidden bg-gradient-to-br ${gradient} border ${border} rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion`}
+    >
+      <div
+        className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+        style={{ backgroundColor: `${accentHex}0D` }}
+      />
+      <div className="flex items-start justify-between gap-2 relative z-10">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-gray-500 truncate">{title}</p>
+          <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">{value}</p>
+        </div>
+        <div
+          className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+          style={{ backgroundColor: accentHex }}
+        >
+          {icon}
+        </div>
       </div>
-      <div className="min-w-0">
-        <p className="text-xs font-medium text-gray-500 truncate">{title}</p>
-        <p className={`text-xl font-bold leading-tight ${valueColor}`}>{value}</p>
+      <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+        <p className="text-[11px] text-gray-500 font-medium truncate">{subtitle}</p>
+        <svg
+          className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+          viewBox="0 0 64 24"
+          fill="none"
+        >
+          <path
+            d="M2 20L16 14L26 17L40 9L50 12L62 5"
+            stroke={accentHex}
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </div>
     </div>
   );

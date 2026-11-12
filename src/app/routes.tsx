@@ -39,6 +39,7 @@ import { SupervisorSettingManagementInterview } from "./pages/supervisor/setting
 import { UserManagementPage } from "./pages/hr/settings/UserManagement"
 import { AccessManagementPage } from "./pages/hr/settings/AccessManagement"
 import { MenuManagementPage } from "./pages/hr/settings/MenuManagement"
+import { NotificationManagementPage } from "./pages/hr/settings/NotificationManagement"
 import { AuditTrailPage } from "./pages/hr/settings/AuditTrail"
 import { DataSyncPage } from "./pages/hr/settings/DataSync"
 import { MasterAppraisalForm } from "./pages/hr/settings/MasterAppraisalForm"
@@ -275,6 +276,10 @@ export const router = createBrowserRouter([
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/notification-management", Component: NotificationManagementPage },
+      { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
+      { path: "settings/notifications", Component: NotificationManagementPage },
+      { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
       {
@@ -421,6 +426,10 @@ export const router = createBrowserRouter([
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/notification-management", Component: NotificationManagementPage },
+      { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
+      { path: "settings/notifications", Component: NotificationManagementPage },
+      { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
@@ -435,6 +444,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: StaffDashboard },
       { path: "dashboard", Component: StaffDashboard },
+      { path: "dashboard/my", Component: StaffDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
       { path: "analytics", Component: AnalyticsDashboard },
       { path: "profile", Component: StaffViewProfile },
@@ -535,6 +545,10 @@ export const router = createBrowserRouter([
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/notification-management", Component: NotificationManagementPage },
+      { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
+      { path: "settings/notifications", Component: NotificationManagementPage },
+      { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
@@ -640,6 +654,10 @@ export const router = createBrowserRouter([
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/notification-management", Component: NotificationManagementPage },
+      { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
+      { path: "settings/notifications", Component: NotificationManagementPage },
+      { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
@@ -651,6 +669,28 @@ export const router = createBrowserRouter([
       { path: "profile/:tab", Component: ViewProfile },
       { path: "history", Component: HRCycleHistory },
       { path: "*", Component: Placeholder },
+    ],
+  },
+  {
+    path: "/dashboard",
+    Component: AppLayout,
+    children: [
+      { index: true, Component: SupervisorDashboard },
+      { path: ":tab", Component: SupervisorDashboard },
+    ],
+  },
+  {
+    path: "/settings",
+    Component: AppLayout,
+    children: [
+      { path: "user-management", Component: UserManagementPage },
+      { path: "user-management/:tab", Component: UserManagementPage },
+      { path: "access-management", Component: AccessManagementPage },
+      { path: "menu-management", Component: MenuManagementPage },
+      { path: "notification-management", Component: NotificationManagementPage },
+      { path: "notification-management/:tab", Component: NotificationManagementPage },
+      { path: "notifications", Component: NotificationManagementPage },
+      { path: "notifications/:tab", Component: NotificationManagementPage },
     ],
   },
   {

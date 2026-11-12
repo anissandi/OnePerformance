@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import { KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking } from "../employee/KPIPage";
 import {
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
-  CheckCircle2, Clock, X, Target, ArrowRight,
+  CheckCircle2, Clock, X, Target, ArrowRight, ChevronDown, ChevronUp, Sparkles, ClipboardCheck,
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { getLiveUserModuleApprovals } from "../shared/appraisalWorkflowStore";
@@ -11,6 +11,7 @@ import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
 import { getActiveUser } from "../../store/authStore";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
+import { DashboardNotificationSection } from "../../components/DashboardNotificationSection";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -385,47 +386,99 @@ function AppraisalSummaryCards() {
 
   return (
     <>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
         {/* Current Score */}
         <button
           onClick={() => navigate("/employee/appraisal")}
-          className="bg-[#1A284F] rounded-xl p-3.5 flex flex-col gap-1 text-left hover:bg-[#243869] active:scale-95 transition-all cursor-pointer"
+          className="group relative overflow-hidden bg-gradient-to-br from-[#EAEFF9] via-[#F6F8FD] to-white border border-[#DCE3F2] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] text-left transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg active:scale-[0.99] cursor-pointer shadow-sm"
         >
-          <span className="text-[9px] font-bold uppercase tracking-widest text-blue-300">Current Score</span>
-          <span className="text-2xl font-extrabold text-white leading-none">{s.currentScore}</span>
-          <span className="text-[10px] text-blue-200 mt-0.5">Appraisal 2026</span>
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#1E3A6E]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <span className="text-xs font-medium text-gray-500 block">Current Score</span>
+              <span className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5 block">{s.currentScore}</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#1E3A6E] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <Target className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            <span className="text-[11px] text-gray-500 font-medium">Appraisal 2026</span>
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#1E3A6E" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </button>
 
         {/* Current Grade */}
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3.5 flex flex-col gap-1">
-          <span className="text-[9px] font-bold uppercase tracking-widest text-yellow-600">Current Grade</span>
-          <span className="text-2xl font-extrabold text-emerald-600 leading-none">{s.currentGrade}</span>
-          <span className="flex items-center gap-1 text-[10px] text-yellow-600 font-semibold mt-0.5">
-            <Clock className="w-3 h-3" />
-            {s.status}
-          </span>
+        <div className="group relative overflow-hidden bg-gradient-to-br from-[#E6F4EE] via-[#F4FAF7] to-white border border-[#D3EBE1] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#2D6A5B]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <span className="text-xs font-medium text-gray-500 block">Current Grade</span>
+              <span className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5 block">{s.currentGrade}</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#2D6A5B] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <ClipboardCheck className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            <span className="flex items-center gap-1 text-[11px] text-gray-500 font-medium">
+              <Clock className="w-3 h-3 text-[#2D6A5B]" />
+              {s.status}
+            </span>
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#2D6A5B" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
 
         {/* Modules Approved */}
-        <div className="bg-blue-50 border border-blue-100 rounded-xl p-3.5 flex flex-col gap-1">
-          <span className="text-[9px] font-bold uppercase tracking-widest text-blue-400">Modules Approved</span>
-          <div className="flex items-baseline gap-0.5 leading-none">
-            <span className="text-2xl font-extrabold text-[#1A284F]">{s.modulesApproved}</span>
-            <span className="text-base font-semibold text-gray-400">/{s.modulesTotal}</span>
+        <div className="group relative overflow-hidden bg-gradient-to-br from-[#ECEFF8] via-[#F7F8FC] to-white border border-[#DDE2F0] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#142546]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <span className="text-xs font-medium text-gray-500 block">Modules Approved</span>
+              <div className="flex items-baseline gap-0.5 leading-tight mt-0.5">
+                <span className="text-2xl font-extrabold text-[#111827]">{s.modulesApproved}</span>
+                <span className="text-lg font-bold text-gray-400">/{s.modulesTotal}</span>
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#142546] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <ClipboardList className="w-5 h-5" />
+            </div>
           </div>
-          <button
-            onClick={() => setShowPopup(true)}
-            className="text-[10px] text-blue-600 font-semibold mt-0.5 text-left hover:underline"
-          >
-            {pending} pending — Details
-          </button>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            <button
+              onClick={() => setShowPopup(true)}
+              className="text-[11px] text-[#142546] font-medium text-left hover:underline"
+            >
+              {pending} pending — Details
+            </button>
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#142546" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
 
         {/* Last Updated */}
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3.5 flex flex-col gap-1">
-          <span className="text-[9px] font-bold uppercase tracking-widest text-yellow-600">Last Updated</span>
-          <span className="text-lg font-extrabold text-gray-900 leading-none mt-0.5">{s.lastUpdated}</span>
-          <span className="text-[10px] text-orange-500 font-semibold mt-0.5">Year-end: {s.yearEnd}</span>
+        <div className="group relative overflow-hidden bg-gradient-to-br from-[#FBECE5] via-[#FDF7F4] to-white border border-[#F2DCD2] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#A85D43]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <span className="text-xs font-medium text-gray-500 block">Last Updated</span>
+              <span className="text-xl font-extrabold text-[#111827] leading-tight mt-0.5 block">{s.lastUpdated}</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#A85D43] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <Sparkles className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            <span className="text-[11px] text-gray-500 font-medium">Year-end: {s.yearEnd}</span>
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#A85D43" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
       </div>
 
@@ -438,15 +491,29 @@ function AppraisalSummaryCards() {
 
 function MilestoneProgress() {
   const navigate = useNavigate();
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
       {/* Header */}
-      <div className="mb-6">
-        <h3 className="font-semibold text-base text-gray-900">Approval Progress by Module</h3>
-        <p className="text-xs text-gray-400 mt-0.5">Current cycle — 2026 Performance Appraisal</p>
+      <div className={`flex items-center justify-between gap-3 ${isCollapsed ? "" : "mb-6"}`}>
+        <div>
+          <h3 className="font-semibold text-base text-gray-900">Approval Progress by Module</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Current cycle — 2026 Performance Appraisal</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsCollapsed((prev) => !prev)}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 text-xs font-semibold text-gray-600 transition-colors"
+          title={isCollapsed ? "Expand Approval Progress by Module" : "Collapse Approval Progress by Module"}
+        >
+          <span>{isCollapsed ? "Expand" : "Collapse"}</span>
+          {isCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+        </button>
       </div>
 
+      {!isCollapsed && (
+        <>
       {/* Module rows — derived directly from MODULE_APPROVALS */}
       <div className="flex flex-col gap-4">
         {MODULE_APPROVALS.map((mod) => {
@@ -522,6 +589,8 @@ function MilestoneProgress() {
           </span>
         ))}
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -529,44 +598,15 @@ function MilestoneProgress() {
 // ─── StaffDashboard ───────────────────────────────────────────────────────────
 
 export function StaffDashboard() {
-  const navigate = useNavigate();
-
   return (
     <div className="flex flex-col gap-8">
       <CurrentCycleBanner />
 
       <AppraisalSummaryCards />
 
-      <MilestoneProgress />
+      <DashboardNotificationSection />
 
-      {/* Feedback banner */}
-      <div className="bg-[#1A284F] text-white rounded-2xl p-6 relative overflow-hidden">
-        <div className="relative z-10 flex items-start justify-between gap-6">
-          <div className="flex-1">
-            <h3 className="font-semibold text-lg mb-1">Performance Appraisal Feedback</h3>
-            <p className="text-blue-100 text-sm mb-4">
-              Feedback received from your Approver on your appraisal submission.
-            </p>
-            <div className="flex items-center gap-3 flex-wrap mb-5">
-              {[
-                { label: "KPI (Tracking)",         icon: TrendingUp,  color: "bg-blue-400/20 text-blue-100 border-blue-300/30 hover:bg-blue-400/30",   to: "/employee/measurement/kpi-tracking" },
-                { label: "SMART Goals (Tracking)", icon: Lightbulb,   color: "bg-amber-400/20 text-amber-100 border-amber-300/30 hover:bg-amber-400/30", to: "/employee/measurement/smart-goals" },
-                { label: "RCA",                    icon: Target,       color: "bg-red-400/20 text-red-100 border-red-300/30 hover:bg-red-400/30",         to: "/employee/measurement/rca" },
-              ].map(({ label, icon: Icon, color, to }) => (
-                <button
-                  key={label}
-                  onClick={() => navigate(to)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors cursor-pointer ${color}`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <Target className="w-28 h-28 text-white/5 shrink-0" />
-        </div>
-      </div>
+      <MilestoneProgress />
     </div>
   );
 }

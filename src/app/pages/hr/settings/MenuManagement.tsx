@@ -178,8 +178,9 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "setting_user_mgmt",     label: "User Management",      path: "/settings/user-management",      icon: "Users",       isVisible: true,  order: 6, roles: HR_ADMIN },
       { id: "setting_access_mgmt",   label: "Access Management",    path: "/settings/access-management",    icon: "Shield",      isVisible: true,  order: 7, roles: ["Administrator"] as Role[] },
       { id: "setting_menu_mgmt",     label: "Menu Management",      path: "/settings/menu-management",      icon: "Menu",        isVisible: true,  order: 8, roles: ["Administrator"] as Role[] },
-      { id: "setting_data_sync",     label: "Data Sync",            path: "/settings/data-sync",            icon: "RefreshCw",   isVisible: true,  order: 9, roles: HR_ADMIN },
-      { id: "setting_audit",         label: "Audit Trail",          path: "/settings/audit-trail",          icon: "FileSearch",  isVisible: false, order: 10, roles: HR_ROLES },
+      { id: "setting_notification",  label: "Notification Management", path: "/settings/notification-management", icon: "Bell",   isVisible: true,  order: 9, roles: ["Administrator", "HR ICF"] as Role[] },
+      { id: "setting_data_sync",     label: "Data Sync",            path: "/settings/data-sync",            icon: "RefreshCw",   isVisible: true,  order: 10, roles: HR_ADMIN },
+      { id: "setting_audit",         label: "Audit Trail",          path: "/settings/audit-trail",          icon: "FileSearch",  isVisible: false, order: 11, roles: HR_ROLES },
     ],
   },
 ];
@@ -409,9 +410,13 @@ function mergeWithInitialMenus(saved: MenuItem[]): MenuItem[] {
   function mergeTree(defaults: MenuItem[]): MenuItem[] {
     return defaults.map((def) => {
       const s = savedById.get(def.id);
+      const normalizedSavedLabel =
+        def.id === "setting_notification" && s?.label === "Notification"
+          ? "Notification Management"
+          : s?.label;
       return {
         ...def,
-        ...(s ? { label: s.label || def.label, isVisible: s.isVisible ?? def.isVisible, order: s.order ?? def.order, icon: s.icon || def.icon } : {}),
+        ...(s ? { label: normalizedSavedLabel || def.label, isVisible: s.isVisible ?? def.isVisible, order: s.order ?? def.order, icon: s.icon || def.icon } : {}),
         ...(def.children ? { children: mergeTree(def.children) } : {}),
       };
     });

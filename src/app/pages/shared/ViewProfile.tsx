@@ -5,7 +5,7 @@ import {
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
   ChevronRight, Award,
   BarChart2, Star, Activity, MessageSquare, Clock, CheckCircle2, ChevronDown, Users,
-  StickyNote, UserCheck,
+  StickyNote, UserCheck, Target, ClipboardCheck, Sparkles,
 } from "lucide-react";
 import {
   KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
@@ -533,40 +533,97 @@ export function ViewProfile() {
       </div>
 
       {/* ── Stat cards ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-[#1A284F] rounded-2xl border border-[#1A284F] shadow-sm px-5 py-4">
-          <p className="text-[11px] text-blue-200 uppercase tracking-wide mb-1">{isCurrent ? "Current Score" : "Final Score"}</p>
-          <p className="text-3xl font-bold text-white">{displayScore}</p>
-          <p className="text-[11px] text-blue-200 mt-0.5">Appraisal {selectedYear}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {/* Current / Final Score */}
+        <div className="group relative overflow-hidden bg-gradient-to-br from-[#EAEFF9] via-[#F6F8FD] to-white border border-[#DCE3F2] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#1E3A6E]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <p className="text-xs font-medium text-gray-500">{isCurrent ? "Current Score" : "Final Score"}</p>
+              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">{displayScore}</p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#1E3A6E] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <Target className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            <p className="text-[11px] text-gray-500 font-medium">Appraisal {selectedYear}</p>
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#1E3A6E" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
-        <div className={`rounded-2xl border shadow-sm px-5 py-4 ${isCurrent ? "bg-amber-50 border-amber-200" : "bg-green-50 border-green-200"}`}>
-          <p className={`text-[11px] uppercase tracking-wide mb-1 opacity-80 ${isCurrent ? "text-amber-600" : "text-green-600"}`}>
-            {isCurrent ? "Current Grade" : "Final Grade"}
-          </p>
-          <p className={`text-3xl font-bold ${gradeColor(displayGrade).split(" ")[1]}`}>{displayGrade}</p>
-          {isCurrent ? (
-            <p className="text-[11px] text-amber-500 mt-0.5 flex items-center gap-1"><Clock className="w-3 h-3" /> In Progress</p>
-          ) : (
-            <p className="text-[11px] text-green-600 mt-0.5 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Finalized</p>
-          )}
+
+        {/* Current / Final Grade */}
+        <div className="group relative overflow-hidden bg-gradient-to-br from-[#E6F4EE] via-[#F4FAF7] to-white border border-[#D3EBE1] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#2D6A5B]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <p className="text-xs font-medium text-gray-500">{isCurrent ? "Current Grade" : "Final Grade"}</p>
+              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">{displayGrade}</p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#2D6A5B] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <ClipboardCheck className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            {isCurrent ? (
+              <p className="text-[11px] text-gray-500 font-medium flex items-center gap-1"><Clock className="w-3 h-3 text-[#2D6A5B]" /> In Progress</p>
+            ) : (
+              <p className="text-[11px] text-gray-500 font-medium flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#2D6A5B]" /> Finalized</p>
+            )}
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#2D6A5B" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
-        <div className="bg-blue-50 rounded-2xl border border-blue-100 shadow-sm px-5 py-4">
-          <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">Modules Approved</p>
-          <p className="text-3xl font-bold text-blue-700">
-            {dynamicModulesApproved}<span className="text-lg text-blue-300">/{dynamicModulesTotal}</span>
-          </p>
-          <p className="text-[11px] text-gray-400 mt-0.5">
-            {isCurrent ? `${Math.max(0, dynamicModulesTotal - dynamicModulesApproved)} pending approval` : "All modules finalized"}
-          </p>
+
+        {/* Modules Approved */}
+        <div className="group relative overflow-hidden bg-gradient-to-br from-[#ECEFF8] via-[#F7F8FC] to-white border border-[#DDE2F0] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#142546]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <p className="text-xs font-medium text-gray-500">Modules Approved</p>
+              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">
+                {dynamicModulesApproved}<span className="text-lg font-bold text-gray-400">/{dynamicModulesTotal}</span>
+              </p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#142546] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <Users className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            <p className="text-[11px] text-gray-500 font-medium">
+              {isCurrent ? `${Math.max(0, dynamicModulesTotal - dynamicModulesApproved)} pending approval` : "All modules finalized"}
+            </p>
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#142546" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
-        <div className={`rounded-2xl border shadow-sm px-5 py-4 ${isCurrent ? "bg-amber-50 border-amber-100" : "bg-green-50 border-green-100"}`}>
-          <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">Last Updated</p>
-          <p className="text-base font-bold text-gray-800 mt-1">{yearData.lastUpdated}</p>
-          {isCurrent ? (
-            <p className="text-[11px] text-amber-600 mt-0.5">Year-end: Dec {selectedYear}</p>
-          ) : (
-            <p className="text-[11px] text-green-600 mt-0.5 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Score locked</p>
-          )}
+
+        {/* Last Updated */}
+        <div className="group relative overflow-hidden bg-gradient-to-br from-[#FBECE5] via-[#FDF7F4] to-white border border-[#F2DCD2] rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
+          <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#A85D43]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
+          <div className="flex items-start justify-between gap-2 relative z-10">
+            <div>
+              <p className="text-xs font-medium text-gray-500">Last Updated</p>
+              <p className="text-xl font-extrabold text-[#111827] leading-tight mt-0.5">{yearData.lastUpdated}</p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-[#A85D43] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+              <Sparkles className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
+            {isCurrent ? (
+              <p className="text-[11px] text-gray-500 font-medium">Year-end: Dec {selectedYear}</p>
+            ) : (
+              <p className="text-[11px] text-gray-500 font-medium flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#A85D43]" /> Score locked</p>
+            )}
+            <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
+              <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#A85D43" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
       </div>
 

@@ -1,7 +1,8 @@
+// @refresh reset
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT } from "../../shared/scoringWeightStore";
-import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check } from "lucide-react";
+import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw } from "lucide-react";
 import {
   defaultAllowedModulesForGrouping,
   loadManagedUsers,
@@ -12,6 +13,10 @@ import {
 } from "../../../store/authStore";
 import { HIERARCHICAL_COMPANY_GROUPS, useAccessManagement } from "./AccessManagement";
 import { loadCalibrationOrgOptions } from "../CalibrationSetting";
+import {
+  useLoginManagement,
+  type LoginMethodOption,
+} from "../../../store/loginManagementStore";
 
 type Role = "Employee" | "Supervisor" | "GM" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "" | string;
 type Status = "Active" | "Inactive";
@@ -1014,8 +1019,17 @@ const COMPANY_COLORS = [
   "from-indigo-500 to-indigo-700",
 ];
 
-function CompanyUnitPicker({ users, onSelect }: { users: User[]; onSelect: (company: string) => void }) {
+function CompanyUnitPicker({
+  users,
+  onSelect,
+  onOpenLoginTab,
+}: {
+  users: User[];
+  onSelect: (company: string) => void;
+  onOpenLoginTab: (company: string) => void;
+}) {
   const [search, setSearch] = useState("");
+  const { getUnitLoginConfig } = useLoginManagement();
   const filtered = COMPANIES.filter(c => c.toLowerCase().includes(search.toLowerCase()));
 
   return (
@@ -1025,9 +1039,18 @@ function CompanyUnitPicker({ users, onSelect }: { users: User[]; onSelect: (comp
           <h1 className="font-bold text-[#1A284F] text-xl">User Management</h1>
           <p className="text-sm text-gray-500 mt-0.5">Select a Company Unit to manage its users</p>
         </div>
-        <div className="text-sm text-gray-400 flex items-center gap-1">
-          <span>&#8962;</span><span>Home</span><span className="mx-1">›</span><span>Setting</span><span className="mx-1">›</span>
-          <span className="font-medium text-gray-700">User Management</span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onOpenLoginTab(COMPANIES[0])}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold transition-colors"
+          >
+            <KeyRound size={14} /> Login Management
+          </button>
+          <div className="text-sm text-gray-400 flex items-center gap-1">
+            <span>&#8962;</span><span>Home</span><span className="mx-1">›</span><span>Setting</span><span className="mx-1">›</span>
+            <span className="font-medium text-gray-700">User Management</span>
+          </div>
         </div>
       </div>
 
@@ -1053,6 +1076,7 @@ function CompanyUnitPicker({ users, onSelect }: { users: User[]; onSelect: (comp
             const userCount = users.filter(u => u.company === company).length;
             const activeCount = users.filter(u => u.company === company && u.status === "Active").length;
             const gradient = COMPANY_COLORS[idx % COMPANY_COLORS.length];
+            const loginCfg = getUnitLoginConfig(company);
             return (
               <button
                 key={company}
@@ -1067,6 +1091,9 @@ function CompanyUnitPicker({ users, onSelect }: { users: User[]; onSelect: (comp
                   <div>
                     <p className="text-lg font-bold text-gray-800">{userCount}</p>
                     <p className="text-[11px] text-gray-400">{activeCount} active</p>
+                    <p className="text-[10px] font-semibold text-indigo-600 mt-1">
+                      Login: {loginCfg.enabledMethods.map((m) => LOGIN_METHOD_DEFS.find((d) => d.id === m)?.label ?? m).join(", ")}
+                    </p>
                   </div>
                   <ChevronRight size={16} className="text-gray-300 group-hover:text-gray-500 transition-colors" />
                 </div>
@@ -1082,12 +1109,430 @@ function CompanyUnitPicker({ users, onSelect }: { users: User[]; onSelect: (comp
   );
 }
 
+const LOGIN_METHOD_DEFS: Array<{
+  id: LoginMethodOption;
+  label: string;
+  subtitle: string;
+  badge: string;
+  exclusive?: boolean;
+}> = [
+  {
+    id: "otp_telegram",
+    label: "OTP Telegram",
+    subtitle: "Kirim kode OTP 6 digit ke No Telegram karyawan terdaftar",
+    badge: "Bisa dikombinasikan",
+  },
+  {
+    id: "otp_whatsapp",
+    label: "OTP WhatsApp",
+    subtitle: "Kirim kode OTP 6 digit ke nomor WhatsApp karyawan terdaftar",
+    badge: "Bisa dikombinasikan",
+  },
+  {
+    id: "otp_email",
+    label: "OTP Email",
+    subtitle: "Kirim kode OTP 6 digit ke Corporate Email karyawan terdaftar",
+    badge: "Bisa dikombinasikan",
+  },
+  {
+    id: "password",
+    label: "Password",
+    subtitle: "Login menggunakan Password (default awal wajib diganti user, blokir otomatis jika 5x salah)",
+    badge: "Eksklusif (Tidak bisa digabung OTP)",
+    exclusive: true,
+  },
+];
+
+function LoginManagementTab({
+  activeCompany,
+  users,
+  onSwitchCompany,
+}: {
+  activeCompany: string;
+  users: User[];
+  onSwitchCompany: (company: string) => void;
+}) {
+  const {
+    unitConfigs,
+    securityMap,
+    getUnitLoginConfig,
+    toggleUnitLoginMethod,
+    updateUnitLoginMethods,
+    resetPasswordToDefault,
+  } = useLoginManagement();
+  const [savedNotice, setSavedNotice] = useState("");
+  const currentCfg = getUnitLoginConfig(activeCompany);
+  const [gatewayDraft, setGatewayDraft] = useState(() => ({
+    telegramApiUrl: currentCfg.gateway?.telegramApiUrl ?? "https://api.telegram.org",
+    telegramBotToken: currentCfg.gateway?.telegramBotToken ?? "",
+    whatsappApiUrl: currentCfg.gateway?.whatsappApiUrl ?? "https://api.whatsapp.com/send-otp",
+    whatsappApiKey: currentCfg.gateway?.whatsappApiKey ?? "",
+    emailWebhookUrl: currentCfg.gateway?.emailWebhookUrl ?? "https://api.sambugroup.com/pa/email-otp",
+    emailSenderName: currentCfg.gateway?.emailSenderName ?? "PA Sambu Group",
+  }));
+
+  useEffect(() => {
+    const cfg = getUnitLoginConfig(activeCompany);
+    setGatewayDraft({
+      telegramApiUrl: cfg.gateway?.telegramApiUrl ?? "https://api.telegram.org",
+      telegramBotToken: cfg.gateway?.telegramBotToken ?? "",
+      whatsappApiUrl: cfg.gateway?.whatsappApiUrl ?? "https://api.whatsapp.com/send-otp",
+      whatsappApiKey: cfg.gateway?.whatsappApiKey ?? "",
+      emailWebhookUrl: cfg.gateway?.emailWebhookUrl ?? "https://api.sambugroup.com/pa/email-otp",
+      emailSenderName: cfg.gateway?.emailSenderName ?? "PA Sambu Group",
+    });
+  }, [activeCompany]);
+
+  const unitUsers = users.filter((u) => u.company === activeCompany);
+  const isPwdActive = currentCfg.enabledMethods.includes("password");
+
+  const blockedUsersInUnit = unitUsers.filter(
+    (u) => securityMap[u.employeeId.trim().toUpperCase()]?.isBlocked,
+  );
+  const defaultPwdUsersCount = unitUsers.filter((u) => {
+    const rec = securityMap[u.employeeId.trim().toUpperCase()];
+    return !rec || rec.mustChangePassword;
+  }).length;
+  const customPwdUsersCount = unitUsers.length - defaultPwdUsersCount;
+
+  const handleToggleMethod = (company: string, method: LoginMethodOption) => {
+    toggleUnitLoginMethod(company, method);
+    setSavedNotice(`Metode login untuk ${company} berhasil diperbarui.`);
+    setTimeout(() => setSavedNotice(""), 3000);
+  };
+
+  const handleSaveGateway = () => {
+    updateUnitLoginMethods(activeCompany, currentCfg.enabledMethods, gatewayDraft);
+    setSavedNotice(`Konfigurasi Gateway Login untuk ${activeCompany} berhasil disimpan.`);
+    setTimeout(() => setSavedNotice(""), 3000);
+  };
+
+  return (
+    <div className="space-y-5">
+      {savedNotice && (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-xs font-semibold text-emerald-800 flex items-center gap-2">
+          <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+          <span>{savedNotice}</span>
+        </div>
+      )}
+
+      {/* Matriks Cepat Pengaturan Metode Login Seluruh Unit Usaha */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-[#1A284F]">
+              Pengaturan Metode Login per Unit Usaha (Seluruh Company Unit)
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Opsi <strong>OTP Telegram</strong>, <strong>OTP WhatsApp</strong>, dan <strong>OTP Email</strong> dapat dipilih lebih dari 1. Opsi <strong>Password</strong> bersifat eksklusif dan tidak dapat digabungkan dengan opsi OTP.
+            </p>
+          </div>
+          <span className="text-[11px] font-semibold px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+            Unit Aktif: {activeCompany}
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50/70 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                <th className="text-left px-5 py-3">Company Unit</th>
+                <th className="text-center px-4 py-3">OTP Telegram</th>
+                <th className="text-center px-4 py-3">OTP WhatsApp</th>
+                <th className="text-center px-4 py-3">OTP Email</th>
+                <th className="text-center px-4 py-3">Password (Eksklusif)</th>
+                <th className="text-left px-4 py-3">Mode Aktif Saat Ini</th>
+              </tr>
+            </thead>
+            <tbody>
+              {COMPANIES.map((comp) => {
+                const cfg = getUnitLoginConfig(comp);
+                const hasPwd = cfg.enabledMethods.includes("password");
+                const isSelected = comp === activeCompany;
+                return (
+                  <tr
+                    key={comp}
+                    className={`border-b border-gray-50 transition-colors ${
+                      isSelected ? "bg-indigo-50/40" : "hover:bg-gray-50/50"
+                    }`}
+                  >
+                    <td className="px-5 py-3">
+                      <button
+                        type="button"
+                        onClick={() => onSwitchCompany(comp)}
+                        className="text-left font-semibold text-gray-800 hover:text-[#1A284F] flex items-center gap-2"
+                      >
+                        <Building2 size={14} className={isSelected ? "text-[#1A284F]" : "text-gray-400"} />
+                        <span>{comp}</span>
+                        {isSelected && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#1A284F] text-white font-semibold">
+                            Sedang Dibuka
+                          </span>
+                        )}
+                      </button>
+                    </td>
+                    {(["otp_telegram", "otp_whatsapp", "otp_email"] as LoginMethodOption[]).map((m) => {
+                      const checked = cfg.enabledMethods.includes(m);
+                      return (
+                        <td key={m} className="px-4 py-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleMethod(comp, m)}
+                            className={`inline-flex items-center justify-center w-6 h-6 rounded-lg border transition-colors ${
+                              checked
+                                ? "bg-[#1A284F] border-[#1A284F] text-white"
+                                : "bg-white border-gray-300 text-transparent hover:border-gray-400"
+                            }`}
+                            title={`Toggle ${m} untuk ${comp}`}
+                          >
+                            <Check size={13} />
+                          </button>
+                        </td>
+                      );
+                    })}
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleMethod(comp, "password")}
+                        className={`inline-flex items-center justify-center w-6 h-6 rounded-lg border transition-colors ${
+                          hasPwd
+                            ? "bg-amber-600 border-amber-600 text-white"
+                            : "bg-white border-gray-300 text-transparent hover:border-amber-400"
+                        }`}
+                        title={`Gunakan metode Password (eksklusif) untuk ${comp}`}
+                      >
+                        <Check size={13} />
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {cfg.enabledMethods.map((m) => (
+                          <span
+                            key={m}
+                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                              m === "password"
+                                ? "bg-amber-100 text-amber-800 border border-amber-200"
+                                : "bg-blue-50 text-blue-700 border border-blue-200"
+                            }`}
+                          >
+                            {LOGIN_METHOD_DEFS.find((d) => d.id === m)?.label ?? m}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Detail Pengaturan untuk Unit Usaha yang Sedang Dipilih */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-gray-800">
+                Detail Metode Login — {activeCompany}
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Klik pada kartu metode di bawah untuk mengaktifkan atau menonaktifkan metode login unit ini.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {LOGIN_METHOD_DEFS.map((def) => {
+              const active = currentCfg.enabledMethods.includes(def.id);
+              return (
+                <button
+                  key={def.id}
+                  type="button"
+                  onClick={() => handleToggleMethod(activeCompany, def.id)}
+                  className={`text-left rounded-xl p-4 border transition-all ${
+                    active
+                      ? def.exclusive
+                        ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-500/20"
+                        : "border-[#1A284F] bg-indigo-50/40 ring-2 ring-[#1A284F]/15"
+                      : "border-gray-200 bg-white hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                      {def.exclusive ? <Lock size={14} className="text-amber-600" /> : <KeyRound size={14} className="text-[#1A284F]" />}
+                      {def.label}
+                    </span>
+                    <span
+                      className={`w-5 h-5 rounded-md flex items-center justify-center text-white text-xs ${
+                        active ? (def.exclusive ? "bg-amber-600" : "bg-[#1A284F]") : "border border-gray-300 bg-white"
+                      }`}
+                    >
+                      {active && <Check size={12} />}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 leading-relaxed mb-2">{def.subtitle}</p>
+                  <span
+                    className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                      def.exclusive ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    {def.badge}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Konfigurasi Backend / API Gateway Koneksi OTP */}
+          <div className="pt-3 border-t border-gray-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+                  Koneksi Backend Gateway OTP ({activeCompany})
+                </h4>
+                <p className="text-[11px] text-gray-400">
+                  Endpoint & kredensial integrasi pengiriman OTP ke Telegram, WhatsApp, dan Corporate Email.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveGateway}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1A284F] text-white text-xs font-semibold hover:bg-[#131d3b]"
+              >
+                <Save size={13} /> Simpan Gateway
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Telegram API Base URL</label>
+                <input
+                  type="text"
+                  value={gatewayDraft.telegramApiUrl}
+                  onChange={(e) => setGatewayDraft((d) => ({ ...d, telegramApiUrl: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">WhatsApp OTP Gateway URL</label>
+                <input
+                  type="text"
+                  value={gatewayDraft.whatsappApiUrl}
+                  onChange={(e) => setGatewayDraft((d) => ({ ...d, whatsappApiUrl: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Corporate Email OTP Webhook URL</label>
+                <input
+                  type="text"
+                  value={gatewayDraft.emailWebhookUrl}
+                  onChange={(e) => setGatewayDraft((d) => ({ ...d, emailWebhookUrl: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Email Sender Identity</label>
+                <input
+                  type="text"
+                  value={gatewayDraft.emailSenderName}
+                  onChange={(e) => setGatewayDraft((d) => ({ ...d, emailSenderName: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Panel Ringkasan Keamanan Password & Akun Terblokir */}
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-gray-800">Status Keamanan Password Unit</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Kebijakan Password: wajib ganti password default saat pertama login, minimal 8 karakter (huruf, angka, simbol), dan blokir otomatis setelah 5x salah password.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3">
+              <div className="text-lg font-bold text-amber-800">{defaultPwdUsersCount}</div>
+              <div className="text-[10px] font-semibold text-amber-700">Password Default</div>
+            </div>
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3">
+              <div className="text-lg font-bold text-emerald-800">{customPwdUsersCount}</div>
+              <div className="text-[10px] font-semibold text-emerald-700">Sudah Diperbaharui</div>
+            </div>
+            <div className="rounded-xl bg-rose-50 border border-rose-200 p-3">
+              <div className="text-lg font-bold text-rose-800">{blockedUsersInUnit.length}</div>
+              <div className="text-[10px] font-semibold text-rose-700">Akun Diblokir (5x)</div>
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-gray-50 border border-gray-200 p-3.5 text-xs text-gray-600 space-y-1.5">
+            <div className="font-semibold text-gray-800">Status Tombol Reset Password di Tabel User:</div>
+            <p>
+              {isPwdActive ? (
+                <span className="text-emerald-700 font-medium">
+                  Aktif — Karena unit {activeCompany} menggunakan metode login Password, ikon Reset Password di kolom Action tabel User Management dapat digunakan.
+                </span>
+              ) : (
+                <span className="text-amber-700 font-medium">
+                  Non-Aktif — Karena unit {activeCompany} saat ini menggunakan metode OTP, ikon Reset Password di kolom Action tabel User Management otomatis dinonaktifkan.
+                </span>
+              )}
+            </p>
+          </div>
+
+          {blockedUsersInUnit.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-bold text-rose-700 flex items-center gap-1.5">
+                <ShieldAlert size={14} /> Daftar Akun Terblokir ({blockedUsersInUnit.length})
+              </div>
+              <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                {blockedUsersInUnit.map((u) => (
+                  <div
+                    key={u.employeeId}
+                    className="flex items-center justify-between px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs"
+                  >
+                    <div>
+                      <div className="font-bold text-rose-900">{u.name}</div>
+                      <div className="text-[10px] text-rose-700">{u.employeeId} · 5x salah password</div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!isPwdActive}
+                      onClick={() => {
+                        resetPasswordToDefault(u.employeeId);
+                        setSavedNotice(`Password untuk ${u.name} (${u.employeeId}) berhasil di-reset ke default.`);
+                        setTimeout(() => setSavedNotice(""), 3000);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white text-[11px] font-semibold"
+                    >
+                      Reset Default
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export function UserManagementPage() {
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useRouteTab<"users" | "grouping">(["users", "grouping"], "users");
+  const [activeTab, setActiveTab] = useRouteTab<"users" | "grouping" | "login">(["users", "grouping", "login"], "users");
   const [users, setUsers] = useState<User[]>(() => loadManagedUsers());
   const { roles: accessRoles, groups: accessGroups } = useAccessManagement();
+  const {
+    getUnitLoginConfig,
+    securityMap,
+    resetPasswordToDefault,
+  } = useLoginManagement();
   const [pageSize, setPageSize] = useState(10);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [statusFilter, setStatusFilter] = useState("All Status");
@@ -1096,6 +1541,8 @@ export function UserManagementPage() {
   const [editUser, setEditUser] = useState<User | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteUser, setDeleteUser] = useState<User | null>(null);
+  const [resetPwdUser, setResetPwdUser] = useState<User | null>(null);
+  const [resetPwdBanner, setResetPwdBanner] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
@@ -1111,7 +1558,16 @@ export function UserManagementPage() {
   }, []);
 
   if (!selectedCompany) {
-    return <CompanyUnitPicker users={users} onSelect={setSelectedCompany} />;
+    return (
+      <CompanyUnitPicker
+        users={users}
+        onSelect={setSelectedCompany}
+        onOpenLoginTab={(comp) => {
+          setSelectedCompany(comp);
+          setActiveTab("login");
+        }}
+      />
+    );
   }
 
   const companyUsers = users.filter(u => u.company === selectedCompany);
@@ -1195,13 +1651,41 @@ export function UserManagementPage() {
         >
           <Layers size={15} /> User Groupings
         </button>
+        <button
+          onClick={() => setActiveTab("login")}
+          className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+            activeTab === "login" ? "border-[#1A284F] text-[#1A284F]" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <KeyRound size={15} /> Login Management
+        </button>
       </div>
 
       {/* User Groupings tab */}
       {activeTab === "grouping" && <UserGroupingTab companyName={selectedCompany} />}
 
+      {/* Login Management tab */}
+      {activeTab === "login" && (
+        <LoginManagementTab
+          activeCompany={selectedCompany}
+          users={users}
+          onSwitchCompany={(comp) => setSelectedCompany(comp)}
+        />
+      )}
+
       {/* User Management tab content */}
       {activeTab === "users" && <>
+      {resetPwdBanner && (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-xs font-semibold text-emerald-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+            <span>{resetPwdBanner}</span>
+          </div>
+          <button onClick={() => setResetPwdBanner("")} className="text-emerald-700 hover:text-emerald-900">
+            <X size={14} />
+          </button>
+        </div>
+      )}
       {/* Stats */}
       <div className="grid grid-cols-4 lg:grid-cols-8 gap-3">
         {[
@@ -1284,12 +1768,35 @@ export function UserManagementPage() {
             <tbody>
               {paginated.length === 0 ? (
                 <tr><td colSpan={10} className="text-center text-gray-400 py-14">No users match the current filter.</td></tr>
-              ) : paginated.map((user, idx) => (
+              ) : paginated.map((user, idx) => {
+                const userUnitCfg = getUnitLoginConfig(user.company);
+                const isUserUnitPwdMode = userUnitCfg.enabledMethods.includes("password");
+                const userSec = securityMap[user.employeeId.trim().toUpperCase()];
+                return (
                 <tr key={user.id} className={`border-b border-gray-50 hover:bg-blue-50/20 transition-colors ${idx % 2 === 1 ? "bg-gray-50/20" : ""}`}>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-1.5">
                       <button onClick={() => setViewUser(user)} className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View"><Eye size={14} /></button>
                       <button onClick={() => setEditUser(user)} className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit"><Edit2 size={14} /></button>
+                      <button
+                        type="button"
+                        disabled={!isUserUnitPwdMode}
+                        onClick={() => {
+                          if (isUserUnitPwdMode) setResetPwdUser(user);
+                        }}
+                        className={`p-1.5 rounded-lg transition-colors ${
+                          isUserUnitPwdMode
+                            ? "text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50"
+                            : "text-gray-300 opacity-40 cursor-not-allowed"
+                        }`}
+                        title={
+                          isUserUnitPwdMode
+                            ? "Reset Password menjadi Password Default"
+                            : `Non-aktif: Unit ${user.company} tidak menggunakan metode login Password`
+                        }
+                      >
+                        <RotateCcw size={14} />
+                      </button>
                       <button onClick={() => setDeleteUser(user)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete"><Trash2 size={14} /></button>
                     </div>
                   </td>
@@ -1348,10 +1855,20 @@ export function UserManagementPage() {
                   <td className="px-4 py-3">
                     <span className="inline-flex px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-xs font-medium">{user.groupings}</span>
                   </td>
-                  <td className="px-4 py-3"><StatusBadge status={user.status} /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col items-start gap-1">
+                      <StatusBadge status={user.status} />
+                      {isUserUnitPwdMode && userSec?.isBlocked && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 text-[10px] font-bold">
+                          Diblokir (5x Salah Password)
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{user.lastLogin || "—"}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1383,6 +1900,55 @@ export function UserManagementPage() {
         />
       )}
       {deleteUser && <DeleteModal user={deleteUser} onClose={() => setDeleteUser(null)} onConfirm={() => handleDelete(deleteUser.id)} />}
+      {resetPwdUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 bg-[#1A284F] text-white">
+              <div className="flex items-center gap-2">
+                <RotateCcw size={16} />
+                <h3 className="font-semibold text-sm">Konfirmasi Reset Password Default</h3>
+              </div>
+              <button onClick={() => setResetPwdUser(null)} className="text-white/70 hover:text-white">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 text-sm text-gray-600">
+              <p className="leading-relaxed">
+                Apakah Anda yakin ingin me-reset password untuk{" "}
+                <strong className="text-gray-900">{resetPwdUser.name}</strong> (
+                <span className="font-mono text-xs">{resetPwdUser.employeeId}</span> ·{" "}
+                {resetPwdUser.company}) kembali menjadi <strong>Password Default</strong>?
+              </p>
+              <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-800 space-y-1">
+                <div>• Status blokir (jika akun terblokir karena 5x salah password) akan dibuka kembali.</div>
+                <div>• Saat karyawan login berikutnya dengan password default, sistem akan mewajibkan karyawan membuat password baru.</div>
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResetPwdUser(null)}
+                  className="px-4 py-2 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetPasswordToDefault(resetPwdUser.employeeId);
+                    setResetPwdBanner(
+                      `Password untuk ${resetPwdUser.name} (${resetPwdUser.employeeId}) telah di-reset ke password default awal.`,
+                    );
+                    setResetPwdUser(null);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold"
+                >
+                  Ya, Reset Password
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       </>}
     </div>
   );
