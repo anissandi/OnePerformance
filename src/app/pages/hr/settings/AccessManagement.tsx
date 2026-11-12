@@ -8,8 +8,112 @@ export type Role = BuiltinRole | string;
 export interface AccessRoleMetadata {
   excludeFromCalibrationHC: boolean;
   excludeFromVerification: boolean;
+  /** Daftar Unit Usaha yang diizinkan diakses (Data, Transaksi, Proses & Analytics Dashboard) */
+  allowedCompanyUnits?: string[];
 }
 
+export const HIERARCHICAL_COMPANY_GROUPS = [
+  {
+    groupName: "RSUP Group",
+    units: [
+      "PT RSUP (Industry)",
+      "PT RSUP (Perkebunan)",
+      "PT GHS",
+      "PT RSTM",
+      "ASD",
+    ],
+  },
+  {
+    groupName: "Sambu Group",
+    units: [
+      "PT Pulau Sambu (Jakarta)",
+      "PT Pulau Sambu (Guntung)",
+      "PT Pulau Sambu (Kuala Enok)",
+    ],
+  },
+] as const;
+
+function HierarchicalCompanyUnitChecklist({
+  selectedUnits,
+  onChange,
+}: {
+  selectedUnits: string[];
+  onChange: (nextUnits: string[]) => void;
+}) {
+  const selectedSet = new Set(selectedUnits);
+
+  function toggleGroup(units: readonly string[], checked: boolean) {
+    const next = new Set(selectedSet);
+    for (const u of units) {
+      if (checked) next.add(u);
+      else next.delete(u);
+    }
+    onChange(Array.from(next));
+  }
+
+  function toggleUnit(unit: string, checked: boolean) {
+    const next = new Set(selectedSet);
+    if (checked) next.add(unit);
+    else next.delete(unit);
+    onChange(Array.from(next));
+  }
+
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3.5 space-y-3">
+      <div>
+        <p className="text-xs font-semibold text-[#1A284F]">
+          Cakupan Akses Group &amp; Unit Usaha (Data, Transaksi, Proses &amp; Analytics Dashboard)
+        </p>
+        <p className="text-[11px] text-gray-500 mt-0.5">
+          Ceklis Group untuk memilih seluruh unit usaha di dalamnya secara otomatis, atau pilih unit usaha tertentu (mis. untuk jabatan ganda Director &amp; GM lintas group).
+        </p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {HIERARCHICAL_COMPANY_GROUPS.map((grp, idx) => {
+          const checkedCount = grp.units.filter((u) => selectedSet.has(u)).length;
+          const groupState: "all" | "none" | "indeterminate" =
+            checkedCount === 0
+              ? "none"
+              : checkedCount === grp.units.length
+              ? "all"
+              : "indeterminate";
+          return (
+            <div key={grp.groupName} className="bg-white rounded-lg border border-gray-200 p-3 space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer pb-1.5 border-b border-gray-100">
+                <IndeterminateCheckbox
+                  state={groupState}
+                  onChange={(val) => toggleGroup(grp.units, val)}
+                />
+                <span className="text-xs font-bold text-[#1A284F]">
+                  {idx + 1}. {grp.groupName}
+                </span>
+                <span className="ml-auto text-[10px] font-semibold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
+                  {checkedCount}/{grp.units.length}
+                </span>
+              </label>
+              <div className="pl-4 space-y-1.5">
+                {grp.units.map((unit) => {
+                  const isChecked = selectedSet.has(unit);
+                  return (
+                    <label key={unit} className="flex items-center gap-2 cursor-pointer text-xs text-gray-700 hover:text-gray-900">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => toggleUnit(unit, e.target.checked)}
+                        className="w-3.5 h-3.5 rounded accent-blue-600 cursor-pointer shrink-0"
+                      />
+                      <span className={isChecked ? "font-medium text-gray-900" : "text-gray-600"}>{unit}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 export type BuiltinGroup =
   | "Operasional"
   | "Ka./Wa.Ka.Seksi"
@@ -1092,12 +1196,13 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
   const [baseRole, setBaseRole] = useState<string>("");
   const [excludeFromCalibrationHC, setExcludeFromCalibrationHC] = useState(false);
   const [excludeFromVerification, setExcludeFromVerification] = useState(false);
+  const [allowedCompanyUnits, setAllowedCompanyUnits] = useState<string[]>([]);
   const duplicate = name.trim() && existingRoles.map(r => r.toLowerCase()).includes(name.trim().toLowerCase());
   const valid = name.trim().length > 0 && !duplicate;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-xl mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center">
@@ -1121,7 +1226,11 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
               onChange={e => setName(e.target.value)}
               onKeyDown={e => {
                 if (e.key === "Enter" && valid) {
-                  onAdd(name.trim(), baseRole || undefined, { excludeFromCalibrationHC, excludeFromVerification });
+                  onAdd(name.trim(), baseRole || undefined, {
+                    excludeFromCalibrationHC,
+                    excludeFromVerification,
+                    allowedCompanyUnits,
+                  });
                   onClose();
                 }
               }}
@@ -1145,6 +1254,10 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
               ))}
             </select>
           </div>
+          <HierarchicalCompanyUnitChecklist
+            selectedUnits={allowedCompanyUnits}
+            onChange={setAllowedCompanyUnits}
+          />
           <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">
             <p className="text-xs font-semibold text-[#1A284F]">Pengaturan Headcount Kalibrasi &amp; Verification</p>
             <label className="flex items-start gap-2.5 cursor-pointer text-xs text-gray-700">
@@ -1180,7 +1293,11 @@ function AddAccessModal({ existingRoles, onAdd, onClose }: AddAccessModalProps) 
             disabled={!valid}
             onClick={() => {
               if (valid) {
-                onAdd(name.trim(), baseRole || undefined, { excludeFromCalibrationHC, excludeFromVerification });
+                onAdd(name.trim(), baseRole || undefined, {
+                  excludeFromCalibrationHC,
+                  excludeFromVerification,
+                  allowedCompanyUnits,
+                });
                 onClose();
               }
             }}
@@ -1207,6 +1324,7 @@ function EditRoleModal({ role, isBuiltin, existingRoles, initialMeta, onSave, on
   const [name, setName] = useState(role);
   const [excludeFromCalibrationHC, setExcludeFromCalibrationHC] = useState(initialMeta.excludeFromCalibrationHC);
   const [excludeFromVerification, setExcludeFromVerification] = useState(initialMeta.excludeFromVerification);
+  const [allowedCompanyUnits, setAllowedCompanyUnits] = useState<string[]>(initialMeta.allowedCompanyUnits ?? []);
   const duplicate =
     name.trim().toLowerCase() !== role.toLowerCase() &&
     existingRoles.map(r => r.toLowerCase()).includes(name.trim().toLowerCase());
@@ -1214,7 +1332,7 @@ function EditRoleModal({ role, isBuiltin, existingRoles, initialMeta, onSave, on
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-xl mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
@@ -1245,6 +1363,10 @@ function EditRoleModal({ role, isBuiltin, existingRoles, initialMeta, onSave, on
               <p className="text-xs text-red-500 mt-1">A role with this name already exists.</p>
             )}
           </div>
+          <HierarchicalCompanyUnitChecklist
+            selectedUnits={allowedCompanyUnits}
+            onChange={setAllowedCompanyUnits}
+          />
           <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">
             <p className="text-xs font-semibold text-[#1A284F]">Pengaturan Headcount Kalibrasi &amp; Verification</p>
             <label className="flex items-start gap-2.5 cursor-pointer text-xs text-gray-700">
@@ -1277,7 +1399,11 @@ function EditRoleModal({ role, isBuiltin, existingRoles, initialMeta, onSave, on
             disabled={!valid}
             onClick={() => {
               if (valid) {
-                onSave(role, name.trim(), { excludeFromCalibrationHC, excludeFromVerification });
+                onSave(role, name.trim(), {
+                  excludeFromCalibrationHC,
+                  excludeFromVerification,
+                  allowedCompanyUnits,
+                });
                 onClose();
               }
             }}
@@ -1338,8 +1464,9 @@ export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
       ? {
           excludeFromCalibrationHC: Boolean(s.excludeFromCalibrationHC ?? base.excludeFromCalibrationHC),
           excludeFromVerification: Boolean(s.excludeFromVerification ?? base.excludeFromVerification),
+          allowedCompanyUnits: Array.isArray(s.allowedCompanyUnits) ? s.allowedCompanyUnits : base.allowedCompanyUnits ?? [],
         }
-      : base;
+      : { ...base, allowedCompanyUnits: base.allowedCompanyUnits ?? [] };
   }
   return result;
 }

@@ -116,7 +116,23 @@ export function getGroupNameForUnit(company: string): "RSUP Group" | "Sambu Grou
   return "RSUP Group";
 }
 
+export function getRoleAllowedCompanyUnits(role?: string): string[] {
+  if (!role) return [];
+  const meta = getRoleMetadata(role);
+  return Array.isArray(meta.allowedCompanyUnits)
+    ? meta.allowedCompanyUnits.filter(Boolean)
+    : [];
+}
+
 export function getGroupCompaniesForUnit(company: string, extraUnits?: string[]): string[] {
+  const activeUser = getActiveUser();
+  const roleUnits =
+    activeUser && activeUser.company === company
+      ? getRoleAllowedCompanyUnits(activeUser.role)
+      : [];
+  if (roleUnits.length > 0) {
+    return Array.from(new Set([...roleUnits, ...(extraUnits ?? [])].filter(Boolean)));
+  }
   const groupName = getGroupNameForUnit(company);
   const base =
     groupName === "Sambu Group"
@@ -347,8 +363,12 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   }
 
   const myRank = HIERARCHY_RANK[level];
+  const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
   const directorGroupUnits = new Set(
-    getGroupCompaniesForUnit(user.company, user.managedUnits).map(normOrgName),
+    (roleAllowedUnits.length > 0
+      ? [...roleAllowedUnits, ...(user.managedUnits ?? [])]
+      : getGroupCompaniesForUnit(user.company, user.managedUnits)
+    ).map(normOrgName),
   );
 
   // 1. Collect transitive AP1 / AP2 subordinate chain
@@ -379,7 +399,7 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
 
   // 2. Collect structural hierarchy scope
   const allowedUnits = new Set<string>(
-    [user.company, ...(user.managedUnits ?? [])].map(normOrgName).filter(Boolean),
+    [user.company, ...roleAllowedUnits, ...(user.managedUnits ?? [])].map(normOrgName).filter(Boolean),
   );
   const allowedDivisions = new Set<string>(
     [user.division, ...(user.managedDivisions ?? [])].map(normOrgName).filter(Boolean),
@@ -394,6 +414,11 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   return allUsers.filter((target) => {
     if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return true;
     if (transitiveSubIds.has(target.employeeId.toLowerCase())) return true;
+    // Jika Role memiliki cakupan Unit Usaha yang diceklis di Access Management (mis. jabatan ganda Director + GM lintas group),
+    // maka seluruh karyawan pada unit usaha yang diceklis tersebut dapat diakses
+    if (roleAllowedUnits.length > 0 && roleAllowedUnits.some((u) => normOrgName(u) === normOrgName(target.company))) {
+      return true;
+    }
 
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];
@@ -924,8 +949,11 @@ export function useAuthStore() {
   const allUsers = loadManagedUsers();
   const allowedModules = resolveUserAllowedModules(activeUser);
   const isHrUnitLocked = activeUser.role === "HR Unit";
+  const roleAllowedUnits = getRoleAllowedCompanyUnits(activeUser.role);
   const lockedUnits = isHrUnitLocked
-    ? Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
+    ? Array.from(new Set([activeUser.company, ...roleAllowedUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
+    : roleAllowedUnits.length > 0
+    ? Array.from(new Set([...roleAllowedUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
     : undefined;
 
   return {

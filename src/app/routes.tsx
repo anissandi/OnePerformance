@@ -70,6 +70,7 @@ import {
 import {
   getActiveUser,
   getGroupCompaniesForUnit,
+  getRoleAllowedCompanyUnits,
   isDirectorRoleOrGrouping,
 } from "./store/authStore"
 
@@ -78,6 +79,10 @@ function HRAppraisalSummary() {
 }
 function getBodOrDirectorUnits(): string[] | undefined {
   const activeUser = getActiveUser()
+  const roleUnits = getRoleAllowedCompanyUnits(activeUser.role)
+  if (roleUnits.length > 0) {
+    return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
+  }
   if (isDirectorRoleOrGrouping(activeUser)) {
     return getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
   }

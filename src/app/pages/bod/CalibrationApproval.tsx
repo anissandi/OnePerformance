@@ -8,6 +8,7 @@ import {
   getActiveUser,
   getGroupCompaniesForUnit,
   getGroupNameForUnit,
+  getRoleAllowedCompanyUnits,
   isDirectorRoleOrGrouping,
   isExcludedFromAppraisalCalibration,
   loadManagedUsers,
@@ -385,8 +386,16 @@ export function BODCalibrationApproval() {
     () => activeUser.directorCalibrationRole ?? "approver",
   );
   const allowedUnitNames = useMemo(
-    () => (isDirector ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits) : COMPANY_UNITS.map((u) => u.name)),
-    [isDirector, activeUser.company, activeUser.managedUnits],
+    () => {
+      const roleUnits = getRoleAllowedCompanyUnits(activeUser.role);
+      if (roleUnits.length > 0) {
+        return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+      }
+      return isDirector
+        ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
+        : COMPANY_UNITS.map((u) => u.name);
+    },
+    [isDirector, activeUser.role, activeUser.company, activeUser.managedUnits],
   );
   const visibleUnits = useMemo(
     () => COMPANY_UNITS.filter((u) => allowedUnitNames.includes(u.name)),

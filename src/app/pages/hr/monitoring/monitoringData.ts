@@ -4,6 +4,7 @@ import {
   getActiveUser,
   getAuthorizedSubordinates,
   getGroupCompaniesForUnit,
+  getRoleAllowedCompanyUnits,
   isAdminOrHrIcfRole,
   isDirectorRoleOrGrouping,
   loadManagedUsers,
@@ -104,6 +105,10 @@ const ALL_COMPANY_UNITS = [
 
 function getScopedCompanyUnits(): string[] {
   const activeUser = getActiveUser();
+  const roleUnits = getRoleAllowedCompanyUnits(activeUser.role);
+  if (roleUnits.length > 0) {
+    return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+  }
   if (activeUser.role === "HR Unit") {
     return Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
   }
