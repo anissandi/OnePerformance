@@ -563,9 +563,9 @@ export function Topbar({
             className="flex items-center gap-3 hover:bg-gray-50 rounded-xl px-2 py-1 transition-colors"
           >
             <div className="text-right hidden sm:block">
-              <p className="text-sm font-medium text-gray-800 leading-tight">{displayUserName}</p>
+              <p className="text-sm font-medium text-gray-800 leading-tight">{activeUser.name || displayUserName}</p>
               <p className="text-[11px] text-gray-400 leading-tight">
-                {activeUser.employeeId} · {activeUser.role} · {activeUser.company}
+                {activeUser.position || "—"} · {activeUser.department || "—"}
               </p>
             </div>
             <div className="w-9 h-9 rounded-full bg-[#1A284F] flex items-center justify-center shrink-0">
@@ -580,8 +580,8 @@ export function Topbar({
             <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-50">
               <div className="px-4 py-2.5 bg-gray-50/80 border-b border-gray-100">
                 <p className="text-xs font-bold text-[#1A284F] truncate">{activeUser.name}</p>
-                <p className="text-[11px] text-gray-500 truncate">{activeUser.position}</p>
-                <p className="text-[10px] text-gray-400 truncate">{activeUser.company} · {activeUser.groupings}</p>
+                <p className="text-[11px] text-gray-600 truncate">{activeUser.position || "—"}</p>
+                <p className="text-[10px] text-gray-400 truncate">{activeUser.department || "—"}</p>
               </div>
               <button
                 onClick={() => { setDropOpen(false); navigate(`/${role}/profile`); }}

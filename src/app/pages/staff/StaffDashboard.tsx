@@ -610,9 +610,9 @@ export function StaffDashboard() {
 
       <AppraisalSummaryCards />
 
-      <DashboardNotificationSection />
-
       <MilestoneProgress />
+
+      <DashboardNotificationSection />
     </div>
   );
 }

@@ -313,13 +313,13 @@ function ProgressRing({ pct, size = 80, stroke = 7 }: { pct: number; size?: numb
   );
 }
 
-type Tab = "overview" | "results" | "kpi";
+type Tab = "overview" | "results";
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function ViewProfile() {
   const { activeUser } = useAuthStore();
-  const [tab, setTab] = useRouteTab<Tab>(["overview", "results", "kpi"], "overview");
+  const [tab, setTab] = useRouteTab<Tab>(["overview", "results"], "overview");
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState<number>(CURRENT_YEAR);
   const [yearOpen, setYearOpen] = useState(false);
@@ -625,7 +625,6 @@ export function ViewProfile() {
         {([
           { id: "overview", label: "Overview",         icon: Activity  },
           { id: "results",  label: "Module Results",   icon: Star      },
-          { id: "kpi",      label: "KPI Detail",       icon: BarChart2 },
         ] as { id: Tab; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
           <button key={id} onClick={() => setTab(id)}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
@@ -751,32 +750,6 @@ export function ViewProfile() {
       {/* ── Tab: Module Results ── */}
       {tab === "results" && (
         <div className="flex flex-col gap-3">
-          {/* Status banner */}
-          <div className="bg-[#1A284F] rounded-2xl p-6 flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <p className="text-xs text-blue-200 font-semibold uppercase tracking-wide">
-                  {isCurrent ? "Current Appraisal Status" : "Final Appraisal Result"} · {selectedYear}
-                </p>
-                {isCurrent ? (
-                  <span className="text-[10px] bg-amber-400 text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><Clock className="w-2.5 h-2.5" />In Progress</span>
-                ) : (
-                  <span className="text-[10px] bg-green-400 text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle2 className="w-2.5 h-2.5" />Finalized</span>
-                )}
-              </div>
-              <p className="text-4xl font-bold text-white">{displayScore} <span className="text-lg font-normal text-blue-200">/ 100</span></p>
-              <p className="text-sm text-blue-200 mt-1">
-                Last updated {yearData.lastUpdated} · {dynamicModulesApproved} of {dynamicModulesTotal} modules approved
-              </p>
-            </div>
-            <div className="text-center shrink-0">
-              <p className="text-xs text-blue-200 mb-2">{isCurrent ? "Current Grade" : "Final Grade"}</p>
-              <span className={`inline-block text-4xl font-black px-6 py-3 rounded-2xl ${gradeColor(displayGrade)}`}>
-                {displayGrade}
-              </span>
-            </div>
-          </div>
-
           {/* Module result cards */}
           {activeModules.map((m, idx) => {
             const expanded = expandedModule === m.id;
@@ -899,81 +872,6 @@ export function ViewProfile() {
               <span className="text-3xl font-bold text-[#1A284F]">{totalWeighted.toFixed(1)}</span>
               <span className={`px-4 py-2 rounded-xl text-lg font-black ${gradeColor(displayGrade)}`}>{displayGrade}</span>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Tab: KPI Detail ── */}
-      {tab === "kpi" && (
-        <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4">
-              <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">{isCurrent ? "Current KPI Score" : "Final KPI Score"}</p>
-              <p className="text-2xl font-bold text-[#1A284F]">{displayKPIScore}</p>
-              {isCurrent ? (
-                <p className="text-[11px] text-amber-500 mt-0.5 flex items-center gap-1"><Clock className="w-3 h-3" />In Progress</p>
-              ) : (
-                <p className="text-[11px] text-green-600 mt-0.5 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />Finalized</p>
-              )}
-            </div>
-            <div className={`rounded-2xl border shadow-sm px-5 py-4 ${gradeColor(displayKPIGrade)} border-current/20`}>
-              <p className="text-[11px] uppercase tracking-wide mb-1 opacity-70">KPI Grade</p>
-              <p className="text-2xl font-bold">{displayKPIGrade}</p>
-              <p className="text-[11px] opacity-60 mt-0.5">Weight {kpiModuleWeight}%</p>
-            </div>
-            <div className="bg-green-50 rounded-2xl border border-green-100 shadow-sm px-5 py-4">
-              <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">On Track</p>
-              <p className="text-2xl font-bold text-green-700">{KPI_SUMMARY.filter(k => k.score >= 85).length}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">KPI indicators</p>
-            </div>
-            <div className="bg-blue-50 rounded-2xl border border-blue-100 shadow-sm px-5 py-4">
-              <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">Total KPIs</p>
-              <p className="text-2xl font-bold text-blue-700">{KPI_SUMMARY.length}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">indicators set</p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-50">
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-                KPI Indicators — {isCurrent ? "Current Status" : `Final Result ${selectedYear}`}
-              </p>
-            </div>
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-gray-100 text-[11px] font-bold text-gray-400 uppercase tracking-wider">
-                  <th className="px-5 py-3">No</th>
-                  <th className="px-5 py-3">KPI Indicator</th>
-                  <th className="px-5 py-3">Target</th>
-                  <th className="px-5 py-3">Achievement</th>
-                  <th className="px-5 py-3">Score</th>
-                  <th className="px-5 py-3 text-center">Grade</th>
-                </tr>
-              </thead>
-              <tbody>
-                {KPI_SUMMARY.map((k, i) => (
-                  <tr key={i} className={`border-b border-gray-50 hover:bg-gray-50/50 transition-colors ${i % 2 === 0 ? "" : "bg-gray-50/30"}`}>
-                    <td className="px-5 py-3.5 text-xs text-gray-400">{i + 1}</td>
-                    <td className="px-5 py-3.5 text-xs font-medium text-gray-800">{k.label}</td>
-                    <td className="px-5 py-3.5 text-xs text-gray-600">{k.target}</td>
-                    <td className="px-5 py-3.5 text-xs text-gray-700 font-semibold">{k.achievement}</td>
-                    <td className="px-5 py-3.5 w-36">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                          <div className={`${gradeBar(k.grade)} h-1.5 rounded-full`} style={{ width: `${k.score}%` }} />
-                        </div>
-                        <span className="text-[10px] font-bold text-gray-600 w-7 text-right">{k.score}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5 text-center">
-                      <span className={`inline-block px-2.5 py-0.5 rounded-lg text-[11px] font-bold ${gradeColor(k.grade)}`}>
-                        {k.grade}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         </div>
       )}

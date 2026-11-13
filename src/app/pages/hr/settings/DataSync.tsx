@@ -51,7 +51,7 @@ const initialItems: SyncItem[] = [
   {
     id: "all",
     label: "All Data",
-    description: "Sync semua data sekaligus (Absensi, Jumlah Karyawan, Pelanggaran, Kecelakaan Kerja)",
+    description: "Sync semua data sekaligus (Absensi, Data Karyawan, Pelanggaran, Kecelakaan Kerja)",
     lastSync: null,
     status: "idle",
   },
@@ -64,7 +64,7 @@ const initialItems: SyncItem[] = [
   },
   {
     id: "karyawan",
-    label: "Data Jumlah Karyawan",
+    label: "Data Karyawan",
     description: "Total headcount dan distribusi karyawan per unit/divisi",
     lastSync: null,
     status: "idle",
@@ -93,8 +93,17 @@ function StatusBadge({ status }: { status: SyncItem["status"] }) {
 }
 
 export function DataSyncPage() {
+  const normalizeSyncItems = (rawItems: SyncItem[]): SyncItem[] =>
+    rawItems.map((it) =>
+      it.id === "karyawan" || it.label === "Data Jumlah Karyawan"
+        ? { ...it, label: "Data Karyawan" }
+        : it.id === "all"
+        ? { ...it, description: "Sync semua data sekaligus (Absensi, Data Karyawan, Pelanggaran, Kecelakaan Kerja)" }
+        : it,
+    );
+
   const [items, setItems] = useState<SyncItem[]>(() =>
-    loadPersistedState<SyncItem[]>("pa_data_sync_items_v1", initialItems)
+    normalizeSyncItems(loadPersistedState<SyncItem[]>("pa_data_sync_items_v1", initialItems))
   );
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [syncing, setSyncing] = useState(false);
@@ -109,7 +118,7 @@ export function DataSyncPage() {
 
   useEffect(() => {
     const onHydrated = () => {
-      setItems(loadPersistedState<SyncItem[]>("pa_data_sync_items_v1", initialItems));
+      setItems(normalizeSyncItems(loadPersistedState<SyncItem[]>("pa_data_sync_items_v1", initialItems)));
       setUsers(loadManagedUsers());
       setLastImportSummary(loadPersistedState<string | null>("pa_last_employee_excel_import_v1", null));
     };
@@ -480,7 +489,7 @@ export function DataSyncPage() {
             <h1 className="text-[26px] font-bold text-[#1A284F]">Data Sync & Import Data Karyawan</h1>
           </div>
           <p className="text-gray-500 text-sm">
-            Import Excel data karyawan & validasi berjenjang (Reg No AP1 & AP2), serta sinkronisasi dataset HR tahun berjalan
+            Update data karyawan dengan metode sync data atau import
           </p>
         </div>
         <button
@@ -504,15 +513,9 @@ export function DataSyncPage() {
             <div className="flex items-center gap-2">
               <FileSpreadsheet className="w-5 h-5 text-[#1A284F]" />
               <h2 className="text-base font-bold text-[#1A284F]">
-                Import Excel Data Karyawan & Mapping Approval Berjenjang (AP1 / AP2)
+                Import Data Karyawan &amp; Mapping Approval
               </h2>
             </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Format wajib 15 kolom:{" "}
-              <span className="font-mono text-[11px] text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded">
-                No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2; Role; Groupings
-              </span>
-            </p>
           </div>
           <div className="flex items-center gap-2.5 flex-wrap">
             <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5">
@@ -579,28 +582,13 @@ export function DataSyncPage() {
           </div>
         </div>
 
-        {/* Rule summary strip */}
-        <div className="px-6 py-3 bg-slate-50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-600">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="inline-flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <strong>Approval Umum:</strong> Reg No AP1 (Approval 1) → Reg No AP2 (Approval 2)
-            </span>
-            <span className="text-gray-300">|</span>
-            <span>
-              <strong>Alur KPI & SMART Goals:</strong> Submit → Check (HR Unit) → Approval 1 → Approval 2 → Validate (HR ICF)
-            </span>
-            <span className="text-gray-300">|</span>
-            <span>
-              <strong>Project Outside Job Scope:</strong> Approval 1 → Approval 2
-            </span>
-          </div>
-          {lastImportSummary && (
+        {lastImportSummary && (
+          <div className="px-6 py-2.5 bg-slate-50 border-b border-gray-100 flex items-center justify-end text-xs">
             <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
               {lastImportSummary}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Search + Table preview */}
         <div className="p-5">
@@ -608,7 +596,7 @@ export function DataSyncPage() {
             <div className="flex items-center gap-2 text-xs text-gray-600">
               <Users className="w-4 h-4 text-[#1A284F]" />
               <span>
-                Menampilkan <strong>{filteredUsers.length}</strong> karyawan terimpor (otomatis terdistribusi ke User Management & HC Awal Tahun di Calibration Setting)
+                Menampilkan <strong>{filteredUsers.length}</strong> karyawan terimpor
               </span>
             </div>
             <div className="relative w-72">

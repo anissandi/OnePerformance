@@ -211,7 +211,7 @@ function EditRequestReviewModal({ row, onAccept, onReject, onClose }: {
 
 // ── History status tag helper ─────────────────────────────────────────────────
 
-function HistoryTag({ status }: { status: string }) {
+function HistoryTag({ status, type }: { status: string; type?: string }) {
   if (status === "Assessed-Approver 1") {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
@@ -219,10 +219,18 @@ function HistoryTag({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "Approved" || status === "Assessed-Approver 2") {
+  if (status === "Approved") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300">
+        <CheckCircle2 className="w-3 h-3" /> Approved
+      </span>
+    );
+  }
+  if (status === "Assessed-Approver 2") {
+    const tagText = type === "Project" ? "Approved" : "Assessed";
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200">
-        <Check className="w-3 h-3" /> Assessed
+        <Check className="w-3 h-3" /> {tagText}
       </span>
     );
   }
@@ -542,7 +550,7 @@ function ApprovalsTable({
                         <button onClick={() => { setReviewRow(row); setReviewFromHistory(true); }} className="p-1 text-gray-500 hover:bg-gray-100 rounded" title="View">
                           <Eye className="w-5 h-5" />
                         </button>
-                        <HistoryTag status={row.status} />
+                        <HistoryTag status={row.status} type={row.type} />
                       </>
                     )}
                   </div>

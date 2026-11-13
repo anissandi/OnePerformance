@@ -2,7 +2,7 @@
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../../shared/appraisalFormStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 import { useAppraisalRevision } from "../../shared/useAppraisalRevision";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, ClipboardList, CheckCircle2, AlertCircle, Clock, Filter } from "lucide-react";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 
@@ -202,6 +202,20 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 
 export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   useAppraisalRevision();
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
   const average = (values: number[]) => values.length ? values.reduce((sum, score) => sum + score, 0) / values.length : 0;
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
@@ -220,7 +234,12 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
     );
     const first = approvers.find((entry) => entry.approverLevel === 1);
     const second = approvers.find((entry) => entry.approverLevel === 2);
-    const selfValues = self ? self.forms.flatMap((form) => Object.values(form.ratings)) : [];
+    const selfValues = self
+      ? self.forms.flatMap((form) => {
+          const vals = Object.values(form.ratings).map(Number).filter((v) => v > 0);
+          return vals.length > 0 ? vals : form.avgScore > 0 ? [form.avgScore] : [];
+        })
+      : [];
     const a1Values = first
       ? first.forms.flatMap((form) => Object.values(form.ratings))
       : Object.values(wfRec?.assessments.approver1?.ratings ?? {});

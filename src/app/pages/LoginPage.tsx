@@ -332,9 +332,6 @@ export function LoginPage() {
                 <Building2 className="w-4 h-4 text-gray-500" />
                 Company Unit
               </label>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                Mode: {unitLoginCfg.enabledMethods.map((m) => METHOD_LABELS[m]).join(" / ")}
-              </span>
             </div>
             <div className="relative">
               <button

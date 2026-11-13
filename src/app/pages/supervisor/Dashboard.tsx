@@ -1087,9 +1087,9 @@ function MyDashboard() {
 
       <AppraisalSummaryCards />
 
-      <DashboardNotificationSection />
-
       <MilestoneProgress />
+
+      <DashboardNotificationSection />
     </div>
   );
 }

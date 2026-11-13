@@ -1,8 +1,8 @@
 // @refresh reset
 import { useState, useEffect } from "react";
-import { X, CheckCircle2, FileCheck, Lock } from "lucide-react";
+import { X, CheckCircle2, FileCheck, Lock, Clock, RotateCcw } from "lucide-react";
 import {
-  saveAppraisalSelf, loadAppraisalSelf,
+  saveAppraisalSelf, loadAppraisalSelf, loadAllAppraisalApprovers,
 } from "../shared/appraisalFormStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { getActiveUser } from "../../store/authStore";
@@ -468,6 +468,7 @@ export function AppraisalForm() {
     const user = getActiveUser();
     const normId = normalizeEmployeeId(user.employeeId);
     const existing = loadAppraisalSelf(user.employeeId);
+    const approverEntries = loadAllAppraisalApprovers(user.employeeId);
     const wfRec = loadWorkflowRecords().find(
       (r) =>
         r.year === "2026" &&
@@ -475,9 +476,11 @@ export function AppraisalForm() {
         r.phase === "measurement" &&
         (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
     );
-    const isRevision =
-      wfRec?.decisions.approver1?.status === "Revision" ||
-      wfRec?.decisions.approver2?.status === "Revision";
+    const a1Decision = wfRec?.decisions.approver1?.status ?? "";
+    const a2Decision = wfRec?.decisions.approver2?.status ?? "";
+    const isRevision = a1Decision === "Revision" || a2Decision === "Revision";
+    const a1Done = a1Decision === "Approved" || a1Decision.startsWith("Assessed");
+    const a2Done = a2Decision === "Approved" || a2Decision.startsWith("Assessed");
     const submittedLocked = Boolean((existing?.submitted || wfRec) && !isRevision);
 
     const merged: Ratings = {};
@@ -490,11 +493,54 @@ export function AppraisalForm() {
         saved[f.formId] = { total: f.avgScore };
       }
     });
+
+    const extractApproverRatings = (level: 1 | 2): Record<string, number> => {
+      const fromWf = level === 1 ? wfRec?.assessments.approver1?.ratings : wfRec?.assessments.approver2?.ratings;
+      if (fromWf && Object.keys(fromWf).length > 0) {
+        const normMap: Record<string, number> = {};
+        Object.entries(fromWf).forEach(([k, v]) => {
+          normMap[k.replace("-", "__")] = Number(v);
+        });
+        return normMap;
+      }
+      const fromEntry = approverEntries.find((e) => e.approverLevel === level);
+      if (fromEntry) {
+        const normMap: Record<string, number> = {};
+        fromEntry.forms.forEach((f) => {
+          Object.entries(f.ratings).forEach(([k, v]) => {
+            normMap[k.replace("-", "__")] = Number(v);
+          });
+        });
+        return normMap;
+      }
+      return {};
+    };
+
+    let approvalStatusLabel = "Draft (Belum Disubmit)";
+    let approvalStatusTone: "draft" | "pending_a1" | "pending_a2" | "approved" | "revision" = "draft";
+    if (isRevision) {
+      approvalStatusLabel = "Revision Requested";
+      approvalStatusTone = "revision";
+    } else if (a2Done) {
+      approvalStatusLabel = "Approved (Final — Approver 2)";
+      approvalStatusTone = "approved";
+    } else if (a1Done) {
+      approvalStatusLabel = "Assessed Approver 1 · Pending Approver 2";
+      approvalStatusTone = "pending_a2";
+    } else if (submittedLocked) {
+      approvalStatusLabel = "Submitted · Pending Approver 1";
+      approvalStatusTone = "pending_a1";
+    }
+
     return {
       merged,
       saved,
       submittedLocked,
       submittedDate: existing?.submittedAt || wfRec?.submittedDate || "",
+      a1Ratings: extractApproverRatings(1),
+      a2Ratings: extractApproverRatings(2),
+      approvalStatusLabel,
+      approvalStatusTone,
     };
   };
 
@@ -502,6 +548,10 @@ export function AppraisalForm() {
   const [savedForms, setSavedForms] = useState<SavedForms>(() => readEmployeeFormState().saved);
   const [isSubmittedLocked, setIsSubmittedLocked] = useState<boolean>(() => readEmployeeFormState().submittedLocked);
   const [submittedDateLabel, setSubmittedDateLabel] = useState<string>(() => readEmployeeFormState().submittedDate);
+  const [approver1Ratings, setApprover1Ratings] = useState<Record<string, number>>(() => readEmployeeFormState().a1Ratings);
+  const [approver2Ratings, setApprover2Ratings] = useState<Record<string, number>>(() => readEmployeeFormState().a2Ratings);
+  const [approvalStatusLabel, setApprovalStatusLabel] = useState<string>(() => readEmployeeFormState().approvalStatusLabel);
+  const [approvalStatusTone, setApprovalStatusTone] = useState<"draft" | "pending_a1" | "pending_a2" | "approved" | "revision">(() => readEmployeeFormState().approvalStatusTone);
   const [modalItem, setModalItem] = useState<FormItem | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -514,15 +564,20 @@ export function AppraisalForm() {
       setSavedForms(next.saved);
       setIsSubmittedLocked(next.submittedLocked);
       setSubmittedDateLabel(next.submittedDate);
-      setActiveForm("A");
+      setApprover1Ratings(next.a1Ratings);
+      setApprover2Ratings(next.a2Ratings);
+      setApprovalStatusLabel(next.approvalStatusLabel);
+      setApprovalStatusTone(next.approvalStatusTone);
     };
     window.addEventListener("pa-db-hydrated", onHydrated);
     window.addEventListener("pa-auth-updated", onHydrated);
     window.addEventListener("appraisal-updated", onHydrated);
+    window.addEventListener("storage", onHydrated);
     return () => {
       window.removeEventListener("pa-db-hydrated", onHydrated);
       window.removeEventListener("pa-auth-updated", onHydrated);
       window.removeEventListener("appraisal-updated", onHydrated);
+      window.removeEventListener("storage", onHydrated);
     };
   }, []);
 
@@ -537,6 +592,33 @@ export function AppraisalForm() {
   const isSaved = !!savedForms[activeForm];
   const allRated = rated === form.items.length;
   const allFormsSaved = ["A", "B", "C"].every((id) => !!savedForms[id]);
+
+  const computeFormAvg = (ratingMap: Record<string, number>, fDef: FormDef): number | null => {
+    const vals = fDef.items
+      .map((it) => ratingMap[key(fDef.id, it.no)])
+      .filter((v): v is number => typeof v === "number" && v > 0);
+    if (vals.length === 0) return null;
+    return vals.reduce((s, n) => s + n, 0) / vals.length;
+  };
+
+  const computeWeightedOverall5 = (ratingMap: Record<string, number>): number | null => {
+    let sum = 0;
+    let hasAny = false;
+    for (const fDef of formsList) {
+      const avg = computeFormAvg(ratingMap, fDef);
+      if (avg !== null) {
+        hasAny = true;
+        sum += avg * (fDef.percentage / 100);
+      }
+    }
+    return hasAny ? sum : null;
+  };
+
+  const activeFormA1Avg = computeFormAvg(approver1Ratings, form);
+  const activeFormA2Avg = computeFormAvg(approver2Ratings, form);
+  const overallSelf5 = computeWeightedOverall5(selfRatings as Record<string, number>);
+  const overallA1_5 = computeWeightedOverall5(approver1Ratings);
+  const overallA2_5 = computeWeightedOverall5(approver2Ratings);
 
   const buildAllFormEntries = (targetSavedForms: SavedForms) =>
     formsList.map((f) => {
@@ -567,6 +649,8 @@ export function AppraisalForm() {
     );
     setIsSubmittedLocked(true);
     setSubmittedDateLabel(todayStr);
+    setApprovalStatusLabel("Submitted · Pending Approver 1");
+    setApprovalStatusTone("pending_a1");
     setShowConfirm(false);
     setShowSuccess(true);
   };
@@ -617,8 +701,8 @@ export function AppraisalForm() {
         {formsList.map((f, idx) => {
           const isTabSaved = !!savedForms[f.id];
           const isActive = activeForm === f.id;
-          // Locked if any previous form is not yet saved
-          const isLocked = idx > 0 && !savedForms[formsList[idx - 1].id];
+          // Jika sudah disubmit (read-only), owner tetap bebas berpindah tab Form A, B, C
+          const isLocked = !isSubmittedLocked && idx > 0 && !savedForms[formsList[idx - 1].id];
           return (
             <button
               key={f.id}
@@ -650,11 +734,98 @@ export function AppraisalForm() {
       </div>
 
       <div className="flex-1 overflow-y-auto flex flex-col gap-4">
-        {/* Form header */}
-        <div className="bg-white border border-gray-100 rounded-xl py-5 text-center shadow-sm shrink-0">
-          <p className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-1">Performance Appraisal</p>
-          <h2 className="text-2xl font-bold text-gray-900 mb-1">{form.title}</h2>
-          <p className="text-sm text-[#1A284F]">Indikator Penilaian {form.subtitle}</p>
+        {/* Form header + Real-time Approval Status & Scores Summary */}
+        <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm shrink-0 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-0.5">Performance Appraisal</p>
+              <h2 className="text-xl font-bold text-gray-900">{form.title} — Indikator Penilaian {form.subtitle}</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+                  approvalStatusTone === "approved"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : approvalStatusTone === "pending_a2"
+                    ? "bg-sky-50 text-sky-700 border-sky-200"
+                    : approvalStatusTone === "pending_a1"
+                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                    : approvalStatusTone === "revision"
+                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                    : "bg-gray-100 text-gray-600 border-gray-200"
+                }`}
+              >
+                {approvalStatusTone === "approved" ? (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                ) : approvalStatusTone === "revision" ? (
+                  <RotateCcw className="w-3.5 h-3.5" />
+                ) : (
+                  <Clock className="w-3.5 h-3.5" />
+                )}
+                {approvalStatusLabel}
+              </span>
+            </div>
+          </div>
+
+          {/* Ringkasan Nilai Hasil Assessment Diri Sendiri, Approver 1, Approver 2 */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-gray-100">
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-2.5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-semibold text-indigo-700">Assessment Diri Sendiri</p>
+                <p className="text-[10px] text-gray-500">
+                  {form.tab}: <strong>{avgScore > 0 ? avgScore.toFixed(2) : "—"}</strong> / 5.00
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-lg font-extrabold text-[#1A284F]">
+                  {overallSelf5 !== null ? `${overallSelf5.toFixed(2)}` : "—"}
+                </span>
+                {overallSelf5 !== null && (
+                  <span className="block text-[10px] font-semibold text-indigo-600">
+                    ({Math.round((overallSelf5 / 5) * 100)}%)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-sky-100 bg-sky-50/50 px-4 py-2.5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-semibold text-sky-700">Nilai Approver 1</p>
+                <p className="text-[10px] text-gray-500">
+                  {form.tab}: <strong>{activeFormA1Avg !== null ? activeFormA1Avg.toFixed(2) : "—"}</strong> / 5.00
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-lg font-extrabold text-sky-800">
+                  {overallA1_5 !== null ? `${overallA1_5.toFixed(2)}` : "—"}
+                </span>
+                {overallA1_5 !== null && (
+                  <span className="block text-[10px] font-semibold text-sky-600">
+                    ({Math.round((overallA1_5 / 5) * 100)}%)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 px-4 py-2.5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-semibold text-emerald-700">Nilai Approver 2</p>
+                <p className="text-[10px] text-gray-500">
+                  {form.tab}: <strong>{activeFormA2Avg !== null ? activeFormA2Avg.toFixed(2) : "—"}</strong> / 5.00
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-lg font-extrabold text-emerald-800">
+                  {overallA2_5 !== null ? `${overallA2_5.toFixed(2)}` : "—"}
+                </span>
+                {overallA2_5 !== null && (
+                  <span className="block text-[10px] font-semibold text-emerald-600">
+                    ({Math.round((overallA2_5 / 5) * 100)}%)
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Section header */}
@@ -681,19 +852,21 @@ export function AppraisalForm() {
                       {[1,2,3,4,5].map(n => <span key={n} className="w-8 text-center">{n}</span>)}
                     </div>
                   </th>
-                  {form.hasEvaluasiAtasan && (
-                    <th className="py-3 px-4 text-center font-semibold text-gray-700 w-56 border-l border-gray-200">
-                      <div>Evaluasi Atasan</div>
-                      <div className="flex justify-around mt-1 text-gray-400 font-normal">
-                        {[1,2,3,4,5].map(n => <span key={n} className="w-8 text-center">{n}</span>)}
-                      </div>
-                    </th>
-                  )}
+                  <th className="py-3 px-4 text-center font-semibold text-sky-700 w-36 border-l border-gray-200">
+                    <div>Approver 1</div>
+                    <div className="text-[10px] text-gray-400 font-normal mt-0.5">Nilai (1–5)</div>
+                  </th>
+                  <th className="py-3 px-4 text-center font-semibold text-emerald-700 w-36 border-l border-gray-200">
+                    <div>Approver 2</div>
+                    <div className="text-[10px] text-gray-400 font-normal mt-0.5">Nilai (1–5)</div>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {form.items.map((item) => {
                   const selected = selfRatings[key(form.id, item.no)] ?? null;
+                  const a1Val = approver1Ratings[key(form.id, item.no)] ?? null;
+                  const a2Val = approver2Ratings[key(form.id, item.no)] ?? null;
                   return (
                     <tr key={item.no} className="hover:bg-gray-50/50 transition-colors">
                       {/* No */}
@@ -740,38 +913,45 @@ export function AppraisalForm() {
                         </div>
                       </td>
 
-                      {/* Atasan rating (disabled for employee) */}
-                      {form.hasEvaluasiAtasan && (
-                        <td className="py-4 px-4 align-middle border-l border-gray-100">
-                          <div className="flex items-center justify-around">
-                            {[1,2,3,4,5].map((n) => (
-                              <div
-                                key={n}
-                                className="w-8 h-8 rounded border border-gray-200 text-xs font-semibold text-gray-300 flex items-center justify-center bg-gray-50 cursor-not-allowed"
-                              >
-                                {n}
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                      )}
+                      {/* Approver 1 Score */}
+                      <td className="py-4 px-4 align-middle border-l border-gray-100 text-center">
+                        {a1Val !== null ? (
+                          <span className="inline-flex items-center justify-center w-8 h-8 rounded bg-sky-100 text-sky-800 border border-sky-200 text-xs font-bold">
+                            {a1Val}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-300">—</span>
+                        )}
+                      </td>
+
+                      {/* Approver 2 Score */}
+                      <td className="py-4 px-4 align-middle border-l border-gray-100 text-center">
+                        {a2Val !== null ? (
+                          <span className="inline-flex items-center justify-center w-8 h-8 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold">
+                            {a2Val}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-300">—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
 
                 {/* Total row */}
                 <tr className="bg-gray-50 border-t border-gray-200">
-                  <td colSpan={form.hasEvaluasiAtasan ? 3 : 3} className="py-3 px-4 text-sm font-bold text-gray-800 border-r border-gray-200 text-right">
+                  <td colSpan={3} className="py-3 px-4 text-sm font-bold text-gray-800 border-r border-gray-200 text-right">
                     ({form.percentage}%) Nilai Total
                   </td>
                   <td className="py-3 px-4 text-center font-bold text-[#1A284F]">
                     {avgScore > 0 ? avgScore.toFixed(2) : "—"}
                   </td>
-                  {form.hasEvaluasiAtasan && (
-                    <td className="py-3 px-4 text-center font-bold text-gray-300 border-l border-gray-100">
-                      0
-                    </td>
-                  )}
+                  <td className="py-3 px-4 text-center font-bold text-sky-700 border-l border-gray-100">
+                    {activeFormA1Avg !== null ? activeFormA1Avg.toFixed(2) : "—"}
+                  </td>
+                  <td className="py-3 px-4 text-center font-bold text-emerald-700 border-l border-gray-100">
+                    {activeFormA2Avg !== null ? activeFormA2Avg.toFixed(2) : "—"}
+                  </td>
                 </tr>
               </tbody>
             </table>

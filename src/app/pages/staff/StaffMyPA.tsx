@@ -1,5 +1,6 @@
+// @refresh reset
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import {
   TrendingUp, Lightbulb, ClipboardList, SearchCode, ChevronDown, ChevronUp,
@@ -25,7 +26,9 @@ import { loadRCAApprovalDecisions } from "../shared/rcaApprovalStore";
 import { useProjectStore, SCOPE_BOBOT } from "../../store/projectStore";
 import type { CheckInStatus as ProjectCheckInStatus } from "../../store/projectStore";
 import { STAFF_PROFILE } from "../../store/profileStore";
-import { useAuthStore } from "../../store/authStore";
+import { resolveEffectiveUserGrouping, useAuthStore } from "../../store/authStore";
+import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { loadUnitScoreWeights, type ScoreWeightColumn } from "../shared/scoringWeightStore";
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
@@ -1550,22 +1553,71 @@ function getGrade(score: number): { letter: string; color: string; bg: string } 
 }
 
 function ScoreSummaryBanner({ year }: { year: string }) {
+  const { activeUser, allowedModules } = useAuthStore();
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
   const isCurrent = year === "2026";
   const hist = HISTORICAL_SCORES_EDWARD[year];
   const scoreLabel = isCurrent ? "Current Score" : "Final Score";
-  const kpiScore2026 = React.useMemo(() => isCurrent ? getKPIScore2026() : null, [isCurrent]);
+  const liveMe = getLiveTransactionalEmployees().find(
+    (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
+  );
+  const grouping = resolveEffectiveUserGrouping(activeUser);
+  const unitWeights = loadUnitScoreWeights(activeUser.company);
+  const weightCol: ScoreWeightColumn =
+    grouping === "Ka./Wa.Ka.Div ke atas" || grouping === "Direktur / Director"
+      ? "kepalaDivisi"
+      : grouping === "Ka./Wa.Ka.Dept"
+      ? "kepalaDepartement"
+      : grouping === "Ka./Wa.Ka.Bagian"
+      ? "pengawasKepalaBagian"
+      : grouping === "Ka./Wa.Ka.Seksi"
+      ? "kaWaKaSeksi"
+      : "operasional";
+  const getWeightNum = (indikator: string, fallback: number): number => {
+    const raw = unitWeights[indikator]?.[weightCol];
+    if (!raw || raw === "-") return 0;
+    const num = parseFloat(String(raw).replace("%", "").trim());
+    return Number.isFinite(num) ? num : fallback;
+  };
 
-  const cards = [
-    { label: "KPI",            score: isCurrent ? kpiScore2026           : (hist?.kpi       ?? null), weight: 50, icon: <TrendingUp className="w-5 h-5" />,   color: "text-blue-700",  bg: "bg-blue-50",  border: "border-blue-200"  },
-    { label: "SMART Goals",    score: isCurrent ? null                   : (hist?.smart     ?? null), weight: 20, icon: <Lightbulb className="w-5 h-5" />,     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200" },
-    { label: "Appraisal Form", score: isCurrent ? null                   : (hist?.appraisal ?? null), weight: 15, icon: <ClipboardList className="w-5 h-5" />, color: "text-green-700", bg: "bg-green-50", border: "border-green-200" },
-    { label: "Project Outside",score: isCurrent ? null                   : (hist?.project   ?? null), weight: 15, icon: <FolderKanban className="w-5 h-5" />,  color: "text-teal-700",  bg: "bg-teal-50",  border: "border-teal-200"  },
+  const liveKpiScore = liveMe && liveMe.kpi.score > 0 ? liveMe.kpi.score : null;
+  const liveSgScore  = liveMe && liveMe.smartGoals.score > 0 ? liveMe.smartGoals.score : null;
+  const liveAfScore  = liveMe && liveMe.formA.score > 0 ? liveMe.formA.score : null;
+  const livePrjScore = liveMe && liveMe.project.score > 0 ? liveMe.project.score : null;
+
+  const allCards = [
+    { label: "KPI",            score: isCurrent ? liveKpiScore : (hist?.kpi       ?? null), weight: getWeightNum("KPI", 50),                       icon: <TrendingUp className="w-5 h-5" />,   color: "text-blue-700",  bg: "bg-blue-50",  border: "border-blue-200"  },
+    { label: "SMART Goals",    score: isCurrent ? liveSgScore  : (hist?.smart     ?? null), weight: getWeightNum("SMART Goals", 20),               icon: <Lightbulb className="w-5 h-5" />,     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200" },
+    { label: "Appraisal Form", score: isCurrent ? liveAfScore  : (hist?.appraisal ?? null), weight: getWeightNum("Appraisal Form", 15),            icon: <ClipboardList className="w-5 h-5" />, color: "text-green-700", bg: "bg-green-50", border: "border-green-200" },
+    { label: "Project Outside",score: isCurrent ? livePrjScore : (hist?.project   ?? null), weight: getWeightNum("Project Outside Job Scope", 15), icon: <FolderKanban className="w-5 h-5" />,  color: "text-teal-700",  bg: "bg-teal-50",  border: "border-teal-200"  },
   ];
+  const cards = allCards.filter((c) => {
+    if (c.label === "KPI") return allowedModules.includes("KPI (Setting/Measurement)");
+    if (c.label === "SMART Goals") return allowedModules.includes("SMART Goals (Setting/Measurement)");
+    if (c.label === "Appraisal Form") return allowedModules.includes("Appraisals Form");
+    if (c.label === "Project Outside") return allowedModules.includes("Project Outside Job Scope");
+    return true;
+  });
 
   const scoredCards = cards.filter(c => c.score !== null);
   const evaluatedWeight = scoredCards.reduce((s, c) => s + c.weight, 0);
-  const computedOverall = scoredCards.length > 0
-    ? parseFloat((scoredCards.reduce((s, c) => s + c.score! * c.weight, 0) / evaluatedWeight).toFixed(1))
+  const computedOverall = liveMe && liveMe.totalScore > 0
+    ? parseFloat(liveMe.totalScore.toFixed(1))
+    : scoredCards.length > 0 && evaluatedWeight > 0
+    ? parseFloat((scoredCards.reduce((s, c) => s + c.score! * (c.weight / 100), 0)).toFixed(1))
     : null;
   const overallScore = isCurrent ? computedOverall : (hist?.overall ?? null);
   const isPartial = isCurrent && evaluatedWeight < 100;
