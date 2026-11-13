@@ -125,16 +125,26 @@ export function loadOverrides(): Override[] {
   }
 }
 
-export function saveOverride(no: string, status: string, approvalDate: string): void {
+export function saveOverride(no: string, status: string, approvalDate: string, note?: string): void {
   try {
     const existing = loadOverrides().filter((o) => o.no !== no);
     savePersistedState(KEY, [...existing, { no, status, approvalDate }]);
-    saveWorkflowDecision(no, status, approvalDate);
+    saveWorkflowDecision(no, status, approvalDate, note);
     const alias = workflowAlias(no);
     if (alias && alias.module === "SMART Goals" && alias.phase === "measurement") {
       const assessment = loadAssessment(no, alias.role);
       const values = Object.values(assessment?.ratings ?? {});
-      upsertApprovalDecision({ employeeId: alias.employeeId.replace(/-/g, ""), approverLevel: alias.role === "approver1" ? 1 : 2, approverName: alias.role === "approver1" ? "Supervisor" : "HR Admin", approverRole: alias.role, status: status === "Revision" ? "Needs Revision" : "Approved", feedback: assessment?.comments["0"] ?? "", score: values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : "", reviewedDate: approvalDate });
+      const activeUser = getActiveUser();
+      upsertApprovalDecision({
+        employeeId: alias.employeeId,
+        approverLevel: alias.role === "approver1" ? 1 : 2,
+        approverName: activeUser.name || (alias.role === "approver1" ? "Approver 1" : "Approver 2"),
+        approverRole: alias.role,
+        status: status === "Revision" ? "Needs Revision" : "Approved",
+        feedback: note?.trim() || assessment?.comments["0"] || "",
+        score: values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : "",
+        reviewedDate: approvalDate,
+      });
     }
   } catch {
     // ignore

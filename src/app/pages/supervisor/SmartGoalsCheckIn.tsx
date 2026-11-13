@@ -1,12 +1,15 @@
+// @refresh reset
 import React, { useState, useEffect, useRef } from "react";
 import {
   CheckCircle2, Send, Eye, Edit3, AlertCircle, Paperclip, X, Plus,
-  ChevronDown, ChevronUp, Star, Info, TrendingUp, Target, Activity, Upload,
+  ChevronDown, ChevronUp, Star, Info, TrendingUp, Target, Activity, Upload, Clock, RotateCcw, Lock,
 } from "lucide-react";
 import type { SmartGoal } from "../employee/SMARTGoals";
 import { ROWS, SAMPLE_GOALS } from "../employee/SMARTGoals";
-import { loadSubmittedGoals, saveCheckInEntries } from "../shared/smartGoalsStore";
+import { loadApprovalDecisions, loadCheckInEntries, loadSubmittedGoals, saveCheckInEntries } from "../shared/smartGoalsStore";
 import type { StoredCheckInEntry } from "../shared/smartGoalsStore";
+import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
+import { getActiveUser } from "../../store/authStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX } from "../../utils/excelUtils";
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
@@ -17,6 +20,7 @@ interface EvidenceFile {
   name: string;
   size: number;
   type: string;
+  dataUrl?: string;
 }
 
 // Local status — includes dash (default/unset), Batal, and the 3 standard states
@@ -131,6 +135,13 @@ function ConfirmModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm
 }
 
 function SuccessModal({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onClose();
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full mx-4 text-center">
@@ -138,7 +149,7 @@ function SuccessModal({ onClose }: { onClose: () => void }) {
           <CheckCircle2 className="w-7 h-7 text-green-600" />
         </div>
         <h3 className="font-bold text-gray-900 text-lg mb-2">Submitted Successfully</h3>
-        <p className="text-gray-500 text-sm mb-6">Pengukuran SMART Goals telah berhasil disubmit untuk persetujuan.</p>
+        <p className="text-gray-500 text-sm mb-6">Pengukuran SMART Goals telah berhasil disubmit untuk persetujuan (menutup otomatis...).</p>
         <button onClick={onClose} className="px-8 py-2 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors">Done</button>
       </div>
     </div>
@@ -317,9 +328,19 @@ function ActionPlansSection({
         month: "June",
         kpiName: goal.label,
       });
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === "string" ? reader.result : undefined;
+        const curr = getExtra(planId);
+        setExtra(planId, {
+          evidence: [
+            ...curr.evidence,
+            { name: rawFile.name, size: rawFile.size, type: rawFile.type, dataUrl },
+          ],
+        });
+      };
+      reader.readAsDataURL(rawFile);
     });
-    const extra = getExtra(planId);
-    setExtra(planId, { evidence: [...extra.evidence, ...valid.map((f) => ({ name: f.name, size: f.size, type: f.type }))] });
   };
 
   if (goal.actionPlans.length === 0) return null;
@@ -681,9 +702,19 @@ function TargetVsActualSection({
         period: "2026",
         month: "June",
       });
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === "string" ? reader.result : undefined;
+        const curr = getEntry(goalId);
+        updateEntry(goalId, {
+          evidenceFiles: [
+            ...curr.evidenceFiles,
+            { name: rawFile.name, size: rawFile.size, type: rawFile.type, dataUrl },
+          ],
+        });
+      };
+      reader.readAsDataURL(rawFile);
     });
-    const prev = getEntry(goalId);
-    updateEntry(goalId, { evidenceFiles: [...prev.evidenceFiles, ...valid.map((f) => ({ name: f.name, size: f.size, type: f.type }))] });
   };
 
   return (
@@ -871,7 +902,19 @@ function TargetVsActualSection({
 
 // ─── Penilaian Akhir Section (single, at end of page) ─────────────────────────
 
-function PenilaianAkhirSection() {
+function PenilaianAkhirSection({
+  scoreLabel,
+  approver1Note,
+  approver2Note,
+  approver1Score,
+  approver2Score,
+}: {
+  scoreLabel: string | null;
+  approver1Note: string;
+  approver2Note: string;
+  approver1Score: string | null;
+  approver2Score: string | null;
+}) {
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
       <div className="flex items-center px-5 py-3 bg-[#1A284F] gap-3">
@@ -883,20 +926,38 @@ function PenilaianAkhirSection() {
           <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Nilai / Score</label>
           <div className="flex items-center gap-2 bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5">
             <Star className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-xs text-gray-400 italic">Belum ada nilai/score</span>
+            {scoreLabel ? (
+              <span className="text-sm font-bold text-[#1A284F]">{scoreLabel}</span>
+            ) : (
+              <span className="text-xs text-gray-400 italic">Belum ada nilai/score</span>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Catatan Approver 1</label>
+            <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500 flex items-center justify-between">
+              <span>Catatan Approver 1</span>
+              {approver1Score && <span className="text-indigo-700 font-bold">Nilai: {approver1Score}</span>}
+            </label>
             <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5 min-h-[48px]">
-              <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
+              {approver1Note ? (
+                <span className="text-xs text-gray-700 leading-relaxed">{approver1Note}</span>
+              ) : (
+                <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
+              )}
             </div>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Catatan Approver 2</label>
+            <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500 flex items-center justify-between">
+              <span>Catatan Approver 2</span>
+              {approver2Score && <span className="text-emerald-700 font-bold">Nilai: {approver2Score}</span>}
+            </label>
             <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5 min-h-[48px]">
-              <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
+              {approver2Note ? (
+                <span className="text-xs text-gray-700 leading-relaxed">{approver2Note}</span>
+              ) : (
+                <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
+              )}
             </div>
           </div>
         </div>
@@ -913,32 +974,137 @@ export function SmartGoalsCheckInPage() {
   const [targetActuals, setTargetActuals] = useState<TargetActualEntry[]>([]);
   const [view, setView] = useState<PageView>("input");
   const [submitted, setSubmitted] = useState(false);
+  const [statusLabel, setStatusLabel] = useState("Draft");
+  const [statusTone, setStatusTone] = useState<"validated" | "in_progress" | "revision" | "submitted">("submitted");
+  const [wfRecState, setWfRecState] = useState<WorkflowRecord | undefined>(undefined);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  useEffect(() => {
-    const loaded = loadSubmittedGoals();
+  const syncCheckInPageState = () => {
+    const user = getActiveUser();
+    const normId = normalizeEmployeeId(user.employeeId);
+    const loaded = loadSubmittedGoals(user.employeeId);
     const source = loaded ?? SAMPLE_GOALS;
+    const savedCheckIn = loadCheckInEntries(user.employeeId);
+    const wfRec = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "SMART Goals" &&
+        r.phase === "measurement" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
+    );
+    const a1 = wfRec?.decisions.approver1?.status ?? "";
+    const a2 = wfRec?.decisions.approver2?.status ?? "";
+    const chk = wfRec?.decisions.checker?.status ?? "";
+    const isRev = a1 === "Revision" || a2 === "Revision" || chk === "Revision";
+    const isVal = a2 === "Validated" || a2 === "Approved" || a2.startsWith("Assessed");
+    const isA1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
+    const isChkDone = Boolean(chk && chk !== "Revision");
+
+    let nextLabel = "Draft (Belum Disubmit)";
+    let nextTone: "validated" | "in_progress" | "revision" | "submitted" = "submitted";
+    if (isRev) {
+      nextLabel = "Revision";
+      nextTone = "revision";
+    } else if (isVal) {
+      nextLabel = "Validated";
+      nextTone = "validated";
+    } else if (isA1Done) {
+      nextLabel = "Assessed Approver 1 · Pending Approver 2 / Validate";
+      nextTone = "in_progress";
+    } else if (isChkDone) {
+      nextLabel = "Checked (HR Unit) · Pending Approver 1";
+      nextTone = "in_progress";
+    } else if (wfRec) {
+      nextLabel = "Submitted · Pending Check HR Unit";
+      nextTone = "submitted";
+    }
+
+    const isLocked = Boolean(wfRec && !isRev);
     setGoals(source);
-    setEntries(source.map((g) => makeBlankEntry(g)));
-    setTargetActuals(source.map((g) => ({ goalId: g.id, actual: "", status: "", alasanTidakTercapai: "", evidenceFiles: [] })));
+    setSubmitted(isLocked);
+    if (isLocked) setView("preview");
+    setStatusLabel(nextLabel);
+    setStatusTone(nextTone);
+    setWfRecState(wfRec);
+
+    setEntries(
+      source.map((g) => {
+        const st = savedCheckIn.find((x) => x.goalId === g.id);
+        if (!st) return makeBlankEntry(g);
+        const extras: Record<number, ActionPlanExtra> = {};
+        g.actionPlans.forEach((ap) => {
+          extras[ap.id] = {
+            kendala: st.actionPlanKendala?.[ap.id] ?? "",
+            progressPct: st.actionPlanProgress?.[ap.id] ?? 0,
+            evidence: (st.actionPlanEvidence?.[ap.id] ?? []).map((f) => ({
+              name: f.name,
+              size: f.size,
+              type: f.type || "application/octet-stream",
+              dataUrl: f.dataUrl,
+            })),
+            alasanBatal: "",
+          };
+        });
+        return {
+          ...makeBlankEntry(g),
+          actual: st.actual ?? "",
+          achievement: st.achievement ?? "",
+          kendala: st.kendala ?? "",
+          rencanaLanjut: st.rencanaLanjut ?? "",
+          actionPlanStatuses: (st.actionPlanStatuses as Record<number, LocalStatus>) ?? {},
+          actionPlanExtras: extras,
+        };
+      }),
+    );
+    setTargetActuals(
+      source.map((g) => {
+        const st = savedCheckIn.find((x) => x.goalId === g.id);
+        return {
+          goalId: g.id,
+          actual: st?.actual ?? "",
+          status: (st?.targetAchievementStatus as GoalAchievementStatus) ?? "",
+          alasanTidakTercapai: st?.alasanTidakTercapai ?? "",
+          evidenceFiles: (st?.evidenceFiles ?? []).map((f) => ({
+            name: f.name,
+            size: f.size,
+            type: f.type || "application/octet-stream",
+            dataUrl: f.dataUrl,
+          })),
+        };
+      }),
+    );
+  };
+
+  useEffect(() => {
+    syncCheckInPageState();
+    window.addEventListener("pa-auth-updated", syncCheckInPageState);
+    window.addEventListener("appraisal-updated", syncCheckInPageState);
+    window.addEventListener("pa-db-hydrated", syncCheckInPageState);
+    window.addEventListener("storage", syncCheckInPageState);
+    return () => {
+      window.removeEventListener("pa-auth-updated", syncCheckInPageState);
+      window.removeEventListener("appraisal-updated", syncCheckInPageState);
+      window.removeEventListener("pa-db-hydrated", syncCheckInPageState);
+      window.removeEventListener("storage", syncCheckInPageState);
+    };
   }, []);
 
   const updateEntry = (goalId: number, updated: CheckInEntry) =>
     setEntries((prev) => {
       const next = prev.map((e) => e.goalId === goalId ? updated : e);
-      // Persist to localStorage
-      persistEntries(next, targetActuals);
+      // Simpan draft tanpa men-trigger submitWorkflowModule / notifikasi
+      persistEntries(next, targetActuals, false);
       return next;
     });
 
   // Persist helper
-  const persistEntries = (ents: CheckInEntry[], tas: TargetActualEntry[]) => {
+  const persistEntries = (ents: CheckInEntry[], tas: TargetActualEntry[], submitWorkflow = false) => {
     const stored: StoredCheckInEntry[] = ents.map((e) => {
       const ta = tas.find((t) => t.goalId === e.goalId);
       return {
         goalId: e.goalId,
-        actual: e.actual,
+        actual: ta?.actual || e.actual,
         achievement: e.achievement,
         kendala: e.kendala,
         rencanaLanjut: e.rencanaLanjut,
@@ -949,15 +1115,30 @@ export function SmartGoalsCheckInPage() {
         actionPlanKendala: Object.fromEntries(
           Object.entries(e.actionPlanExtras).map(([k, v]) => [Number(k), (v as ActionPlanExtra).kendala])
         ),
+        actionPlanEvidence: Object.fromEntries(
+          Object.entries(e.actionPlanExtras).map(([k, v]) => [Number(k), (v as ActionPlanExtra).evidence])
+        ),
         targetAchievementStatus: ta?.status ?? "",
         alasanTidakTercapai: ta?.alasanTidakTercapai ?? "",
+        evidenceFiles: ta?.evidenceFiles ?? [],
       };
     });
-    saveCheckInEntries(stored);
+    saveCheckInEntries(stored, { submitWorkflow });
   };
 
-  const handleConfirm = () => { setShowConfirm(false); setShowSuccess(true); };
-  const handleSuccessClose = () => { setShowSuccess(false); setSubmitted(true); setView("preview"); };
+  const handleConfirm = () => {
+    persistEntries(entries, targetActuals, true);
+    setShowConfirm(false);
+    setShowSuccess(true);
+    setSubmitted(true);
+    setView("preview");
+    syncCheckInPageState();
+  };
+  const handleSuccessClose = () => {
+    setShowSuccess(false);
+    setSubmitted(true);
+    setView("preview");
+  };
 
   const handleExport = () => {
     if (!goals) return;
@@ -993,6 +1174,32 @@ export function SmartGoalsCheckInPage() {
 
   const editable = view === "input" && !submitted;
 
+  // Ekstrak nilai & catatan terbaru dari Approver 1 & Approver 2 untuk Penilaian Akhir
+  const activeUser = getActiveUser();
+  const decisions = loadApprovalDecisions(activeUser.employeeId);
+  const dec1 = decisions.find((d) => d.approverLevel === 1);
+  const dec2 = decisions.find((d) => d.approverLevel === 2);
+  const wfA1Vals = Object.values(wfRecState?.assessments.approver1?.ratings ?? {}).map(Number).filter((v) => v > 0);
+  const wfA2Vals = Object.values(wfRecState?.assessments.approver2?.ratings ?? {}).map(Number).filter((v) => v > 0);
+  const a1AvgStr =
+    wfA1Vals.length > 0
+      ? `${Math.round(wfA1Vals.reduce((s, n) => s + n, 0) / wfA1Vals.length)}%`
+      : dec1?.score
+      ? `${dec1.score}%`
+      : null;
+  const a2AvgStr =
+    wfA2Vals.length > 0
+      ? `${Math.round(wfA2Vals.reduce((s, n) => s + n, 0) / wfA2Vals.length)}%`
+      : dec2?.score
+      ? `${dec2.score}%`
+      : null;
+  const a1NoteStr = wfRecState?.assessments.approver1?.comments?.["0"] || dec1?.feedback || "";
+  const a2NoteStr = wfRecState?.assessments.approver2?.comments?.["0"] || dec2?.feedback || "";
+  const finalScoreStr =
+    wfA2Vals.length > 0 && wfA1Vals.length > 0
+      ? `${Math.round(((wfA1Vals.reduce((s, n) => s + n, 0) / wfA1Vals.length) + (wfA2Vals.reduce((s, n) => s + n, 0) / wfA2Vals.length)) / 2)}% (Rata-rata A1 & A2)`
+      : a2AvgStr || a1AvgStr || null;
+
   return (
     <div className="w-full flex flex-col gap-6">
       {/* Header */}
@@ -1002,42 +1209,56 @@ export function SmartGoalsCheckInPage() {
           <p className="text-gray-500 text-sm">2026 Performance Appraisal — {goals.length} goal{goals.length !== 1 ? "s" : ""}</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {editable && (
-            <>
-              <button onClick={() => setView("preview")}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
-                <Eye className="w-4 h-4" />Preview
-              </button>
-              <button onClick={() => setShowConfirm(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                <Send className="w-4 h-4" />Submit Measurement
-              </button>
-            </>
-          )}
-          {view === "preview" && !submitted && (
-            <>
-              <button onClick={() => setView("input")}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
-                <Edit3 className="w-4 h-4" />Back to Edit
-              </button>
-              <button onClick={() => setShowConfirm(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                <Send className="w-4 h-4" />Submit Measurement
-              </button>
-            </>
+          {(submitted || statusTone === "revision") && (
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
+                statusTone === "validated"
+                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                  : statusTone === "revision"
+                  ? "bg-orange-50 text-orange-700 border-orange-200"
+                  : "bg-amber-50 text-amber-700 border-amber-200"
+              }`}
+            >
+              {statusTone === "validated" ? (
+                <CheckCircle2 className="w-3.5 h-3.5" />
+              ) : statusTone === "revision" ? (
+                <RotateCcw className="w-3.5 h-3.5" />
+              ) : (
+                <Clock className="w-3.5 h-3.5" />
+              )}
+              Status Approval: {statusLabel}
+            </span>
           )}
           <ExportImportButton onExport={handleExport} onImport={handleImport} size="sm" />
         </div>
       </div>
+
+      {statusTone === "revision" && wfRecState?.revisionHistory && wfRecState.revisionHistory.length > 0 && (
+        <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-4 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-orange-800">
+            <RotateCcw className="w-4 h-4 text-orange-600" />
+            <span>Permintaan Revisi dari Approver (Silakan perbaiki dan Submit ulang):</span>
+          </div>
+          {wfRecState.revisionHistory.map((rev, i) => (
+            <div key={i} className="bg-white/90 border border-orange-100 rounded-lg px-3.5 py-2 text-xs">
+              <div className="flex items-center justify-between font-semibold text-gray-800">
+                <span>{rev.role} — {rev.approverName}</span>
+                <span className="text-[10px] text-gray-400">{rev.date}</span>
+              </div>
+              <p className="text-gray-700 mt-0.5">{rev.note}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Status banner */}
       {view === "preview" && (
         <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium border ${
           submitted ? "bg-green-50 border-green-200 text-green-700" : "bg-amber-50 border-amber-200 text-amber-700"
         }`}>
-          {submitted ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <Eye className="w-4 h-4 shrink-0" />}
+          {submitted ? <Lock className="w-4 h-4 shrink-0" /> : <Eye className="w-4 h-4 shrink-0" />}
           {submitted
-            ? "SMART Goals Measurement telah disubmit dan menunggu review Approver."
+            ? `SMART Goals Measurement telah disubmit (Read-Only) — Status: ${statusLabel}.`
             : "Preview mode — periksa kembali data sebelum submit."}
         </div>
       )}
@@ -1082,12 +1303,63 @@ export function SmartGoalsCheckInPage() {
         editable={editable}
         onChange={(updated) => {
           setTargetActuals(updated);
-          persistEntries(entries, updated);
+          persistEntries(entries, updated, false);
         }}
       />
 
+      {/* Action Buttons — di bawah Target vs Actual dan tepat di atas section Penilaian Akhir */}
+      {!submitted && (
+        <div className="flex items-center justify-end gap-3 bg-white border border-gray-200 rounded-2xl px-5 py-3.5 shadow-sm">
+          {editable ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setView("preview")}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+              >
+                <Eye className="w-4 h-4" />
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowConfirm(true)}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
+              >
+                <Send className="w-4 h-4" />
+                Submit Measurement
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setView("input")}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+              >
+                <Edit3 className="w-4 h-4" />
+                Back to Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowConfirm(true)}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
+              >
+                <Send className="w-4 h-4" />
+                Submit Measurement
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Single Penilaian Akhir at end of page */}
-      <PenilaianAkhirSection />
+      <PenilaianAkhirSection
+        scoreLabel={finalScoreStr}
+        approver1Note={a1NoteStr}
+        approver2Note={a2NoteStr}
+        approver1Score={a1AvgStr}
+        approver2Score={a2AvgStr}
+      />
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} />}

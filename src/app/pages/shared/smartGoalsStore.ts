@@ -1,48 +1,94 @@
 import type { SmartGoal } from "../employee/SMARTGoals";
-import { submitWorkflowModule } from "./appraisalWorkflowStore";
+import { normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 
 const STORAGE_KEY = "sg_submitted_smart_goals";
+const GOALS_BY_EMP_KEY = "sg_goals_by_emp_v2";
 const CHECKIN_KEY = "sg_checkin_entries_v1";
+const CHECKIN_BY_EMP_KEY = "sg_checkin_by_emp_v2";
 
-export function saveSubmittedGoals(goals: SmartGoal[]): void {
+export interface StoredSmartGoalEvidenceFile {
+  name: string;
+  size: number;
+  type?: string;
+  dataUrl?: string;
+}
+
+function readGoalsByEmpMap(): Record<string, SmartGoal[]> {
+  try {
+    const raw = localStorage.getItem(GOALS_BY_EMP_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, SmartGoal[]>) ?? {} : {};
+  } catch {
+    return {};
+  }
+}
+
+function readCheckinByEmpMap(): Record<string, StoredCheckInEntry[]> {
+  try {
+    const raw = localStorage.getItem(CHECKIN_BY_EMP_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, StoredCheckInEntry[]>) ?? {} : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveSubmittedGoals(
+  goals: SmartGoal[],
+  options?: { submitWorkflow?: boolean; employeeId?: string },
+): void {
   try {
     const activeUser = getActiveUser();
+    const empId = options?.employeeId ?? activeUser.employeeId;
+    const normId = normalizeEmployeeId(empId);
+    const isFinalSubmit = options?.submitWorkflow ?? true;
+    const map = readGoalsByEmpMap();
+    map[normId] = goals;
+    savePersistedState(GOALS_BY_EMP_KEY, map);
     savePersistedState(STORAGE_KEY, goals, {
       kind: "smart-goals",
-      employeeId: activeUser.employeeId,
+      employeeId: empId,
       period: "2026",
       goals,
-      checkinEntries: loadCheckInEntries(),
-      approvalDecisions: loadApprovalDecisions(),
-      status: "Submitted-Setting",
-      audit: {
-        action: "Create",
-        module: "SMART Goals",
-        subModule: "SMART Goals Setting",
-        description: `Submitted ${goals.length} SMART Goals for approval by ${activeUser.name} (${activeUser.employeeId})`,
-      },
+      checkinEntries: loadCheckInEntries(empId),
+      approvalDecisions: loadApprovalDecisions(empId),
+      status: isFinalSubmit ? "Submitted-Setting" : "Draft-Setting",
+      ...(isFinalSubmit
+        ? {
+            audit: {
+              action: "Create",
+              module: "SMART Goals",
+              subModule: "SMART Goals Setting",
+              description: `Submitted ${goals.length} SMART Goals for approval by ${activeUser.name} (${empId})`,
+            },
+          }
+        : {}),
     });
-    submitWorkflowModule("SMART Goals", "setting", new Date().toLocaleDateString("id-ID"), activeUser.employeeId);
+    if (isFinalSubmit) {
+      submitWorkflowModule("SMART Goals", "setting", new Date().toLocaleDateString("id-ID"), empId);
+    }
   } catch {
     // ignore storage errors
   }
 }
 
-export function loadSubmittedGoals(): SmartGoal[] | null {
+export function loadSubmittedGoals(employeeId?: string): SmartGoal[] | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as SmartGoal[];
+    const normId = normalizeEmployeeId(employeeId ?? getActiveUser().employeeId);
+    const map = readGoalsByEmpMap();
+    if (map[normId] && map[normId].length > 0) return map[normId];
+    return null;
   } catch {
     return null;
   }
 }
 
-export function clearSubmittedGoals(): void {
+export function clearSubmittedGoals(employeeId?: string): void {
   try {
-    savePersistedState(STORAGE_KEY, []);
+    const normId = normalizeEmployeeId(employeeId ?? getActiveUser().employeeId);
+    const map = readGoalsByEmpMap();
+    delete map[normId];
+    savePersistedState(GOALS_BY_EMP_KEY, map);
   } catch {
     // ignore
   }
@@ -62,37 +108,62 @@ export interface StoredCheckInEntry {
   actionPlanProgress: Record<number, number>;
   /** action plan id → kendala text */
   actionPlanKendala: Record<number, string>;
+  /** action plan id → evidence files */
+  actionPlanEvidence?: Record<number, StoredSmartGoalEvidenceFile[]>;
   targetAchievementStatus: string;
   alasanTidakTercapai: string;
+  /** goal-level target vs actual evidence files */
+  evidenceFiles?: StoredSmartGoalEvidenceFile[];
 }
 
-export function saveCheckInEntries(entries: StoredCheckInEntry[]): void {
+export function saveCheckInEntries(
+  entries: StoredCheckInEntry[],
+  options?: { submitWorkflow?: boolean; employeeId?: string },
+): void {
   try {
+    const activeUser = getActiveUser();
+    const empId = options?.employeeId ?? activeUser.employeeId;
+    const normId = normalizeEmployeeId(empId);
+    const isFinalSubmit = Boolean(options?.submitWorkflow);
+    const map = readCheckinByEmpMap();
+    map[normId] = entries;
+    savePersistedState(CHECKIN_BY_EMP_KEY, map);
     savePersistedState(CHECKIN_KEY, entries, {
       kind: "smart-goals",
-      employeeId: "E002",
+      employeeId: empId,
       period: "2026",
-      goals: loadSubmittedGoals() ?? [],
+      goals: loadSubmittedGoals(empId) ?? [],
       checkinEntries: entries,
-      approvalDecisions: loadApprovalDecisions(),
-      status: "Submitted-Measurement",
-      audit: {
-        action: "Update",
-        module: "SMART Goals",
-        subModule: "SMART Goals Measurement",
-        description: `Submitted SMART Goals Measurement check-in (${entries.length} goals)`,
-      },
+      approvalDecisions: loadApprovalDecisions(empId),
+      status: isFinalSubmit ? "Submitted-Measurement" : "Draft-Measurement",
+      ...(isFinalSubmit
+        ? {
+            audit: {
+              action: "Update",
+              module: "SMART Goals",
+              subModule: "SMART Goals Measurement",
+              description: `Submitted SMART Goals Measurement check-in (${entries.length} goals) by ${activeUser.name} (${empId})`,
+            },
+          }
+        : {}),
     });
-    saveApprovalDecisions(loadApprovalDecisions().filter((decision) => decision.employeeId.replace(/-/g, "") !== "EMP002"));
-    submitWorkflowModule("SMART Goals");
+    // Hanya trigger workflow & notifikasi saat tombol Submit Measurement diklik (1x saja)
+    if (isFinalSubmit) {
+      saveApprovalDecisions(
+        loadApprovalDecisions().filter(
+          (decision) => normalizeEmployeeId(decision.employeeId) !== normId,
+        ),
+      );
+      submitWorkflowModule("SMART Goals", "measurement", new Date().toLocaleDateString("id-ID"), empId);
+    }
   } catch { /* ignore */ }
 }
 
-export function loadCheckInEntries(): StoredCheckInEntry[] {
+export function loadCheckInEntries(employeeId?: string): StoredCheckInEntry[] {
   try {
-    const raw = localStorage.getItem(CHECKIN_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as StoredCheckInEntry[];
+    const normId = normalizeEmployeeId(employeeId ?? getActiveUser().employeeId);
+    const map = readCheckinByEmpMap();
+    return map[normId] ?? [];
   } catch {
     return [];
   }
@@ -129,11 +200,14 @@ export function saveApprovalDecisions(decisions: StoredApprovalDecision[]): void
   } catch { /* ignore */ }
 }
 
-export function loadApprovalDecisions(): StoredApprovalDecision[] {
+export function loadApprovalDecisions(employeeId?: string): StoredApprovalDecision[] {
   try {
     const raw = localStorage.getItem(APPROVAL_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as StoredApprovalDecision[];
+    const all = JSON.parse(raw) as StoredApprovalDecision[];
+    if (!employeeId) return all;
+    const normId = normalizeEmployeeId(employeeId);
+    return all.filter((d) => normalizeEmployeeId(d.employeeId) === normId);
   } catch {
     return [];
   }
@@ -141,13 +215,18 @@ export function loadApprovalDecisions(): StoredApprovalDecision[] {
 
 export function upsertApprovalDecision(decision: StoredApprovalDecision): void {
   const current = loadApprovalDecisions();
+  const normId = normalizeEmployeeId(decision.employeeId);
   const idx = current.findIndex(
-    (d) => d.employeeId === decision.employeeId && d.approverLevel === decision.approverLevel
+    (d) => normalizeEmployeeId(d.employeeId) === normId && d.approverLevel === decision.approverLevel
   );
+  const normalizedDecision: StoredApprovalDecision = {
+    ...decision,
+    employeeId: normId,
+  };
   if (idx >= 0) {
-    current[idx] = decision;
+    current[idx] = normalizedDecision;
   } else {
-    current.push(decision);
+    current.push(normalizedDecision);
   }
   saveApprovalDecisions(current);
 }

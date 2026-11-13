@@ -527,7 +527,9 @@ export function getDirectApprovalRoleForTarget(
 
 /**
  * Menentukan peran reviewer ("approver1" | "approver2" | null) dari user yang sedang login
- * terhadap suatu transaksi pengajuan karyawan berdasarkan Reg No AP1 dan Reg No AP2.
+ * terhadap suatu transaksi pengajuan karyawan berdasarkan alur modul:
+ * - KPI & SMART Goals: Check (HR Unit) -> Approval 1 (AP1) -> Approval 2 (AP2) -> Validate (HR ICF / Admin)
+ * - Modul lainnya: Approval 1 (AP1) -> Approval 2 (AP2)
  */
 export function resolveReviewerRoleForTarget(
   viewer: ManagedUser,
@@ -535,10 +537,15 @@ export function resolveReviewerRoleForTarget(
   isStep1Completed = false,
   moduleType = "",
   allUsers = loadManagedUsers(),
+  workflowStepState?: {
+    checkerDone?: boolean;
+    a1Done?: boolean;
+    a2Done?: boolean;
+    validatorDone?: boolean;
+  },
 ): "approver1" | "approver2" | null {
   const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
   const viewerClean = viewer.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
-  // Karyawan tidak boleh meng-approve pengajuan miliknya sendiri (kecuali Admin/HR ICF saat simulasi/override)
   const isSelf =
     viewer.employeeId.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
     viewer.name.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
@@ -553,6 +560,27 @@ export function resolveReviewerRoleForTarget(
     );
   });
 
+  const isFourStepModule = moduleType === "KPI" || moduleType === "SMART Goals";
+
+  // Bagian XII Poin 1 & 2: HR Unit Checker memeriksa pengajuan KPI & SMART Goals di unit usahanya (kecuali miliknya sendiri)
+  if (
+    !isSelf &&
+    isFourStepModule &&
+    (viewer.role === "HR Unit" || viewer.isHrUnitChecker) &&
+    target &&
+    normOrgName(viewer.company) === normOrgName(target.company)
+  ) {
+    const reg = (viewer.regNo ?? "").trim().toLowerCase();
+    const emp = viewer.employeeId.trim().toLowerCase();
+    const nm = viewer.name.trim().toLowerCase();
+    const ap2 = (target.regNoAp2 ?? "").trim().toLowerCase();
+    const isAlsoAp2 = Boolean((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm));
+    if (isAlsoAp2 && (workflowStepState?.a1Done || isStep1Completed)) {
+      return "approver2";
+    }
+    return "approver1";
+  }
+
   if (target) {
     const reg = (viewer.regNo ?? "").trim().toLowerCase();
     const emp = viewer.employeeId.trim().toLowerCase();
@@ -563,7 +591,6 @@ export function resolveReviewerRoleForTarget(
     const isAp1 = Boolean((reg && ap1 === reg) || (emp && ap1 === emp) || (nm && ap1 === nm));
     const isAp2 = Boolean((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm));
 
-    // Jika pejabat yang sama menjadi AP1 sekaligus AP2, sesuaikan dengan tahap yang sedang berjalan
     if (isAp1 && isAp2) {
       return isStep1Completed ? "approver2" : "approver1";
     }
@@ -571,20 +598,9 @@ export function resolveReviewerRoleForTarget(
     if (isAp2) return "approver2";
   }
 
-  // Administrator / HR ICF dapat memproses approval pada tahap yang sedang aktif
+  // Administrator / HR ICF bertindak sebagai Validator akhir (atau memproses tahap yang sedang aktif)
   if (isAdminOrHrIcfRole(viewer.role) || viewer.isHrIcfValidator) {
     return isStep1Completed ? "approver2" : "approver1";
-  }
-
-  // HR Unit Checker hanya untuk modul KPI & SMART Goals di unit usahanya (dan bukan milik dirinya sendiri)
-  if (
-    !isSelf &&
-    (viewer.role === "HR Unit" || viewer.isHrUnitChecker) &&
-    target &&
-    normOrgName(viewer.company) === normOrgName(target.company) &&
-    (moduleType === "KPI" || moduleType === "SMART Goals")
-  ) {
-    return "approver1";
   }
 
   return null;
@@ -1023,9 +1039,12 @@ export function useAuthStore() {
   const allUsers = loadManagedUsers();
   const allowedModules = resolveUserAllowedModules(activeUser);
   const isHrUnitLocked = activeUser.role === "HR Unit";
+  const isAdminOrIcf = isAdminOrHrIcfRole(activeUser.role);
   const roleAllowedUnits = getRoleAllowedCompanyUnits(activeUser.role);
   const lockedUnits = isHrUnitLocked
     ? Array.from(new Set([activeUser.company, ...roleAllowedUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
+    : isAdminOrIcf
+    ? undefined
     : roleAllowedUnits.length > 0
     ? Array.from(new Set([...roleAllowedUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
     : undefined;

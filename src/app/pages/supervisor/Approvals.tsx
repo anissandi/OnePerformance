@@ -39,7 +39,7 @@ const SETTING_FILTER_OPTIONS = {
 };
 
 const PENDING_STATUSES  = new Set(["Pending", "Edit Request"]);
-const HISTORY_STATUSES  = new Set(["Assessed-Approver 1", "Assessed-Approver 2", "Approved", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
+const HISTORY_STATUSES  = new Set(["Assessed-Approver 1", "Assessed-Approver 2", "Approved", "Validated", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
 
 type MainTab = "checkin" | "setting";
 
@@ -219,6 +219,13 @@ function HistoryTag({ status, type }: { status: string; type?: string }) {
       </span>
     );
   }
+  if (status === "Validated" || ((type === "KPI" || type === "SMART Goals") && (status === "Approved" || status === "Assessed-Approver 2"))) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300">
+        <CheckCircle2 className="w-3 h-3" /> Validated
+      </span>
+    );
+  }
   if (status === "Approved") {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300">
@@ -367,7 +374,9 @@ function ApprovalsTable({
     const isAssessedType = row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA";
     const newStatus = isAssessedType
       ? effectiveRole === "approver2"
-        ? "Assessed-Approver 2"
+        ? row.type === "KPI" || row.type === "SMART Goals"
+          ? "Validated"
+          : "Assessed-Approver 2"
         : "Assessed-Approver 1"
       : "Approved";
     saveOverride(row.no, newStatus, TODAY);
@@ -388,7 +397,7 @@ function ApprovalsTable({
 
   const handleRevision = (row: ApprovalRow, note: string) => {
     const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
-    saveOverride(row.no, "Revision", "-");
+    saveOverride(row.no, "Revision", "-", note);
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: "Revision", approvalDate: "-" } : r));
     if (row.type === "RCA") {
       saveRCAApprovalDecision({
@@ -513,16 +522,15 @@ function ApprovalsTable({
                     {/* Pending tab */}
                     {activeTab === "Pending" && row.status === "Pending" && (() => {
                       const rel = getDirectApprovalRoleForTarget(activeUser, row.employeeId);
-                      const effRole = row.reviewerRoleForRow ?? (rel === "ap2" ? "approver2" : "approver1");
                       const isDirectApprover = rel === "ap1" || rel === "ap2" || rel === "checker" || rel === "validator";
                       return isDirectApprover ? (
                         <button
                           onClick={() => { setReviewRow(row); setReviewFromHistory(false); }}
                           className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-[#1A284F] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg"
-                          title="Review & Approve (Direct Approver)"
+                          title="Review Submission"
                         >
                           <FileCheck className="w-4 h-4" />
-                          <span>{effRole === "approver2" ? "Approve (AP2)" : rel === "checker" ? "Check (HR Unit)" : "Approve (AP1)"}</span>
+                          <span>Review</span>
                         </button>
                       ) : (
                         <button

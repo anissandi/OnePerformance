@@ -9,6 +9,7 @@ import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
 import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole } from "../../store/authStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 
 type Role = "hr" | "supervisor";
 
@@ -365,8 +366,17 @@ function DistributionByGroup({ employees, calibrationTargets }: { employees: Emp
   );
 }
 
-function ModuleCell({ data }: { data: ScoreGrade | null }) {
-  if (!data) return <span className="text-gray-300 text-xs">—</span>;
+function ModuleCell({ data, settingValidated }: { data: ScoreGrade | null; settingValidated?: boolean }) {
+  if (!data || data.score <= 0) {
+    if (settingValidated) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+          Setting
+        </span>
+      );
+    }
+    return <span className="text-gray-300 text-xs">—</span>;
+  }
   return (
     <div className="flex flex-col items-center gap-0.5">
       <span className="font-semibold text-gray-800 text-xs">{data.score}%</span>
@@ -453,6 +463,20 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   );
 
   const liveEmployees = getLiveTransactionalEmployees();
+  const allWorkflows = loadWorkflowRecords();
+  const isSettingFullyApproved = (empId: string, modName: "KPI" | "SMART Goals"): boolean => {
+    const normId = normalizeEmployeeId(empId);
+    const rec = allWorkflows.find(
+      (w) =>
+        w.year === year &&
+        w.module === modName &&
+        w.phase === "setting" &&
+        (w.employeeId === normId || w.employeeId.toLowerCase() === empId.toLowerCase()),
+    );
+    const a2 = rec?.decisions.approver2?.status ?? "";
+    return a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed");
+  };
+
   const filtered = liveEmployees.filter(emp => {
     if (!isGlobalViewer || role === "supervisor" || isHrUnitScoped) {
       if (!supervisorAllowedIds.has(emp.id.toLowerCase())) return false;
@@ -673,8 +697,8 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.joined}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.tenure}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.approvalCompleteDate}</td>
-                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.kpi} /></td>
-                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.smartGoals} /></td>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.kpi} settingValidated={isSettingFullyApproved(emp.id, "KPI")} /></td>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.smartGoals} settingValidated={isSettingFullyApproved(emp.id, "SMART Goals")} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formA} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formB} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formC} /></td>

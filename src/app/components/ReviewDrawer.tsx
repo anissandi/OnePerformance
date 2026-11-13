@@ -1,3 +1,4 @@
+// @refresh reset
 import { loadAppraisalSelf } from "../pages/shared/appraisalFormStore";
 import { loadMSSelfRatings } from "../pages/shared/msStore";
 import { normalizeEmployeeId, workflowAlias, loadWorkflowRecords } from "../pages/shared/appraisalWorkflowStore";
@@ -12,7 +13,7 @@ import {
 import { FORMS, type FormItem } from "../pages/employee/AppraisalForm";
 import { KPI_ITEMS, INITIAL_MONTHS, computeTotal2026 } from "../pages/employee/KPIPage";
 import { SAMPLE_GOALS, ROWS } from "../pages/employee/SMARTGoals";
-import { loadSubmittedGoals } from "../pages/shared/smartGoalsStore";
+import { loadCheckInEntries, loadSubmittedGoals, type StoredSmartGoalEvidenceFile } from "../pages/shared/smartGoalsStore";
 import { loadKPIComments, saveKPIComment, type KPIRowComments } from "../pages/shared/kpiCommentsStore";
 import { loadEvidenceFiles, type StoredEvidenceFile } from "../pages/shared/kpiEvidenceStore";
 import { saveAssessment, loadAssessment, loadSGAssessment } from "../pages/shared/approvalsStore";
@@ -695,7 +696,21 @@ function SG_StatusOverview({ goals, apStatuses }: { goals: typeof SAMPLE_GOALS; 
 
 // ── Goal Review Card ──────────────────────────────────────────────────────────
 
-function SG_GoalCard({ goal, apStatuses, defaultOpen }: { goal: typeof SAMPLE_GOALS[0]; apStatuses: Record<number, SG_LocalStatus>; defaultOpen?: boolean }) {
+function SG_GoalCard({
+  goal,
+  apStatuses,
+  apNotes,
+  apEvidence,
+  onPreviewFile,
+  defaultOpen,
+}: {
+  goal: typeof SAMPLE_GOALS[0];
+  apStatuses: Record<number, SG_LocalStatus>;
+  apNotes: Record<number, string>;
+  apEvidence: Record<number, StoredSmartGoalEvidenceFile[]>;
+  onPreviewFile: (file: StoredSmartGoalEvidenceFile) => void;
+  defaultOpen?: boolean;
+}) {
   const [collapsed, setCollapsed] = React.useState(!defaultOpen);
   const selesaiCount = goal.actionPlans.filter((ap) => (apStatuses[ap.id] ?? "-") === "Selesai").length;
   const totalAPs = goal.actionPlans.length;
@@ -780,8 +795,8 @@ function SG_GoalCard({ goal, apStatuses, defaultOpen }: { goal: typeof SAMPLE_GO
                       <td className="border-t border-gray-200 border-r border-gray-200 px-3 py-2 align-top"><span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Catatan</span></td>
                       {goal.actionPlans.map((ap, idx) => (
                         <td key={ap.id} className={`border-t border-gray-200 px-3 py-2 align-top text-[11px] leading-relaxed ${idx < goal.actionPlans.length - 1 ? "border-r border-gray-200" : ""}`}>
-                          {SG_MOCK_AP_NOTES[ap.id]
-                            ? <span className="text-gray-700">{SG_MOCK_AP_NOTES[ap.id]}</span>
+                          {apNotes[ap.id]
+                            ? <span className="text-gray-700">{apNotes[ap.id]}</span>
                             : <span className="italic text-gray-300">—</span>}
                         </td>
                       ))}
@@ -789,7 +804,7 @@ function SG_GoalCard({ goal, apStatuses, defaultOpen }: { goal: typeof SAMPLE_GO
                     <tr className="bg-gray-50">
                       <td className="border-t border-gray-200 border-r border-gray-200 px-3 py-2 align-top"><span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Evidence</span></td>
                       {goal.actionPlans.map((ap, idx) => {
-                        const files = SG_MOCK_AP_EVIDENCE[ap.id] ?? [];
+                        const files = apEvidence[ap.id] ?? [];
                         return (
                           <td key={ap.id} className={`border-t border-gray-200 px-2 py-2 align-top ${idx < goal.actionPlans.length - 1 ? "border-r border-gray-200" : ""}`}>
                             {files.length > 0 ? (
@@ -798,7 +813,22 @@ function SG_GoalCard({ goal, apStatuses, defaultOpen }: { goal: typeof SAMPLE_GO
                                   <div key={fi} className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-gray-200">
                                     <Paperclip className="w-3 h-3 text-gray-400 shrink-0" />
                                     <span className="text-[10px] text-gray-700 truncate flex-1 font-medium">{f.name}</span>
-                                    <a href="#" onClick={(e) => e.preventDefault()} className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1A284F]"><Download className="w-3 h-3" /></a>
+                                    <button
+                                      type="button"
+                                      onClick={() => onPreviewFile(f)}
+                                      title="Lihat Evidence di Browser"
+                                      className="p-1 rounded hover:bg-blue-50 text-blue-600 hover:text-[#1A284F]"
+                                    >
+                                      <Eye className="w-3 h-3" />
+                                    </button>
+                                    <a
+                                      href={f.dataUrl || FAKE_BLOB}
+                                      download={f.name}
+                                      title="Download Evidence"
+                                      className="p-1 rounded hover:bg-gray-100 text-gray-500 hover:text-[#1A284F]"
+                                    >
+                                      <Download className="w-3 h-3" />
+                                    </a>
                                   </div>
                                 ))}
                               </div>
@@ -820,7 +850,15 @@ function SG_GoalCard({ goal, apStatuses, defaultOpen }: { goal: typeof SAMPLE_GO
 
 // ── Target vs Actual read-only ────────────────────────────────────────────────
 
-function SG_TargetVsActual({ goals, targetActuals }: { goals: typeof SAMPLE_GOALS; targetActuals: Record<number, SG_TargetActual> }) {
+function SG_TargetVsActual({
+  goals,
+  targetActuals,
+  onPreviewFile,
+}: {
+  goals: typeof SAMPLE_GOALS;
+  targetActuals: Record<number, SG_TargetActual & { files?: StoredSmartGoalEvidenceFile[] }>;
+  onPreviewFile: (file: StoredSmartGoalEvidenceFile) => void;
+}) {
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
       <div className="flex items-center px-4 py-3 bg-[#1A284F] gap-2">
@@ -861,9 +899,28 @@ function SG_TargetVsActual({ goals, targetActuals }: { goals: typeof SAMPLE_GOAL
                           </div>
                         )}
                         {ta.status === "Tercapai" && ta.evidenceCount > 0 && (
-                          <div className="flex items-center gap-1.5">
-                            <Paperclip className="w-3 h-3 text-green-600" />
-                            <span className="text-[11px] text-green-700 font-medium">{ta.evidenceCount} file evidence</span>
+                          <div className="flex flex-col gap-1 mt-1">
+                            {(ta.files ?? []).map((f, fi) => (
+                              <div key={fi} className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-green-50 border border-green-200 w-fit">
+                                <Paperclip className="w-3 h-3 text-green-600 shrink-0" />
+                                <span className="text-[11px] text-green-800 font-medium">{f.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => onPreviewFile(f)}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-green-300 text-[10px] font-bold text-[#1A284F] hover:bg-green-100"
+                                >
+                                  <Eye className="w-3 h-3" /> Lihat di Browser
+                                </button>
+                                <a
+                                  href={f.dataUrl || FAKE_BLOB}
+                                  download={f.name}
+                                  className="p-0.5 text-green-700 hover:text-green-900"
+                                  title="Download"
+                                >
+                                  <Download className="w-3 h-3" />
+                                </a>
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>
@@ -960,8 +1017,38 @@ function SmartGoalsApproverReview({
   rowNo?: string;
   position?: string;
 }) {
-  const live = employeeId === "EMP002" ? loadSubmittedGoals() : null;
-  const goals = (live && live.length > 0 ? live : SAMPLE_GOALS).slice(0, 3);
+  const [previewEvidenceFile, setPreviewEvidenceFile] = useState<StoredSmartGoalEvidenceFile | null>(null);
+  const live = loadSubmittedGoals(employeeId);
+  const goals = live && live.length > 0 ? live : SAMPLE_GOALS;
+  const ownerCheckInEntries = loadCheckInEntries(employeeId);
+
+  // Bangun status Action Plan, catatan, evidence, dan Target vs Actual murni dari data owner (karyawan pemilik)
+  const ownerApStatuses: Record<number, SG_LocalStatus> = {};
+  const ownerApNotes: Record<number, string> = {};
+  const ownerApEvidence: Record<number, StoredSmartGoalEvidenceFile[]> = {};
+  const ownerTargetActuals: Record<number, SG_TargetActual & { files?: StoredSmartGoalEvidenceFile[] }> = {};
+
+  for (const g of goals) {
+    const ci = ownerCheckInEntries.find((e) => e.goalId === g.id);
+    for (const ap of g.actionPlans) {
+      const st = (ci?.actionPlanStatuses?.[ap.id] as SG_LocalStatus | undefined) ?? "-";
+      ownerApStatuses[ap.id] = st;
+      if (ci?.actionPlanKendala?.[ap.id]) {
+        ownerApNotes[ap.id] = ci.actionPlanKendala[ap.id];
+      }
+      if (ci?.actionPlanEvidence?.[ap.id]) {
+        ownerApEvidence[ap.id] = ci.actionPlanEvidence[ap.id];
+      }
+    }
+    const files = ci?.evidenceFiles ?? [];
+    ownerTargetActuals[g.id] = {
+      actual: ci?.actual ?? "",
+      status: (ci?.targetAchievementStatus as "Tercapai" | "Tidak Tercapai" | "") ?? "",
+      alasan: ci?.alasanTidakTercapai ?? "",
+      evidenceCount: files.length,
+      files,
+    };
+  }
 
   // Load Approver 1 stored assessment (for Approver 2 view)
   const storedA1 = rowNo ? loadSGAssessment(rowNo) : null;
@@ -971,9 +1058,9 @@ function SmartGoalsApproverReview({
           .filter(([k]) => k.startsWith("sg-"))
           .map(([k, v]) => [Number(k.slice(3)), v])
       )
-    : APPROVER1_SG_RATINGS_FALLBACK;
-  const a1GlobalComment = storedA1?.globalComment ?? APPROVER1_SG_COMMENT_FALLBACK;
-  const a1AssessedDate  = storedA1?.assessedDate  ?? "17/05/2026";
+    : {};
+  const a1GlobalComment = storedA1?.globalComment ?? "";
+  const a1AssessedDate  = storedA1?.assessedDate  ?? "—";
   const assessorColor = reviewerRole === "approver1" ? "indigo" : "teal";
   const assessorLabel = reviewerRole === "approver1" ? "Penilaian Approver 1" : "Penilaian Approver 2";
 
@@ -1017,17 +1104,29 @@ function SmartGoalsApproverReview({
       </div>
 
       {/* 1 — Status Progress Overview */}
-      <SG_StatusOverview goals={goals} apStatuses={SG_MOCK_AP} />
+      <SG_StatusOverview goals={goals} apStatuses={ownerApStatuses} />
 
       {/* 2 — Per-goal collapsible cards */}
       <div className="flex flex-col gap-3">
         {goals.map((goal, idx) => (
-          <SG_GoalCard key={goal.id} goal={goal} apStatuses={SG_MOCK_AP} defaultOpen={idx === 0} />
+          <SG_GoalCard
+            key={goal.id}
+            goal={goal}
+            apStatuses={ownerApStatuses}
+            apNotes={ownerApNotes}
+            apEvidence={ownerApEvidence}
+            onPreviewFile={(file) => setPreviewEvidenceFile(file)}
+            defaultOpen={idx === 0}
+          />
         ))}
       </div>
 
       {/* 3 — Target vs Actual */}
-      <SG_TargetVsActual goals={goals} targetActuals={SG_MOCK_TARGET_ACTUAL} />
+      <SG_TargetVsActual
+        goals={goals}
+        targetActuals={ownerTargetActuals}
+        onPreviewFile={(file) => setPreviewEvidenceFile(file)}
+      />
 
       {/* Divider */}
       <div className="flex items-center gap-3">
@@ -1093,7 +1192,7 @@ function SmartGoalsApproverReview({
               {goals.map((goal, idx) => {
                 const ratingKey = `sg-${goal.id}`;
                 const ratingVal = assessorRatings[ratingKey];
-                const achieveStatus = SG_MOCK_TARGET_ACTUAL[goal.id]?.status ?? "";
+                const achieveStatus = ownerTargetActuals[goal.id]?.status ?? "";
                 return (
                   <tr key={goal.id} className={idx % 2 === 0 ? "bg-white" : `${assessorColor === "indigo" ? "bg-indigo-50/20" : "bg-teal-50/20"}`}>
                     <td className={`border-t px-4 py-3 align-middle text-center font-bold ${assessorColor === "indigo" ? "border-indigo-50 text-indigo-400" : "border-teal-50 text-teal-400"}`}>{idx + 1}</td>
@@ -1137,7 +1236,9 @@ function SmartGoalsApproverReview({
       <div className={`border rounded-2xl overflow-hidden ${assessorColor === "indigo" ? "border-indigo-100" : "border-teal-100"}`}>
         <div className={`px-4 py-2.5 flex items-center gap-2 ${assessorColor === "indigo" ? "bg-indigo-50" : "bg-teal-50"}`}>
           <MessageSquare className={`w-3.5 h-3.5 ${assessorColor === "indigo" ? "text-indigo-600" : "text-teal-600"}`} />
-          <span className={`text-xs font-bold ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`}>Komentar &amp; Catatan Approver</span>
+          <span className={`text-xs font-bold ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`}>
+            Komentar &amp; Catatan Approver <span className="text-rose-500">* (Wajib Diisi)</span>
+          </span>
         </div>
         <div className="p-4">
           {submitted ? (
@@ -1161,7 +1262,7 @@ function SmartGoalsApproverReview({
         <div className="flex flex-col gap-2 mb-2">
           {goals.map((goal, idx) => {
             const v = assessorRatings[`sg-${goal.id}`];
-            const achieveStatus = SG_MOCK_TARGET_ACTUAL[goal.id]?.status ?? "";
+            const achieveStatus = ownerTargetActuals[goal.id]?.status ?? "";
             return (
               <div key={goal.id} className="flex items-center gap-3 text-xs">
                 <span className="text-gray-500 w-5 shrink-0 font-semibold">{idx + 1}.</span>
@@ -1243,6 +1344,68 @@ function SmartGoalsApproverReview({
           </div>
 
           <p className="text-[10px] text-blue-300/60 text-center">Bobot jabatan "{position ?? "—"}" = {bobot}%</p>
+        </div>
+      )}
+
+      {/* Modal Preview Evidence di Browser */}
+      {previewEvidenceFile && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPreviewEvidenceFile(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 bg-[#1A284F] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <Paperclip className="w-4 h-4 shrink-0" />
+                <span className="text-sm font-bold truncate">{previewEvidenceFile.name}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={previewEvidenceFile.dataUrl || FAKE_BLOB}
+                  download={previewEvidenceFile.name}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-semibold"
+                >
+                  <Download className="w-3.5 h-3.5" /> Download
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewEvidenceFile(null)}
+                  className="text-white/70 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-6 bg-gray-100 flex items-center justify-center min-h-[420px]">
+              {previewEvidenceFile.dataUrl ? (
+                previewEvidenceFile.type?.startsWith("image/") ||
+                /\.(jpg|jpeg|png|gif|webp)$/i.test(previewEvidenceFile.name) ? (
+                  <img
+                    src={previewEvidenceFile.dataUrl}
+                    alt={previewEvidenceFile.name}
+                    className="max-h-[72vh] max-w-full object-contain rounded-xl shadow bg-white p-2"
+                  />
+                ) : (
+                  <iframe
+                    src={previewEvidenceFile.dataUrl}
+                    title={previewEvidenceFile.name}
+                    className="w-full h-[72vh] rounded-xl bg-white border border-gray-200"
+                  />
+                )
+              ) : (
+                <div className="bg-white rounded-2xl p-8 text-center space-y-3 border border-gray-200 max-w-md">
+                  <FileText className="w-12 h-12 text-[#1A284F] mx-auto" />
+                  <p className="text-sm font-bold text-gray-800">{previewEvidenceFile.name}</p>
+                  <p className="text-xs text-gray-500">
+                    Dokumen Evidence SMART Goals siap ditampilkan atau diunduh.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -1849,28 +2012,39 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
   });
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
+  const [showRevisionConfirm, setShowRevisionConfirm] = useState(false);
   const [indicatorItem, setIndicatorItem]   = useState<FormItem | MSItem | null>(null);
   const [activeForm, setActiveForm]         = useState<"A" | "B" | "C">("A");
 
   const hasAssessment = needsAssessment(row.type);
-  const effectiveReadOnly = readOnly || isFullyAssessed;
+  const effectiveReadOnly = readOnly || isFullyAssessed || row.status === "Validated";
   const badge = TYPE_BADGE[row.type] ?? { color: "bg-gray-50 text-gray-600 border-gray-200", icon: <ClipboardList className="w-3.5 h-3.5" /> };
 
   const handleRate = (key: string, val: number) => setAssessorRatings((prev) => ({ ...prev, [key]: val }));
 
+  const ownerGoalsForCheck =
+    row.type === "SMART Goals"
+      ? loadSubmittedGoals(row.employeeId) ?? SAMPLE_GOALS
+      : [];
+  const isApproverCommentFilled = Boolean((smartComments[0] ?? "").trim());
+
   // Check if all required items are filled across ALL forms
   const allFilled = (() => {
-    if (!hasAssessment) return true;
-    if (row.type === "Managerial Skill") {
-      return MS_ITEMS.every((item) => assessorRatings[`ms-${item.no}`] != null);
-    }
     if (row.type === "SMART Goals") {
-      const goals = SAMPLE_GOALS.slice(0, 2);
-      return goals.every((g) => assessorRatings[`sg-${g.id}`] != null);
+      return (
+        ownerGoalsForCheck.every((g) => assessorRatings[`sg-${g.id}`] != null) &&
+        isApproverCommentFilled
+      );
+    }
+    if (!hasAssessment) return isApproverCommentFilled;
+    if (row.type === "Managerial Skill") {
+      return MS_ITEMS.every((item) => assessorRatings[`ms-${item.no}`] != null) && isApproverCommentFilled;
     }
     // Appraisal Form: all three forms (A, B, C) must be fully assessed
-    return FORMS.every((f) =>
+    return (
+      FORMS.every((f) =>
       f.items.every((item) => assessorRatings[`${f.id}-${item.no}`] != null)
+      ) && isApproverCommentFilled
     );
   })();
 
@@ -1975,8 +2149,35 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
       {/* ── Body ────────────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {step === "review" ? (
-          <div className="px-8 py-8">
+          <div className="px-8 py-8 space-y-6">
             {renderContent()}
+
+            {/* Mandatory Komentar & Catatan Approver untuk modul selain SMART Goals */}
+            {row.type !== "SMART Goals" && (
+              <div className="border border-indigo-100 rounded-2xl overflow-hidden bg-white shadow-sm">
+                <div className="px-4 py-2.5 flex items-center gap-2 bg-indigo-50">
+                  <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="text-xs font-bold text-indigo-700">
+                    Komentar &amp; Catatan Approver <span className="text-rose-500">* (Wajib Diisi)</span>
+                  </span>
+                </div>
+                <div className="p-4">
+                  {effectiveReadOnly || assessmentSubmitted ? (
+                    <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-indigo-50/40 border-indigo-100 text-indigo-900">
+                      {smartComments[0] || <span className="text-gray-400 italic">Tidak ada komentar.</span>}
+                    </p>
+                  ) : (
+                    <textarea
+                      rows={3}
+                      value={smartComments[0] ?? ""}
+                      onChange={(e) => setSmartComments((prev) => ({ ...prev, 0: e.target.value }))}
+                      placeholder={`Wajib diisi: tuliskan komentar atau catatan review untuk ${row.type} ini sebelum melakukan Submit / Approve...`}
+                      className="w-full text-xs border-2 border-indigo-100 focus:border-indigo-400 rounded-xl px-3.5 py-2.5 outline-none resize-none text-gray-700"
+                    />
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="max-w-2xl mx-auto px-8 py-8 flex flex-col gap-5">
@@ -2036,7 +2237,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
             </div>
 
             {/* Right: action buttons */}
-            {!effectiveReadOnly && row.status !== "Approved" && row.status !== "Assessed-Approver 1" && (
+            {!effectiveReadOnly && row.status !== "Approved" && row.status !== "Validated" && row.status !== "Assessed-Approver 1" && (
               <div className="flex items-center gap-3">
                 {/* Appraisal Form / Managerial Skill — only Submit Assessment, no Approve/Revision */}
                 {hasAssessment && (
@@ -2062,7 +2263,8 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                     </button>
                     <button
                       onClick={() => setShowApproveConfirm(true)}
-                      className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors"
+                      disabled={!allFilled}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <Check className="w-4 h-4" />
                       Approve
@@ -2079,7 +2281,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
             </button>
             <button
               disabled={!revisionNote.trim()}
-              onClick={() => onRevision(revisionNote)}
+              onClick={() => setShowRevisionConfirm(true)}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <RotateCcw className="w-4 h-4" />
@@ -2165,13 +2367,47 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                 onClick={() => {
                   setShowSubmitConfirm(false);
                   // Save assessment for Appraisal Form and Managerial Skill (use Submit path)
-                  const commentsToSave: Record<string, string> = {};
+                  const commentsToSave: Record<string, string> = Object.fromEntries(
+                    Object.entries(smartComments).map(([k, v]) => [k, v]),
+                  );
                   saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }));
                   onAssessed();
                 }}
                 className="flex-1 py-2.5 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"
               >
                 Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Revision Confirm Modal ───────────────────────────────────────────── */}
+      {showRevisionConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8 text-center">
+            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-orange-50 mx-auto mb-4">
+              <RotateCcw className="w-7 h-7 text-orange-600" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900 mb-2">Konfirmasi Permintaan Revisi</h3>
+            <p className="text-sm text-gray-600 mb-6">
+              Kirim permintaan revisi untuk pengajuan <strong>{row.type}</strong> milik <strong>{row.name}</strong> ({row.employeeId})?
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowRevisionConfirm(false)}
+                className="flex-1 py-2.5 rounded-full border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => {
+                  setShowRevisionConfirm(false);
+                  onRevision(revisionNote);
+                }}
+                className="flex-1 py-2.5 rounded-full bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600"
+              >
+                Ya, Kirim Revisi
               </button>
             </div>
           </div>

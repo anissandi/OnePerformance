@@ -1,3 +1,4 @@
+// @refresh reset
 import React, { useState, useEffect, useRef } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { loadMasterKpi, type MasterKpiStore } from "../../hr/settings/masterKpiStore";
@@ -7,6 +8,8 @@ import {
   isDirectorRoleOrGrouping,
   resolveEffectiveUserGrouping,
 } from "../../../store/authStore";
+import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
+import { savePersistedState } from "../../../services/supabaseClient";
 import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock } from "lucide-react";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
@@ -4108,11 +4111,29 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [submitted, setSubmitted]     = useState(false);
+  const readPersonalWorkflowState = () => {
+    if (isCorporate) return { isSub: false, isApp: false };
+    const u = getActiveUser();
+    const normId = normalizeEmployeeId(u.employeeId);
+    const rec = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "KPI" &&
+        r.phase === "setting" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
+    );
+    if (!rec) return { isSub: false, isApp: false };
+    const a1 = rec.decisions.approver1?.status ?? "";
+    const a2 = rec.decisions.approver2?.status ?? "";
+    const isRev = a1 === "Revision" || a2 === "Revision";
+    const isApp = a2 === "Validated" || a2 === "Approved" || a2.startsWith("Assessed");
+    return { isSub: !isRev, isApp };
+  };
+  const [submitted, setSubmitted]     = useState(() => readPersonalWorkflowState().isSub);
   const [showEditRequest, setShowEditRequest]             = useState(false);
   const [showEditRequestSuccess, setShowEditRequestSuccess] = useState(false);
   const [pendingEditRequest, setPendingEditRequest]       = useState(false);
-  const [kpiApproved, setKpiApproved]                   = useState(false);
+  const [kpiApproved, setKpiApproved]                   = useState(() => readPersonalWorkflowState().isApp);
   const [showTargetEditRequest, setShowTargetEditRequest] = useState(false);
   const [showTargetEditSuccess, setShowTargetEditSuccess] = useState(false);
   const [pendingTargetEditRequest, setPendingTargetEditRequest] = useState(false);
@@ -4122,6 +4143,22 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const [selectedTargetKpis, setSelectedTargetKpis]     = useState<string[]>([]);
   const [targetEditCategory, setTargetEditCategory]     = useState("");
   const [targetEditReason, setTargetEditReason]         = useState("");
+
+  useEffect(() => {
+    const onSync = () => {
+      const st = readPersonalWorkflowState();
+      setSubmitted(st.isSub);
+      setKpiApproved(st.isApp);
+    };
+    window.addEventListener("pa-auth-updated", onSync);
+    window.addEventListener("appraisal-updated", onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      window.removeEventListener("pa-auth-updated", onSync);
+      window.removeEventListener("appraisal-updated", onSync);
+      window.removeEventListener("storage", onSync);
+    };
+  }, [isCorporate]);
 
   useEffect(() => {
     let ts: TabStatus = "idle";
@@ -4139,7 +4176,23 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   }, 0);
 
   const handleConfirm = () => { setShowConfirm(false); setShowSuccess(true); };
-  const handleSuccessClose = () => { setShowSuccess(false); setSubmitted(true); setView("preview"); };
+  const handleSuccessClose = () => {
+    setShowSuccess(false);
+    setSubmitted(true);
+    setView("preview");
+    const u = getActiveUser();
+    const normId = normalizeEmployeeId(u.employeeId);
+    const todayStr = new Date().toLocaleDateString("id-ID");
+    try {
+      const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+      const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
+      map[normId] = items;
+      savePersistedState("pa_kpi_setting_by_emp_v2", map);
+    } catch {
+      // ignore
+    }
+    submitWorkflowModule("KPI", "setting", todayStr, u.employeeId);
+  };
 
   const handleExport = () => {
     if (isCorporate) {
@@ -4279,14 +4332,6 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
             </div>
           )}
 
-          {/* Simulate approval / validate — all tabs, after submitted */}
-          {submitted && !kpiApproved && (
-            <button onClick={() => setKpiApproved(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors">
-              <CheckCircle2 className="w-3.5 h-3.5" /> {useValidateTerms ? "Simulate Validate" : "Simulate Approval"}
-            </button>
-          )}
-
           {/* Approved / Validated state — all tabs */}
           {kpiApproved && !pendingTargetEditRequest && !monthlyTargetPending && (
             <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-50 border border-green-300 text-green-700">
@@ -4306,10 +4351,6 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
               <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Pending Approval
               </span>
-              <button onClick={() => { setPendingTargetEditRequest(false); setTargetEditApproved(true); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors">
-                <CheckCircle2 className="w-3 h-3" /> Simulate Approve
-              </button>
               <button onClick={() => setPendingTargetEditRequest(false)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors">
                 <X className="w-3.5 h-3.5" /> Cancel
@@ -4329,10 +4370,6 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
               <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Pending Approval
               </span>
-              <button onClick={() => setMonthlyTargetPending(false)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors">
-                <CheckCircle2 className="w-3 h-3" /> Simulate Approve
-              </button>
             </div>
           )}
 
@@ -4447,11 +4484,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const TAB_DEFS: { id: KPITab; label: string }[] = [
-  { id: "personal",  label: "KPI Pak Dani (Demo)"     },
-  { id: "division",  label: "KPI Pak Pras (Demo)"     },
-  { id: "pak-amir",  label: "KPI Pak Made (Demo)"     },
-  { id: "pak-anton", label: "KPI Pak Anton (Demo)"    },
-  { id: "corporate", label: "KPI (Business)"          },
+  { id: "personal",  label: "KPI (Personal)"          },
 ];
 
 function TabStatusBadge({ ts, useValidate = false }: { ts: TabStatus; useValidate?: boolean }) {
@@ -4476,15 +4509,9 @@ function TabStatusBadge({ ts, useValidate = false }: { ts: TabStatus; useValidat
 
 export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = false }: { personalOnly?: boolean } = {}) {
   const activeUser = getActiveUser();
-  const effectiveGrouping = resolveEffectiveUserGrouping(activeUser);
   const isDirectorMode = !personalOnlyProp && isDirectorRoleOrGrouping(activeUser);
   const isGmMode = !personalOnlyProp && !isDirectorMode && activeUser.role === "GM";
-  const personalOnly =
-    personalOnlyProp ||
-    (!isDirectorMode &&
-      !isGmMode &&
-      (effectiveGrouping === "Operasional" ||
-        effectiveGrouping === "Ka./Wa.Ka.Seksi"));
+  const personalOnly = personalOnlyProp || (!isDirectorMode && !isGmMode);
   const defaultFirstTab: KPITab = personalOnly
     ? "personal"
     : isGmMode
@@ -4493,7 +4520,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
   const [routeKpiTab, setActiveTab]         = useRouteTab<KPITab>(["corporate", "pak-anton", "pak-amir", "division", "department", "personal"], defaultFirstTab);
   const activeTab: KPITab                   = personalOnly ? "personal" : routeKpiTab;
   const [personalTabStatus, setPersonalTabStatus]   = useState<TabStatus>("idle");
-  const [divisionTabStatus, setDivisionTabStatus]   = useState<TabStatus>("idle");
+  const [divisionTabStatus, setDivisionTabStatus]   = useState<TabStatus>("approved");
   const [corporateTabStatus, setCorporateTabStatus] = useState<TabStatus>("idle");
   const [pakAntonTabStatus, setPakAntonTabStatus]   = useState<TabStatus>("idle");
   const [pakAmirTabStatus, setPakAmirTabStatus]     = useState<TabStatus>("idle");

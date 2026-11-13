@@ -1,6 +1,9 @@
-import React, { useState } from "react";
-import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, Info, AlertTriangle } from "lucide-react";
-import { saveSubmittedGoals } from "../shared/smartGoalsStore";
+// @refresh reset
+import React, { useEffect, useState } from "react";
+import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, Info, AlertTriangle, Clock, RotateCcw, Lock, MessageSquare } from "lucide-react";
+import { loadSubmittedGoals, saveSubmittedGoals } from "../shared/smartGoalsStore";
+import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
+import { getActiveUser } from "../../store/authStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
 
@@ -505,26 +508,109 @@ function PreviewView({
 
 // ─── Results View ─────────────────────────────────────────────────────────────
 
-function ResultsView({ goals }: { goals: SmartGoal[] }) {
+function ResultsView({
+  goals,
+  statusLabel,
+  statusTone,
+  wfRecord,
+}: {
+  goals: SmartGoal[];
+  statusLabel: string;
+  statusTone: "validated" | "in_progress" | "revision" | "submitted";
+  wfRecord?: WorkflowRecord;
+}) {
+  const revisionList = wfRecord?.revisionHistory ?? [];
+  const latestNote =
+    wfRecord?.decisions.approver2?.note ||
+    wfRecord?.decisions.approver1?.note ||
+    wfRecord?.decisions.checker?.note ||
+    revisionList[revisionList.length - 1]?.note ||
+    "";
+
   return (
     <div className="flex flex-col gap-6">
-      <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium flex items-center gap-2">
-        <CheckCircle2 className="w-4 h-4 shrink-0" />
-        SMART Goals have been submitted and are pending Approver review.
-      </div>
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold text-[#1A284F]">SMART Goals — 2026 Performance Appraisal</h3>
-        <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 rounded-full font-semibold">
-          Pending Approval
+      <div
+        className={`rounded-xl px-4 py-3 text-sm font-medium flex items-center justify-between gap-3 border ${
+          statusTone === "validated"
+            ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+            : statusTone === "revision"
+            ? "bg-orange-50 border-orange-200 text-orange-800"
+            : "bg-blue-50 border-blue-200 text-blue-800"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          {statusTone === "validated" ? (
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+          ) : statusTone === "revision" ? (
+            <RotateCcw className="w-4 h-4 shrink-0 text-orange-600" />
+          ) : (
+            <Lock className="w-4 h-4 shrink-0 text-blue-600" />
+          )}
+          <span>
+            {statusTone === "validated"
+              ? "SMART Goals Setting telah disetujui penuh (Validated) dan otomatis aktif di SMART Goals Measurement."
+              : statusTone === "revision"
+              ? "Approver meminta revisi pada SMART Goals Setting Anda. Silakan periksa catatan di bawah dan lakukan perbaikan pada tab Input Form."
+              : "SMART Goals Setting telah disubmit (Read-Only) dan sedang dalam proses verifikasi / approval berjenjang."}
+          </span>
+        </div>
+        <span
+          className={`text-xs px-3 py-1 rounded-full font-bold border shrink-0 ${
+            statusTone === "validated"
+              ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+              : statusTone === "revision"
+              ? "bg-orange-100 text-orange-800 border-orange-300"
+              : "bg-amber-50 text-amber-700 border-amber-200"
+          }`}
+        >
+          {statusLabel}
         </span>
       </div>
+
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-[#1A284F]">SMART Goals — 2026 Performance Appraisal</h3>
+        <span
+          className={`text-xs px-3 py-1 rounded-full font-semibold border ${
+            statusTone === "validated"
+              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+              : statusTone === "revision"
+              ? "bg-orange-50 text-orange-700 border-orange-200"
+              : "bg-amber-50 text-amber-700 border-amber-200"
+          }`}
+        >
+          Status: {statusLabel}
+        </span>
+      </div>
+
       <SmartTable goals={goals} editable={false} />
       <ActionPlansSection goals={goals} editable={false} />
-      <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-5">
-        <h4 className="text-sm font-bold text-[#1A284F] mb-3">Feedback from Approver</h4>
-        <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-400 italic">
-          No feedback yet — awaiting Approver review.
-        </div>
+
+      <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-5 space-y-3">
+        <h4 className="text-sm font-bold text-[#1A284F] flex items-center gap-2">
+          <MessageSquare className="w-4 h-4 text-[#1A284F]" />
+          Feedback &amp; Riwayat Revisi dari Approver
+        </h4>
+        {revisionList.length > 0 ? (
+          <div className="space-y-2.5">
+            {revisionList.map((rev, idx) => (
+              <div key={idx} className="rounded-xl border border-orange-200 bg-orange-50/60 px-4 py-3 text-xs space-y-1">
+                <div className="flex items-center justify-between font-bold text-orange-800">
+                  <span>{rev.role} — {rev.approverName}</span>
+                  <span className="text-[11px] font-normal text-orange-600">{rev.date}</span>
+                </div>
+                <p className="text-gray-700 leading-relaxed">{rev.note}</p>
+              </div>
+            ))}
+          </div>
+        ) : latestNote ? (
+          <div className="bg-blue-50/50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-gray-700">
+            {latestNote}
+          </div>
+        ) : (
+          <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-400 italic">
+            Belum ada catatan/revisi dari Approver.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -609,12 +695,91 @@ const ALL_TABS: TabDef[] = [
 ];
 
 export function SMARTGoalsPage() {
-  const [view, setView] = useState<View>("input");
-  const [goals, setGoals] = useState<SmartGoal[]>(SAMPLE_GOALS);
-  const [resultGoals, setResultGoals] = useState<SmartGoal[]>(SAMPLE_GOALS);
-  const [submitted, setSubmitted] = useState(false);
+  const readUserGoalsState = () => {
+    const user = getActiveUser();
+    const normId = normalizeEmployeeId(user.employeeId);
+    const saved = loadSubmittedGoals(user.employeeId);
+    const wfRec = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "SMART Goals" &&
+        r.phase === "setting" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
+    );
+    const a1 = wfRec?.decisions.approver1?.status ?? "";
+    const a2 = wfRec?.decisions.approver2?.status ?? "";
+    const chk = wfRec?.decisions.checker?.status ?? "";
+    const isRev = a1 === "Revision" || a2 === "Revision" || chk === "Revision";
+    const isVal = a2 === "Validated" || a2 === "Approved" || a2.startsWith("Assessed");
+    const isA1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
+    const isChkDone = Boolean(chk && chk !== "Revision");
+
+    let statusLabel = "Draft";
+    let statusTone: "validated" | "in_progress" | "revision" | "submitted" = "submitted";
+    if (isRev) {
+      statusLabel = "Revision";
+      statusTone = "revision";
+    } else if (isVal) {
+      statusLabel = "Validated";
+      statusTone = "validated";
+    } else if (isA1Done) {
+      statusLabel = "Approved Approver 1 · Pending Approver 2 / Validate";
+      statusTone = "in_progress";
+    } else if (isChkDone) {
+      statusLabel = "Checked (HR Unit) · Pending Approver 1";
+      statusTone = "in_progress";
+    } else if (wfRec) {
+      statusLabel = "Submitted · Pending Check HR Unit";
+      statusTone = "submitted";
+    }
+
+    const initialGoals = saved && saved.length > 0 ? saved : SAMPLE_GOALS;
+    const lockedSubmitted = Boolean(wfRec && !isRev);
+    return {
+      initialGoals,
+      lockedSubmitted,
+      isRev,
+      statusLabel,
+      statusTone,
+      wfRec,
+    };
+  };
+
+  const init = readUserGoalsState();
+  const [view, setView] = useState<View>(() => (init.lockedSubmitted ? "results" : "input"));
+  const [goals, setGoals] = useState<SmartGoal[]>(() => init.initialGoals);
+  const [resultGoals, setResultGoals] = useState<SmartGoal[]>(() => init.initialGoals);
+  const [submitted, setSubmitted] = useState<boolean>(() => init.lockedSubmitted);
+  const [statusLabel, setStatusLabel] = useState<string>(() => init.statusLabel);
+  const [statusTone, setStatusTone] = useState<"validated" | "in_progress" | "revision" | "submitted">(() => init.statusTone);
+  const [wfRecState, setWfRecState] = useState<WorkflowRecord | undefined>(() => init.wfRec);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+
+  useEffect(() => {
+    const sync = () => {
+      const next = readUserGoalsState();
+      setGoals(next.initialGoals);
+      setResultGoals(next.initialGoals);
+      setSubmitted(next.lockedSubmitted);
+      setStatusLabel(next.statusLabel);
+      setStatusTone(next.statusTone);
+      setWfRecState(next.wfRec);
+      if (next.lockedSubmitted) {
+        setView("results");
+      }
+    };
+    window.addEventListener("pa-auth-updated", sync);
+    window.addEventListener("appraisal-updated", sync);
+    window.addEventListener("pa-db-hydrated", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("pa-auth-updated", sync);
+      window.removeEventListener("appraisal-updated", sync);
+      window.removeEventListener("pa-db-hydrated", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
 
   const handleExport = () => {
     const headers = ["No","Goals","Specific","Measurable","Attainable","Relevant","Timely","Bukti","Target","Action Plans"];
@@ -661,7 +826,11 @@ export function SMARTGoalsPage() {
     setShowSuccess(false);
     setSubmitted(true);
     setResultGoals(goals);
-    saveSubmittedGoals(goals);
+    saveSubmittedGoals(goals, { submitWorkflow: true });
+    const next = readUserGoalsState();
+    setStatusLabel(next.statusLabel);
+    setStatusTone(next.statusTone);
+    setWfRecState(next.wfRec);
     setView("results");
   };
 
@@ -675,7 +844,45 @@ export function SMARTGoalsPage() {
           <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">SMART Goals</h1>
           <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
         </div>
+        {(submitted || statusTone === "revision") && (
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
+              statusTone === "validated"
+                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                : statusTone === "revision"
+                ? "bg-orange-50 text-orange-700 border-orange-200"
+                : "bg-amber-50 text-amber-700 border-amber-200"
+            }`}
+          >
+            {statusTone === "validated" ? (
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            ) : statusTone === "revision" ? (
+              <RotateCcw className="w-3.5 h-3.5" />
+            ) : (
+              <Clock className="w-3.5 h-3.5" />
+            )}
+            Status Approval: {statusLabel}
+          </span>
+        )}
       </div>
+
+      {statusTone === "revision" && wfRecState?.revisionHistory && wfRecState.revisionHistory.length > 0 && (
+        <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-4 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-orange-800">
+            <RotateCcw className="w-4 h-4 text-orange-600" />
+            <span>Permintaan Revisi dari Approver (Silakan perbaiki dan Submit ulang):</span>
+          </div>
+          {wfRecState.revisionHistory.map((rev, i) => (
+            <div key={i} className="bg-white/90 border border-orange-100 rounded-lg px-3.5 py-2 text-xs">
+              <div className="flex items-center justify-between font-semibold text-gray-800">
+                <span>{rev.role} — {rev.approverName}</span>
+                <span className="text-[10px] text-gray-400">{rev.date}</span>
+              </div>
+              <p className="text-gray-700 mt-0.5">{rev.note}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-gray-200">
@@ -710,7 +917,14 @@ export function SMARTGoalsPage() {
       {view === "preview" && (
         <PreviewView goals={goals} onBack={() => setView("input")} onSubmit={() => setShowConfirm(true)} />
       )}
-      {view === "results" && <ResultsView goals={resultGoals} />}
+      {view === "results" && (
+        <ResultsView
+          goals={resultGoals}
+          statusLabel={statusLabel}
+          statusTone={statusTone}
+          wfRecord={wfRecState}
+        />
+      )}
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} />}

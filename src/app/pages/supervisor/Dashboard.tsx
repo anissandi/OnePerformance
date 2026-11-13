@@ -38,6 +38,7 @@ interface PendingItem {
   unit: string;
   division: string;
   module: Module;
+  phase?: "setting" | "measurement";
   submissionType: string;
   actionNeeded: ActionType;
   submittedDate: string;
@@ -81,6 +82,11 @@ const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
   "Managerial Skill":          "/supervisor/approvals/measurement/managerial-skill",
   "Inter-Department Feedback": "/supervisor/approvals/measurement/inter-department-feedback",
   "RCA":                       "/supervisor/approvals/measurement/rca",
+};
+
+const MODULE_SETTING_APPROVAL_ROUTE: Partial<Record<Module, string>> = {
+  "KPI":         "/supervisor/appraisals/setting/kpi",
+  "SMART Goals": "/supervisor/appraisals/setting/smart-goals",
 };
 
 function ApprovalDashboard() {
@@ -158,6 +164,7 @@ function ApprovalDashboard() {
         unit: sub.company,
         division: sub.division,
         module: mod,
+        phase: rec.phase,
         submissionType: `${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"})`,
         actionNeeded: mod === "Appraisal Form" ? "Complete Assessment" : "Approve",
         submittedDate: rec.submittedDate || "2026-06-10",
@@ -340,71 +347,6 @@ function ApprovalDashboard() {
         </div>
       </div>
 
-      {/* Infographics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-5 flex flex-col gap-3 h-48">
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Distribution by Module</p>
-          <div className="flex items-center gap-3 flex-1 min-h-0">
-            <div style={{ width: 110, height: 110, flexShrink: 0 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={allowedApprovalModules.map((m) => ({ name: m, value: byModule(m) }))}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={30}
-                    outerRadius={48}
-                    dataKey="value"
-                    strokeWidth={2}
-                  >
-                    {allowedApprovalModules.map((m, i) => (
-                      <Cell key={`mod-cell-${i}`} fill={MODULE_META[m].hex} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v: number, n: string) => [v, n]} contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb" }} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex flex-col justify-center gap-1 flex-1 min-w-0 overflow-y-auto max-h-32">
-              {allowedApprovalModules.map((m) => {
-                const pct = pendingItems.length > 0 ? Math.round((byModule(m) / pendingItems.length) * 100) : 0;
-                return (
-                  <div key={m} className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: MODULE_META[m].hex }} />
-                    <span className="text-[10px] text-gray-600 truncate flex-1">{m}</span>
-                    <span className="text-[10px] font-bold text-gray-700">{byModule(m)}</span>
-                    <span className="text-[10px] text-gray-400">({pct}%)</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-5 flex flex-col gap-3 h-48">
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Action Required Breakdown</p>
-          <div className="flex flex-col justify-center gap-3 flex-1">
-            {(["Approve", "Complete Assessment", "Review & Validate"] as ActionType[]).map((a) => {
-              const count = pendingItems.filter((p) => p.actionNeeded === a).length;
-              const pct = pendingItems.length > 0 ? Math.round((count / pendingItems.length) * 100) : 0;
-              const barColor   = a === "Approve" ? "bg-[#1A284F]" : a === "Complete Assessment" ? "bg-green-600" : "bg-amber-500";
-              const labelColor = a === "Approve" ? "text-[#1A284F]" : a === "Complete Assessment" ? "text-green-700" : "text-amber-700";
-              return (
-                <div key={a} className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between">
-                    <span className={`text-[11px] font-semibold ${labelColor}`}>{a}</span>
-                    <span className="text-[11px] font-bold text-gray-700">{count} <span className="text-gray-400 font-normal">({pct}%)</span></span>
-                  </div>
-                  <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-                    <div className={`${barColor} h-2 rounded-full`} style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
       {/* Module pills */}
       <div className="flex flex-wrap gap-3">
         {allowedApprovalModules.map((m) => {
@@ -491,7 +433,13 @@ function ApprovalDashboard() {
                     : "bg-amber-50 text-amber-700 border-amber-200"
                   }`}>{item.actionNeeded}</span>
                   <button
-                    onClick={() => navigate(MODULE_APPROVAL_ROUTE[item.module])}
+                    onClick={() =>
+                      navigate(
+                        item.phase === "setting"
+                          ? MODULE_SETTING_APPROVAL_ROUTE[item.module] ?? "/supervisor/appraisals/setting"
+                          : MODULE_APPROVAL_ROUTE[item.module],
+                      )
+                    }
                     className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${btnCls}`}
                   >
                     {item.actionNeeded === "Complete Assessment" ? "Fill Assessment" : "Review"}
@@ -1046,7 +994,7 @@ function AppraisalSummaryCards() {
               onClick={() => setShowPopup(true)}
               className="text-[11px] text-[#142546] font-medium text-left hover:underline"
             >
-              {pending} pending — Details
+              {pending} pending | {s.modulesApproved} Approved - See Details
             </button>
             <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
               <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#142546" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />

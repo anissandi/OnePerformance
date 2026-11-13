@@ -42,7 +42,7 @@ function gradeColor(grade: string) {
 
 function gradeBar(grade: string) {
   switch (grade) {
-    case "A+": return "bg-purple-500";
+    case "A+": return "bg-teal-500";
     case "A":  return "bg-emerald-500";
     case "B":  return "bg-blue-500";
     case "C":  return "bg-yellow-500";
@@ -576,7 +576,7 @@ export function ViewProfile() {
           <div className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full bg-[#142546]/[0.05] transition-transform duration-500 ease-out group-hover:scale-125" />
           <div className="flex items-start justify-between gap-2 relative z-10">
             <div>
-              <p className="text-xs font-medium text-gray-500">Modules Approved</p>
+              <p className="text-xs font-medium text-gray-500">Modules</p>
               <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">
                 {dynamicModulesApproved}<span className="text-lg font-bold text-gray-400">/{dynamicModulesTotal}</span>
               </p>
@@ -587,7 +587,7 @@ export function ViewProfile() {
           </div>
           <div className="flex items-end justify-between gap-2 mt-4 relative z-10">
             <p className="text-[11px] text-gray-500 font-medium">
-              {isCurrent ? `${Math.max(0, dynamicModulesTotal - dynamicModulesApproved)} pending approval` : "All modules finalized"}
+              {isCurrent ? `${Math.max(0, dynamicModulesTotal - dynamicModulesApproved)} In Progress | ${dynamicModulesApproved} Done` : "All modules finalized"}
             </p>
             <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
               <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#142546" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />

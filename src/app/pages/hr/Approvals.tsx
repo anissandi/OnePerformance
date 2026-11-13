@@ -46,7 +46,7 @@ const PAGE_SIZE = 8;
 type MainTab = "checkin" | "setting";
 
 const PENDING_STATUSES = new Set(["Pending", "Edit Request", "Awaiting Approver 1"]);
-const HISTORY_STATUSES = new Set(["Approved", "Assessed-Approver 1", "Assessed-Approver 2", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
+const HISTORY_STATUSES = new Set(["Approved", "Validated", "Assessed-Approver 1", "Assessed-Approver 2", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
 
 export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const location = useLocation();
@@ -104,7 +104,7 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
       window.removeEventListener("pa-auth-updated", refresh);
       window.removeEventListener("storage", refresh);
     };
-  }, [location.pathname, effectiveLockedUnits, activeUser.employeeId]);
+  }, [location.pathname, effectiveLockedUnits?.join(",") ?? "", activeUser.employeeId]);
 
   const checkinFilterOpts = {
     ...filterOptionsCheckin,
@@ -216,6 +216,13 @@ function HistoryTag({ status, type }: { status: string; type?: string }) {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
         <Clock className="w-3 h-3" /> Pending-Approver 2
+      </span>
+    );
+  }
+  if (status === "Validated" || ((type === "KPI" || type === "SMART Goals") && (status === "Approved" || status === "Assessed-Approver 2"))) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300">
+        <CheckCircle2 className="w-3 h-3" /> Validated
       </span>
     );
   }
@@ -364,7 +371,7 @@ function ApprovalsTable({
     const isAssessedType = row.type === "KPI" || row.type === "SMART Goals";
     const newStatus = isAssessedType
       ? effectiveRole === "approver2"
-        ? "Assessed-Approver 2"
+        ? "Validated"
         : "Assessed-Approver 1"
       : "Approved";
     saveOverride(row.no, newStatus, TODAY);
@@ -373,8 +380,8 @@ function ApprovalsTable({
     setActiveTab("Approval History");
   };
 
-  const handleRevision = (row: ApprovalRow, _note: string) => {
-    saveOverride(row.no, "Revision", "-");
+  const handleRevision = (row: ApprovalRow, note: string) => {
+    saveOverride(row.no, "Revision", "-", note);
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: "Revision", approvalDate: "-" } : r));
     setReviewRow(null);
     setActiveTab("Approval History");
@@ -477,8 +484,13 @@ function ApprovalsTable({
                 <td className="py-4 px-4">
                   <div className="flex items-center gap-2 flex-wrap">
                     {activeTab === "Pending" && row.status === "Pending" && (
-                      <button onClick={() => { setReviewRow(row); setReviewFromHistory(false); }} className="p-1 text-[#1A284F] hover:bg-blue-50 rounded" title="Review">
-                        <FileCheck className="w-5 h-5" />
+                      <button
+                        onClick={() => { setReviewRow(row); setReviewFromHistory(false); }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-[#1A284F] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg"
+                        title="Review"
+                      >
+                        <FileCheck className="w-4 h-4" />
+                        <span>Review</span>
                       </button>
                     )}
                     {activeTab === "Pending" && row.status === "Edit Request" && (

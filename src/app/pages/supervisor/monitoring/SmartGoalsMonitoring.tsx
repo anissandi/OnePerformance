@@ -1,6 +1,9 @@
-import React, { useState, useMemo } from "react";
+// @refresh reset
+import React, { useState, useMemo, useEffect } from "react";
 import { Search, Lightbulb, CheckCircle2, AlertCircle, Clock, ChevronUp, ChevronDown, Eye, X, Filter, Users, Target, ListChecks, ShieldCheck, BarChart2, TrendingUp } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
+import { loadSubmittedGoals, loadCheckInEntries } from "../../shared/smartGoalsStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 // ─── Team scope ───────────────────────────────────────────────────────────────
 
@@ -221,6 +224,20 @@ function ViewModal({ empName, sg, onClose }: { empName: string; sg: SGRecord; on
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function SupervisorMonitoringSmartGoals() {
+  const [tick, setTick]                               = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
   const [search, setSearch]                           = useState("");
   const [unitFilter, setUnitFilter]                   = useState("All");
   const [divisionFilter, setDivisionFilter]           = useState("All");
@@ -238,14 +255,93 @@ export function SupervisorMonitoringSmartGoals() {
   const measureStatuses = ["Pending-Assessment", "Revision", "Validated"];
 
   const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "SMART Goals (Setting/Measurement)");
+  const buildLiveSG = (empId: string): SGRecord => {
+    const normId = normalizeEmployeeId(empId);
+    const workflows = loadWorkflowRecords();
+    const wfSet = workflows.find(
+      (w) => w.year === "2026" && w.module === "SMART Goals" && w.phase === "setting" && (w.employeeId === normId || w.employeeId.toLowerCase() === empId.toLowerCase()),
+    );
+    const wfMeas = workflows.find(
+      (w) => w.year === "2026" && w.module === "SMART Goals" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === empId.toLowerCase()),
+    );
+    const submittedGoals = loadSubmittedGoals(empId);
+    const checkIns = loadCheckInEntries(empId);
+    const hasSettingRecord = Boolean(wfSet || (submittedGoals && submittedGoals.length > 0));
+    if (!hasSettingRecord && !wfMeas) {
+      return {
+        employeeId: empId,
+        totalGoals: 0,
+        totalAPs: 0,
+        completedAPs: 0,
+        completionPercent: 0,
+        settingStatus: "Unsubmitted",
+        measurementStatus: "Pending-Assessment",
+        lastUpdated: "-",
+        goals: [],
+      };
+    }
+    const goals = submittedGoals && submittedGoals.length > 0 ? submittedGoals : MOCK_GOALS_E002;
+    const totalGoals = goals.length;
+    const totalAPs = goals.reduce((s, g) => s + g.actionPlans.length, 0);
+    let completedAPs = 0;
+    for (const g of goals) {
+      const ci = checkIns.find((e) => e.goalId === g.id);
+      for (const ap of g.actionPlans) {
+        if (ci?.actionPlanStatuses?.[ap.id] === "Selesai") completedAPs++;
+      }
+    }
+    const setA2 = wfSet?.decisions.approver2?.status ?? "";
+    const setA1 = wfSet?.decisions.approver1?.status ?? "";
+    const settingStatus: SGRecord["settingStatus"] =
+      setA2 === "Validated" || setA2 === "Approved" || setA2.startsWith("Assessed")
+        ? "Validated"
+        : setA2 === "Revision" || setA1 === "Revision"
+        ? "Revision"
+        : wfSet
+        ? "Pending-Approver"
+        : "Draft";
+
+    const measA2 = wfMeas?.decisions.approver2?.status ?? "";
+    const measA1 = wfMeas?.decisions.approver1?.status ?? "";
+    const measurementStatus: SGRecord["measurementStatus"] =
+      measA2 === "Validated" || measA2 === "Approved" || measA2.startsWith("Assessed")
+        ? "Validated"
+        : measA2 === "Revision" || measA1 === "Revision"
+        ? "Revision"
+        : "Pending-Assessment";
+
+    const measRatings = Object.values(
+      wfMeas?.assessments.approver2?.ratings ?? wfMeas?.assessments.approver1?.ratings ?? {},
+    ).map(Number).filter((v) => v > 0);
+    const completionPercent =
+      measRatings.length > 0
+        ? Math.round(measRatings.reduce((s, n) => s + n, 0) / measRatings.length)
+        : totalAPs > 0
+        ? Math.round((completedAPs / totalAPs) * 100)
+        : 0;
+
+    return {
+      employeeId: empId,
+      totalGoals,
+      totalAPs,
+      completedAPs,
+      completionPercent,
+      settingStatus,
+      measurementStatus,
+      lastUpdated:
+        wfMeas?.decisions.approver2?.date ??
+        wfMeas?.submittedDate ??
+        wfSet?.decisions.approver2?.date ??
+        wfSet?.submittedDate ??
+        "-",
+      goals,
+    };
+  };
+
   const rows = useMemo(() => {
     const base = allowedTeamEmployees.map(emp => ({
       emp,
-      sg: SG_DATA.find(k => k.employeeId === emp.id) ?? {
-        employeeId: emp.id, totalGoals: 0, totalAPs: 0, completedAPs: 0,
-        completionPercent: 0, settingStatus: "Unsubmitted" as const,
-        measurementStatus: "Pending-Assessment" as const, lastUpdated: "-", goals: [],
-      },
+      sg: buildLiveSG(emp.id),
     }));
 
     const filtered = base.filter(({ emp, sg }) => {
@@ -282,7 +378,7 @@ export function SupervisorMonitoringSmartGoals() {
     });
 
     return filtered;
-  }, [search, unitFilter, divisionFilter, positionFilter, settingStatusFilter, measureStatusFilter, sortKey, sortDir]);
+  }, [search, unitFilter, divisionFilter, positionFilter, settingStatusFilter, measureStatusFilter, sortKey, sortDir, tick]);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -290,13 +386,9 @@ export function SupervisorMonitoringSmartGoals() {
   }
 
   // ─── Stats ────────────────────────────────────────────────────────────────────
-  const allSGWithEmp = TEAM_EMPLOYEES.map(emp => ({
+  const allSGWithEmp = allowedTeamEmployees.map(emp => ({
     emp,
-    sg: SG_DATA.find(k => k.employeeId === emp.id) ?? {
-      employeeId: emp.id, totalGoals: 0, totalAPs: 0, completedAPs: 0,
-      completionPercent: 0, settingStatus: "Unsubmitted" as const,
-      measurementStatus: "Pending-Assessment" as const, lastUpdated: "-", goals: [],
-    },
+    sg: buildLiveSG(emp.id),
   }));
 
   const totalEmployees            = TEAM_EMPLOYEES.length;

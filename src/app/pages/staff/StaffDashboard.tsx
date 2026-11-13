@@ -444,7 +444,7 @@ function AppraisalSummaryCards() {
               onClick={() => setShowPopup(true)}
               className="text-[11px] text-[#142546] font-medium text-left hover:underline"
             >
-              {pending} pending — Details
+              {pending} pending | {s.modulesApproved} Approved - See Details
             </button>
             <svg className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 64 24" fill="none">
               <path d="M2 20L16 14L26 17L40 9L50 12L62 5" stroke="#142546" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />

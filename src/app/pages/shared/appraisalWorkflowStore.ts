@@ -13,8 +13,14 @@ export interface WorkflowRecord {
   phase: "setting" | "measurement";
   year: string;
   submittedDate: string;
-  decisions: Partial<Record<ReviewerRole, { status: string; date: string }>>;
+  decisions: Partial<Record<ReviewerRole | "checker" | "validator", { status: string; date: string; note?: string; approverName?: string }>>;
   assessments: Partial<Record<ReviewerRole, { ratings: Record<string, number>; comments: Record<string, string>; date: string }>>;
+  revisionHistory?: Array<{
+    role: string;
+    approverName: string;
+    note: string;
+    date: string;
+  }>;
 }
 export interface WorkflowAlias { key: string; employeeId: string; module: string; phase: WorkflowRecord["phase"]; year: string; submittedDate: string; role: ReviewerRole }
 function read<T>(key: string, fallback: T): T {
@@ -43,9 +49,6 @@ export function registerWorkflowRows(rows: ApprovalRow[], role: ReviewerRole) {
     aliases[row.no] = nextAlias;
   }
   localStorage.setItem(ALIASES_KEY, JSON.stringify(aliases));
-  if (changed) {
-    savePersistedState(ALIASES_KEY, aliases);
-  }
 }
 function write(record: WorkflowRecord) {
   const nextRecords = [...loadWorkflowRecords().filter((item) => item.key !== record.key), record];
@@ -88,10 +91,10 @@ export function submitWorkflowModule(
   const bypassChecker =
     (module === "KPI" || module === "SMART Goals") &&
     shouldBypassCheckerForSubmission(employeeId);
+  const existing = loadWorkflowRecords().find((item) => item.key === key);
   const initialDecisions: WorkflowRecord["decisions"] = bypassChecker
     ? {
-        // Bagian XII Poin 2: HR Unit tidak bisa melakukan Checker pada pengajuan KPI & SMART Goals miliknya sendiri
-        // sehingga langsung masuk ke Approval 1 dst.
+        checker: { status: "Bypassed", date },
       }
     : {};
   write({
@@ -103,6 +106,7 @@ export function submitWorkflowModule(
     submittedDate: date,
     decisions: initialDecisions,
     assessments: {},
+    revisionHistory: existing?.revisionHistory ?? [],
   });
   triggerApprovalTransactionNotification({
     employeeId: normalizeEmployeeId(employeeId),
@@ -111,24 +115,58 @@ export function submitWorkflowModule(
     approverName: getActiveUser().name,
   });
 }
-export function saveWorkflowDecision(no: string, status: string, date: string) {
+export function saveWorkflowDecision(no: string, status: string, date: string, note?: string) {
   const alias = workflowAlias(no);
   if (!alias) return;
+  const activeUser = getActiveUser();
   const existing = loadWorkflowRecords().find((item) => item.key === alias.key);
-  const record: WorkflowRecord = existing ?? { ...alias, decisions: {}, assessments: {} };
-  const decisions = { ...record.decisions, [alias.role]: { status, date } };
+  const record: WorkflowRecord = existing ?? { ...alias, decisions: {}, assessments: {}, revisionHistory: [] };
+  const isFourStep = alias.module === "KPI" || alias.module === "SMART Goals";
+  const isHrUnitCheckerOnly =
+    isFourStep &&
+    (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) &&
+    alias.role === "approver1" &&
+    !record.decisions.checker;
+
+  const decisions: WorkflowRecord["decisions"] = {
+    ...record.decisions,
+    ...(isHrUnitCheckerOnly
+      ? { checker: { status: status === "Revision" ? "Revision" : "Checked", date, note, approverName: activeUser.name } }
+      : {}),
+    [alias.role]: {
+      status:
+        isFourStep && alias.role === "approver2" && (status === "Approved" || status.startsWith("Assessed"))
+          ? "Validated"
+          : status,
+      date,
+      note,
+      approverName: activeUser.name,
+    },
+    ...(isFourStep && alias.role === "approver2" && (status === "Approved" || status.startsWith("Assessed") || status === "Validated")
+      ? { validator: { status: "Validated", date, note, approverName: activeUser.name } }
+      : {}),
+  };
   const assessments = { ...record.assessments };
   if (alias.role === "approver1") {
     delete decisions.approver2;
     delete assessments.approver2;
   }
-  write({ ...record, decisions, assessments });
+  const revisionHistory = [...(record.revisionHistory ?? [])];
+  if (status === "Revision" && note?.trim()) {
+    revisionHistory.push({
+      role: alias.role === "approver2" ? "Approver 2" : "Approver 1",
+      approverName: activeUser.name || (alias.role === "approver2" ? "Approver 2" : "Approver 1"),
+      note: note.trim(),
+      date: date !== "-" ? date : new Date().toLocaleDateString("id-ID"),
+    });
+  }
+  write({ ...record, decisions, assessments, revisionHistory });
   triggerApprovalTransactionNotification({
     employeeId: alias.employeeId,
     moduleName: `${alias.module} (${alias.phase === "setting" ? "Setting" : "Measurement"})`,
-    rawStatus: status,
+    rawStatus: decisions[alias.role]?.status ?? status,
     approverRole: alias.role,
-    approverName: getActiveUser().name,
+    approverName: activeUser.name,
   });
 }
 export function saveWorkflowAssessment(no: string, role: ReviewerRole, ratings: Record<string, number>, comments: Record<string, string>, date: string) {
@@ -143,7 +181,36 @@ export function workflowRowStatus(row: ApprovalRow, role: ReviewerRole): Partial
   if (!record) return null;
   const own = record.decisions[role];
   const first = record.decisions.approver1;
-  const ready = first && (first.status === "Approved" || first.status.startsWith("Assessed"));
+  const second = record.decisions.approver2;
+  const ready = first && (first.status === "Approved" || first.status.startsWith("Assessed") || first.status === "Validated");
+  const a2Completed =
+    second &&
+    (second.status === "Approved" ||
+      second.status.startsWith("Assessed") ||
+      second.status === "Validated");
+
+  // Jika Approver 2 sudah menyelesaikan penilaian/approval, maka di Approver 1 juga harus terupdate (tidak lagi Pending-Approver 2)
+  if (a2Completed) {
+    const isFourStep = record.module === "KPI" || record.module === "SMART Goals";
+    const finalStatus = isFourStep
+      ? "Validated"
+      : record.module === "Project" || record.module === "Inter-Department Feedback"
+      ? "Approved"
+      : second.status;
+    return {
+      status: finalStatus,
+      submittedDate: record.submittedDate,
+      approvalDate: second.date || own?.date || "-",
+    };
+  }
+  if (second?.status === "Revision") {
+    return {
+      status: "Revision",
+      submittedDate: record.submittedDate,
+      approvalDate: "-",
+    };
+  }
+
   const status = own?.status ?? (role === "approver2" && !ready ? "Awaiting Approver 1" : "Pending");
   return { status, submittedDate: record.submittedDate, approvalDate: own?.date ?? "-" };
 }
@@ -183,15 +250,16 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
         ],
       };
     }
-    const a1Done = Boolean(rec.decisions.approver1 && (rec.decisions.approver1.status === "Approved" || rec.decisions.approver1.status.startsWith("Assessed")));
-    const a2Done = Boolean(rec.decisions.approver2 && (rec.decisions.approver2.status === "Approved" || rec.decisions.approver2.status.startsWith("Assessed")));
+    const a1Done = Boolean(rec.decisions.approver1 && (rec.decisions.approver1.status === "Approved" || rec.decisions.approver1.status.startsWith("Assessed") || rec.decisions.approver1.status === "Validated"));
+    const a2Done = Boolean(rec.decisions.approver2 && (rec.decisions.approver2.status === "Approved" || rec.decisions.approver2.status.startsWith("Assessed") || rec.decisions.approver2.status === "Validated"));
+    const checkDone = Boolean(bypassCheck || a1Done || a2Done || (rec.decisions.checker && rec.decisions.checker.status !== "Revision"));
     const overallStatus = a2Done ? "Approved" : "In Progress";
     return {
       module: modLabel,
       overallStatus,
       steps: [
-        { label: "Check", description: bypassCheck ? "Auto-bypassed (Self HR Unit)" : "Submission reviewed by HR Unit Usaha", status: "completed" },
-        { label: "Approver 1", description: `First-level approval (${activeUser.regNoAp1 || "AP1"})`, status: a1Done ? "completed" : "in_progress" },
+        { label: "Check", description: bypassCheck ? "Auto-bypassed (Self HR Unit)" : "Submission reviewed by HR Unit Usaha", status: checkDone ? "completed" : "in_progress" },
+        { label: "Approver 1", description: `First-level approval (${activeUser.regNoAp1 || "AP1"})`, status: a1Done ? "completed" : checkDone ? "in_progress" : "pending" },
         { label: "Approver 2", description: `Second-level approval (${activeUser.regNoAp2 || "AP2"})`, status: a2Done ? "completed" : a1Done ? "in_progress" : "pending" },
         { label: "Validate", description: "Final validation by HR ICF", status: a2Done ? "completed" : "pending" },
       ],

@@ -1,8 +1,10 @@
+// @refresh reset
 import React, { useState } from "react";
-import { X, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Lightbulb, ClipboardList, Layers, Eye, User, Building2, Calendar } from "lucide-react";
+import { X, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Lightbulb, ClipboardList, Layers, Eye, User, Building2, Calendar, MessageSquare } from "lucide-react";
 import { type ApprovalRow } from "./ReviewDrawer";
 import { ROWS, SAMPLE_GOALS, type SmartGoal } from "../pages/employee/SMARTGoals";
 import { loadSubmittedGoals } from "../pages/shared/smartGoalsStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 import { FORMS } from "../pages/employee/AppraisalForm";
 import { MS_ITEMS } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPI_ITEMS as FULL_KPI_ITEMS } from "../pages/employee/KPIPage";
@@ -113,11 +115,23 @@ interface SettingApprovalDrawerProps {
 export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, readOnly }: SettingApprovalDrawerProps) {
   const [revisionNote, setRevisionNote] = useState("");
   const [showRevision, setShowRevision] = useState(false);
+  const [confirmApproveOpen, setConfirmApproveOpen] = useState(false);
+  const [confirmRevisionOpen, setConfirmRevisionOpen] = useState(false);
   const [expandedKpi, setExpandedKpi]   = useState<string | null>(null);
+
+  const normEmpId = normalizeEmployeeId(row.employeeId);
+  const wfRec = loadWorkflowRecords().find(
+    (r) =>
+      r.year === "2026" &&
+      r.module === row.type &&
+      r.phase === "setting" &&
+      r.employeeId === normEmpId,
+  );
+  const revisionHistory = wfRec?.revisionHistory ?? [];
 
   const handleRevision = () => {
     if (!revisionNote.trim()) return;
-    onRevision(revisionNote);
+    setConfirmRevisionOpen(true);
   };
 
   return (
@@ -155,6 +169,25 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
       {/* ── Content area ────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-8 py-6">
         <div className="flex flex-col gap-5">
+          {revisionHistory.length > 0 && (
+            <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-4 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-orange-800">
+                <MessageSquare className="w-4 h-4 text-orange-600" />
+                <span>Riwayat Revisi &amp; Komentar Sebelumnya ({revisionHistory.length}):</span>
+              </div>
+              <div className="space-y-1.5">
+                {revisionHistory.map((rev, i) => (
+                  <div key={i} className="bg-white border border-orange-100 rounded-lg px-3.5 py-2 text-xs">
+                    <div className="flex items-center justify-between font-semibold text-gray-800">
+                      <span>{rev.role} — {rev.approverName}</span>
+                      <span className="text-[10px] text-gray-400">{rev.date}</span>
+                    </div>
+                    <p className="text-gray-700 mt-0.5">{rev.note}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {row.type === "KPI" && <KPIContent expandedKpi={expandedKpi} setExpandedKpi={setExpandedKpi} />}
           {row.type === "SMART Goals" && <SmartGoalsSettingContent employeeId={row.employeeId} />}
           {row.type === "Appraisal Form" && <AppraisalFormSettingContent />}
@@ -165,7 +198,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
       </div>
 
       {/* ── Action area ─────────────────────────────────────────────────────── */}
-      {!readOnly && row.status !== "Approved" && row.status !== "Assessed-Approver 1" && (
+      {!readOnly && row.status !== "Approved" && row.status !== "Validated" && row.status !== "Assessed-Approver 1" && (
         <div className="sticky bottom-0 bg-white border-t border-gray-200 px-8 py-4 shrink-0">
           <div>
             {!showRevision ? (
@@ -178,7 +211,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
                   Request Revision
                 </button>
                 <button
-                  onClick={onApprove}
+                  onClick={() => setConfirmApproveOpen(true)}
                   className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#1A284F] text-white rounded-xl font-semibold text-sm hover:bg-[#131d3b] transition-colors"
                 >
                   <CheckCircle2 className="w-4 h-4" />
@@ -222,6 +255,74 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
           </div>
         </div>
       )}
+
+      {/* Popup Konfirmasi Approve */}
+      {confirmApproveOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8 text-center">
+            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-green-50 mx-auto mb-4">
+              <CheckCircle2 className="w-7 h-7 text-green-600" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900 mb-2">Konfirmasi Persetujuan (Approve)</h3>
+            <p className="text-sm text-gray-600 mb-6">
+              Apakah Anda yakin ingin menyetujui pengajuan <strong>{row.type} (Setting)</strong> dari <strong>{row.name}</strong> ({row.employeeId})?
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmApproveOpen(false)}
+                className="flex-1 py-2.5 rounded-full border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmApproveOpen(false);
+                  onApprove();
+                }}
+                className="flex-1 py-2.5 rounded-full bg-green-600 text-white text-sm font-semibold hover:bg-green-700"
+              >
+                Ya, Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Popup Konfirmasi Revision */}
+      {confirmRevisionOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8 text-center">
+            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-orange-50 mx-auto mb-4">
+              <RotateCcw className="w-7 h-7 text-orange-600" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900 mb-2">Konfirmasi Permintaan Revisi</h3>
+            <p className="text-sm text-gray-600 mb-6">
+              Kirim permintaan revisi untuk <strong>{row.type} (Setting)</strong> milik <strong>{row.name}</strong>?
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmRevisionOpen(false)}
+                className="flex-1 py-2.5 rounded-full border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmRevisionOpen(false);
+                  onRevision(revisionNote);
+                }}
+                className="flex-1 py-2.5 rounded-full bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600"
+              >
+                Ya, Kirim Revisi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -231,12 +332,8 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
 function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
   const [openGoal, setOpenGoal] = useState<number | null>(null);
 
-  const live = employeeId === "EMP002" ? loadSubmittedGoals() : null;
-  const goals: SmartGoal[] =
-    live && live.length > 0 ? live
-    : employeeId === "EMP009" ? SAMPLE_GOALS_EMP009
-    : employeeId === "EMP013" ? SAMPLE_GOALS_EMP013
-    : SAMPLE_GOALS;
+  const live = loadSubmittedGoals(employeeId);
+  const goals: SmartGoal[] = live && live.length > 0 ? live : SAMPLE_GOALS;
 
   return (
     <div className="flex flex-col gap-4">

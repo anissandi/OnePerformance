@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+// @refresh reset
+import React, { useEffect, useState } from "react";
 import { Search, TrendingUp, BarChart2, AlertTriangle, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 const TEAM_IDS   = ["E002", "E011"];
 const TEAM_UNIT  = "PT. RSUP (Industri)";
@@ -977,28 +979,69 @@ function AchievementBar({ value }: { value: number }) {
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
 export function SupervisorMonitoringKPI() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
   const [search, setSearch]     = useState("");
   const [kpiModal, setKpiModal] = useState<{ rec: KPIRecord; empName: string } | null>(null);
   const [rcaModal, setRcaModal] = useState<{ rec: KPIRecord; empName: string } | null>(null);
 
   const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "KPI (Setting/Measurement)");
+  const workflows = loadWorkflowRecords();
   const rows = allowedTeamEmployees
-    .map((emp, idx) => ({
-      idx,
-      emp,
-      kpi: KPI_DATA.find((k) => k.employeeId === emp.id) ?? {
-        employeeId: emp.id,
-        totalKPI: 0,
-        submittedKPI: 0,
-        avgAchievement: 0,
-        rcaRequired: 0,
-        rcaCompleted: 0,
-        kpiDefs: [],
-        cells: {},
-        rcaClosedSet: new Set<string>(),
-        rcaItems: [],
-      },
-    }))
+    .map((emp, idx) => {
+      const normId = normalizeEmployeeId(emp.id);
+      const wfSet = workflows.find(
+        (w) => w.year === "2026" && w.module === "KPI" && w.phase === "setting" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
+      );
+      const wfMeas = workflows.find(
+        (w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
+      );
+      const setApproved = Boolean(
+        wfSet?.decisions.approver2 &&
+          (wfSet.decisions.approver2.status === "Validated" ||
+            wfSet.decisions.approver2.status === "Approved" ||
+            wfSet.decisions.approver2.status.startsWith("Assessed")),
+      );
+      const hasActiveKpi = Boolean(setApproved || wfMeas);
+      const kpi: KPIRecord = hasActiveKpi
+        ? {
+            employeeId: emp.id,
+            totalKPI: KPI_DEFS_E002.length,
+            submittedKPI: wfMeas ? KPI_DEFS_E002.length : 0,
+            avgAchievement: wfMeas ? 85 : 0,
+            rcaRequired: 0,
+            rcaCompleted: 0,
+            kpiDefs: KPI_DEFS_E002,
+            cells: wfMeas ? CELLS_E002 : {},
+            rcaClosedSet: new Set<string>(),
+            rcaItems: [],
+          }
+        : {
+            employeeId: emp.id,
+            totalKPI: 0,
+            submittedKPI: 0,
+            avgAchievement: 0,
+            rcaRequired: 0,
+            rcaCompleted: 0,
+            kpiDefs: [],
+            cells: {},
+            rcaClosedSet: new Set<string>(),
+            rcaItems: [],
+          };
+      return { idx, emp, kpi };
+    })
     .filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()) || emp.id.toLowerCase().includes(search.toLowerCase()));
 
   const totalSubmitted = KPI_DATA.filter((k) => k.totalKPI > 0 && k.submittedKPI === k.totalKPI).length;

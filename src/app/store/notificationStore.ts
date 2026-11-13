@@ -144,7 +144,8 @@ export type MasterApprovalTriggerStatus =
   | "Approved (Approval 1)"
   | "Approved (Approval 2)"
   | "Validated"
-  | "Revision / Rejected";
+  | "Revision"
+  | "Rejected";
 
 export const MASTER_APPROVAL_TRIGGER_OPTIONS: MasterApprovalTriggerStatus[] = [
   "All Approval Status",
@@ -153,7 +154,8 @@ export const MASTER_APPROVAL_TRIGGER_OPTIONS: MasterApprovalTriggerStatus[] = [
   "Approved (Approval 1)",
   "Approved (Approval 2)",
   "Validated",
-  "Revision / Rejected",
+  "Revision",
+  "Rejected",
 ];
 
 export type ScheduledModuleChoice =
@@ -763,8 +765,10 @@ export function triggerApprovalTransactionNotification(params: {
     mappedStatus = "Validated";
   } else if (sLower.includes("check")) {
     mappedStatus = "Checked";
-  } else if (sLower.includes("revis") || sLower.includes("reject") || sLower.includes("tolak")) {
-    mappedStatus = "Revision / Rejected";
+  } else if (sLower.includes("reject") || sLower.includes("tolak")) {
+    mappedStatus = "Rejected";
+  } else if (sLower.includes("revis")) {
+    mappedStatus = "Revision";
   } else if (sLower.includes("approv") || sLower.startsWith("assessed")) {
     mappedStatus =
       params.approverRole === "approver2"
@@ -872,6 +876,9 @@ export function triggerApprovalTransactionNotification(params: {
   if (targetUser) {
     const isSettingPhase = canonicalMod.toLowerCase().includes("setting");
     const approvalRoute = isSettingPhase ? "/approvals/setting" : "/approvals/measurement";
+    const isFourStepMod =
+      canonicalMod.toLowerCase().includes("kpi") ||
+      canonicalMod.toLowerCase().includes("smart");
 
     const findApproverUser = (refValue?: string): ManagedUser | undefined => {
       const ref = (refValue ?? "").trim().toLowerCase();
@@ -884,7 +891,43 @@ export function triggerApprovalTransactionNotification(params: {
       );
     };
 
+    const findUnitCheckerUsers = (companyName: string): ManagedUser[] =>
+      allUsers.filter(
+        (u) =>
+          u.status === "Active" &&
+          u.company.trim().toLowerCase() === companyName.trim().toLowerCase() &&
+          (u.role === "HR Unit" || Boolean(u.isHrUnitChecker)) &&
+          u.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase(),
+      );
+
+    const findHrIcfValidators = (): ManagedUser[] =>
+      allUsers.filter(
+        (u) =>
+          u.status === "Active" &&
+          (u.role === "HR ICF" || u.role === "Administrator" || Boolean(u.isHrIcfValidator)),
+      );
+
     if (mappedStatus === "Submitted") {
+      const checkers = isFourStepMod ? findUnitCheckerUsers(targetUser.company) : [];
+      if (checkers.length > 0) {
+        const chkTitle = `Menunggu Check HR Unit: ${canonicalMod} — ${targetUser.name}`;
+        const chkBody = `Terdapat pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) yang menunggu pemeriksaan (Check) HR Unit Anda.`;
+        createAndBroadcastNotification({
+          title: chkTitle,
+          summary: chkBody,
+          body: [chkBody],
+          category: "Approval",
+          senderName: targetUser.name,
+          senderRole: targetUser.role || "Employee",
+          moduleName: canonicalMod,
+          approvalStatus: "Pending Check HR Unit",
+          ctaLabel: "Buka Menu Approvals",
+          ctaRoute: approvalRoute,
+          targetAll: false,
+          targetEmployeeIds: checkers.map((c) => c.employeeId),
+          channels: ["Notifikasi Sistem"],
+        });
+      }
       const ap1User = findApproverUser(targetUser.regNoAp1);
       if (ap1User && ap1User.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
         const ap1Title = `Menunggu Approval 1: ${canonicalMod} — ${targetUser.name}`;
@@ -898,6 +941,28 @@ export function triggerApprovalTransactionNotification(params: {
           senderRole: targetUser.role || "Employee",
           moduleName: canonicalMod,
           approvalStatus: "Pending Approval 1",
+          approverName: ap1User.name,
+          ctaLabel: "Buka Menu Approvals",
+          ctaRoute: approvalRoute,
+          targetAll: false,
+          targetEmployeeIds: [ap1User.employeeId],
+          channels: ["Notifikasi Sistem"],
+        });
+      }
+    } else if (mappedStatus === "Checked") {
+      const ap1User = findApproverUser(targetUser.regNoAp1);
+      if (ap1User && ap1User.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
+        const ap1Title = `Telah Di-Check HR Unit · Menunggu Approval 1: ${canonicalMod} — ${targetUser.name}`;
+        const ap1Body = `Halo ${ap1User.name}, pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId}) telah selesai diperiksa oleh HR Unit dan kini menunggu Approval 1 Anda.`;
+        createAndBroadcastNotification({
+          title: ap1Title,
+          summary: ap1Body,
+          body: [ap1Body],
+          category: "Approval",
+          senderName: ctx.approverName || "HR Unit Checker",
+          senderRole: "HR Unit",
+          moduleName: canonicalMod,
+          approvalStatus: "Checked",
           approverName: ap1User.name,
           ctaLabel: "Buka Menu Approvals",
           ctaRoute: approvalRoute,
@@ -925,6 +990,27 @@ export function triggerApprovalTransactionNotification(params: {
           ctaRoute: approvalRoute,
           targetAll: false,
           targetEmployeeIds: [ap2User.employeeId],
+          channels: ["Notifikasi Sistem"],
+        });
+      }
+    } else if (mappedStatus === "Approved (Approval 2)" && isFourStepMod) {
+      const validators = findHrIcfValidators();
+      if (validators.length > 0) {
+        const valTitle = `Menunggu Validasi HR ICF: ${canonicalMod} — ${targetUser.name}`;
+        const valBody = `Pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) telah disetujui oleh Approver 2 dan siap untuk divalidasi (Validate).`;
+        createAndBroadcastNotification({
+          title: valTitle,
+          summary: valBody,
+          body: [valBody],
+          category: "Approval",
+          senderName: ctx.approverName || "Approver 2",
+          senderRole: "Approver 2",
+          moduleName: canonicalMod,
+          approvalStatus: "Pending Validation",
+          ctaLabel: "Validate Pengajuan",
+          ctaRoute: approvalRoute,
+          targetAll: false,
+          targetEmployeeIds: validators.map((v) => v.employeeId),
           channels: ["Notifikasi Sistem"],
         });
       }

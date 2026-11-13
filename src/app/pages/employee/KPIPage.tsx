@@ -1,3 +1,4 @@
+// @refresh reset
 import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router";
 import { DatePickerID } from "../../components/DatePickerID";
@@ -19,6 +20,8 @@ import {
   getGroupNameForUnit,
   isDirectorRoleOrGrouping,
 } from "../../store/authStore";
+import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../shared/appraisalWorkflowStore";
+import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -437,7 +440,24 @@ function getRolePrefix(): string {
 
 function loadSubmitState(): { submitted: boolean; submittedDate: string } {
   try {
-    const raw = localStorage.getItem(`${KPI_SUBMIT_KEY}_${getRolePrefix()}`);
+    const user = getActiveUser();
+    const normId = normalizeEmployeeId(user.employeeId);
+    const wfRec = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "KPI" &&
+        r.phase === "measurement" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
+    );
+    if (wfRec) {
+      const a1 = wfRec.decisions.approver1?.status ?? "";
+      const a2 = wfRec.decisions.approver2?.status ?? "";
+      const isRev = a1 === "Revision" || a2 === "Revision";
+      if (!isRev) {
+        return { submitted: true, submittedDate: wfRec.submittedDate || "" };
+      }
+    }
+    const raw = localStorage.getItem(`${KPI_SUBMIT_KEY}_${normId}`);
     if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return { submitted: false, submittedDate: "" };
@@ -445,8 +465,10 @@ function loadSubmitState(): { submitted: boolean; submittedDate: string } {
 
 function saveSubmitState(submitted: boolean, submittedDate: string): void {
   try {
+    const user = getActiveUser();
+    const normId = normalizeEmployeeId(user.employeeId);
     savePersistedState(
-      `${KPI_SUBMIT_KEY}_${getRolePrefix()}`,
+      `${KPI_SUBMIT_KEY}_${normId}`,
       { submitted, submittedDate },
     );
   } catch { /* ignore */ }
@@ -460,7 +482,8 @@ export interface KPITrackingSnapshot {
 export function saveKPITracking(data: KPITrackingSnapshot): void {
   try {
     const activeUser = getActiveUser();
-    savePersistedState(KPI_STORE_KEY, data, {
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    savePersistedState(`${KPI_STORE_KEY}_${normId}`, data, {
       kind: "kpi-tracking",
       docKey: `${activeUser.employeeId}:2026`,
       employeeId: activeUser.employeeId,
@@ -481,6 +504,10 @@ export function saveKPITracking(data: KPITrackingSnapshot): void {
 
 export function loadKPITracking(): KPITrackingSnapshot {
   try {
+    const activeUser = getActiveUser();
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    const byEmpRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
+    if (byEmpRaw) return JSON.parse(byEmpRaw) as KPITrackingSnapshot;
     const raw = localStorage.getItem(KPI_STORE_KEY);
     if (raw) return JSON.parse(raw) as KPITrackingSnapshot;
   } catch { /* ignore */ }
@@ -2955,7 +2982,26 @@ export function KPIPage() {
   const [editRequestApproved, setEditRequestApproved] = useState(false);
   const [approvedEditTargets, setApprovedEditTargets] = useState<{ kpiNo: string; monthId: string }[]>([]);
 
-  const isDeadlinePassed = new Date() > new Date(MOCK_DEADLINE + "T23:59:59");
+  // Sesuaikan penguncian KPI Tracking dengan tanggal aktual yang di-setup di Module Activation (/hr/modules)
+  const isDeadlinePassed = (() => {
+    try {
+      const mods = loadLiveModuleActivationList("2026");
+      const kpiMeasMod = mods.find(
+        (m) => m.id === "kpi_measurement" || m.name.toLowerCase().includes("kpi measurement"),
+      );
+      if (!kpiMeasMod) return false;
+      if (kpiMeasMod.isActive === false) return true;
+      if (kpiMeasMod.endDate) {
+        const endTs = new Date(`${kpiMeasMod.endDate}T23:59:59`).getTime();
+        if (Number.isFinite(endTs)) {
+          return Date.now() > endTs;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  })();
   const isLockedByDeadline = isDeadlinePassed && !submitted && !openLockApproved;
   const approvedEditCells =
     editRequestApproved && approvedEditTargets.length > 0
@@ -3141,7 +3187,10 @@ export function KPIPage() {
   const handleSuccessClose = () => {
     setShowSuccess(false);
     setSubmitted(true);
-    { const _d = new Date(); setSubmittedDate(`${String(_d.getDate()).padStart(2,"0")}/${String(_d.getMonth()+1).padStart(2,"0")}/${_d.getFullYear()}`); }
+    const _d = new Date();
+    const dateStr = `${String(_d.getDate()).padStart(2, "0")}/${String(_d.getMonth() + 1).padStart(2, "0")}/${_d.getFullYear()}`;
+    setSubmittedDate(dateStr);
+    submitWorkflowModule("KPI", "measurement", dateStr, activeUser.employeeId);
     setView("preview");
   };
 
@@ -3319,12 +3368,6 @@ export function KPIPage() {
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
             Menunggu Persetujuan
           </span>
-          <button
-            onClick={() => setOpenLockApproved(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-100 text-orange-700 hover:bg-orange-200 border border-orange-300 transition-colors"
-          >
-            [Demo] Simulate Admin Approval
-          </button>
         </div>
       )}
 
@@ -3403,12 +3446,6 @@ export function KPIPage() {
               Supervisor 1
             </span>
           </div>
-          <button
-            onClick={() => { setPendingEditRequest(false); setEditRequestApproved(true); }}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-300 transition-colors"
-          >
-            [Demo] Simulate Approval
-          </button>
         </div>
       )}
 
