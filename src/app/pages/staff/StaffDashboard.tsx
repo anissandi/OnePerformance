@@ -1,5 +1,5 @@
+// @refresh reset
 import React, { useState, useMemo, useEffect } from "react";
-import { KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking } from "../employee/KPIPage";
 import {
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
   CheckCircle2, Clock, X, Target, ArrowRight, ChevronDown, ChevronUp, Sparkles, ClipboardCheck,
@@ -363,24 +363,15 @@ function AppraisalSummaryCards() {
     };
   }, []);
 
-  const liveKPI = useMemo(() => {
-    const { months, cellsMap } = loadKPITracking();
-    const total = KPI_ITEMS.reduce((sum, k) => {
-      const ach = computeKPIAchievement(k, cellsMap, months);
-      if (ach === null) return sum;
-      return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
-    }, 0);
-    return total > 0 ? parseFloat(total.toFixed(1)) : null;
-  }, [tick]);
-
   const activeUser = getActiveUser();
+  const liveMods = getLiveUserModuleApprovals(false);
   const emps = getLiveTransactionalEmployees();
   const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase());
   const baseScore = me?.totalScore ?? 0;
-  const currentScore = baseScore > 0 ? baseScore : liveKPI ? parseFloat((liveKPI * 0.5).toFixed(1)) : 0;
+  const currentScore = parseFloat(baseScore.toFixed(1));
   const currentGrade = currentScore > 0 ? scoreToGrade(currentScore) : "—";
-  const modulesApproved = MODULE_APPROVALS.filter(m => m.overallStatus === "Approved").length;
-  const modulesTotal = MODULE_APPROVALS.length;
+  const modulesApproved = liveMods.filter(m => m.overallStatus === "Approved").length;
+  const modulesTotal = liveMods.length;
   const s = { ...MY_APPRAISAL_SUMMARY, currentScore, currentGrade, modulesApproved, modulesTotal };
   const pending = s.modulesTotal - s.modulesApproved;
 
@@ -396,7 +387,7 @@ function AppraisalSummaryCards() {
           <div className="flex items-start justify-between gap-2 relative z-10">
             <div>
               <span className="text-xs font-medium text-gray-500 block">Current Score</span>
-              <span className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5 block">{s.currentScore}</span>
+              <span className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5 block">{s.currentScore}%</span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-[#1E3A6E] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
               <Target className="w-5 h-5" />
@@ -492,6 +483,21 @@ function AppraisalSummaryCards() {
 function MilestoneProgress() {
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
+  const liveModules = getLiveUserModuleApprovals(false);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
@@ -516,7 +522,7 @@ function MilestoneProgress() {
         <>
       {/* Module rows — derived directly from MODULE_APPROVALS */}
       <div className="flex flex-col gap-4">
-        {MODULE_APPROVALS.map((mod) => {
+        {liveModules.map((mod) => {
           const Icon     = MODULE_MILESTONE_ICONS[mod.module] ?? ClipboardList;
           const status   = approvalToMilestoneStatus(mod);
           const fillPct  = stepFillPct(mod);

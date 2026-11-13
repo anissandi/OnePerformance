@@ -4,7 +4,13 @@ import { saveAppraisalApprover } from "./appraisalFormStore";
 import { saveMSApproverEntry } from "./msStore";
 import { upsertApprovalDecision } from "./smartGoalsStore";
 import { savePersistedState } from "../../services/supabaseClient";
-import { loadManagedUsers } from "../../store/authStore";
+import {
+  getActiveUser,
+  loadManagedUsers,
+  resolveReviewerRoleForTarget,
+  shouldBypassCheckerForSubmission,
+  type ManagedUser,
+} from "../../store/authStore";
 
 const KEY = "sg_approvals_overrides";
 
@@ -39,17 +45,39 @@ export function saveAssessment(
     const alias = workflowAlias(rowNo);
     if (alias && alias.phase === "measurement") {
       const level = approverRole === "approver1" ? 1 : 2;
-      const approverName = level === 1 ? "Supervisor" : "HR Admin";
+      const activeUser = getActiveUser();
+      const approverName = activeUser.name || (level === 1 ? "Approver 1" : "Approver 2");
       if (type === "Managerial Skill") {
         const values = Object.fromEntries(Object.entries(ratings).map(([key, value]) => [Number(key.replace("ms-", "")), value]));
-        saveMSApproverEntry({ approverName, approverRole, approverLevel: level, ratings: values, totalScore: Object.values(values).reduce((sum, value) => sum + value, 0), comment: comments["0"] ?? "", reviewedDate: assessedDate });
+        saveMSApproverEntry(
+          {
+            approverName,
+            approverRole,
+            approverLevel: level,
+            ratings: values,
+            totalScore: Object.values(values).reduce((sum, value) => sum + value, 0),
+            comment: comments["0"] ?? "",
+            reviewedDate: assessedDate,
+          },
+          alias.employeeId,
+        );
       }
       if (type === "Appraisal Form") {
         const forms = (["A", "B", "C"] as const).map((formId) => {
           const entries = Object.entries(ratings).filter(([key]) => key.startsWith(`${formId}-`) || key.startsWith(`${formId}__`));
           return { formId, ratings: Object.fromEntries(entries.map(([key, value]) => [key.replace(`${formId}-`, `${formId}__`), value])), avgScore: entries.length ? entries.reduce((sum, [, value]) => sum + value, 0) / entries.length : 0 };
         });
-        saveAppraisalApprover({ approverName, approverRole, approverLevel: level, forms, overallComment: comments["0"] ?? "", reviewedDate: assessedDate });
+        saveAppraisalApprover(
+          {
+            approverName,
+            approverRole,
+            approverLevel: level,
+            forms,
+            overallComment: comments["0"] ?? "",
+            reviewedDate: assessedDate,
+          },
+          alias.employeeId,
+        );
       }
     }
   } catch { /* ignore */ }
@@ -133,6 +161,8 @@ export function applyOverrides(
   const expanded = [...baseRows];
   for (const record of loadWorkflowRecords()) {
     if (record.phase !== phase || record.year !== "2026") continue;
+    // Jangan duplikasi modul Project & Inter-Department Feedback karena sudah di-generate oleh projectApprovalRows & feedbackApprovalRows
+    if (record.module === "Project" || record.module === "Inter-Department Feedback") continue;
     if (expanded.some((row) => normalizeEmployeeId(row.employeeId) === record.employeeId && row.type === record.module)) continue;
     const existingRow = rows.find((row) => normalizeEmployeeId(row.employeeId) === record.employeeId);
     const managedUser = managedUsers.find(
@@ -176,4 +206,89 @@ export function applyOverrides(
     const ov = overrides.find((o) => o.no === r.no);
     return ov ? { ...r, status: ov.status, approvalDate: ov.approvalDate } : r;
   });
+}
+
+/**
+ * Menyaring, mendeduplikasi, dan menentukan reviewerRole ("approver1" | "approver2") secara dinamis
+ * untuk setiap baris transaksi approval sesuai hirarki Reg No AP1 & Reg No AP2 dari user yang sedang login.
+ */
+export function resolveDynamicApprovalRowsForUser(
+  rawRows: ApprovalRow[],
+  activeUser: ManagedUser,
+  phase: "setting" | "measurement",
+  allowedTypes: Set<string>,
+  lockedUnits?: string[],
+): ApprovalRow[] {
+  const workflows = loadWorkflowRecords();
+  const overrides = loadOverrides();
+  const seenKeys = new Set<string>();
+  const result: ApprovalRow[] = [];
+
+  for (const row of rawRows) {
+    if (!allowedTypes.has(row.type)) continue;
+    if (lockedUnits && !lockedUnits.includes(row.companyUnit)) continue;
+
+    const normEmpId = normalizeEmployeeId(row.employeeId);
+    const dedupKey = `${normEmpId}:${phase}:${row.type}`;
+    if (seenKeys.has(dedupKey)) continue;
+
+    // Bagian XII Poin 2: HR Unit Checker bypass pengajuan KPI & SMART Goals miliknya sendiri
+    if (
+      (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) &&
+      (row.type === "KPI" || row.type === "SMART Goals") &&
+      (normEmpId === normalizeEmployeeId(activeUser.employeeId) ||
+        row.name.trim().toLowerCase() === activeUser.name.trim().toLowerCase()) &&
+      shouldBypassCheckerForSubmission(activeUser.employeeId)
+    ) {
+      continue;
+    }
+
+    const wfRec = workflows.find(
+      (w) =>
+        w.year === "2026" &&
+        w.phase === phase &&
+        w.module === row.type &&
+        w.employeeId === normEmpId,
+    );
+    const a1Done = Boolean(
+      wfRec?.decisions.approver1 &&
+        (wfRec.decisions.approver1.status === "Approved" ||
+          wfRec.decisions.approver1.status.startsWith("Assessed")),
+    );
+
+    const roleForRow = resolveReviewerRoleForTarget(
+      activeUser,
+      row.employeeId,
+      a1Done,
+      row.type,
+    );
+    // Jika user yang login bukan Approver 1, bukan Approver 2, bukan Checker/Validator berwenang untuk karyawan ini -> sembunyikan
+    if (!roleForRow) continue;
+
+    seenKeys.add(dedupKey);
+
+    const prefix = `${roleForRow === "approver2" ? "H" : ""}${phase === "setting" ? "ST" : "CI"}`;
+    const canonicalNo =
+      row.type === "Inter-Department Feedback"
+        ? row.no
+        : `${prefix}-LIVE-${normEmpId}-${row.type}`;
+    const rowWithCanonicalNo: ApprovalRow = {
+      ...row,
+      no: canonicalNo,
+      reviewerRoleForRow: roleForRow,
+    };
+
+    registerWorkflowRows([rowWithCanonicalNo], roleForRow);
+    const shared = workflowRowStatus(rowWithCanonicalNo, roleForRow);
+    const ov = overrides.find((o) => o.no === canonicalNo);
+    const resolvedRow: ApprovalRow = shared
+      ? { ...rowWithCanonicalNo, ...shared, reviewerRoleForRow: roleForRow }
+      : ov
+      ? { ...rowWithCanonicalNo, status: ov.status, approvalDate: ov.approvalDate, reviewerRoleForRow: roleForRow }
+      : rowWithCanonicalNo;
+
+    result.push(resolvedRow);
+  }
+
+  return result;
 }

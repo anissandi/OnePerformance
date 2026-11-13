@@ -1,6 +1,9 @@
-import React, { useState } from "react";
+// @refresh reset
+import React, { useEffect, useState } from "react";
 import { FolderKanban, CheckCircle2, AlertCircle, Clock, Search, Filter, Download, ShieldCheck, ShieldX, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
+import { loadAllIcfProjectsByEmployee } from "../../../store/projectStore";
+import { normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
@@ -146,12 +149,19 @@ export function SupervisorMonitoringProject() {
   const [deptFilter, setDeptFilter]         = useState("All Departments");
   const [sortKey, setSortKey]               = useState<SortKey | null>(null);
   const [sortDir, setSortDir]               = useState<SortDir>("asc");
+  const [uploadedByEmp, setUploadedByEmp]   = useState(() => loadAllIcfProjectsByEmployee());
 
-  const ssCount       = PROJ_DATA.filter(k => k.scope === "SS").length;
-  const qccCount      = PROJ_DATA.filter(k => k.scope === "QCC").length;
-  const qcpCount      = PROJ_DATA.filter(k => k.scope === "QCP").length;
-  const totalProjects = ssCount + qccCount + qcpCount;
-  const doneCount     = PROJ_DATA.filter(k => k.progressStatus === "Done").length;
+  useEffect(() => {
+    const sync = () => setUploadedByEmp(loadAllIcfProjectsByEmployee());
+    window.addEventListener("appraisal-updated", sync);
+    window.addEventListener("pa-auth-updated", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("appraisal-updated", sync);
+      window.removeEventListener("pa-auth-updated", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
 
   const unitOptions = ["All Units",       ...unique(TEAM_EMPLOYEES.map(e => e.unit))];
   const deptOptions = ["All Departments", ...unique(TEAM_EMPLOYEES.map(e => e.division))];
@@ -162,10 +172,59 @@ export function SupervisorMonitoringProject() {
   };
 
   const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "Project Outside Job Scope");
+  const effectiveRecords: ProjRecord[] = allowedTeamEmployees.map((emp) => {
+    const uploaded = uploadedByEmp[normalizeEmployeeId(emp.id)] ?? uploadedByEmp[emp.id];
+    if (!uploaded || !uploaded.rows.length) {
+      return {
+        employeeId: emp.id,
+        scope: null,
+        role: null,
+        title: null,
+        detail: null,
+        startDate: null,
+        finishDate: null,
+        progressStatus: null,
+        projectScore: null,
+      };
+    }
+    const bestRow = [...uploaded.rows].sort((a, b) => b.finalScore - a.finalScore)[0];
+    const normScope: ProjectScope = bestRow.projectScope.toUpperCase().includes("QCP")
+      ? "QCP"
+      : bestRow.projectScope.toUpperCase().includes("QCC")
+      ? "QCC"
+      : "SS";
+    const normRole: ProjectRole = bestRow.roleProject.toLowerCase().includes("leader") || bestRow.roleProject.toLowerCase().includes("ketua")
+      ? "Team Leader"
+      : bestRow.roleProject.toLowerCase().includes("ideator")
+      ? "Ideator"
+      : "Member";
+    const normProgress: ProgressStatus = bestRow.progressStatus.toLowerCase().includes("done") || bestRow.progressStatus.toLowerCase().includes("complete")
+      ? "Done"
+      : bestRow.progressStatus.toLowerCase().includes("progress")
+      ? "In Progress"
+      : "Submitted";
+    return {
+      employeeId: emp.id,
+      scope: normScope,
+      role: normRole,
+      title: bestRow.projectTitle,
+      detail: bestRow.projectDetail,
+      startDate: bestRow.startDate,
+      finishDate: bestRow.finishDate,
+      progressStatus: normProgress,
+      projectScore: bestRow.finalScore,
+    };
+  });
+  const ssCount       = effectiveRecords.filter(k => k.scope === "SS").length;
+  const qccCount      = effectiveRecords.filter(k => k.scope === "QCC").length;
+  const qcpCount      = effectiveRecords.filter(k => k.scope === "QCP").length;
+  const totalProjects = ssCount + qccCount + qcpCount;
+  const doneCount     = effectiveRecords.filter(k => k.progressStatus === "Done").length;
+
   const baseRows = allowedTeamEmployees.map((emp, idx) => ({
     no: idx + 1,
     emp,
-    rec: PROJ_DATA.find(k => k.employeeId === emp.id) ?? {
+    rec: effectiveRecords.find(k => k.employeeId === emp.id) ?? {
       employeeId: emp.id,
       scope: null,
       role: null,

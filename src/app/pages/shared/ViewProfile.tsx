@@ -347,16 +347,6 @@ export function ViewProfile() {
   const yearData = YEAR_DATA[selectedYear];
 
   // Live 2026 KPI score — same computation as My Appraisal page
-  const liveKPIScore2026 = useMemo(() => {
-    const { months, cellsMap } = loadKPITracking();
-    const total = KPI_ITEMS.reduce((s, k) => {
-      const ach = computeKPIAchievement(k, cellsMap, months);
-      if (ach === null) return s;
-      return s + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
-    }, 0);
-    return total > 0 ? parseFloat(total.toFixed(1)) : null;
-  }, [tick]);
-
   // Inject live KPI score into 2026 module results
   const activeModules = useMemo(() => {
     const allowed = resolveUserAllowedModules(activeUser);
@@ -398,7 +388,7 @@ export function ViewProfile() {
         };
       }
       let score = 0;
-      if (m.module === "KPI") score = liveKPIScore2026 ?? liveEmp?.kpi.score ?? 0;
+      if (m.module === "KPI") score = liveEmp?.kpi.score ?? 0;
       else if (m.module === "SMART Goals") score = liveEmp?.smartGoals.score ?? 0;
       else if (m.module === "Appraisal Form") score = liveEmp?.formA.score ?? 0;
       else if (m.module === "Project Outside Job Scope") score = liveEmp?.project.score ?? 0;
@@ -408,7 +398,7 @@ export function ViewProfile() {
       const status: ModuleStatus = score > 0 ? "approved" : "pending";
       return { ...m, weight, score, grade, status, weightedScore: parseFloat(((score * weight) / 100).toFixed(2)) };
     });
-  }, [activeUser, selectedYear, isCurrent, liveKPIScore2026, tick]);
+  }, [activeUser, selectedYear, isCurrent, tick]);
 
   const yearsOfService = new Date().getFullYear() - new Date(USER.joinDate).getFullYear();
   const totalWeighted = activeModules.reduce((s, m) => s + m.weightedScore, 0);
@@ -426,9 +416,12 @@ export function ViewProfile() {
     if (s >= 50) return "D";
     return "E";
   }
-  const displayScore    = isCurrent ? parseFloat(totalWeighted.toFixed(1)) : yearData.score;
+  const liveMe = getLiveTransactionalEmployees().find(
+    (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
+  );
+  const displayScore    = isCurrent ? (liveMe?.totalScore ?? parseFloat(totalWeighted.toFixed(1))) : yearData.score;
   const displayGrade    = isCurrent ? scoreToGrade(displayScore) : yearData.grade;
-  const displayKPIScore = isCurrent && liveKPIScore2026 !== null ? liveKPIScore2026 : yearData.kpiScore;
+  const displayKPIScore = isCurrent ? (liveMe?.kpi.score ?? 0) : yearData.kpiScore;
   const displayKPIGrade = scoreToGrade(displayKPIScore ?? 0);
 
   return (
@@ -485,7 +478,7 @@ export function ViewProfile() {
                     </span>
                     <span className="text-xs text-gray-400">
                       {isCurrent ? "Current" : "Final"} Score:{" "}
-                      <span className="font-bold text-gray-700">{displayScore}</span>
+                      <span className="font-bold text-gray-700">{displayScore}%</span>
                     </span>
                     <span className="text-xs text-gray-300">·</span>
                     {isCurrent ? (
@@ -500,7 +493,7 @@ export function ViewProfile() {
                   <div className="relative">
                     <ProgressRing pct={displayScore} size={72} stroke={6} />
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-sm font-bold text-[#1A284F] leading-none">{displayScore}</span>
+                      <span className="text-sm font-bold text-[#1A284F] leading-none">{displayScore}%</span>
                       <span className={`text-[8px] leading-none mt-0.5 ${isCurrent ? "text-amber-500" : "text-green-500"}`}>
                         {isCurrent ? "Current" : "Final"}
                       </span>
@@ -540,7 +533,7 @@ export function ViewProfile() {
           <div className="flex items-start justify-between gap-2 relative z-10">
             <div>
               <p className="text-xs font-medium text-gray-500">{isCurrent ? "Current Score" : "Final Score"}</p>
-              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">{displayScore}</p>
+              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">{displayScore}%</p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-[#1E3A6E] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
               <Target className="w-5 h-5" />

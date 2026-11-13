@@ -11,6 +11,8 @@ import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/apprai
 import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../pages/shared/appraisalFormStore";
 import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
+import { loadAllIcfProjectsByEmployee } from "../store/projectStore";
+import { KPI_ITEMS, computeKPIAchievement, loadKPITracking, parseBobotDecimal } from "../pages/employee/KPIPage";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export interface ScoreGrade { score: number; grade: string; }
@@ -123,12 +125,7 @@ export function getLiveTransactionalEmployees(): Employee[] {
     const users = loadManagedUsers().filter((u) => !isExcludedFromAppraisalCalibration(u));
     const activeUser = getActiveUser();
     const workflows = loadWorkflowRecords();
-    let projectByEmp: Record<string, { rows?: Array<{ finalScore?: number }>; submittedDate?: string }> = {};
-    try {
-      projectByEmp = JSON.parse(localStorage.getItem("pa_project_icf_by_emp_v1") ?? "{}");
-    } catch {
-      projectByEmp = {};
-    }
+    const projectByEmp = loadAllIcfProjectsByEmployee();
     let calAdjScores: Record<string, Record<string, number>> = {};
     try {
       calAdjScores = JSON.parse(localStorage.getItem("pa_calibration_adj_scores_v1") ?? "{}");
@@ -150,6 +147,19 @@ export function getLiveTransactionalEmployees(): Employee[] {
         const a1 = Object.values(rec.assessments.approver1?.ratings ?? {});
         const vals = a2.length > 0 ? a2 : a1;
         if (vals.length === 0) return 0;
+        if (modName === "Appraisal Form") {
+          const ratingMap = Object.keys(rec.assessments.approver2?.ratings ?? {}).length > 0
+            ? rec.assessments.approver2!.ratings
+            : rec.assessments.approver1?.ratings ?? {};
+          const avgForm = (prefix: "A" | "B" | "C") => {
+            const entries = Object.entries(ratingMap)
+              .filter(([k]) => k.startsWith(`${prefix}-`) || k.startsWith(`${prefix}__`))
+              .map(([, v]) => Number(v));
+            return entries.length > 0 ? entries.reduce((s, n) => s + n, 0) / entries.length : 0;
+          };
+          const weighted5 = avgForm("A") * 0.6 + avgForm("B") * 0.25 + avgForm("C") * 0.15;
+          return weighted5 > 0 ? Math.round((weighted5 / 5) * 100) : 0;
+        }
         const avg = averageNumbers(vals);
         return avg <= 5 ? Math.round((avg / 5) * 100) : Math.round(avg);
       };
@@ -160,30 +170,40 @@ export function getLiveTransactionalEmployees(): Employee[] {
       let msScore = extractAssessmentScore("Managerial Skill");
       const miScore = extractAssessmentScore("Management Interview");
 
-      // Jika user sedang aktif dan sudah mengisi self/approver rating di modul lokal
-      if (isSelf) {
-        if (afScore === 0) {
-          const afApprovers = loadAllAppraisalApprovers();
-          const afSelf = loadAppraisalSelf();
-          if (afApprovers.length > 0) {
-            const latest = afApprovers[afApprovers.length - 1];
-            const avg = averageNumbers(latest.forms.map((f) => f.avgScore));
-            afScore = avg <= 5 ? Math.round((avg / 5) * 100) : Math.round(avg);
-          } else if (afSelf && afSelf.forms.length > 0) {
-            const avg = averageNumbers(afSelf.forms.map((f) => f.avgScore));
-            afScore = avg <= 5 ? Math.round((avg / 5) * 100) : Math.round(avg);
-          }
+      // Baca skor Appraisal Form & Managerial Skill milik karyawan terkait (terisolasi per employeeId)
+      if (afScore === 0) {
+        const afApprovers = loadAllAppraisalApprovers(u.employeeId);
+        const afSelf = loadAppraisalSelf(u.employeeId);
+        const computeWeightedAfPct = (forms: Array<{ formId: string; avgScore: number }>) => {
+          const getAvg = (id: string) => forms.find((f) => f.formId === id)?.avgScore ?? 0;
+          const weighted5 = getAvg("A") * 0.6 + getAvg("B") * 0.25 + getAvg("C") * 0.15;
+          return weighted5 > 0 ? Math.round((weighted5 / 5) * 100) : 0;
+        };
+        if (afApprovers.length > 0) {
+          const latest = afApprovers[afApprovers.length - 1];
+          afScore = computeWeightedAfPct(latest.forms);
+        } else if (afSelf && afSelf.submitted && afSelf.forms.length > 0) {
+          afScore = computeWeightedAfPct(afSelf.forms);
         }
-        if (msScore === 0) {
-          const msApprovers = loadAllMSApprovers();
-          const msSelf = loadMSSelfRatings();
-          if (msApprovers.length > 0) {
-            const latest = msApprovers[msApprovers.length - 1];
-            msScore = latest.totalScore <= 5 ? Math.round((latest.totalScore / 5) * 100) : Math.round(latest.totalScore);
-          } else if (msSelf && msSelf.totalScore > 0) {
-            msScore = msSelf.totalScore <= 5 ? Math.round((msSelf.totalScore / 5) * 100) : Math.round(msSelf.totalScore);
-          }
+      }
+      if (msScore === 0) {
+        const msApprovers = loadAllMSApprovers(u.employeeId);
+        const msSelf = loadMSSelfRatings(u.employeeId);
+        if (msApprovers.length > 0) {
+          const latest = msApprovers[msApprovers.length - 1];
+          msScore = latest.totalScore <= 5 ? Math.round((latest.totalScore / 5) * 100) : Math.round(latest.totalScore);
+        } else if (msSelf && msSelf.totalScore > 0) {
+          msScore = msSelf.totalScore <= 5 ? Math.round((msSelf.totalScore / 5) * 100) : Math.round(msSelf.totalScore);
         }
+      }
+      if (isSelf && kpiScore === 0 && empWorkflows.some((w) => w.module === "KPI")) {
+        const { months, cellsMap } = loadKPITracking();
+        const totalKpi = KPI_ITEMS.reduce((sum, k) => {
+          const ach = computeKPIAchievement(k, cellsMap, months);
+          if (ach === null) return sum;
+          return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
+        }, 0);
+        if (totalKpi > 0) kpiScore = Math.round(totalKpi);
       }
 
       const prjRows = projectByEmp[normId]?.rows ?? projectByEmp[u.employeeId]?.rows ?? [];

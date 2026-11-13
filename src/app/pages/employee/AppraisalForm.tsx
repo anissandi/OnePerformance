@@ -1,8 +1,11 @@
+// @refresh reset
 import { useState, useEffect } from "react";
-import { X, CheckCircle2, FileCheck } from "lucide-react";
+import { X, CheckCircle2, FileCheck, Lock } from "lucide-react";
 import {
-  saveAppraisalSelf, saveAppraisalApprover, loadAllAppraisalApprovers, loadAppraisalSelf,
+  saveAppraisalSelf, loadAppraisalSelf,
 } from "../shared/appraisalFormStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import { getActiveUser } from "../../store/authStore";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -460,36 +463,67 @@ function SuccessModal({ onClose }: { onClose: () => void }) {
 export function AppraisalForm() {
   const [formsList, setFormsList] = useState<FormDef[]>(() => loadMasterAppraisalForms());
   const [activeForm, setActiveForm] = useState<"A" | "B" | "C">("A");
-  const [selfRatings, setSelfRatings] = useState<Ratings>(() => {
-    const existing = loadAppraisalSelf();
-    if (!existing) return {};
+
+  const readEmployeeFormState = () => {
+    const user = getActiveUser();
+    const normId = normalizeEmployeeId(user.employeeId);
+    const existing = loadAppraisalSelf(user.employeeId);
+    const wfRec = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "Appraisal Form" &&
+        r.phase === "measurement" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
+    );
+    const isRevision =
+      wfRec?.decisions.approver1?.status === "Revision" ||
+      wfRec?.decisions.approver2?.status === "Revision";
+    const submittedLocked = Boolean((existing?.submitted || wfRec) && !isRevision);
+
     const merged: Ratings = {};
-    existing.forms.forEach((f) => {
+    const saved: SavedForms = {};
+    existing?.forms.forEach((f) => {
       Object.entries(f.ratings).forEach(([k, v]) => {
         merged[k] = v;
       });
-    });
-    return merged;
-  });
-  const [savedForms, setSavedForms] = useState<SavedForms>(() => {
-    const existing = loadAppraisalSelf();
-    if (!existing) return {};
-    const saved: SavedForms = {};
-    existing.forms.forEach((f) => {
       if (Object.keys(f.ratings).length > 0) {
         saved[f.formId] = { total: f.avgScore };
       }
     });
-    return saved;
-  });
+    return {
+      merged,
+      saved,
+      submittedLocked,
+      submittedDate: existing?.submittedAt || wfRec?.submittedDate || "",
+    };
+  };
+
+  const [selfRatings, setSelfRatings] = useState<Ratings>(() => readEmployeeFormState().merged);
+  const [savedForms, setSavedForms] = useState<SavedForms>(() => readEmployeeFormState().saved);
+  const [isSubmittedLocked, setIsSubmittedLocked] = useState<boolean>(() => readEmployeeFormState().submittedLocked);
+  const [submittedDateLabel, setSubmittedDateLabel] = useState<string>(() => readEmployeeFormState().submittedDate);
   const [modalItem, setModalItem] = useState<FormItem | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
   useEffect(() => {
-    const onHydrated = () => setFormsList(loadMasterAppraisalForms());
+    const onHydrated = () => {
+      setFormsList(loadMasterAppraisalForms());
+      const next = readEmployeeFormState();
+      setSelfRatings(next.merged);
+      setSavedForms(next.saved);
+      setIsSubmittedLocked(next.submittedLocked);
+      setSubmittedDateLabel(next.submittedDate);
+      setActiveForm("A");
+    };
     window.addEventListener("pa-db-hydrated", onHydrated);
-    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+    window.addEventListener("pa-auth-updated", onHydrated);
+    window.addEventListener("appraisal-updated", onHydrated);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onHydrated);
+      window.removeEventListener("pa-auth-updated", onHydrated);
+      window.removeEventListener("appraisal-updated", onHydrated);
+    };
   }, []);
 
   const form = formsList.find((f) => f.id === activeForm) ?? formsList[0];
@@ -504,12 +538,41 @@ export function AppraisalForm() {
   const allRated = rated === form.items.length;
   const allFormsSaved = ["A", "B", "C"].every((id) => !!savedForms[id]);
 
+  const buildAllFormEntries = (targetSavedForms: SavedForms) =>
+    formsList.map((f) => {
+      const fRatings: Record<string, number> = {};
+      f.items.forEach((item) => {
+        const v = selfRatings[key(f.id, item.no)];
+        if (v != null) fRatings[key(f.id, item.no)] = v as number;
+      });
+      const saved = targetSavedForms[f.id];
+      return { formId: f.id, ratings: fRatings, avgScore: saved?.total ?? 0 };
+    });
+
   const handleConfirmSubmit = () => {
+    if (isSubmittedLocked) return;
+    const todayStr = new Date().toLocaleDateString("id-ID", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+    const allFormEntries = buildAllFormEntries(savedForms);
+    saveAppraisalSelf(
+      {
+        forms: allFormEntries,
+        submittedAt: todayStr,
+        submitted: true,
+      },
+      { submitWorkflow: true },
+    );
+    setIsSubmittedLocked(true);
+    setSubmittedDateLabel(todayStr);
     setShowConfirm(false);
     setShowSuccess(true);
   };
 
   const setRating = (no: number, val: number) => {
+    if (isSubmittedLocked) return;
     // Unsave if editing after save
     if (savedForms[activeForm]) {
       setSavedForms((prev) => { const n = { ...prev }; delete n[activeForm]; return n; });
@@ -518,38 +581,20 @@ export function AppraisalForm() {
   };
 
   const saveForm = () => {
+    if (isSubmittedLocked) return;
     const nextSavedForms = { ...savedForms, [activeForm]: { total: avgScore } };
     setSavedForms(nextSavedForms);
 
-    // Build all saved form entries for persistence
-    const allFormEntries = formsList.map((f) => {
-      const fRatings: Record<string, number> = {};
-      f.items.forEach((item) => {
-        const v = selfRatings[key(f.id, item.no)];
-        if (v != null) fRatings[key(f.id, item.no)] = v as number;
-      });
-      const saved = nextSavedForms[f.id];
-      return { formId: f.id, ratings: fRatings, avgScore: saved?.total ?? 0 };
-    });
-
-    const isSupervisor = window.location.pathname.includes("/supervisor");
-    if (isSupervisor) {
-      const existing = loadAllAppraisalApprovers();
-      const existing1 = existing.find((e) => e.approverLevel === 1);
-      saveAppraisalApprover({
-        approverName: existing1?.approverName ?? "Budi Santoso",
-        approverRole: existing1?.approverRole ?? "Atasan Langsung",
-        approverLevel: 1,
-        forms: allFormEntries,
-        overallComment: existing1?.overallComment ?? "",
-        reviewedDate: new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }),
-      });
-    } else {
-      saveAppraisalSelf({
+    const allFormEntries = buildAllFormEntries(nextSavedForms);
+    // Simpan draft bagian form tanpa memicu submitWorkflowModule / notifikasi
+    saveAppraisalSelf(
+      {
         forms: allFormEntries,
         submittedAt: new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }),
-      });
-    }
+        submitted: false,
+      },
+      { submitWorkflow: false },
+    );
 
     const nextIndex = formsList.findIndex((f) => f.id === activeForm) + 1;
     if (nextIndex < formsList.length) {
@@ -558,6 +603,7 @@ export function AppraisalForm() {
   };
 
   const resetForm = () => {
+    if (isSubmittedLocked) return;
     const updated = { ...selfRatings };
     form.items.forEach((item) => delete updated[key(form.id, item.no)]);
     setSelfRatings(updated);
@@ -677,12 +723,16 @@ export function AppraisalForm() {
                           {[1,2,3,4,5].map((n) => (
                             <button
                               key={n}
+                              type="button"
+                              disabled={isSubmittedLocked}
                               onClick={() => setRating(item.no, n)}
                               className={`w-8 h-8 rounded border text-xs font-semibold transition-colors ${
                                 selected === n
                                   ? "bg-[#1A284F] text-white border-[#1A284F]"
+                                  : isSubmittedLocked
+                                  ? "border-gray-200 text-gray-300 bg-gray-50 cursor-not-allowed"
                                   : "border-gray-300 text-gray-600 hover:border-[#1A284F] hover:text-[#1A284F]"
-                              }`}
+                              } ${isSubmittedLocked ? "cursor-not-allowed" : ""}`}
                             >
                               {n}
                             </button>
@@ -731,7 +781,20 @@ export function AppraisalForm() {
 
       {/* Sticky bottom bar */}
       <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-4 py-3 flex items-center justify-between z-10 gap-4">
-        {isSaved ? (
+        {isSubmittedLocked ? (
+          <div className="flex-1 flex items-center justify-between gap-3 bg-indigo-50/80 border border-indigo-200 rounded-lg px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <Lock className="w-4 h-4 text-[#1A284F] shrink-0" />
+              <p className="text-sm font-medium text-[#1A284F]">
+                Appraisal Form telah disubmit{submittedDateLabel ? ` pada ${submittedDateLabel}` : ""} dan terkunci. Nilai Rata-rata {form.tab}:{" "}
+                <span className="font-bold">{avgScore > 0 ? avgScore.toFixed(2) : "—"}</span>
+              </p>
+            </div>
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#1A284F] text-white shrink-0">
+              Submitted &amp; Locked
+            </span>
+          </div>
+        ) : isSaved ? (
           <>
             <div className="flex-1 flex items-center gap-2 bg-green-50 border border-green-200 rounded px-4 py-2.5">
               <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />

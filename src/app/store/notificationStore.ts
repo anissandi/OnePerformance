@@ -867,6 +867,69 @@ export function triggerApprovalTransactionNotification(params: {
       matchedIds.has(t.id) ? { ...t, lastTriggeredAt: nowStr } : t,
     ),
   );
+
+  // Kirim notifikasi tindak lanjut ke Approver 1 (saat Submitted) atau Approver 2 (saat Approved oleh Approver 1)
+  if (targetUser) {
+    const isSettingPhase = canonicalMod.toLowerCase().includes("setting");
+    const approvalRoute = isSettingPhase ? "/approvals/setting" : "/approvals/measurement";
+
+    const findApproverUser = (refValue?: string): ManagedUser | undefined => {
+      const ref = (refValue ?? "").trim().toLowerCase();
+      if (!ref) return undefined;
+      return allUsers.find(
+        (u) =>
+          (u.regNo ?? "").trim().toLowerCase() === ref ||
+          u.employeeId.trim().toLowerCase() === ref ||
+          u.name.trim().toLowerCase() === ref,
+      );
+    };
+
+    if (mappedStatus === "Submitted") {
+      const ap1User = findApproverUser(targetUser.regNoAp1);
+      if (ap1User && ap1User.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
+        const ap1Title = `Menunggu Approval 1: ${canonicalMod} — ${targetUser.name}`;
+        const ap1Body = `Halo ${ap1User.name}, terdapat pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) yang menunggu pemeriksaan dan Approval 1 Anda.`;
+        createAndBroadcastNotification({
+          title: ap1Title,
+          summary: ap1Body,
+          body: [ap1Body],
+          category: "Approval",
+          senderName: targetUser.name,
+          senderRole: targetUser.role || "Employee",
+          moduleName: canonicalMod,
+          approvalStatus: "Pending Approval 1",
+          approverName: ap1User.name,
+          ctaLabel: "Buka Menu Approvals",
+          ctaRoute: approvalRoute,
+          targetAll: false,
+          targetEmployeeIds: [ap1User.employeeId],
+          channels: ["Notifikasi Sistem"],
+        });
+      }
+    } else if (mappedStatus === "Approved (Approval 1)") {
+      const ap2User = findApproverUser(targetUser.regNoAp2);
+      if (ap2User && ap2User.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
+        const ap2Title = `Menunggu Approval 2: ${canonicalMod} — ${targetUser.name}`;
+        const ap2Body = `Halo ${ap2User.name}, pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) telah disetujui oleh Approver 1 (${ctx.approverName}) dan kini menunggu tindak lanjut Approval 2 Anda.`;
+        createAndBroadcastNotification({
+          title: ap2Title,
+          summary: ap2Body,
+          body: [ap2Body],
+          category: "Approval",
+          senderName: ctx.approverName || "Approver 1",
+          senderRole: "Approver 1",
+          moduleName: canonicalMod,
+          approvalStatus: "Pending Approval 2",
+          approverName: ap2User.name,
+          ctaLabel: "Tindak Lanjuti Approval 2",
+          ctaRoute: approvalRoute,
+          targetAll: false,
+          targetEmployeeIds: [ap2User.employeeId],
+          channels: ["Notifikasi Sistem"],
+        });
+      }
+    }
+  }
 }
 
 export function useNotificationStore(userOverride?: ManagedUser) {

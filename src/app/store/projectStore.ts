@@ -3,7 +3,7 @@ import type { ProjectExcelRow } from "../utils/projectExcelUtils";
 import { normalizeEmployeeId, submitWorkflowModule, workflowRowStatus, registerWorkflowRows } from "../pages/shared/appraisalWorkflowStore";
 import type { ApprovalRow, ReviewerRole } from "../components/ReviewDrawer";
 import type { ParsedExternalProjectRow } from "../utils/projectExcelUtils";
-import { EMPLOYEES } from "../pages/hr/monitoring/monitoringData";
+import { getActiveUser, loadManagedUsers } from "./authStore";
 import { savePersistedState, syncToSupabase } from "../services/supabaseClient";
 
 export type ProjectCategory = "Improvement Project" | "Corporate Event" | "Komite/Task Force";
@@ -104,7 +104,23 @@ export function loadAllIcfProjectsByEmployee(): Record<string, EmployeeIcfProjec
   try {
     const raw = localStorage.getItem(EXCEL_BY_EMP_STORAGE_KEY);
     if (!raw) return {};
-    return JSON.parse(raw) ?? {};
+    const parsed = (JSON.parse(raw) ?? {}) as Record<string, EmployeeIcfProjectState>;
+    const managedUsers = loadManagedUsers();
+    const cleaned: Record<string, EmployeeIcfProjectState> = {};
+    for (const [rawKey, state] of Object.entries(parsed)) {
+      if (!state || !Array.isArray(state.rows) || state.rows.length === 0) continue;
+      const normKey = normalizeEmployeeId(rawKey);
+      const matchedUser = managedUsers.find(
+        (u) =>
+          normalizeEmployeeId(u.employeeId).toLowerCase() === normKey.toLowerCase() ||
+          u.employeeId.trim().toLowerCase() === rawKey.trim().toLowerCase() ||
+          (u.regNo && u.regNo.trim().toLowerCase() === rawKey.trim().toLowerCase()),
+      );
+      if (!matchedUser) continue;
+      const canonicalKey = normalizeEmployeeId(matchedUser.employeeId);
+      cleaned[canonicalKey] = state;
+    }
+    return cleaned;
   } catch {
     return {};
   }
@@ -112,17 +128,14 @@ export function loadAllIcfProjectsByEmployee(): Record<string, EmployeeIcfProjec
 
 export function loadIcfProjectRows(employeeId?: string): { rows: ProjectExcelRow[]; fileName: string; submitted: boolean } {
   try {
-    if (employeeId) {
-      const normId = normalizeEmployeeId(employeeId);
-      const byEmp = loadAllIcfProjectsByEmployee();
-      if (byEmp[normId]) return byEmp[normId];
-      if (byEmp[employeeId]) return byEmp[employeeId];
-    }
-    const raw = localStorage.getItem(EXCEL_STORAGE_KEY);
-    if (!raw) return { rows: INITIAL_EXCEL_ROWS, fileName: "Project_ICF_2026.xlsx", submitted: true };
-    return JSON.parse(raw);
+    const targetId = employeeId ?? getActiveUser().employeeId;
+    const normId = normalizeEmployeeId(targetId);
+    const byEmp = loadAllIcfProjectsByEmployee();
+    if (byEmp[normId]) return byEmp[normId];
+    if (byEmp[targetId]) return byEmp[targetId];
+    return { rows: INITIAL_EXCEL_ROWS, fileName: "", submitted: false };
   } catch {
-    return { rows: INITIAL_EXCEL_ROWS, fileName: "Project_ICF_2026.xlsx", submitted: true };
+    return { rows: INITIAL_EXCEL_ROWS, fileName: "", submitted: false };
   }
 }
 
@@ -148,11 +161,21 @@ export function importExternalProjectRows(
   fileName: string,
 ): { employeeCount: number; rowCount: number } {
   const today = new Date().toLocaleDateString("id-ID");
+  const managedUsers = loadManagedUsers();
   const grouped = new Map<string, ProjectExcelRow[]>();
 
   for (const row of parsedRows) {
-    const rawEmpId = row.employeeId?.trim() || "E002";
-    const normId = normalizeEmployeeId(rawEmpId);
+    const rawEmpId = row.employeeId?.trim();
+    if (!rawEmpId) continue;
+    const rawNorm = normalizeEmployeeId(rawEmpId);
+    const matchedUser = managedUsers.find(
+      (u) =>
+        normalizeEmployeeId(u.employeeId).toLowerCase() === rawNorm.toLowerCase() ||
+        u.employeeId.trim().toLowerCase() === rawEmpId.toLowerCase() ||
+        (u.regNo && u.regNo.trim().toLowerCase() === rawEmpId.toLowerCase()) ||
+        u.name.trim().toLowerCase() === rawEmpId.toLowerCase(),
+    );
+    const normId = matchedUser ? normalizeEmployeeId(matchedUser.employeeId) : rawNorm;
     const list = grouped.get(normId) ?? [];
     list.push({
       no: list.length + 1,
@@ -198,18 +221,7 @@ export function importExternalProjectRows(
         description: `Uploaded external Project Excel "${fileName}" (${parsedRows.length} rows for ${grouped.size} employees) -> auto-routed to Approval 1 & 2`,
       },
     });
-    const staffRows = grouped.get("EMP-002") ?? parsedRows.map((r, i) => ({
-      no: i + 1,
-      projectScope: r.projectScope,
-      roleProject: r.roleProject,
-      projectTitle: r.projectTitle,
-      projectDetail: r.projectDetail,
-      startDate: r.startDate,
-      finishDate: r.finishDate,
-      progressStatus: r.progressStatus,
-      finalScore: r.finalScore,
-    }));
-    localStorage.setItem(EXCEL_STORAGE_KEY, JSON.stringify({ rows: staffRows, fileName, submitted: true }));
+    localStorage.removeItem(EXCEL_STORAGE_KEY);
     window.dispatchEvent(new Event("appraisal-updated"));
   } catch {
     // ignore storage errors
@@ -223,27 +235,31 @@ export function projectApprovalRows(role: ReviewerRole): ApprovalRow[] {
   const entries = Object.entries(byEmp);
   if (entries.length === 0) return [];
 
-  const baseRows: ApprovalRow[] = entries.map(([normId, state], idx) => {
-    const numMatch = normId.match(/(\d+)$/)?.[1];
-    const eId = numMatch ? `E${numMatch.padStart(3, "0")}` : normId;
-    const empIdDisplay = numMatch ? `EMP${numMatch.padStart(3, "0")}` : normId;
-    const emp = EMPLOYEES.find((e) => e.id === eId || normalizeEmployeeId(e.id) === normId);
+  const managedUsers = loadManagedUsers();
+  const baseRows: ApprovalRow[] = [];
+  entries.forEach(([normId, state]) => {
+    const managedUser = managedUsers.find(
+      (u) =>
+        normalizeEmployeeId(u.employeeId).toLowerCase() === normId.toLowerCase() ||
+        u.employeeId.trim().toLowerCase() === normId.toLowerCase(),
+    );
+    if (!managedUser) return;
     const maxScore = state.rows.length ? Math.max(...state.rows.map((r) => r.finalScore)) : 0;
-    return {
-      no: `${role === "approver1" ? "CI-PRJ" : "HCI-PRJ"}-${String(idx + 1).padStart(2, "0")}`,
-      employeeId: empIdDisplay,
-      name: emp?.name ?? empIdDisplay,
-      position: emp?.position ?? "Staff",
-      department: emp?.division.replace(/^Divisi\s+/i, "") ?? "Operasional",
-      division: emp?.division ?? "Divisi Operasional",
-      companyUnit: emp?.unit ?? "PT RSUP (Industry)",
+    baseRows.push({
+      no: `${role === "approver1" ? "CI" : "HCI"}-LIVE-${normId}-Project`,
+      employeeId: managedUser.employeeId,
+      name: managedUser.name,
+      position: managedUser.position || "Staff",
+      department: managedUser.department || "Operasional",
+      division: managedUser.division || "Divisi Operasional",
+      companyUnit: managedUser.company || "PT RSUP (Industry)",
       type: "Project",
       submittedDate: state.submittedDate || "10/08/2026",
       approvalDate: "-",
       status: "Pending",
       period: "Mid-Year Checkin 2026",
       achievement: `${maxScore}%`,
-    };
+    });
   });
 
   registerWorkflowRows(baseRows, role);

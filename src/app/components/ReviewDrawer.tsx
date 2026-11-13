@@ -34,6 +34,7 @@ export interface ApprovalRow {
   submittedDate: string;
   approvalDate: string;
   status: string;
+  reviewerRoleForRow?: ReviewerRole;
   editRequestReason?: string;
   editRequestDate?: string;
   period?: string;
@@ -1297,11 +1298,11 @@ function AppraisalFormReview({
   activeForm: "A" | "B" | "C";
   setActiveForm: (f: "A" | "B" | "C") => void;
 }) {
-  const self = normalizeEmployeeId(row.employeeId) === "EMP-002" ? loadAppraisalSelf() : null;
-  const selfRatings = self ? Object.fromEntries(self.forms.flatMap((entry) => Object.entries(entry.ratings).map(([key, value]) => [key.replace("__", "-"), value]))) : SELF_RATINGS;
+  const self = loadAppraisalSelf(row.employeeId);
+  const selfRatings = self ? Object.fromEntries(self.forms.flatMap((entry) => Object.entries(entry.ratings).map(([key, value]) => [key.replace("__", "-"), value]))) : {};
   const alias = workflowAlias(row.no);
   const record = alias && loadWorkflowRecords().find((item) => item.key === alias.key);
-  const firstRatings = loadAssessment(row.no, "approver1")?.ratings ?? (record ? {} : APPROVER1_APPRAISAL);
+  const firstRatings = loadAssessment(row.no, "approver1")?.ratings ?? record?.assessments.approver1?.ratings ?? {};
   const form = FORMS.find((f) => f.id === activeForm)!;
   const showApp1 = reviewerRole === "approver2";
   const assessorColor = reviewerRole === "approver1" ? "indigo" : "teal";
@@ -1615,11 +1616,12 @@ function ManagerialSkillReview({
   indicatorItem: FormItem | MSItem | null;
   setIndicatorItem: (item: FormItem | MSItem | null) => void;
 }) {
-  const selfRatings = normalizeEmployeeId(row.employeeId) === "EMP-002" ? loadMSSelfRatings()?.ratings ?? APPROVER1_MS : APPROVER1_MS;
+  const selfRatings = loadMSSelfRatings(row.employeeId)?.ratings ?? {};
   const alias = workflowAlias(row.no);
   const record = alias && loadWorkflowRecords().find((item) => item.key === alias.key);
   const first = loadAssessment(row.no, "approver1");
-  const firstRatings: Record<number, number> = first ? Object.fromEntries(Object.entries(first.ratings).map(([key, value]) => [Number(key.replace("ms-", "")), value])) : record ? {} : APPROVER1_MS;
+  const rawFirst = first?.ratings ?? record?.assessments.approver1?.ratings ?? {};
+  const firstRatings: Record<number, number> = Object.fromEntries(Object.entries(rawFirst).map(([key, value]) => [Number(key.replace("ms-", "")), value]));
   const showApp1 = reviewerRole === "approver2";
   const assessorColor = reviewerRole === "approver1" ? "indigo" : "teal";
   const assessorLabel = reviewerRole === "approver1" ? "Evaluasi Approver 1" : "Evaluasi Approver 2";
@@ -1628,7 +1630,7 @@ function ManagerialSkillReview({
   const PERCENTAGE = 20;
   const msW = PERCENTAGE / 100;
   const selfTotal     = ((MS_ITEMS.reduce((s, i) => s + (selfRatings[i.no] ?? 0), 0) / msCount) * msW).toFixed(2);
-  const app1Total     = ((MS_ITEMS.reduce((s, i) => s + (APPROVER1_MS[i.no] ?? 0), 0) / msCount) * msW).toFixed(2);
+  const app1Total     = ((MS_ITEMS.reduce((s, i) => s + (firstRatings[i.no] ?? 0), 0) / msCount) * msW).toFixed(2);
   const msAssessorRated = MS_ITEMS.filter((i) => assessorRatings[`ms-${i.no}`] != null).length;
   const assessorTotal = msAssessorRated > 0
     ? ((MS_ITEMS.reduce((s, i) => s + (assessorRatings[`ms-${i.no}`] ?? 0), 0) / msCount) * msW).toFixed(2)

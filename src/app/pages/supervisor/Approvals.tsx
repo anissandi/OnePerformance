@@ -1,3 +1,4 @@
+// @refresh reset
 import { useState, useRef, useEffect } from "react";
 import { useLocation, useParams } from "react-router";
 import { ModuleRouteNav } from "../../components/ModuleRouteNav";
@@ -8,16 +9,14 @@ import { Input } from "../../components/ui/input";
 import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
 import { SettingApprovalDrawer } from "../../components/SettingApprovalDrawer";
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
-import { applyOverrides, saveOverride } from "../shared/approvalsStore";
+import { applyOverrides, resolveDynamicApprovalRowsForUser, saveOverride } from "../shared/approvalsStore";
 import { saveRCAApprovalDecision } from "../shared/rcaApprovalStore";
 import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
 import { projectApprovalRows } from "../../store/projectStore";
 import {
-  canUserAccessEmployeeData,
   getAllowedApprovalTypesForUser,
   getDirectApprovalRoleForTarget,
   getScopedFilterOptionsForUser,
-  shouldBypassCheckerForSubmission,
   useAuthStore,
 } from "../../store/authStore";
 
@@ -40,7 +39,7 @@ const SETTING_FILTER_OPTIONS = {
 };
 
 const PENDING_STATUSES  = new Set(["Pending", "Edit Request"]);
-const HISTORY_STATUSES  = new Set(["Assessed-Approver 1", "Approved", "Revision", "EditRequest-PendingA2", "EditRequest-Rejected"]);
+const HISTORY_STATUSES  = new Set(["Assessed-Approver 1", "Assessed-Approver 2", "Approved", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
 
 type MainTab = "checkin" | "setting";
 
@@ -69,48 +68,46 @@ export function SupervisorApprovals() {
     approvalType: moduleTypes,
   };
 
-  const filterByScopeAndSelfCheckerRule = (rows: ApprovalRow[]): ApprovalRow[] => {
-    return rows.filter((row) => {
-      if (!allowedTypeSet.has(row.type)) return false;
-      // Bagian XII Poin 2: HR Unit Checker tidak bisa melakukan Checker pada pengajuan KPI & SMART Goals miliknya sendiri
-      if (
-        (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) &&
-        (row.type === "KPI" || row.type === "SMART Goals") &&
-        (row.employeeId.toLowerCase().replace(/^emp-?0*/i, "") === activeUser.employeeId.toLowerCase().replace(/^e0*/i, "") ||
-          row.name.toLowerCase() === activeUser.name.toLowerCase()) &&
-        shouldBypassCheckerForSubmission(activeUser.employeeId)
-      ) {
-        return false;
-      }
-      // Bagian I Poin 4: Hanya melihat data karyawan di dalam wewenang approval-nya
-      return (
-        canUserAccessEmployeeData(activeUser, row.employeeId) ||
-        canUserAccessEmployeeData(activeUser, row.name) ||
-        row.companyUnit === activeUser.company
-      );
-    });
-  };
+  const buildCheckinRows = () =>
+    resolveDynamicApprovalRowsForUser(
+      [
+        ...applyOverrides(BASE_CHECKIN, "approver1", "measurement"),
+        ...projectApprovalRows("approver1"),
+        ...feedbackApprovalRows("approver1"),
+      ],
+      activeUser,
+      "measurement",
+      allowedTypeSet,
+    );
 
-  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => [...applyOverrides(BASE_CHECKIN, "approver1", "measurement"), ...projectApprovalRows("approver1"), ...feedbackApprovalRows("approver1")]);
+  const buildSettingRows = () =>
+    resolveDynamicApprovalRowsForUser(
+      applyOverrides(BASE_SETTING, "approver1", "setting"),
+      activeUser,
+      "setting",
+      allowedTypeSet,
+    );
+
+  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => buildCheckinRows());
+  const [settingData, setSettingData] = useState<ApprovalRow[]>(() => buildSettingRows());
+
   useEffect(() => {
     const refresh = () => {
-      setCheckinData([...applyOverrides(BASE_CHECKIN, "approver1", "measurement"), ...projectApprovalRows("approver1"), ...feedbackApprovalRows("approver1")]);
-      setSettingData(applyOverrides(BASE_SETTING, "approver1", "setting"));
+      setCheckinData(buildCheckinRows());
+      setSettingData(buildSettingRows());
     };
     refresh();
     window.addEventListener("feedback-updated", refresh);
     window.addEventListener("appraisal-updated", refresh);
+    window.addEventListener("pa-auth-updated", refresh);
     window.addEventListener("storage", refresh);
-    return () => { window.removeEventListener("feedback-updated", refresh); window.removeEventListener("appraisal-updated", refresh); window.removeEventListener("storage", refresh); };
-  }, [location.pathname]);
-  const [settingData, setSettingData] = useState<ApprovalRow[]>(() => {
-    const base = applyOverrides(BASE_SETTING, "approver1", "setting");
-    const live = loadSubmittedGoals();
-    if (live && live.length > 0) {
-      return base.map((r) => r.no === "ST-02" ? { ...r, submittedDate: "29/05/2026", status: (applyOverrides(BASE_SETTING, "approver1", "setting").find((x) => x.no === "ST-02")?.status ?? "Pending") } : r);
-    }
-    return base;
-  });
+    return () => {
+      window.removeEventListener("feedback-updated", refresh);
+      window.removeEventListener("appraisal-updated", refresh);
+      window.removeEventListener("pa-auth-updated", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [location.pathname, activeUser.employeeId]);
 
   useEffect(() => {
     const live = loadSubmittedGoals();
@@ -134,9 +131,9 @@ export function SupervisorApprovals() {
       </div>
       <ModuleRouteNav base={moduleBase} modules={moduleTypes} label="Modul approval" />
       {mainTab === "checkin" ? (
-        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(checkinData)} onDataChange={setCheckinData} filterOptions={dynamicCheckinFilterOpts} reviewerRole="approver1" isSetting={false} />
+        <ApprovalsTable key={`checkin-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={checkinData} onDataChange={setCheckinData} filterOptions={dynamicCheckinFilterOpts} reviewerRole="approver1" isSetting={false} />
       ) : (
-        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={filterByScopeAndSelfCheckerRule(settingData)} onDataChange={setSettingData} filterOptions={dynamicSettingFilterOpts} reviewerRole="approver1" isSetting={true} />
+        <ApprovalsTable key={`setting-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={settingData} onDataChange={setSettingData} filterOptions={dynamicSettingFilterOpts} reviewerRole="approver1" isSetting={true} />
       )}
     </div>
   );
@@ -222,7 +219,7 @@ function HistoryTag({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "Approved") {
+  if (status === "Approved" || status === "Assessed-Approver 2") {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200">
         <Check className="w-3 h-3" /> Assessed
@@ -358,32 +355,61 @@ function ApprovalsTable({
   };
 
   const handleApprove = (row: ApprovalRow) => {
-    const isAssessedType = (row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA") && reviewerRole === "approver1";
-    const newStatus = isAssessedType ? "Assessed-Approver 1" : "Approved";
+    const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
+    const isAssessedType = row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA";
+    const newStatus = isAssessedType
+      ? effectiveRole === "approver2"
+        ? "Assessed-Approver 2"
+        : "Assessed-Approver 1"
+      : "Approved";
     saveOverride(row.no, newStatus, TODAY);
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: TODAY } : r));
     if (row.type === "RCA") {
-      saveRCAApprovalDecision({ approverName: "Budi Santoso", approverRole: "Atasan Langsung", approverLevel: 1, status: newStatus, comment: "", reviewedDate: TODAY });
+      saveRCAApprovalDecision({
+        approverName: activeUser.name || "Approver",
+        approverRole: effectiveRole === "approver2" ? "Approver 2" : "Approver 1",
+        approverLevel: effectiveRole === "approver2" ? 2 : 1,
+        status: newStatus,
+        comment: "",
+        reviewedDate: TODAY,
+      });
     }
     setReviewRow(null);
     setActiveTab("Approval History");
   };
 
   const handleRevision = (row: ApprovalRow, note: string) => {
+    const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
     saveOverride(row.no, "Revision", "-");
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: "Revision", approvalDate: "-" } : r));
     if (row.type === "RCA") {
-      saveRCAApprovalDecision({ approverName: "Budi Santoso", approverRole: "Atasan Langsung", approverLevel: 1, status: "Revision", comment: note ?? "", reviewedDate: TODAY });
+      saveRCAApprovalDecision({
+        approverName: activeUser.name || "Approver",
+        approverRole: effectiveRole === "approver2" ? "Approver 2" : "Approver 1",
+        approverLevel: effectiveRole === "approver2" ? 2 : 1,
+        status: "Revision",
+        comment: note ?? "",
+        reviewedDate: TODAY,
+      });
     }
     setReviewRow(null);
     setActiveTab("Approval History");
   };
 
   const handleAssessed = (row: ApprovalRow) => {
-    saveOverride(row.no, "Assessed-Approver 1", TODAY);
-    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: "Assessed-Approver 1", approvalDate: TODAY } : r));
+    const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
+    const newStatus = effectiveRole === "approver2" ? "Assessed-Approver 2" : "Assessed-Approver 1";
+    saveOverride(row.no, newStatus, TODAY);
+    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: TODAY } : r));
     if (row.type === "RCA") {
-      saveRCAApprovalDecision({ approverName: "Budi Santoso", approverRole: "Atasan Langsung", approverLevel: 1, status: "Assessed-Approver 1", comment: "", reviewedDate: TODAY });
+      saveRCAApprovalDecision({
+        approverName: activeUser.name || "Approver",
+        approverRole: effectiveRole === "approver2" ? "Approver 2" : "Approver 1",
+        approverLevel: effectiveRole === "approver2" ? 2 : 1,
+        status: newStatus,
+        comment: "",
+        reviewedDate: TODAY,
+      });
     }
     setReviewRow(null);
     setActiveTab("Approval History");
@@ -479,6 +505,7 @@ function ApprovalsTable({
                     {/* Pending tab */}
                     {activeTab === "Pending" && row.status === "Pending" && (() => {
                       const rel = getDirectApprovalRoleForTarget(activeUser, row.employeeId);
+                      const effRole = row.reviewerRoleForRow ?? (rel === "ap2" ? "approver2" : "approver1");
                       const isDirectApprover = rel === "ap1" || rel === "ap2" || rel === "checker" || rel === "validator";
                       return isDirectApprover ? (
                         <button
@@ -487,7 +514,7 @@ function ApprovalsTable({
                           title="Review & Approve (Direct Approver)"
                         >
                           <FileCheck className="w-4 h-4" />
-                          <span>{rel === "ap1" ? "Approve (AP1)" : rel === "ap2" ? "Approve (AP2)" : rel === "checker" ? "Check (HR Unit)" : "Validate"}</span>
+                          <span>{effRole === "approver2" ? "Approve (AP2)" : rel === "checker" ? "Check (HR Unit)" : "Approve (AP1)"}</span>
                         </button>
                       ) : (
                         <button
@@ -548,7 +575,7 @@ function ApprovalsTable({
       </div>
 
       {reviewRow && !isSetting && (
-        <ReviewDrawer row={reviewRow} reviewerRole={reviewerRole} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={() => handleAssessed(reviewRow)} readOnly={reviewFromHistory} />
+        <ReviewDrawer row={reviewRow} reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={() => handleAssessed(reviewRow)} readOnly={reviewFromHistory} />
       )}
       {reviewRow && isSetting && (
         <SettingApprovalDrawer row={reviewRow} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} readOnly={reviewFromHistory} />

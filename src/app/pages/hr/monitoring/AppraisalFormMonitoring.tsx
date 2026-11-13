@@ -1,4 +1,6 @@
+// @refresh reset
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../../shared/appraisalFormStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 import { useAppraisalRevision } from "../../shared/useAppraisalRevision";
 import { useState } from "react";
 import { Search, ClipboardList, CheckCircle2, AlertCircle, Clock, Filter } from "lucide-react";
@@ -200,18 +202,7 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 
 export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   useAppraisalRevision();
-  const self = loadAppraisalSelf();
-  const approvers = loadAllAppraisalApprovers();
   const average = (values: number[]) => values.length ? values.reduce((sum, score) => sum + score, 0) / values.length : 0;
-  const data = AF_DATA.map((record): AFRecord => {
-    if (record.employeeId !== "E002" || !self) return record;
-    const first = approvers.find((entry) => entry.approverLevel === 1);
-    const second = approvers.find((entry) => entry.approverLevel === 2);
-    const selfAvgScore = average(self.forms.flatMap((form) => Object.values(form.ratings)));
-    const approver1Score = average(first?.forms.flatMap((form) => Object.values(form.ratings)) ?? []);
-    const approver2Score = average(second?.forms.flatMap((form) => Object.values(form.ratings)) ?? []);
-    return { ...record, selfAssessmentStatus: "Selesai", supervisorAssessmentStatus: first ? "Selesai" : "Belum Mulai", selfAvgScore, approver1Score, approver2Score, finalScore: second ? selfAvgScore * .3 + approver1Score * .4 + approver2Score * .3 : 0, competencies: [], lastUpdated: second?.reviewedDate ?? first?.reviewedDate ?? self.submittedAt };
-  });
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
 
@@ -219,20 +210,64 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
     lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
     "Appraisals Form",
   );
-  const allRows = filteredEmployees.map((emp) => ({
-    emp,
-    af: data.find((k) => k.employeeId === emp.id) ?? {
+  const workflows = loadWorkflowRecords();
+  const allRows = filteredEmployees.map((emp) => {
+    const normId = normalizeEmployeeId(emp.id);
+    const self = loadAppraisalSelf(emp.id);
+    const approvers = loadAllAppraisalApprovers(emp.id);
+    const wfRec = workflows.find(
+      (w) => w.year === "2026" && w.module === "Appraisal Form" && w.phase === "measurement" && w.employeeId === normId,
+    );
+    const first = approvers.find((entry) => entry.approverLevel === 1);
+    const second = approvers.find((entry) => entry.approverLevel === 2);
+    const selfValues = self ? self.forms.flatMap((form) => Object.values(form.ratings)) : [];
+    const a1Values = first
+      ? first.forms.flatMap((form) => Object.values(form.ratings))
+      : Object.values(wfRec?.assessments.approver1?.ratings ?? {});
+    const a2Values = second
+      ? second.forms.flatMap((form) => Object.values(form.ratings))
+      : Object.values(wfRec?.assessments.approver2?.ratings ?? {});
+    const selfAvgScore = average(selfValues);
+    const approver1Score = average(a1Values);
+    const approver2Score = average(a2Values);
+    const selfDoneStatus: AFRecord["selfAssessmentStatus"] =
+      self?.submitted || wfRec
+        ? "Selesai"
+        : selfValues.length > 0
+        ? "Dalam Proses"
+        : "Belum Mulai";
+    const supDoneStatus: AFRecord["supervisorAssessmentStatus"] =
+      a2Values.length > 0
+        ? "Selesai"
+        : a1Values.length > 0
+        ? "Dalam Proses"
+        : "Belum Mulai";
+    const finalScore =
+      a2Values.length > 0
+        ? approver2Score
+        : a1Values.length > 0
+        ? approver1Score
+        : 0;
+    const af: AFRecord = {
       employeeId: emp.id,
-      selfAssessmentStatus: "Belum Mulai" as const,
-      supervisorAssessmentStatus: "Belum Mulai" as const,
-      selfAvgScore: 0,
-      approver1Score: 0,
-      approver2Score: 0,
-      finalScore: 0,
+      selfAssessmentStatus: selfDoneStatus,
+      supervisorAssessmentStatus: supDoneStatus,
+      selfAvgScore,
+      approver1Score,
+      approver2Score,
+      finalScore,
       competencies: [],
-      lastUpdated: "—",
-    },
-  }));
+      lastUpdated:
+        second?.reviewedDate ??
+        wfRec?.decisions.approver2?.date ??
+        first?.reviewedDate ??
+        wfRec?.decisions.approver1?.date ??
+        self?.submittedAt ??
+        wfRec?.submittedDate ??
+        "—",
+    };
+    return { emp, af };
+  });
   const filteredAF = allRows.map((r) => r.af);
 
   const rows = allRows.filter(({ emp }) => {

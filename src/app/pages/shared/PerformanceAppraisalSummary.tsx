@@ -1,13 +1,14 @@
+// @refresh reset
 import { useState, useEffect, useCallback } from "react";
 import { Download, ChevronDown, ChevronUp, ChevronsUpDown, Eye, X, Star } from "lucide-react";
 import type { Employee, CalibrationTarget, ScoreGrade } from "../../data/mockEmployees";
 import {
-  mockEmployees, gradeColor, gradeFromScore, readCalibrationTargets, MI_EMPLOYEE_STORE_MAP,
+  getLiveTransactionalEmployees, gradeColor, gradeFromScore, readCalibrationTargets, MI_EMPLOYEE_STORE_MAP,
 } from "../../data/mockEmployees";
 import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
-import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser } from "../../store/authStore";
+import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole } from "../../store/authStore";
 
 type Role = "hr" | "supervisor";
 
@@ -410,6 +411,20 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   }, []);
   const [liveMI, setLiveMI] = useState<Record<string, ScoreGrade>>(buildMIScores);
   useEffect(() => subscribeScores(() => setLiveMI(buildMIScores())), [buildMIScores]);
+  const [, setRefreshTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setRefreshTick((t) => t + 1);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
 
   // Reload calibration targets from localStorage whenever the company-unit filter changes.
   // This picks up any submission made in /hr/calibration/setting without a page reload.
@@ -424,6 +439,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
 
   const activeUser = getActiveUser();
   const scopedMeta = getScopedFilterOptionsForUser(activeUser);
+  const isGlobalViewer = isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
   const isHrUnitScoped = activeUser.role === "HR Unit";
   const effectiveLockedUnits =
     lockedUnits ??
@@ -431,13 +447,14 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
       ? Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
       : undefined);
   const supervisorAllowedIds = new Set(
-    role === "supervisor" || isHrUnitScoped
+    !isGlobalViewer || role === "supervisor" || isHrUnitScoped
       ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
       : [],
   );
 
-  const filtered = mockEmployees.filter(emp => {
-    if (role === "supervisor" || isHrUnitScoped) {
+  const liveEmployees = getLiveTransactionalEmployees();
+  const filtered = liveEmployees.filter(emp => {
+    if (!isGlobalViewer || role === "supervisor" || isHrUnitScoped) {
       if (!supervisorAllowedIds.has(emp.id.toLowerCase())) return false;
     }
     if (effectiveLockedUnits && !effectiveLockedUnits.includes(emp.companyUnit)) return false;

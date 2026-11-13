@@ -456,16 +456,18 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
       return sameDiv && allowedDepartments.has(normOrgName(target.department));
     }
 
-    // 5. Level Bagian / Seksi: melihat semua posisi dalam Bagiannya
-    if (level === "bagian" || level === "seksi") {
+    // 5. Level Bagian: melihat semua posisi dalam Bagiannya (wajib cocok Bagian, tidak bocor ke satu Departemen)
+    if (level === "bagian") {
       const sameDiv = !user.division || allowedDivisions.has(normOrgName(target.division));
       const sameDept = !user.department || allowedDepartments.has(normOrgName(target.department));
       if (allowedBagians.size > 0 && target.bagian) {
         return sameDiv && sameDept && allowedBagians.has(normOrgName(target.bagian));
       }
-      return sameDiv && sameDept;
+      return false;
     }
 
+    // Level di bawah Bagian (seksi seperti KASHIFT / operational):
+    // Hanya melihat dirinya sendiri dan karyawan yang berada di dalam rantai Reg No AP1 / Reg No AP2-nya (transitiveSubIds di atas).
     return false;
   });
 }
@@ -521,6 +523,71 @@ export function getDirectApprovalRoleForTarget(
     return "checker";
   }
   return "view_only";
+}
+
+/**
+ * Menentukan peran reviewer ("approver1" | "approver2" | null) dari user yang sedang login
+ * terhadap suatu transaksi pengajuan karyawan berdasarkan Reg No AP1 dan Reg No AP2.
+ */
+export function resolveReviewerRoleForTarget(
+  viewer: ManagedUser,
+  targetEmployeeIdOrName: string,
+  isStep1Completed = false,
+  moduleType = "",
+  allUsers = loadManagedUsers(),
+): "approver1" | "approver2" | null {
+  const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
+  const viewerClean = viewer.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+  // Karyawan tidak boleh meng-approve pengajuan miliknya sendiri (kecuali Admin/HR ICF saat simulasi/override)
+  const isSelf =
+    viewer.employeeId.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+    viewer.name.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+    (q && viewerClean === q);
+
+  const target = allUsers.find((u) => {
+    const uNum = u.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+    return (
+      u.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      u.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      (q && uNum === q)
+    );
+  });
+
+  if (target) {
+    const reg = (viewer.regNo ?? "").trim().toLowerCase();
+    const emp = viewer.employeeId.trim().toLowerCase();
+    const nm = viewer.name.trim().toLowerCase();
+    const ap1 = (target.regNoAp1 ?? "").trim().toLowerCase();
+    const ap2 = (target.regNoAp2 ?? "").trim().toLowerCase();
+
+    const isAp1 = Boolean((reg && ap1 === reg) || (emp && ap1 === emp) || (nm && ap1 === nm));
+    const isAp2 = Boolean((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm));
+
+    // Jika pejabat yang sama menjadi AP1 sekaligus AP2, sesuaikan dengan tahap yang sedang berjalan
+    if (isAp1 && isAp2) {
+      return isStep1Completed ? "approver2" : "approver1";
+    }
+    if (isAp1) return "approver1";
+    if (isAp2) return "approver2";
+  }
+
+  // Administrator / HR ICF dapat memproses approval pada tahap yang sedang aktif
+  if (isAdminOrHrIcfRole(viewer.role) || viewer.isHrIcfValidator) {
+    return isStep1Completed ? "approver2" : "approver1";
+  }
+
+  // HR Unit Checker hanya untuk modul KPI & SMART Goals di unit usahanya (dan bukan milik dirinya sendiri)
+  if (
+    !isSelf &&
+    (viewer.role === "HR Unit" || viewer.isHrUnitChecker) &&
+    target &&
+    normOrgName(viewer.company) === normOrgName(target.company) &&
+    (moduleType === "KPI" || moduleType === "SMART Goals")
+  ) {
+    return "approver1";
+  }
+
+  return null;
 }
 
 export interface ScopedHierarchyFilterOptions {

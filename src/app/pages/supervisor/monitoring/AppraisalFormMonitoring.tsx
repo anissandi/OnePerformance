@@ -1,6 +1,10 @@
+// @refresh reset
 import { useState } from "react";
 import { Search, ClipboardList, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
+import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../../shared/appraisalFormStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { useAppraisalRevision } from "../../shared/useAppraisalRevision";
 
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
@@ -64,28 +68,76 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 }
 
 export function SupervisorMonitoringAppraisalForm() {
+  useAppraisalRevision();
   const [search, setSearch] = useState("");
+  const average = (values: number[]) => values.length ? values.reduce((sum, score) => sum + score, 0) / values.length : 0;
 
   const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "Appraisals Form");
-  const rows = allowedTeamEmployees.map((emp) => ({
-    emp,
-    af: AF_DATA.find((k) => k.employeeId === emp.id) ?? {
+  const workflows = loadWorkflowRecords();
+  const allRows = allowedTeamEmployees.map((emp) => {
+    const normId = normalizeEmployeeId(emp.id);
+    const self = loadAppraisalSelf(emp.id);
+    const approvers = loadAllAppraisalApprovers(emp.id);
+    const wfRec = workflows.find(
+      (w) => w.year === "2026" && w.module === "Appraisal Form" && w.phase === "measurement" && w.employeeId === normId,
+    );
+    const first = approvers.find((entry) => entry.approverLevel === 1);
+    const second = approvers.find((entry) => entry.approverLevel === 2);
+    const selfValues = self ? self.forms.flatMap((form) => Object.values(form.ratings)) : [];
+    const a1Values = first
+      ? first.forms.flatMap((form) => Object.values(form.ratings))
+      : Object.values(wfRec?.assessments.approver1?.ratings ?? {});
+    const a2Values = second
+      ? second.forms.flatMap((form) => Object.values(form.ratings))
+      : Object.values(wfRec?.assessments.approver2?.ratings ?? {});
+    const selfAvgScore = average(selfValues);
+    const approver1Score = average(a1Values);
+    const approver2Score = average(a2Values);
+    const selfDoneStatus: AFRecord["selfAssessmentStatus"] =
+      self?.submitted || wfRec
+        ? "Selesai"
+        : selfValues.length > 0
+        ? "Dalam Proses"
+        : "Belum Mulai";
+    const supDoneStatus: AFRecord["supervisorAssessmentStatus"] =
+      a2Values.length > 0
+        ? "Selesai"
+        : a1Values.length > 0
+        ? "Dalam Proses"
+        : "Belum Mulai";
+    const finalScore =
+      a2Values.length > 0
+        ? approver2Score
+        : a1Values.length > 0
+        ? approver1Score
+        : 0;
+    const af: AFRecord = {
       employeeId: emp.id,
-      selfAssessmentStatus: "Belum Mulai" as const,
-      supervisorAssessmentStatus: "Belum Mulai" as const,
-      selfAvgScore: 0,
-      approver1Score: 0,
-      approver2Score: 0,
-      finalScore: 0,
+      selfAssessmentStatus: selfDoneStatus,
+      supervisorAssessmentStatus: supDoneStatus,
+      selfAvgScore,
+      approver1Score,
+      approver2Score,
+      finalScore,
       competencies: [],
-      lastUpdated: "—",
-    },
-  })).filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
+      lastUpdated:
+        second?.reviewedDate ??
+        wfRec?.decisions.approver2?.date ??
+        first?.reviewedDate ??
+        wfRec?.decisions.approver1?.date ??
+        self?.submittedAt ??
+        wfRec?.submittedDate ??
+        "—",
+    };
+    return { emp, af };
+  });
+  const rows = allRows.filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
+  const filteredAF = allRows.map((r) => r.af);
 
-  const selfDone  = AF_DATA.filter((k) => k.selfAssessmentStatus === "Selesai").length;
-  const supDone   = AF_DATA.filter((k) => k.supervisorAssessmentStatus === "Selesai").length;
-  const bothDone  = AF_DATA.filter((k) => k.selfAssessmentStatus === "Selesai" && k.supervisorAssessmentStatus === "Selesai").length;
-  const validScores = AF_DATA.filter((k) => k.finalScore > 0);
+  const selfDone  = filteredAF.filter((k) => k.selfAssessmentStatus === "Selesai").length;
+  const supDone   = filteredAF.filter((k) => k.supervisorAssessmentStatus === "Selesai").length;
+  const bothDone  = filteredAF.filter((k) => k.selfAssessmentStatus === "Selesai" && k.supervisorAssessmentStatus === "Selesai").length;
+  const validScores = filteredAF.filter((k) => k.finalScore > 0);
   const avgFinal  = validScores.length ? (validScores.reduce((s, k) => s + k.finalScore, 0) / validScores.length).toFixed(2) : "—";
 
   return (

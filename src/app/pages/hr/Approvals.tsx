@@ -1,3 +1,4 @@
+// @refresh reset
 import { useState, useRef, useEffect } from "react";
 import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
 import { projectApprovalRows } from "../../store/projectStore";
@@ -10,12 +11,10 @@ import { Input } from "../../components/ui/input";
 import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
 import { SettingApprovalDrawer } from "../../components/SettingApprovalDrawer";
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
-import { applyOverrides, saveOverride } from "../shared/approvalsStore";
+import { applyOverrides, resolveDynamicApprovalRowsForUser, saveOverride } from "../shared/approvalsStore";
 import {
-  canUserAccessEmployeeData,
   getAllowedApprovalTypesForUser,
   getScopedFilterOptionsForUser,
-  shouldBypassCheckerForSubmission,
   useAuthStore,
 } from "../../store/authStore";
 
@@ -64,26 +63,48 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const baseCheckin = effectiveLockedUnits ? BASE_CHECKIN.filter(r => effectiveLockedUnits.includes(r.companyUnit)) : BASE_CHECKIN;
   const baseSetting = effectiveLockedUnits ? BASE_SETTING.filter(r => effectiveLockedUnits.includes(r.companyUnit)) : BASE_SETTING;
 
-  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => [...applyOverrides(baseCheckin, "approver2", "measurement"), ...projectApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit)), ...feedbackApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit))]);
+  const buildCheckinRows = () =>
+    resolveDynamicApprovalRowsForUser(
+      [
+        ...applyOverrides(baseCheckin, "approver2", "measurement"),
+        ...projectApprovalRows("approver2"),
+        ...feedbackApprovalRows("approver2"),
+      ],
+      activeUser,
+      "measurement",
+      allowedTypeSet,
+      effectiveLockedUnits,
+    );
+
+  const buildSettingRows = () =>
+    resolveDynamicApprovalRowsForUser(
+      applyOverrides(baseSetting, "approver2", "setting"),
+      activeUser,
+      "setting",
+      allowedTypeSet,
+      effectiveLockedUnits,
+    );
+
+  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => buildCheckinRows());
+  const [settingData, setSettingData] = useState<ApprovalRow[]>(() => buildSettingRows());
+
   useEffect(() => {
     const refresh = () => {
-      setCheckinData([...applyOverrides(baseCheckin, "approver2", "measurement"), ...projectApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit)), ...feedbackApprovalRows("approver2").filter((row) => !effectiveLockedUnits || effectiveLockedUnits.includes(row.companyUnit))]);
-      setSettingData(applyOverrides(baseSetting, "approver2", "setting"));
+      setCheckinData(buildCheckinRows());
+      setSettingData(buildSettingRows());
     };
     refresh();
     window.addEventListener("feedback-updated", refresh);
     window.addEventListener("appraisal-updated", refresh);
+    window.addEventListener("pa-auth-updated", refresh);
     window.addEventListener("storage", refresh);
-    return () => { window.removeEventListener("feedback-updated", refresh); window.removeEventListener("appraisal-updated", refresh); window.removeEventListener("storage", refresh); };
-  }, [location.pathname, effectiveLockedUnits]);
-  const [settingData, setSettingData] = useState<ApprovalRow[]>(() => {
-    const base = applyOverrides(baseSetting, "approver2", "setting");
-    const live = loadSubmittedGoals();
-    if (live && live.length > 0) {
-      return base.map((r) => r.no === "HST-04" ? { ...r, submittedDate: "29/05/2026", status: (applyOverrides(baseSetting, "approver2", "setting").find((x) => x.no === "HST-04")?.status ?? "Pending") } : r);
-    }
-    return base;
-  });
+    return () => {
+      window.removeEventListener("feedback-updated", refresh);
+      window.removeEventListener("appraisal-updated", refresh);
+      window.removeEventListener("pa-auth-updated", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [location.pathname, effectiveLockedUnits, activeUser.employeeId]);
 
   const checkinFilterOpts = {
     ...filterOptionsCheckin,
@@ -94,32 +115,6 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
     ...filterOptionsSetting,
     companyUnit: effectiveLockedUnits ?? filterOptionsSetting.companyUnit,
     approvalType: moduleTypes,
-  };
-
-  const filterRowsForActiveUser = (rows: ApprovalRow[]): ApprovalRow[] => {
-    return rows.filter((row) => {
-      if (!allowedTypeSet.has(row.type)) return false;
-      if (effectiveLockedUnits && !effectiveLockedUnits.includes(row.companyUnit)) return false;
-      if (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) {
-        if (
-          (row.type === "KPI" || row.type === "SMART Goals") &&
-          (row.employeeId.toLowerCase().replace(/^emp-?0*/i, "") === activeUser.employeeId.toLowerCase().replace(/^e0*/i, "") ||
-            row.name.toLowerCase() === activeUser.name.toLowerCase()) &&
-          shouldBypassCheckerForSubmission(activeUser.employeeId)
-        ) {
-          return false;
-        }
-        if (
-          activeUser.role === "HR Unit" &&
-          !canUserAccessEmployeeData(activeUser, row.employeeId) &&
-          !canUserAccessEmployeeData(activeUser, row.name) &&
-          row.companyUnit !== activeUser.company
-        ) {
-          return false;
-        }
-      }
-      return true;
-    });
   };
 
   useEffect(() => {
@@ -146,9 +141,9 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
       </div>
       <ModuleRouteNav base={moduleBase} modules={moduleTypes} label="Modul approval" />
       {mainTab === "checkin" ? (
-        <ApprovalsTable key={`checkin-${routeType ?? "all"}`} initialType={routeType} data={filterRowsForActiveUser(checkinData)} onDataChange={setCheckinData} filterOptions={checkinFilterOpts} reviewerRole="approver2" isSetting={false} />
+        <ApprovalsTable key={`checkin-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={checkinData} onDataChange={setCheckinData} filterOptions={checkinFilterOpts} reviewerRole="approver2" isSetting={false} />
       ) : (
-        <ApprovalsTable key={`setting-${routeType ?? "all"}`} initialType={routeType} data={filterRowsForActiveUser(settingData)} onDataChange={setSettingData} filterOptions={settingFilterOpts} reviewerRole="approver2" isSetting={true} />
+        <ApprovalsTable key={`setting-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={settingData} onDataChange={setSettingData} filterOptions={settingFilterOpts} reviewerRole="approver2" isSetting={true} />
       )}
     </div>
   );
@@ -364,8 +359,13 @@ function ApprovalsTable({
   };
 
   const handleApprove = (row: ApprovalRow) => {
-    const isAssessedType = (row.type === "KPI" || row.type === "SMART Goals") && reviewerRole === "approver2";
-    const newStatus = isAssessedType ? "Assessed-Approver 2" : "Approved";
+    const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
+    const isAssessedType = row.type === "KPI" || row.type === "SMART Goals";
+    const newStatus = isAssessedType
+      ? effectiveRole === "approver2"
+        ? "Assessed-Approver 2"
+        : "Assessed-Approver 1"
+      : "Approved";
     saveOverride(row.no, newStatus, TODAY);
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: TODAY } : r));
     setReviewRow(null);
@@ -380,7 +380,8 @@ function ApprovalsTable({
   };
 
   const handleAssessed = (row: ApprovalRow) => {
-    const newStatus = reviewerRole === "approver2" ? "Assessed-Approver 2" : "Assessed-Approver 1";
+    const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
+    const newStatus = effectiveRole === "approver2" ? "Assessed-Approver 2" : "Assessed-Approver 1";
     saveOverride(row.no, newStatus, TODAY);
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: TODAY } : r));
     setReviewRow(null);
@@ -526,7 +527,7 @@ function ApprovalsTable({
       </div>
 
       {reviewRow && !isSetting && (
-        <ReviewDrawer row={reviewRow} reviewerRole={reviewerRole} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={() => handleAssessed(reviewRow)} readOnly={reviewFromHistory} />
+        <ReviewDrawer row={reviewRow} reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={() => handleAssessed(reviewRow)} readOnly={reviewFromHistory} />
       )}
       {reviewRow && isSetting && (
         <SettingApprovalDrawer row={reviewRow} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} readOnly={reviewFromHistory} />
