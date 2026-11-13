@@ -487,6 +487,8 @@ export function AppraisalForm() {
     const saved: SavedForms = {};
     existing?.forms.forEach((f) => {
       Object.entries(f.ratings).forEach(([k, v]) => {
+        const dashKey = k.replace("__", "-");
+        merged[dashKey] = v;
         merged[k] = v;
       });
       if (Object.keys(f.ratings).length > 0) {
@@ -495,25 +497,30 @@ export function AppraisalForm() {
     });
 
     const extractApproverRatings = (level: 1 | 2): Record<string, number> => {
-      const fromWf = level === 1 ? wfRec?.assessments.approver1?.ratings : wfRec?.assessments.approver2?.ratings;
-      if (fromWf && Object.keys(fromWf).length > 0) {
-        const normMap: Record<string, number> = {};
-        Object.entries(fromWf).forEach(([k, v]) => {
-          normMap[k.replace("-", "__")] = Number(v);
-        });
-        return normMap;
-      }
+      const normMap: Record<string, number> = {};
       const fromEntry = approverEntries.find((e) => e.approverLevel === level);
       if (fromEntry) {
-        const normMap: Record<string, number> = {};
         fromEntry.forms.forEach((f) => {
           Object.entries(f.ratings).forEach(([k, v]) => {
-            normMap[k.replace("-", "__")] = Number(v);
+            const num = Number(v);
+            const dashKey = k.replace("__", "-");
+            const underKey = k.replace("-", "__");
+            normMap[dashKey] = num;
+            normMap[underKey] = num;
           });
         });
-        return normMap;
       }
-      return {};
+      const fromWf = level === 1 ? wfRec?.assessments.approver1?.ratings : wfRec?.assessments.approver2?.ratings;
+      if (fromWf && Object.keys(fromWf).length > 0) {
+        Object.entries(fromWf).forEach(([k, v]) => {
+          const num = Number(v);
+          const dashKey = k.replace("__", "-");
+          const underKey = k.replace("-", "__");
+          normMap[dashKey] = num;
+          normMap[underKey] = num;
+        });
+      }
+      return normMap;
     };
 
     let approvalStatusLabel = "Draft (Belum Disubmit)";
@@ -595,7 +602,7 @@ export function AppraisalForm() {
 
   const computeFormAvg = (ratingMap: Record<string, number>, fDef: FormDef): number | null => {
     const vals = fDef.items
-      .map((it) => ratingMap[key(fDef.id, it.no)])
+      .map((it) => ratingMap[`${fDef.id}-${it.no}`] ?? ratingMap[`${fDef.id}__${it.no}`])
       .filter((v): v is number => typeof v === "number" && v > 0);
     if (vals.length === 0) return null;
     return vals.reduce((s, n) => s + n, 0) / vals.length;
@@ -624,11 +631,15 @@ export function AppraisalForm() {
     formsList.map((f) => {
       const fRatings: Record<string, number> = {};
       f.items.forEach((item) => {
-        const v = selfRatings[key(f.id, item.no)];
-        if (v != null) fRatings[key(f.id, item.no)] = v as number;
+        const v = selfRatings[`${f.id}-${item.no}`] ?? selfRatings[`${f.id}__${item.no}`];
+        if (v != null) {
+          fRatings[`${f.id}-${item.no}`] = v as number;
+          fRatings[`${f.id}__${item.no}`] = v as number;
+        }
       });
       const saved = targetSavedForms[f.id];
-      return { formId: f.id, ratings: fRatings, avgScore: saved?.total ?? 0 };
+      const computedAvg = computeFormAvg(fRatings, f);
+      return { formId: f.id, ratings: fRatings, avgScore: saved?.total ?? computedAvg ?? 0 };
     });
 
   const handleConfirmSubmit = () => {
@@ -775,6 +786,16 @@ export function AppraisalForm() {
                 <p className="text-[10px] text-gray-500">
                   {form.tab}: <strong>{avgScore > 0 ? avgScore.toFixed(2) : "—"}</strong> / 5.00
                 </p>
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[10px] text-indigo-700/80">
+                  {formsList.map((fDef) => {
+                    const fa = computeFormAvg(selfRatings as Record<string, number>, fDef);
+                    return (
+                      <span key={fDef.id}>
+                        {fDef.tab}: <strong>{fa !== null ? fa.toFixed(2) : "—"}</strong> / 5.00
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
               <div className="text-right">
                 <span className="text-lg font-extrabold text-[#1A284F]">
@@ -794,6 +815,16 @@ export function AppraisalForm() {
                 <p className="text-[10px] text-gray-500">
                   {form.tab}: <strong>{activeFormA1Avg !== null ? activeFormA1Avg.toFixed(2) : "—"}</strong> / 5.00
                 </p>
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[10px] text-sky-700/80">
+                  {formsList.map((fDef) => {
+                    const fa = computeFormAvg(approver1Ratings, fDef);
+                    return (
+                      <span key={fDef.id}>
+                        {fDef.tab}: <strong>{fa !== null ? fa.toFixed(2) : "—"}</strong> / 5.00
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
               <div className="text-right">
                 <span className="text-lg font-extrabold text-sky-800">
@@ -813,6 +844,16 @@ export function AppraisalForm() {
                 <p className="text-[10px] text-gray-500">
                   {form.tab}: <strong>{activeFormA2Avg !== null ? activeFormA2Avg.toFixed(2) : "—"}</strong> / 5.00
                 </p>
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[10px] text-emerald-700/80">
+                  {formsList.map((fDef) => {
+                    const fa = computeFormAvg(approver2Ratings, fDef);
+                    return (
+                      <span key={fDef.id}>
+                        {fDef.tab}: <strong>{fa !== null ? fa.toFixed(2) : "—"}</strong> / 5.00
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
               <div className="text-right">
                 <span className="text-lg font-extrabold text-emerald-800">

@@ -45,8 +45,8 @@ const TODAY = "08/06/2026";
 const PAGE_SIZE = 8;
 type MainTab = "checkin" | "setting";
 
-const PENDING_STATUSES = new Set(["Pending", "Edit Request", "Awaiting Approver 1"]);
-const HISTORY_STATUSES = new Set(["Approved", "Validated", "Assessed-Approver 1", "Assessed-Approver 2", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
+const PENDING_STATUSES = new Set(["Pending", "Edit Request"]);
+const HISTORY_STATUSES = new Set(["Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Checked", "Approved", "Validated", "Assessed-Approver 1", "Assessed-Approver 2", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
 
 export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const location = useLocation();
@@ -212,14 +212,28 @@ function EditRequestReviewModal({ row, onAccept, onReject, onClose }: {
 // ── History status tag ─────────────────────────────────────────────────────────
 
 function HistoryTag({ status, type }: { status: string; type?: string }) {
-  if (status === "Assessed-Approver 1") {
+  if (status === "Pending-Approver 1" || status === "Checked") {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+        <Clock className="w-3 h-3" /> Pending-Approver 1
+      </span>
+    );
+  }
+  if (status === "Pending-Approver 2" || status === "Assessed-Approver 1") {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
         <Clock className="w-3 h-3" /> Pending-Approver 2
       </span>
     );
   }
-  if (status === "Validated" || ((type === "KPI" || type === "SMART Goals") && (status === "Approved" || status === "Assessed-Approver 2"))) {
+  if (status === "Pending-Validate") {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+        <Clock className="w-3 h-3" /> Pending-Validate (HR ICF)
+      </span>
+    );
+  }
+  if (status === "Validated") {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300">
         <CheckCircle2 className="w-3 h-3" /> Validated
@@ -368,14 +382,29 @@ function ApprovalsTable({
 
   const handleApprove = (row: ApprovalRow) => {
     const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
+    const stage = row.workflowStageForRow ?? effectiveRole;
     const isAssessedType = row.type === "KPI" || row.type === "SMART Goals";
-    const newStatus = isAssessedType
-      ? effectiveRole === "approver2"
-        ? "Validated"
-        : "Assessed-Approver 1"
-      : "Approved";
-    saveOverride(row.no, newStatus, TODAY);
-    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: TODAY } : r));
+    let decisionStatus: string;
+    let uiHistoryStatus: string;
+    if (isAssessedType && stage === "checker") {
+      decisionStatus = "Checked";
+      uiHistoryStatus = "Pending-Approver 1";
+    } else if (isAssessedType && stage === "approver1") {
+      decisionStatus = "Assessed-Approver 1";
+      uiHistoryStatus = "Pending-Approver 2";
+    } else if (isAssessedType && (stage === "validator" || stage === "approver2")) {
+      decisionStatus = "Validated";
+      uiHistoryStatus = "Validated";
+    } else {
+      decisionStatus = isAssessedType
+        ? effectiveRole === "approver2"
+          ? "Validated"
+          : "Assessed-Approver 1"
+        : "Approved";
+      uiHistoryStatus = decisionStatus;
+    }
+    saveOverride(row.no, decisionStatus, TODAY);
+    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: uiHistoryStatus, approvalDate: TODAY } : r));
     setReviewRow(null);
     setActiveTab("Approval History");
   };

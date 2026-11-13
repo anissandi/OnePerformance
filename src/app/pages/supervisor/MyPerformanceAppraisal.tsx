@@ -23,7 +23,8 @@ import { loadMSSelfRatings, loadAllMSApprovers } from "../shared/msStore";
 import { useProjectStore, SCOPE_BOBOT } from "../../store/projectStore";
 import type { CheckInStatus as ProjectCheckInStatus } from "../../store/projectStore";
 import { SUPERVISOR_PROFILE } from "../../store/profileStore";
-import { resolveEffectiveUserGrouping, useAuthStore } from "../../store/authStore";
+import { getActiveUser, resolveEffectiveUserGrouping, useAuthStore } from "../../store/authStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadUnitScoreWeights, type ScoreWeightColumn } from "../shared/scoringWeightStore";
 import {
@@ -872,9 +873,34 @@ function ScoreDot({ value }: { value: number | null }) {
 }
 
 function AppraisalFormTab() {
-  const selfData  = React.useMemo(() => loadAppraisalSelf(), []);
-  const approvers = React.useMemo(() => loadAllAppraisalApprovers(), []);
-  const [expandedForm, setExpandedForm] = useState<string | null>(null);
+  const [afTick, setAfTick] = useState(0);
+  useEffect(() => {
+    const onSync = () => setAfTick((v) => v + 1);
+    window.addEventListener("appraisal-updated", onSync);
+    window.addEventListener("pa-auth-updated", onSync);
+    window.addEventListener("pa-db-hydrated", onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      window.removeEventListener("appraisal-updated", onSync);
+      window.removeEventListener("pa-auth-updated", onSync);
+      window.removeEventListener("pa-db-hydrated", onSync);
+      window.removeEventListener("storage", onSync);
+    };
+  }, []);
+  const selfData  = React.useMemo(() => loadAppraisalSelf(), [afTick]);
+  const approvers = React.useMemo(() => loadAllAppraisalApprovers(), [afTick]);
+  const wfRec = React.useMemo(() => {
+    const u = getActiveUser();
+    const normId = normalizeEmployeeId(u.employeeId);
+    return loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "Appraisal Form" &&
+        r.phase === "measurement" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
+    );
+  }, [afTick]);
+  const [expandedForm, setExpandedForm] = useState<string | null>("A");
 
   const selfFormMap = React.useMemo(() => {
     const m: Record<string, { formId: string; ratings: Record<string, number>; avgScore: number }> = {};
@@ -888,23 +914,67 @@ function AppraisalFormTab() {
   const appr1FormMap = React.useMemo(() => {
     const m: Record<string, { formId: string; ratings: Record<string, number>; avgScore: number }> = {};
     approver1?.forms.forEach((f) => { m[f.formId] = f; });
+    const wfR = wfRec?.assessments.approver1?.ratings;
+    if (wfR && Object.keys(wfR).length > 0) {
+      FORMS.forEach((fDef) => {
+        const rMap: Record<string, number> = { ...(m[fDef.id]?.ratings ?? {}) };
+        const vals: number[] = [];
+        fDef.items.forEach((it) => {
+          const v = wfR[`${fDef.id}-${it.no}`] ?? wfR[`${fDef.id}__${it.no}`];
+          if (typeof v === "number" && v > 0) {
+            rMap[`${fDef.id}__${it.no}`] = v;
+            rMap[`${fDef.id}-${it.no}`] = v;
+            vals.push(v);
+          }
+        });
+        if (vals.length > 0) {
+          m[fDef.id] = {
+            formId: fDef.id,
+            ratings: rMap,
+            avgScore: vals.reduce((s, n) => s + n, 0) / vals.length,
+          };
+        }
+      });
+    }
     return m;
-  }, [approver1]);
+  }, [approver1, wfRec]);
 
   const appr2FormMap = React.useMemo(() => {
     const m: Record<string, { formId: string; ratings: Record<string, number>; avgScore: number }> = {};
     approver2?.forms.forEach((f) => { m[f.formId] = f; });
+    const wfR = wfRec?.assessments.approver2?.ratings;
+    if (wfR && Object.keys(wfR).length > 0) {
+      FORMS.forEach((fDef) => {
+        const rMap: Record<string, number> = { ...(m[fDef.id]?.ratings ?? {}) };
+        const vals: number[] = [];
+        fDef.items.forEach((it) => {
+          const v = wfR[`${fDef.id}-${it.no}`] ?? wfR[`${fDef.id}__${it.no}`];
+          if (typeof v === "number" && v > 0) {
+            rMap[`${fDef.id}__${it.no}`] = v;
+            rMap[`${fDef.id}-${it.no}`] = v;
+            vals.push(v);
+          }
+        });
+        if (vals.length > 0) {
+          m[fDef.id] = {
+            formId: fDef.id,
+            ratings: rMap,
+            avgScore: vals.reduce((s, n) => s + n, 0) / vals.length,
+          };
+        }
+      });
+    }
     return m;
-  }, [approver2]);
+  }, [approver2, wfRec]);
 
-  const selfWeighted = selfData?.forms && selfData.forms.some((f) => f.avgScore > 0)
-    ? FORMS.reduce((s, f) => { const e = selfData.forms.find((sf) => sf.formId === f.id); return s + (e?.avgScore ?? 0) * (f.percentage / 100); }, 0)
+  const selfWeighted = Object.values(selfFormMap).some((f) => f.avgScore > 0)
+    ? FORMS.reduce((s, f) => s + (selfFormMap[f.id]?.avgScore ?? 0) * (f.percentage / 100), 0)
     : null;
-  const appr1Weighted = approver1 && approver1.forms.some((f) => f.avgScore > 0)
-    ? FORMS.reduce((s, f) => { const e = approver1.forms.find((af) => af.formId === f.id); return s + (e?.avgScore ?? 0) * (f.percentage / 100); }, 0)
+  const appr1Weighted = Object.values(appr1FormMap).some((f) => f.avgScore > 0)
+    ? FORMS.reduce((s, f) => s + (appr1FormMap[f.id]?.avgScore ?? 0) * (f.percentage / 100), 0)
     : null;
-  const appr2Weighted = approver2 && approver2.forms.some((f) => f.avgScore > 0)
-    ? FORMS.reduce((s, f) => { const e = approver2.forms.find((af) => af.formId === f.id); return s + (e?.avgScore ?? 0) * (f.percentage / 100); }, 0)
+  const appr2Weighted = Object.values(appr2FormMap).some((f) => f.avgScore > 0)
+    ? FORMS.reduce((s, f) => s + (appr2FormMap[f.id]?.avgScore ?? 0) * (f.percentage / 100), 0)
     : null;
 
   return (
@@ -958,9 +1028,10 @@ function AppraisalFormTab() {
                 <tbody className="divide-y divide-gray-50">
                   {f.items.map((item) => {
                     const rKey      = `${f.id}__${item.no}`;
-                    const selfScore  = selfEntry?.ratings?.[rKey] ?? null;
-                    const appr1Score = appr1Entry?.ratings?.[rKey] ?? null;
-                    const appr2Score = appr2Entry?.ratings?.[rKey] ?? null;
+                    const rKeyDash  = `${f.id}-${item.no}`;
+                    const selfScore  = selfEntry?.ratings?.[rKey] ?? selfEntry?.ratings?.[rKeyDash] ?? null;
+                    const appr1Score = appr1Entry?.ratings?.[rKey] ?? appr1Entry?.ratings?.[rKeyDash] ?? null;
+                    const appr2Score = appr2Entry?.ratings?.[rKey] ?? appr2Entry?.ratings?.[rKeyDash] ?? null;
                     return (
                       <tr key={item.no} className="hover:bg-gray-50/40 transition-colors">
                         <td className="py-2.5 px-3 text-gray-400 align-top">{item.no}</td>
@@ -1061,23 +1132,39 @@ function AppraisalHistorySection({
   selfData: ReturnType<typeof loadAppraisalSelf>;
   approvers: ReturnType<typeof loadAllAppraisalApprovers>;
 }) {
-  type HistoryRow = { role: string; name: string; type: "self" | "approver"; level?: number; forms: { formId: string; avgScore: number }[]; comment: string; date: string; };
+  type HistoryRow = { role: string; name: string; type: "self" | "approver"; level?: number; forms: { formId: string; avgScore: number; ratings?: Record<string, number> }[]; comment: string; date: string; };
   const historyRows: HistoryRow[] = [];
 
   if (selfData) {
     historyRows.push({
       role: "Karyawan", name: "Diri Sendiri", type: "self",
-      forms: selfData.forms.map((f) => ({ formId: f.formId, avgScore: f.avgScore })),
+      forms: selfData.forms.map((f) => ({ formId: f.formId, avgScore: f.avgScore, ratings: f.ratings })),
       comment: "", date: selfData.submittedAt,
     });
   }
   approvers.forEach((a) => {
     historyRows.push({
       role: a.approverRole, name: a.approverName, type: "approver", level: a.approverLevel,
-      forms: a.forms.map((f) => ({ formId: f.formId, avgScore: f.avgScore })),
+      forms: a.forms.map((f) => ({ formId: f.formId, avgScore: f.avgScore, ratings: f.ratings })),
       comment: a.overallComment, date: a.reviewedDate,
     });
   });
+
+  const computeWeightedRow = (row?: HistoryRow): number | null => {
+    if (!row || !row.forms.some((f) => f.avgScore > 0)) return null;
+    return FORMS.reduce((s, f) => {
+      const fe = row.forms.find((rf) => rf.formId === f.id);
+      return s + (fe?.avgScore ?? 0) * (f.percentage / 100);
+    }, 0);
+  };
+  const selfRow = historyRows.find((r) => r.type === "self");
+  const appr1Row = historyRows.find((r) => r.type === "approver" && r.level === 1);
+  const appr2Row = historyRows.find((r) => r.type === "approver" && r.level === 2);
+  const avgSelfScore = computeWeightedRow(selfRow);
+  const avgAppr1Score = computeWeightedRow(appr1Row);
+  const avgAppr2Score = computeWeightedRow(appr2Row);
+  const validAvgScores = [avgSelfScore, avgAppr1Score, avgAppr2Score].filter((v): v is number => v !== null && v > 0);
+  const combinedMeanScore = validAvgScores.length > 0 ? validAvgScores.reduce((s, n) => s + n, 0) / validAvgScores.length : null;
 
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
@@ -1151,6 +1238,64 @@ function AppraisalHistorySection({
               </div>
             );
           })}
+
+          {/* Footer paling bawah: Score Rata-rata dari Assessment Diri Sendiri, Approval 1, Approval 2 */}
+          <div className="px-5 py-4 bg-slate-50 border-t border-gray-200 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-xs font-bold uppercase tracking-wide text-[#1A284F]">
+                Rekapitulasi Score Rata-rata (Assessment Diri Sendiri, Approval 1, Approval 2)
+              </p>
+              {combinedMeanScore !== null && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-[#1A284F] text-white">
+                  Rata-rata Gabungan: {combinedMeanScore.toFixed(2)} / 5.00
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] font-bold text-indigo-800">Assessment Diri Sendiri</p>
+                  <p className="text-[10px] text-indigo-600 mt-0.5">
+                    {FORMS.map((f) => {
+                      const fe = selfRow?.forms.find((rf) => rf.formId === f.id);
+                      return `${f.tab}: ${fe && fe.avgScore > 0 ? fe.avgScore.toFixed(2) : "—"}`;
+                    }).join(" · ")}
+                  </p>
+                </div>
+                <span className="text-lg font-black text-indigo-900">
+                  {avgSelfScore !== null ? `${avgSelfScore.toFixed(2)}` : "—"}
+                </span>
+              </div>
+              <div className="rounded-xl border border-sky-200 bg-sky-50/60 px-4 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] font-bold text-sky-800">Approval 1</p>
+                  <p className="text-[10px] text-sky-600 mt-0.5">
+                    {FORMS.map((f) => {
+                      const fe = appr1Row?.forms.find((rf) => rf.formId === f.id);
+                      return `${f.tab}: ${fe && fe.avgScore > 0 ? fe.avgScore.toFixed(2) : "—"}`;
+                    }).join(" · ")}
+                  </p>
+                </div>
+                <span className="text-lg font-black text-sky-900">
+                  {avgAppr1Score !== null ? `${avgAppr1Score.toFixed(2)}` : "—"}
+                </span>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] font-bold text-emerald-800">Approval 2</p>
+                  <p className="text-[10px] text-emerald-600 mt-0.5">
+                    {FORMS.map((f) => {
+                      const fe = appr2Row?.forms.find((rf) => rf.formId === f.id);
+                      return `${f.tab}: ${fe && fe.avgScore > 0 ? fe.avgScore.toFixed(2) : "—"}`;
+                    }).join(" · ")}
+                  </p>
+                </div>
+                <span className="text-lg font-black text-emerald-900">
+                  {avgAppr2Score !== null ? `${avgAppr2Score.toFixed(2)}` : "—"}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

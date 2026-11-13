@@ -974,6 +974,8 @@ export function SmartGoalsCheckInPage() {
   const [targetActuals, setTargetActuals] = useState<TargetActualEntry[]>([]);
   const [view, setView] = useState<PageView>("input");
   const [submitted, setSubmitted] = useState(false);
+  const [isSettingValidated, setIsSettingValidated] = useState(false);
+  const [settingStatusLabel, setSettingStatusLabel] = useState("Belum Disubmit");
   const [statusLabel, setStatusLabel] = useState("Draft");
   const [statusTone, setStatusTone] = useState<"validated" | "in_progress" | "revision" | "submitted">("submitted");
   const [wfRecState, setWfRecState] = useState<WorkflowRecord | undefined>(undefined);
@@ -986,6 +988,35 @@ export function SmartGoalsCheckInPage() {
     const loaded = loadSubmittedGoals(user.employeeId);
     const source = loaded ?? SAMPLE_GOALS;
     const savedCheckIn = loadCheckInEntries(user.employeeId);
+    const wfSetting = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "SMART Goals" &&
+        r.phase === "setting" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
+    );
+    const stVal = wfSetting?.decisions.validator?.status ?? "";
+    const stA2 = wfSetting?.decisions.approver2?.status ?? "";
+    const stA1 = wfSetting?.decisions.approver1?.status ?? "";
+    const stChk = wfSetting?.decisions.checker?.status ?? "";
+    const settingValidated = Boolean(stVal === "Validated" || stA2 === "Validated");
+    let curSettingLabel = "Belum Disubmit";
+    if (settingValidated) {
+      curSettingLabel = "Validated";
+    } else if (stVal === "Revision" || stA2 === "Revision" || stA1 === "Revision" || stChk === "Revision") {
+      curSettingLabel = "Revision";
+    } else if (stA2 === "Approved" || stA2.startsWith("Assessed")) {
+      curSettingLabel = "Pending-Validate (HR ICF)";
+    } else if (stA1 === "Approved" || stA1.startsWith("Assessed")) {
+      curSettingLabel = "Pending-Approver 2";
+    } else if (stChk && stChk !== "Revision") {
+      curSettingLabel = "Pending-Approver 1";
+    } else if (wfSetting) {
+      curSettingLabel = "Submitted · Pending Check HR Unit";
+    }
+    setIsSettingValidated(settingValidated);
+    setSettingStatusLabel(curSettingLabel);
+
     const wfRec = loadWorkflowRecords().find(
       (r) =>
         r.year === "2026" &&
@@ -996,8 +1027,10 @@ export function SmartGoalsCheckInPage() {
     const a1 = wfRec?.decisions.approver1?.status ?? "";
     const a2 = wfRec?.decisions.approver2?.status ?? "";
     const chk = wfRec?.decisions.checker?.status ?? "";
-    const isRev = a1 === "Revision" || a2 === "Revision" || chk === "Revision";
-    const isVal = a2 === "Validated" || a2 === "Approved" || a2.startsWith("Assessed");
+    const val = wfRec?.decisions.validator?.status ?? "";
+    const isRev = a1 === "Revision" || a2 === "Revision" || chk === "Revision" || val === "Revision";
+    const isVal = val === "Validated" || a2 === "Validated";
+    const isA2Done = a2 === "Approved" || a2.startsWith("Assessed") || a2 === "Validated";
     const isA1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
     const isChkDone = Boolean(chk && chk !== "Revision");
 
@@ -1009,11 +1042,14 @@ export function SmartGoalsCheckInPage() {
     } else if (isVal) {
       nextLabel = "Validated";
       nextTone = "validated";
+    } else if (isA2Done) {
+      nextLabel = "Pending-Validate (HR ICF)";
+      nextTone = "in_progress";
     } else if (isA1Done) {
-      nextLabel = "Assessed Approver 1 · Pending Approver 2 / Validate";
+      nextLabel = "Pending-Approver 2";
       nextTone = "in_progress";
     } else if (isChkDone) {
-      nextLabel = "Checked (HR Unit) · Pending Approver 1";
+      nextLabel = "Pending-Approver 1";
       nextTone = "in_progress";
     } else if (wfRec) {
       nextLabel = "Submitted · Pending Check HR Unit";
@@ -1172,7 +1208,7 @@ export function SmartGoalsCheckInPage() {
     );
   }
 
-  const editable = view === "input" && !submitted;
+  const editable = isSettingValidated && view === "input" && !submitted;
 
   // Ekstrak nilai & catatan terbaru dari Approver 1 & Approver 2 untuk Penilaian Akhir
   const activeUser = getActiveUser();
@@ -1251,6 +1287,26 @@ export function SmartGoalsCheckInPage() {
         </div>
       )}
 
+      {/* Gate Banner: SMART Goals Setting belum Validated */}
+      {!isSettingValidated && (
+        <div className="flex items-start gap-3 px-4 py-3.5 rounded-xl border border-amber-300 bg-amber-50">
+          <Lock className="w-5 h-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-amber-900">
+              SMART Goals Measurement Terkunci — SMART Goals Setting Belum Berstatus Validated
+            </p>
+            <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+              Anda belum dapat melakukan tindakan atau mengisi SMART Goals Measurement karena pengajuan{" "}
+              <strong>SMART Goals Setting</strong> Anda belum berstatus <strong>Validated</strong> (status saat ini:{" "}
+              <span className="font-bold underline">{settingStatusLabel}</span>). Sesuai aturan referensi PA, SMART Goals Measurement otomatis terbuka setelah SMART Goals Setting berstatus Validated.
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+            <Lock className="w-3.5 h-3.5" /> Terkunci
+          </span>
+        </div>
+      )}
+
       {/* Status banner */}
       {view === "preview" && (
         <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium border ${
@@ -1308,7 +1364,7 @@ export function SmartGoalsCheckInPage() {
       />
 
       {/* Action Buttons — di bawah Target vs Actual dan tepat di atas section Penilaian Akhir */}
-      {!submitted && (
+      {isSettingValidated && !submitted && (
         <div className="flex items-center justify-end gap-3 bg-white border border-gray-200 rounded-2xl px-5 py-3.5 shadow-sm">
           {editable ? (
             <>

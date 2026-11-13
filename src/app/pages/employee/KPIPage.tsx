@@ -2963,13 +2963,24 @@ export function KPIPage() {
   const [viewingRCA, setViewingRCA] = useState<{ rcaKey: string; secondaryKey: string; kpiName: string; monthLabel: string } | null>(null);
 
   // Sync storedRCAStatus when the RCAPage writes to localStorage
+  const [, setWfRefreshTick] = useState(0);
   React.useEffect(() => {
-    const sync = () => setStoredRCAStatus(buildStoredRCAStatusMap(loadRCASubmissions()));
+    const sync = () => {
+      setStoredRCAStatus(buildStoredRCAStatusMap(loadRCASubmissions()));
+      const st = loadSubmitState();
+      setSubmitted(st.submitted);
+      setSubmittedDate(st.submittedDate);
+      setWfRefreshTick((v) => v + 1);
+    };
     window.addEventListener("focus", sync);
     window.addEventListener("storage", sync);
+    window.addEventListener("appraisal-updated", sync);
+    window.addEventListener("pa-auth-updated", sync);
     return () => {
       window.removeEventListener("focus", sync);
       window.removeEventListener("storage", sync);
+      window.removeEventListener("appraisal-updated", sync);
+      window.removeEventListener("pa-auth-updated", sync);
     };
   }, []);
 
@@ -2983,6 +2994,38 @@ export function KPIPage() {
   const [approvedEditTargets, setApprovedEditTargets] = useState<{ kpiNo: string; monthId: string }[]>([]);
 
   // Sesuaikan penguncian KPI Tracking dengan tanggal aktual yang di-setup di Module Activation (/hr/modules)
+  const kpiSettingGate = (() => {
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    const wfSetting = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "KPI" &&
+        r.phase === "setting" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
+    );
+    const stVal = wfSetting?.decisions.validator?.status ?? "";
+    const stA2 = wfSetting?.decisions.approver2?.status ?? "";
+    const stA1 = wfSetting?.decisions.approver1?.status ?? "";
+    const stChk = wfSetting?.decisions.checker?.status ?? "";
+    const isVal = Boolean(stVal === "Validated" || stA2 === "Validated");
+    let statusText = "Belum Disubmit";
+    if (isVal) {
+      statusText = "Validated";
+    } else if (stVal === "Revision" || stA2 === "Revision" || stA1 === "Revision" || stChk === "Revision") {
+      statusText = "Revision";
+    } else if (stA2 === "Approved" || stA2.startsWith("Assessed")) {
+      statusText = "Pending-Validate (HR ICF)";
+    } else if (stA1 === "Approved" || stA1.startsWith("Assessed")) {
+      statusText = "Pending-Approver 2";
+    } else if (stChk && stChk !== "Revision") {
+      statusText = "Pending-Approver 1";
+    } else if (wfSetting) {
+      statusText = "Submitted · Pending Check HR Unit";
+    }
+    return { isValidated: isVal, statusText };
+  })();
+  const isKpiSettingValidated = kpiSettingGate.isValidated;
+
   const isDeadlinePassed = (() => {
     try {
       const mods = loadLiveModuleActivationList("2026");
@@ -3002,7 +3045,7 @@ export function KPIPage() {
       return false;
     }
   })();
-  const isLockedByDeadline = isDeadlinePassed && !submitted && !openLockApproved;
+  const isLockedByDeadline = !isKpiSettingValidated || (isDeadlinePassed && !submitted && !openLockApproved);
   const approvedEditCells =
     editRequestApproved && approvedEditTargets.length > 0
       ? new Set(approvedEditTargets.map((t) => `${t.kpiNo}::${t.monthId}`))
@@ -3334,12 +3377,32 @@ export function KPIPage() {
               )}
             </>
           )}
-          <ExportImportButton onExport={handleExport} onImport={handleImport} />
+          {isKpiSettingValidated && <ExportImportButton onExport={handleExport} onImport={handleImport} />}
         </div>
       </div>
 
+      {/* Gate Banner: KPI Setting belum Validated */}
+      {!isKpiSettingValidated && (
+        <div className="flex items-start gap-3 flex-wrap px-4 py-3.5 rounded-xl border border-amber-300 bg-amber-50">
+          <Lock className="w-5 h-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-amber-900">
+              KPI Tracking Terkunci — KPI Setting Belum Berstatus Validated
+            </p>
+            <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+              Anda belum dapat melakukan tindakan atau mengisi KPI Tracking karena pengajuan{" "}
+              <strong>KPI Setting</strong> Anda belum berstatus <strong>Validated</strong> (status saat ini:{" "}
+              <span className="font-bold underline">{kpiSettingGate.statusText}</span>). Sesuai aturan referensi PA, KPI dengan status Validated otomatis terbuka di Measurement → KPI Tracking.
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+            <Lock className="w-3.5 h-3.5" /> Terkunci
+          </span>
+        </div>
+      )}
+
       {/* Deadline lock banners */}
-      {isLockedByDeadline && !openLockRequested && (
+      {isKpiSettingValidated && isLockedByDeadline && !openLockRequested && (
         <div className="flex items-start gap-3 flex-wrap px-4 py-3 rounded-xl border border-red-200 bg-red-50">
           <Lock className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
           <div className="flex-1">

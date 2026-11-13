@@ -128,6 +128,37 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
       r.employeeId === normEmpId,
   );
   const revisionHistory = wfRec?.revisionHistory ?? [];
+  const isFourStepType = row.type === "KPI" || row.type === "SMART Goals";
+  const isCheckerStage =
+    isFourStepType &&
+    (row.workflowStageForRow === "checker" ||
+      (!row.workflowStageForRow && !wfRec?.decisions.checker));
+  const isValidatorStage =
+    isFourStepType && row.workflowStageForRow === "validator";
+  const primaryActionLabel = isCheckerStage
+    ? "Tandai Checked"
+    : isValidatorStage
+    ? "Validate"
+    : "Approve";
+  const confirmTitleText = isCheckerStage
+    ? "Konfirmasi Tandai Checked"
+    : isValidatorStage
+    ? "Konfirmasi Validasi (Validate)"
+    : "Konfirmasi Persetujuan (Approve)";
+  const confirmActionButtonText = isCheckerStage
+    ? "Ya, Tandai Checked"
+    : isValidatorStage
+    ? "Ya, Validate"
+    : "Ya, Approve";
+  const isAlreadyProcessed =
+    row.status === "Approved" ||
+    row.status === "Validated" ||
+    row.status === "Checked" ||
+    row.status === "Pending-Approver 1" ||
+    row.status === "Pending-Approver 2" ||
+    row.status === "Pending-Validate" ||
+    row.status === "Assessed-Approver 1" ||
+    row.status === "Assessed-Approver 2";
 
   const handleRevision = () => {
     if (!revisionNote.trim()) return;
@@ -188,7 +219,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
               </div>
             </div>
           )}
-          {row.type === "KPI" && <KPIContent expandedKpi={expandedKpi} setExpandedKpi={setExpandedKpi} />}
+          {row.type === "KPI" && <KPIContent employeeId={row.employeeId} />}
           {row.type === "SMART Goals" && <SmartGoalsSettingContent employeeId={row.employeeId} />}
           {row.type === "Appraisal Form" && <AppraisalFormSettingContent />}
           {row.type === "Managerial Skill" && <ManSkillSettingContent />}
@@ -198,7 +229,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
       </div>
 
       {/* ── Action area ─────────────────────────────────────────────────────── */}
-      {!readOnly && row.status !== "Approved" && row.status !== "Validated" && row.status !== "Assessed-Approver 1" && (
+      {!readOnly && !isAlreadyProcessed && (
         <div className="sticky bottom-0 bg-white border-t border-gray-200 px-8 py-4 shrink-0">
           <div>
             {!showRevision ? (
@@ -215,7 +246,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
                   className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#1A284F] text-white rounded-xl font-semibold text-sm hover:bg-[#131d3b] transition-colors"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  Approve
+                  {primaryActionLabel}
                 </button>
               </div>
             ) : (
@@ -247,7 +278,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
           </div>
         </div>
       )}
-      {(readOnly || row.status === "Approved" || row.status === "Assessed-Approver 1") && (
+      {(readOnly || isAlreadyProcessed) && (
         <div className="sticky bottom-0 bg-white border-t border-gray-200 px-8 py-4 shrink-0">
           <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
             <CheckCircle2 className="w-4 h-4 text-green-600" />
@@ -263,9 +294,21 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
             <div className="flex items-center justify-center w-14 h-14 rounded-full bg-green-50 mx-auto mb-4">
               <CheckCircle2 className="w-7 h-7 text-green-600" />
             </div>
-            <h3 className="text-base font-bold text-gray-900 mb-2">Konfirmasi Persetujuan (Approve)</h3>
+            <h3 className="text-base font-bold text-gray-900 mb-2">{confirmTitleText}</h3>
             <p className="text-sm text-gray-600 mb-6">
-              Apakah Anda yakin ingin menyetujui pengajuan <strong>{row.type} (Setting)</strong> dari <strong>{row.name}</strong> ({row.employeeId})?
+              {isCheckerStage ? (
+                <>
+                  Apakah Anda yakin ingin menandai pengajuan <strong>{row.type} (Setting)</strong> dari <strong>{row.name}</strong> ({row.employeeId}) sebagai <strong>Checked</strong>?
+                </>
+              ) : isValidatorStage ? (
+                <>
+                  Apakah Anda yakin ingin memvalidasi (<strong>Validate</strong>) pengajuan <strong>{row.type} (Setting)</strong> dari <strong>{row.name}</strong> ({row.employeeId})?
+                </>
+              ) : (
+                <>
+                  Apakah Anda yakin ingin menyetujui pengajuan <strong>{row.type} (Setting)</strong> dari <strong>{row.name}</strong> ({row.employeeId})?
+                </>
+              )}
             </p>
             <div className="flex items-center gap-3">
               <button
@@ -283,7 +326,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
                 }}
                 className="flex-1 py-2.5 rounded-full bg-green-600 text-white text-sm font-semibold hover:bg-green-700"
               >
-                Ya, Approve
+                {confirmActionButtonText}
               </button>
             </div>
           </div>
@@ -438,12 +481,23 @@ function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
 
 // ── KPI content ────────────────────────────��──────────────────────────────────
 
-function KPIContent({ expandedKpi, setExpandedKpi }: { expandedKpi: string | null; setExpandedKpi: (v: string | null) => void }) {
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
-  const sectionA = FULL_KPI_ITEMS.filter((k) => k.section === "A");
-  const sectionB = FULL_KPI_ITEMS.filter((k) => k.section === "B");
+function KPIContent({ employeeId }: { employeeId: string }) {
+  const kpiItems: FullKPIItem[] = (() => {
+    try {
+      const normId = normalizeEmployeeId(employeeId);
+      const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+      const map = raw ? (JSON.parse(raw) as Record<string, FullKPIItem[]>) : {};
+      const stored = map[normId] ?? map[employeeId];
+      if (Array.isArray(stored) && stored.length > 0) return stored;
+    } catch {
+      // ignore
+    }
+    return FULL_KPI_ITEMS;
+  })();
+  const sectionA = kpiItems.filter((k) => k.section === "A");
+  const sectionB = kpiItems.filter((k) => k.section !== "A");
 
-  const totalBobot = FULL_KPI_ITEMS.reduce((sum, k) => sum + parseFloat(k.bobot), 0);
+  const totalBobot = kpiItems.reduce((sum, k) => sum + (parseFloat(String(k.bobot).replace("%", "")) || 0), 0);
 
   return (
     <div className="flex flex-col gap-4">
@@ -451,84 +505,10 @@ function KPIContent({ expandedKpi, setExpandedKpi }: { expandedKpi: string | nul
         <h3 className="font-bold text-gray-800 text-sm">KPI Setting Detail</h3>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500">Total Bobot: <span className="font-bold text-[#1A284F]">{totalBobot}%</span></span>
-          <button
-            onClick={() => setViewMode(viewMode === "cards" ? "table" : "cards")}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
-          >
-            <Eye className="w-3.5 h-3.5" />
-            {viewMode === "cards" ? "View Table Format" : "View Cards"}
-          </button>
         </div>
       </div>
 
-      {viewMode === "cards" ? (
-        <>
-          {[{ label: "Section A — Individual KPI", items: sectionA }, { label: "Section B — Company KPI", items: sectionB }].map(({ label, items }) => (
-            <div key={label} className="flex flex-col gap-2">
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">{label}</p>
-              {items.map((kpi) => {
-                const expanded = expandedKpi === kpi.no;
-                return (
-                  <div key={kpi.no} className="border border-gray-200 rounded-xl overflow-hidden">
-                    <button
-                      onClick={() => setExpandedKpi(expanded ? null : kpi.no)}
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left transition-colors"
-                    >
-                      <span className="w-7 h-7 rounded-full bg-[#1A284F]/10 text-[#1A284F] text-xs font-bold flex items-center justify-center shrink-0">{kpi.no}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-gray-800 truncate">{kpi.kpi}</p>
-                        <p className="text-[10px] text-gray-400">{kpi.perspektif}</p>
-                      </div>
-                      <span className="text-xs font-bold text-[#1A284F] shrink-0">{kpi.bobot}</span>
-                      {expanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
-                    </button>
-                    {expanded && (
-                      <div className="px-4 pb-4 pt-1 border-t border-gray-100 bg-gray-50/50">
-                        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
-                          {[
-                            ["Perspektif",  kpi.perspektif],
-                            ["Satuan",      kpi.satuan],
-                            ["Bobot",       kpi.bobot],
-                            ["Polaritas",   kpi.polaritas],
-                            ["Baseline 2025",    kpi.baseline2025],
-                            ["Target 2026", kpi.target2026],
-                            ["Formula", kpi.formula],
-                            ["Source", kpi.source],
-                          ].map(([label, value]) => (
-                            <div key={label}>
-                              <p className="text-gray-400 text-[10px] uppercase tracking-wide font-semibold">{label}</p>
-                              <p className="text-gray-700 font-medium mt-0.5">{value}</p>
-                            </div>
-                          ))}
-                          {kpi.definisi && (
-                            <div className="col-span-2">
-                              <p className="text-gray-400 text-[10px] uppercase tracking-wide font-semibold">Definisi</p>
-                              <p className="text-gray-700 font-medium mt-0.5">{kpi.definisi}</p>
-                            </div>
-                          )}
-                          {kpi.detailFormula && (
-                            <div className="col-span-2">
-                              <p className="text-gray-400 text-[10px] uppercase tracking-wide font-semibold">Detail Formula</p>
-                              <p className="text-gray-700 font-medium mt-0.5 whitespace-pre-line text-xs">{kpi.detailFormula}</p>
-                            </div>
-                          )}
-                          {kpi.keterangan && (
-                            <div className="col-span-2">
-                              <p className="text-gray-400 text-[10px] uppercase tracking-wide font-semibold">Keterangan</p>
-                              <p className="text-gray-700 font-medium mt-0.5 whitespace-pre-line text-xs">{kpi.keterangan}</p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+      <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
           <table className="border-collapse text-xs w-full">
             <thead>
               <tr className="bg-[#1A284F] text-white">
@@ -597,8 +577,7 @@ function KPIContent({ expandedKpi, setExpandedKpi }: { expandedKpi: string | nul
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

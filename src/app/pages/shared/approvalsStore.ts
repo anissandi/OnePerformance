@@ -7,7 +7,7 @@ import { savePersistedState } from "../../services/supabaseClient";
 import {
   getActiveUser,
   loadManagedUsers,
-  resolveReviewerRoleForTarget,
+  resolveWorkflowStageForTarget,
   shouldBypassCheckerForSubmission,
   type ManagedUser,
 } from "../../store/authStore";
@@ -260,23 +260,41 @@ export function resolveDynamicApprovalRowsForUser(
         w.module === row.type &&
         w.employeeId === normEmpId,
     );
+    const bypassCheck =
+      (row.type === "KPI" || row.type === "SMART Goals") &&
+      shouldBypassCheckerForSubmission(row.employeeId);
+    const checkerDone = Boolean(
+      bypassCheck ||
+        (wfRec?.decisions.checker && wfRec.decisions.checker.status !== "Revision"),
+    );
     const a1Done = Boolean(
       wfRec?.decisions.approver1 &&
         (wfRec.decisions.approver1.status === "Approved" ||
           wfRec.decisions.approver1.status.startsWith("Assessed")),
     );
-
-    const roleForRow = resolveReviewerRoleForTarget(
+    const a2Done = Boolean(
+      wfRec?.decisions.approver2 &&
+        (wfRec.decisions.approver2.status === "Approved" ||
+          wfRec.decisions.approver2.status.startsWith("Assessed") ||
+          wfRec.decisions.approver2.status === "Validated"),
+    );
+    const validatorDone = Boolean(
+      wfRec?.decisions.validator?.status === "Validated" ||
+        wfRec?.decisions.approver2?.status === "Validated",
+    );
+    const stageForRow = resolveWorkflowStageForTarget(
       activeUser,
       row.employeeId,
-      a1Done,
       row.type,
+      { checkerDone, a1Done, a2Done, validatorDone },
     );
     // Jika user yang login bukan Approver 1, bukan Approver 2, bukan Checker/Validator berwenang untuk karyawan ini -> sembunyikan
-    if (!roleForRow) continue;
-
+    if (!stageForRow) continue;
+    const roleForRow: "approver1" | "approver2" =
+      stageForRow === "approver2" || stageForRow === "validator"
+        ? "approver2"
+        : "approver1";
     seenKeys.add(dedupKey);
-
     const prefix = `${roleForRow === "approver2" ? "H" : ""}${phase === "setting" ? "ST" : "CI"}`;
     const canonicalNo =
       row.type === "Inter-Department Feedback"
@@ -286,19 +304,17 @@ export function resolveDynamicApprovalRowsForUser(
       ...row,
       no: canonicalNo,
       reviewerRoleForRow: roleForRow,
+      workflowStageForRow: stageForRow,
     };
-
     registerWorkflowRows([rowWithCanonicalNo], roleForRow);
     const shared = workflowRowStatus(rowWithCanonicalNo, roleForRow);
     const ov = overrides.find((o) => o.no === canonicalNo);
     const resolvedRow: ApprovalRow = shared
-      ? { ...rowWithCanonicalNo, ...shared, reviewerRoleForRow: roleForRow }
+      ? { ...rowWithCanonicalNo, ...shared, reviewerRoleForRow: roleForRow, workflowStageForRow: stageForRow }
       : ov
-      ? { ...rowWithCanonicalNo, status: ov.status, approvalDate: ov.approvalDate, reviewerRoleForRow: roleForRow }
+      ? { ...rowWithCanonicalNo, status: ov.status, approvalDate: ov.approvalDate, reviewerRoleForRow: roleForRow, workflowStageForRow: stageForRow }
       : rowWithCanonicalNo;
-
     result.push(resolvedRow);
   }
-
   return result;
 }

@@ -13,6 +13,7 @@ import {
 import { SUPERVISOR_PROFILE } from "../../store/profileStore";
 import {
   getActiveUser,
+  loadManagedUsers,
   resolveEffectiveUserGrouping,
   resolveUserAllowedModules,
   useAuthStore,
@@ -21,6 +22,10 @@ import {
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadUnitScoreWeights, SCORE_WEIGHT_EVENT, type ScoreWeightColumn } from "./scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
+import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
+import { loadAllAppraisalApprovers } from "./appraisalFormStore";
+import { loadApprovalDecisions } from "./smartGoalsStore";
+import { loadAllMSApprovers } from "./msStore";
 
 // ─── User identity (from shared profile store) ─────────────────────────────────
 const USER = SUPERVISOR_PROFILE;
@@ -424,6 +429,157 @@ export function ViewProfile() {
   const displayKPIScore = isCurrent ? (liveMe?.kpi.score ?? 0) : yearData.kpiScore;
   const displayKPIGrade = scoreToGrade(displayKPIScore ?? 0);
 
+  // Rekapan komentar/note dari Approver 1 (AP1) & Approver 2 (AP2) sesuai modul yang disubmit
+  // (TIDAK termasuk komentar dari HR Unit Checked & HR ICF Validated)
+  const liveSummaryNotes = useMemo(() => {
+    if (!isCurrent) return yearData.summaryNotes;
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    const managedUsers = loadManagedUsers();
+    const findUserByRef = (ref?: string) => {
+      const q = (ref ?? "").trim().toLowerCase();
+      if (!q) return undefined;
+      const qNum = q.replace(/^(?:emp-?|e)0*/i, "");
+      return managedUsers.find(
+        (u) =>
+          (u.regNo ?? "").trim().toLowerCase() === q ||
+          u.employeeId.trim().toLowerCase() === q ||
+          u.name.trim().toLowerCase() === q ||
+          (qNum && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === qNum),
+      );
+    };
+    const ap1User = findUserByRef(activeUser.regNoAp1);
+    const ap2User = findUserByRef(activeUser.regNoAp2);
+
+    type SummaryNoteItem = {
+      approver: string;
+      role: "Approver 1" | "Approver 2";
+      positionLabel: string;
+      module: string;
+      date: string;
+      note: string;
+    };
+    const notes: SummaryNoteItem[] = [];
+    const seen = new Set<string>();
+    const pushNote = (item: SummaryNoteItem) => {
+      const text = item.note.trim();
+      if (!text) return;
+      const approverUser = findUserByRef(item.approver);
+      if (
+        approverUser &&
+        (approverUser.role === "HR ICF" || approverUser.role === "HR Unit") &&
+        approverUser.employeeId !== ap1User?.employeeId &&
+        approverUser.employeeId !== ap2User?.employeeId
+      ) {
+        return;
+      }
+      const dedup = `${item.role}::${item.module}::${text.toLowerCase()}`;
+      if (seen.has(dedup)) return;
+      seen.add(dedup);
+      notes.push({ ...item, note: text });
+    };
+
+    const wfRecords = loadWorkflowRecords().filter(
+      (r) =>
+        r.year === String(selectedYear) &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
+    );
+
+    for (const rec of wfRecords) {
+      const modDisplay =
+        rec.phase === "setting"
+          ? `${rec.module} (Setting)`
+          : rec.module === "KPI"
+          ? "KPI Tracking"
+          : rec.module === "SMART Goals"
+          ? "SMART Goals (Measurement)"
+          : rec.module === "Project"
+          ? "Project Outside Job Scope"
+          : rec.module;
+
+      const a1Comment =
+        rec.assessments.approver1?.comments?.["0"] ||
+        rec.decisions.approver1?.note ||
+        "";
+      if (a1Comment.trim()) {
+        pushNote({
+          approver: rec.decisions.approver1?.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+          role: "Approver 1",
+          positionLabel: ap1User?.position || "Atasan Langsung (AP1)",
+          module: modDisplay,
+          date: rec.decisions.approver1?.date || rec.assessments.approver1?.date || rec.submittedDate || "-",
+          note: a1Comment,
+        });
+      }
+
+      const a2Comment =
+        rec.assessments.approver2?.comments?.["0"] ||
+        rec.decisions.approver2?.note ||
+        "";
+      if (a2Comment.trim()) {
+        pushNote({
+          approver: rec.decisions.approver2?.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+          role: "Approver 2",
+          positionLabel: ap2User?.position || "Atasan Langsung (AP2)",
+          module: modDisplay,
+          date: rec.decisions.approver2?.date || rec.assessments.approver2?.date || rec.submittedDate || "-",
+          note: a2Comment,
+        });
+      }
+    }
+
+    for (const af of loadAllAppraisalApprovers(activeUser.employeeId)) {
+      if (af.overallComment?.trim() && (af.approverLevel === 1 || af.approverLevel === 2)) {
+        pushNote({
+          approver: af.approverName || (af.approverLevel === 1 ? ap1User?.name || "Approver 1" : ap2User?.name || "Approver 2"),
+          role: af.approverLevel === 1 ? "Approver 1" : "Approver 2",
+          positionLabel: af.approverLevel === 1 ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+          module: "Appraisal Form",
+          date: af.reviewedDate || "-",
+          note: af.overallComment,
+        });
+      }
+    }
+
+    for (const sgDec of loadApprovalDecisions(activeUser.employeeId)) {
+      if (sgDec.feedback?.trim() && (sgDec.approverLevel === 1 || sgDec.approverLevel === 2)) {
+        pushNote({
+          approver: sgDec.approverName || (sgDec.approverLevel === 1 ? ap1User?.name || "Approver 1" : ap2User?.name || "Approver 2"),
+          role: sgDec.approverLevel === 1 ? "Approver 1" : "Approver 2",
+          positionLabel: sgDec.approverLevel === 1 ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+          module: "SMART Goals (Measurement)",
+          date: sgDec.reviewedDate || "-",
+          note: sgDec.feedback,
+        });
+      }
+    }
+
+    for (const ms of loadAllMSApprovers(activeUser.employeeId)) {
+      if (ms.comment?.trim() && (ms.approverLevel === 1 || ms.approverLevel === 2)) {
+        pushNote({
+          approver: ms.approverName || (ms.approverLevel === 1 ? ap1User?.name || "Approver 1" : ap2User?.name || "Approver 2"),
+          role: ms.approverLevel === 1 ? "Approver 1" : "Approver 2",
+          positionLabel: ms.approverLevel === 1 ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+          module: "Managerial Skill",
+          date: ms.reviewedDate || "-",
+          note: ms.comment,
+        });
+      }
+    }
+
+    return notes;
+  }, [activeUser, selectedYear, isCurrent, yearData.summaryNotes, tick]);
+
+  const softModuleTagClass = (moduleName: string) => {
+    const m = moduleName.toLowerCase();
+    if (m.includes("kpi")) return "bg-sky-50 text-sky-700 border-sky-200";
+    if (m.includes("smart")) return "bg-amber-50 text-amber-700 border-amber-200";
+    if (m.includes("appraisal")) return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    if (m.includes("managerial")) return "bg-indigo-50 text-indigo-700 border-indigo-200";
+    if (m.includes("project")) return "bg-teal-50 text-teal-700 border-teal-200";
+    if (m.includes("feedback")) return "bg-rose-50 text-rose-700 border-rose-200";
+    return "bg-blue-50 text-blue-700 border-blue-200";
+  };
+
   return (
     <div className="w-full flex flex-col gap-6">
 
@@ -712,27 +868,31 @@ export function ViewProfile() {
                 Appraisal {selectedYear}
               </span>
             </div>
-            {yearData.summaryNotes.length === 0 ? (
+            {liveSummaryNotes.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-8 text-gray-300">
                 <StickyNote className="w-8 h-8" />
-                <p className="text-xs text-gray-400">No summary notes from approver for {selectedYear}.</p>
+                <p className="text-xs text-gray-400">Belum ada rekap catatan/komentar dari Approver 1 &amp; Approver 2 untuk periode {selectedYear}.</p>
               </div>
             ) : (
               <div className="flex flex-col gap-4">
-                {yearData.summaryNotes.map((note, i) => (
-                  <div key={i} className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
-                    <div className="flex items-start justify-between gap-3 mb-3">
-                      <div className="flex items-center gap-2.5">
+                {liveSummaryNotes.map((note, i) => (
+                  <div key={i} className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                    <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+                      <div className="flex items-center gap-2.5 flex-wrap">
                         <div className="w-8 h-8 rounded-full bg-[#1A284F] flex items-center justify-center shrink-0">
                           <UserCheck className="w-4 h-4 text-white" />
                         </div>
-                        <div>
-                          <p className="text-xs font-bold text-gray-800">{note.approver}</p>
-                          <p className="text-[10px] text-gray-500">{note.role}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            {note.approver}
+                          </span>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                            {note.role}
+                          </span>
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
+                        <span className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full border ${softModuleTagClass(note.module)}`}>
                           {note.module}
                         </span>
                         <span className="text-[10px] text-gray-400">{note.date}</span>

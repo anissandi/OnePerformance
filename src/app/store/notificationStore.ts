@@ -399,16 +399,16 @@ const INITIAL_AUTO_TEMPLATES: AutoNotificationTemplate[] = [
   {
     id: "auto-2",
     code: "AUTO_APPROVAL_SUBMIT",
-    name: "Notifikasi Pengajuan Menunggu Approval (Checker / AP1 / AP2)",
-    description: "Memberitahukan Checker HR Unit, Approver 1, Approver 2, atau Validator HR ICF saat terdapat pengajuan baru.",
+    name: "Notifikasi Konfirmasi Pengajuan Berhasil Disubmit (Submitted)",
+    description: "Memberitahukan karyawan bahwa pengajuan modul PA miliknya telah berhasil disubmit (Submitted).",
     category: "Approval",
     triggerType: "Transaction",
-    approvalModule: "KPI Setting",
+    approvalModule: "All Modules",
     approvalTriggerStatus: "Submitted",
     scheduleInfo: "Real-time saat karyawan melakukan Submit modul PA",
     triggerCondition: "Real-time saat karyawan melakukan Submit modul PA",
-    subjectTemplate: "Pengajuan {{nama_modul}} Menunggu Persetujuan Anda",
-    bodyTemplate: "Terdapat pengajuan {{nama_modul}} baru dari {{nama_karyawan}} ({{unit_usaha}}) yang menunggu pemeriksaan/persetujuan Anda di menu Approvals.",
+    subjectTemplate: "Pengajuan {{nama_modul}} Berhasil Disubmit (Submitted)",
+    bodyTemplate: "Halo {{nama_karyawan}}, pengajuan {{nama_modul}} Anda pada unit {{unit_usaha}} telah berhasil disubmit (Submitted) pada {{tanggal}} dan saat ini sedang menunggu pemeriksaan/persetujuan Approver.",
     channels: ["Notifikasi Sistem"],
     active: true,
     lastTriggeredAt: "2026-06-08 09:15",
@@ -800,12 +800,48 @@ export function triggerApprovalTransactionNotification(params: {
     user: targetUser,
     moduleName: canonicalMod,
     approvalStatus: mappedStatus,
-    approverName: params.approverName || (params.approverRole === "approver2" ? "Approver 2 / HR ICF" : params.approverRole === "approver1" ? "Approver 1" : "System"),
+    approverName:
+      params.approverName ||
+      (params.approverRole === "validator"
+        ? "HR ICF Validator"
+        : params.approverRole === "checker"
+        ? "HR Unit Checker"
+        : params.approverRole === "approver2"
+        ? "Approver 2"
+        : params.approverRole === "approver1"
+        ? "Approver 1"
+        : "System"),
     year: "2026",
   };
 
-  if (templates.length === 0) {
-    // Default automatic approval notification if no custom rule matched
+  if (mappedStatus === "Submitted") {
+    // Notifikasi untuk KARYAWAN yang melakukan Submit -> harus berstatus "Submitted", BUKAN "menunggu pemeriksaan/persetujuan Anda"!
+    const empTitle = interpolateNotificationTemplate(
+      "Pengajuan {{nama_modul}} Berhasil Disubmit (Submitted)",
+      ctx,
+    );
+    const empBody = interpolateNotificationTemplate(
+      "Halo {{nama_karyawan}}, pengajuan {{nama_modul}} Anda pada unit {{unit_usaha}} telah berhasil disubmit (Submitted) pada {{tanggal}} dan sedang menunggu pemeriksaan/persetujuan Approver.",
+      ctx,
+    );
+    createAndBroadcastNotification({
+      title: empTitle,
+      summary: empBody,
+      body: [empBody],
+      category: "Approval",
+      senderName: "Workflow Approval System",
+      senderRole: "System",
+      moduleName: canonicalMod,
+      approvalStatus: "Submitted",
+      approverName: ctx.approverName,
+      ctaLabel: `Buka ${canonicalMod}`,
+      ctaRoute: params.ctaRoute || "/appraisal",
+      targetAll: !targetUser,
+      targetEmployeeIds: targetUser ? [targetUser.employeeId] : undefined,
+      channels: ["Notifikasi Sistem"],
+    });
+  } else if (templates.length === 0) {
+    // Default automatic approval notification untuk karyawan saat di-Check / Approve / Validate / Revision
     const title = interpolateNotificationTemplate(
       "Update Status {{nama_modul}} — {{status_approval}}",
       ctx,
@@ -830,38 +866,44 @@ export function triggerApprovalTransactionNotification(params: {
       targetEmployeeIds: targetUser ? [targetUser.employeeId] : undefined,
       channels: ["Notifikasi Sistem"],
     });
-    return;
-  }
-
-  for (const tpl of templates) {
-    const tplModuleName = resolveCanonicalModuleName(
-      tpl.approvalModule || tpl.scheduledModule || canonicalMod,
-    );
-    const ruleCtx: NotificationVariableContext = {
-      ...ctx,
-      moduleName: tplModuleName,
-    };
-    const title = interpolateNotificationTemplate(tpl.subjectTemplate || tpl.name, ruleCtx);
-    const bodyLines = (tpl.bodyTemplate || tpl.subjectTemplate)
-      .split("\n")
-      .map((line) => interpolateNotificationTemplate(line.trim(), ruleCtx))
-      .filter(Boolean);
-    createAndBroadcastNotification({
-      title,
-      summary: bodyLines[0] || title,
-      body: bodyLines.length > 0 ? bodyLines : [title],
-      category: tpl.category,
-      senderName: `Auto Notification (${tpl.name})`,
-      senderRole: "System",
-      moduleName: tplModuleName,
-      approvalStatus: mappedStatus,
-      approverName: ruleCtx.approverName,
-      ctaLabel: `Buka ${tplModuleName}`,
-      ctaRoute: params.ctaRoute || "/appraisal",
-      targetAll: !targetUser,
-      targetEmployeeIds: targetUser ? [targetUser.employeeId] : undefined,
-      channels: tpl.channels?.length ? tpl.channels : ["Notifikasi Sistem"],
-    });
+  } else {
+    for (const tpl of templates) {
+      const tplModuleName = resolveCanonicalModuleName(
+        tpl.approvalModule || tpl.scheduledModule || canonicalMod,
+      );
+      const ruleCtx: NotificationVariableContext = {
+        ...ctx,
+        moduleName: tplModuleName,
+      };
+      let rawSubject = tpl.subjectTemplate || tpl.name;
+      let rawBody = tpl.bodyTemplate || tpl.subjectTemplate;
+      if (rawBody.includes("menunggu pemeriksaan/persetujuan Anda di menu Approvals")) {
+        rawSubject = "Update Status Pengajuan {{nama_modul}} — {{status_approval}}";
+        rawBody =
+          "Halo {{nama_karyawan}}, pengajuan {{nama_modul}} Anda pada unit {{unit_usaha}} telah diperbarui dengan status {{status_approval}} oleh {{nama_approver}} pada {{tanggal}}.";
+      }
+      const title = interpolateNotificationTemplate(rawSubject, ruleCtx);
+      const bodyLines = rawBody
+        .split("\n")
+        .map((line) => interpolateNotificationTemplate(line.trim(), ruleCtx))
+        .filter(Boolean);
+      createAndBroadcastNotification({
+        title,
+        summary: bodyLines[0] || title,
+        body: bodyLines.length > 0 ? bodyLines : [title],
+        category: tpl.category,
+        senderName: `Auto Notification (${tpl.name})`,
+        senderRole: "System",
+        moduleName: tplModuleName,
+        approvalStatus: mappedStatus,
+        approverName: ruleCtx.approverName,
+        ctaLabel: `Buka ${tplModuleName}`,
+        ctaRoute: params.ctaRoute || "/appraisal",
+        targetAll: !targetUser,
+        targetEmployeeIds: targetUser ? [targetUser.employeeId] : undefined,
+        channels: tpl.channels?.length ? tpl.channels : ["Notifikasi Sistem"],
+      });
+    }
   }
 
   // Update lastTriggeredAt on matched templates
@@ -883,11 +925,42 @@ export function triggerApprovalTransactionNotification(params: {
     const findApproverUser = (refValue?: string): ManagedUser | undefined => {
       const ref = (refValue ?? "").trim().toLowerCase();
       if (!ref) return undefined;
+      const refNum = ref.replace(/^(?:emp-?|e)0*/i, "");
       return allUsers.find(
         (u) =>
           (u.regNo ?? "").trim().toLowerCase() === ref ||
           u.employeeId.trim().toLowerCase() === ref ||
-          u.name.trim().toLowerCase() === ref,
+          u.name.trim().toLowerCase() === ref ||
+          (refNum && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === refNum),
+      );
+    };
+
+    const resolveApprover1Recipients = (): ManagedUser[] => {
+      const direct = findApproverUser(targetUser.regNoAp1);
+      if (direct && direct.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
+        return [direct];
+      }
+      return allUsers.filter(
+        (u) =>
+          u.status === "Active" &&
+          u.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase() &&
+          u.company.trim().toLowerCase() === targetUser.company.trim().toLowerCase() &&
+          (u.role === "Supervisor" || u.role === "GM") &&
+          (!targetUser.division || u.division.trim().toLowerCase() === targetUser.division.trim().toLowerCase()),
+      );
+    };
+
+    const resolveApprover2Recipients = (): ManagedUser[] => {
+      const direct = findApproverUser(targetUser.regNoAp2);
+      if (direct && direct.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
+        return [direct];
+      }
+      return allUsers.filter(
+        (u) =>
+          u.status === "Active" &&
+          u.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase() &&
+          u.company.trim().toLowerCase() === targetUser.company.trim().toLowerCase() &&
+          (u.role === "GM" || u.role === "Director"),
       );
     };
 
@@ -908,52 +981,60 @@ export function triggerApprovalTransactionNotification(params: {
       );
 
     if (mappedStatus === "Submitted") {
-      const checkers = isFourStepMod ? findUnitCheckerUsers(targetUser.company) : [];
-      if (checkers.length > 0) {
-        const chkTitle = `Menunggu Check HR Unit: ${canonicalMod} — ${targetUser.name}`;
-        const chkBody = `Terdapat pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) yang menunggu pemeriksaan (Check) HR Unit Anda.`;
-        createAndBroadcastNotification({
-          title: chkTitle,
-          summary: chkBody,
-          body: [chkBody],
-          category: "Approval",
-          senderName: targetUser.name,
-          senderRole: targetUser.role || "Employee",
-          moduleName: canonicalMod,
-          approvalStatus: "Pending Check HR Unit",
-          ctaLabel: "Buka Menu Approvals",
-          ctaRoute: approvalRoute,
-          targetAll: false,
-          targetEmployeeIds: checkers.map((c) => c.employeeId),
-          channels: ["Notifikasi Sistem"],
-        });
-      }
-      const ap1User = findApproverUser(targetUser.regNoAp1);
-      if (ap1User && ap1User.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
-        const ap1Title = `Menunggu Approval 1: ${canonicalMod} — ${targetUser.name}`;
-        const ap1Body = `Halo ${ap1User.name}, terdapat pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) yang menunggu pemeriksaan dan Approval 1 Anda.`;
-        createAndBroadcastNotification({
-          title: ap1Title,
-          summary: ap1Body,
-          body: [ap1Body],
-          category: "Approval",
-          senderName: targetUser.name,
-          senderRole: targetUser.role || "Employee",
-          moduleName: canonicalMod,
-          approvalStatus: "Pending Approval 1",
-          approverName: ap1User.name,
-          ctaLabel: "Buka Menu Approvals",
-          ctaRoute: approvalRoute,
-          targetAll: false,
-          targetEmployeeIds: [ap1User.employeeId],
-          channels: ["Notifikasi Sistem"],
-        });
+      const isSelfChecker = Boolean(targetUser.role === "HR Unit" || targetUser.isHrUnitChecker);
+      if (isFourStepMod && !isSelfChecker) {
+        // Untuk KPI & SMART Goals: saat baru Submit, masuk ke HR Unit Checker terlebih dahulu
+        const checkers = findUnitCheckerUsers(targetUser.company);
+        if (checkers.length > 0) {
+          const chkTitle = `Pengajuan ${canonicalMod} Menunggu Pemeriksaan (Check) Anda`;
+          const chkBody = `Terdapat pengajuan ${canonicalMod} baru dari ${targetUser.name} (${targetUser.company}) yang menunggu pemeriksaan/persetujuan Anda di menu Approvals.`;
+          createAndBroadcastNotification({
+            title: chkTitle,
+            summary: chkBody,
+            body: [chkBody],
+            category: "Approval",
+            senderName: targetUser.name,
+            senderRole: targetUser.role || "Employee",
+            moduleName: canonicalMod,
+            approvalStatus: "Pending Check HR Unit",
+            ctaLabel: "Buka Menu Approvals",
+            ctaRoute: approvalRoute,
+            targetAll: false,
+            targetEmployeeIds: checkers.map((c) => c.employeeId),
+            channels: ["Notifikasi Sistem"],
+          });
+        }
+      } else {
+        // Untuk Appraisal Form, Managerial Skill, Project, Feedback (atau KPI/SMART Goals milik HR Unit yang bypass check):
+        // Langsung kirim notifikasi ke Approver 1!
+        const ap1Recipients = resolveApprover1Recipients();
+        if (ap1Recipients.length > 0) {
+          const ap1Title = `Pengajuan ${canonicalMod} Menunggu Persetujuan Anda`;
+          const ap1Body = `Terdapat pengajuan ${canonicalMod} baru dari ${targetUser.name} (${targetUser.company}) yang menunggu pemeriksaan/persetujuan Anda di menu Approvals.`;
+          createAndBroadcastNotification({
+            title: ap1Title,
+            summary: ap1Body,
+            body: [ap1Body],
+            category: "Approval",
+            senderName: targetUser.name,
+            senderRole: targetUser.role || "Employee",
+            moduleName: canonicalMod,
+            approvalStatus: "Pending Approval 1",
+            approverName: ap1Recipients[0].name,
+            ctaLabel: "Buka Menu Approvals",
+            ctaRoute: approvalRoute,
+            targetAll: false,
+            targetEmployeeIds: ap1Recipients.map((u) => u.employeeId),
+            channels: ["Notifikasi Sistem"],
+          });
+        }
       }
     } else if (mappedStatus === "Checked") {
-      const ap1User = findApproverUser(targetUser.regNoAp1);
-      if (ap1User && ap1User.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
-        const ap1Title = `Telah Di-Check HR Unit · Menunggu Approval 1: ${canonicalMod} — ${targetUser.name}`;
-        const ap1Body = `Halo ${ap1User.name}, pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId}) telah selesai diperiksa oleh HR Unit dan kini menunggu Approval 1 Anda.`;
+      // Setelah HR Unit klik Tandai Checked -> kirim notifikasi ke Approver 1
+      const ap1Recipients = resolveApprover1Recipients();
+      if (ap1Recipients.length > 0) {
+        const ap1Title = `Pengajuan ${canonicalMod} Menunggu Persetujuan Anda (Approval 1)`;
+        const ap1Body = `Terdapat pengajuan ${canonicalMod} baru dari ${targetUser.name} (${targetUser.company}) yang telah selesai di-Check oleh HR Unit dan kini menunggu pemeriksaan/persetujuan Anda di menu Approvals.`;
         createAndBroadcastNotification({
           title: ap1Title,
           summary: ap1Body,
@@ -962,20 +1043,20 @@ export function triggerApprovalTransactionNotification(params: {
           senderName: ctx.approverName || "HR Unit Checker",
           senderRole: "HR Unit",
           moduleName: canonicalMod,
-          approvalStatus: "Checked",
-          approverName: ap1User.name,
+          approvalStatus: "Pending-Approver 1",
+          approverName: ap1Recipients[0].name,
           ctaLabel: "Buka Menu Approvals",
           ctaRoute: approvalRoute,
           targetAll: false,
-          targetEmployeeIds: [ap1User.employeeId],
+          targetEmployeeIds: ap1Recipients.map((u) => u.employeeId),
           channels: ["Notifikasi Sistem"],
         });
       }
     } else if (mappedStatus === "Approved (Approval 1)") {
-      const ap2User = findApproverUser(targetUser.regNoAp2);
-      if (ap2User && ap2User.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
-        const ap2Title = `Menunggu Approval 2: ${canonicalMod} — ${targetUser.name}`;
-        const ap2Body = `Halo ${ap2User.name}, pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) telah disetujui oleh Approver 1 (${ctx.approverName}) dan kini menunggu tindak lanjut Approval 2 Anda.`;
+      const ap2Recipients = resolveApprover2Recipients();
+      if (ap2Recipients.length > 0) {
+        const ap2Title = `Pengajuan ${canonicalMod} Menunggu Persetujuan Anda (Approval 2)`;
+        const ap2Body = `Terdapat pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.company}) yang telah disetujui oleh Approver 1 (${ctx.approverName}) dan kini menunggu pemeriksaan/persetujuan Approval 2 Anda di menu Approvals.`;
         createAndBroadcastNotification({
           title: ap2Title,
           summary: ap2Body,
@@ -984,20 +1065,20 @@ export function triggerApprovalTransactionNotification(params: {
           senderName: ctx.approverName || "Approver 1",
           senderRole: "Approver 1",
           moduleName: canonicalMod,
-          approvalStatus: "Pending Approval 2",
-          approverName: ap2User.name,
+          approvalStatus: "Pending-Approver 2",
+          approverName: ap2Recipients[0].name,
           ctaLabel: "Tindak Lanjuti Approval 2",
           ctaRoute: approvalRoute,
           targetAll: false,
-          targetEmployeeIds: [ap2User.employeeId],
+          targetEmployeeIds: ap2Recipients.map((u) => u.employeeId),
           channels: ["Notifikasi Sistem"],
         });
       }
     } else if (mappedStatus === "Approved (Approval 2)" && isFourStepMod) {
       const validators = findHrIcfValidators();
       if (validators.length > 0) {
-        const valTitle = `Menunggu Validasi HR ICF: ${canonicalMod} — ${targetUser.name}`;
-        const valBody = `Pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.employeeId} · ${targetUser.company}) telah disetujui oleh Approver 2 dan siap untuk divalidasi (Validate).`;
+        const valTitle = `Pengajuan ${canonicalMod} Menunggu Validasi HR ICF`;
+        const valBody = `Terdapat pengajuan ${canonicalMod} dari ${targetUser.name} (${targetUser.company}) yang telah disetujui oleh Approver 2 dan siap untuk divalidasi (Validate) di menu Approvals.`;
         createAndBroadcastNotification({
           title: valTitle,
           summary: valBody,

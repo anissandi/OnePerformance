@@ -483,6 +483,7 @@ export function getStrictSubordinateUsers(user = getActiveUser(), allUsers = loa
 }
 
 export type DirectApprovalRelation = "ap1" | "ap2" | "checker" | "validator" | "view_only";
+export type WorkflowStageRole = "checker" | "approver1" | "approver2" | "validator";
 
 /**
  * Membedakan apakah pengguna yang login adalah Approver Langsung (Reg No AP1 / Reg No AP2 / Checker / Validator)
@@ -526,6 +527,94 @@ export function getDirectApprovalRoleForTarget(
 }
 
 /**
+ * Menentukan tahapan spesifik ("checker" | "approver1" | "approver2" | "validator" | null)
+ * dari user yang sedang login terhadap suatu pengajuan karyawan:
+ * - KPI & SMART Goals: Submit -> HR Unit Check ("checker") -> Approver 1 ("approver1") -> Approver 2 ("approver2") -> HR ICF Validate ("validator")
+ * - Modul lainnya: Approver 1 ("approver1") -> Approver 2 ("approver2")
+ */
+export function resolveWorkflowStageForTarget(
+  viewer: ManagedUser,
+  targetEmployeeIdOrName: string,
+  moduleType = "",
+  workflowStepState?: {
+    checkerDone?: boolean;
+    a1Done?: boolean;
+    a2Done?: boolean;
+    validatorDone?: boolean;
+  },
+  allUsers = loadManagedUsers(),
+): WorkflowStageRole | null {
+  const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
+  const viewerClean = viewer.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+  const isSelf =
+    viewer.employeeId.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+    viewer.name.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+    Boolean(q && viewerClean === q);
+
+  const target = allUsers.find((u) => {
+    const uNum = u.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
+    return (
+      u.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      u.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
+      (q && uNum === q)
+    );
+  });
+
+  const isFourStepModule = moduleType === "KPI" || moduleType === "SMART Goals";
+  const checkerDone = Boolean(workflowStepState?.checkerDone);
+  const a1Done = Boolean(workflowStepState?.a1Done);
+  const a2Done = Boolean(workflowStepState?.a2Done);
+
+  const reg = (viewer.regNo ?? "").trim().toLowerCase();
+  const emp = viewer.employeeId.trim().toLowerCase();
+  const nm = viewer.name.trim().toLowerCase();
+  const ap1 = (target?.regNoAp1 ?? "").trim().toLowerCase();
+  const ap2 = (target?.regNoAp2 ?? "").trim().toLowerCase();
+
+  const isAp1 = Boolean(target && ((reg && ap1 === reg) || (emp && ap1 === emp) || (nm && ap1 === nm)));
+  const isAp2 = Boolean(target && ((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm)));
+  const isHrUnitChecker = Boolean(
+    !isSelf &&
+      isFourStepModule &&
+      (viewer.role === "HR Unit" || viewer.isHrUnitChecker) &&
+      target &&
+      normOrgName(viewer.company) === normOrgName(target.company),
+  );
+  const isHrIcfValidator = Boolean(isAdminOrHrIcfRole(viewer.role) || viewer.isHrIcfValidator);
+
+  if (isFourStepModule) {
+    if (isHrUnitChecker && !checkerDone) {
+      return "checker";
+    }
+    if (isAp1 && (!isAp2 || !a1Done)) {
+      return "approver1";
+    }
+    if (isAp2 && (!isHrIcfValidator || !a2Done)) {
+      return "approver2";
+    }
+    if (isHrIcfValidator) {
+      return "validator";
+    }
+    if (isHrUnitChecker) {
+      return "checker";
+    }
+    if (isAp1) return "approver1";
+    if (isAp2) return "approver2";
+    return null;
+  }
+
+  if (isAp1 && isAp2) {
+    return a1Done ? "approver2" : "approver1";
+  }
+  if (isAp1) return "approver1";
+  if (isAp2) return "approver2";
+  if (isHrIcfValidator) {
+    return a1Done ? "approver2" : "approver1";
+  }
+  return null;
+}
+
+/**
  * Menentukan peran reviewer ("approver1" | "approver2" | null) dari user yang sedang login
  * terhadap suatu transaksi pengajuan karyawan berdasarkan alur modul:
  * - KPI & SMART Goals: Check (HR Unit) -> Approval 1 (AP1) -> Approval 2 (AP2) -> Validate (HR ICF / Admin)
@@ -544,66 +633,20 @@ export function resolveReviewerRoleForTarget(
     validatorDone?: boolean;
   },
 ): "approver1" | "approver2" | null {
-  const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
-  const viewerClean = viewer.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
-  const isSelf =
-    viewer.employeeId.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-    viewer.name.trim().toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-    (q && viewerClean === q);
-
-  const target = allUsers.find((u) => {
-    const uNum = u.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
-    return (
-      u.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-      u.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-      (q && uNum === q)
-    );
-  });
-
-  const isFourStepModule = moduleType === "KPI" || moduleType === "SMART Goals";
-
-  // Bagian XII Poin 1 & 2: HR Unit Checker memeriksa pengajuan KPI & SMART Goals di unit usahanya (kecuali miliknya sendiri)
-  if (
-    !isSelf &&
-    isFourStepModule &&
-    (viewer.role === "HR Unit" || viewer.isHrUnitChecker) &&
-    target &&
-    normOrgName(viewer.company) === normOrgName(target.company)
-  ) {
-    const reg = (viewer.regNo ?? "").trim().toLowerCase();
-    const emp = viewer.employeeId.trim().toLowerCase();
-    const nm = viewer.name.trim().toLowerCase();
-    const ap2 = (target.regNoAp2 ?? "").trim().toLowerCase();
-    const isAlsoAp2 = Boolean((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm));
-    if (isAlsoAp2 && (workflowStepState?.a1Done || isStep1Completed)) {
-      return "approver2";
-    }
-    return "approver1";
-  }
-
-  if (target) {
-    const reg = (viewer.regNo ?? "").trim().toLowerCase();
-    const emp = viewer.employeeId.trim().toLowerCase();
-    const nm = viewer.name.trim().toLowerCase();
-    const ap1 = (target.regNoAp1 ?? "").trim().toLowerCase();
-    const ap2 = (target.regNoAp2 ?? "").trim().toLowerCase();
-
-    const isAp1 = Boolean((reg && ap1 === reg) || (emp && ap1 === emp) || (nm && ap1 === nm));
-    const isAp2 = Boolean((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm));
-
-    if (isAp1 && isAp2) {
-      return isStep1Completed ? "approver2" : "approver1";
-    }
-    if (isAp1) return "approver1";
-    if (isAp2) return "approver2";
-  }
-
-  // Administrator / HR ICF bertindak sebagai Validator akhir (atau memproses tahap yang sedang aktif)
-  if (isAdminOrHrIcfRole(viewer.role) || viewer.isHrIcfValidator) {
-    return isStep1Completed ? "approver2" : "approver1";
-  }
-
-  return null;
+  const stage = resolveWorkflowStageForTarget(
+    viewer,
+    targetEmployeeIdOrName,
+    moduleType,
+    {
+      checkerDone: workflowStepState?.checkerDone,
+      a1Done: workflowStepState?.a1Done ?? isStep1Completed,
+      a2Done: workflowStepState?.a2Done,
+      validatorDone: workflowStepState?.validatorDone,
+    },
+    allUsers,
+  );
+  if (!stage) return null;
+  return stage === "approver2" || stage === "validator" ? "approver2" : "approver1";
 }
 
 export interface ScopedHierarchyFilterOptions {

@@ -36,6 +36,7 @@ export interface ApprovalRow {
   approvalDate: string;
   status: string;
   reviewerRoleForRow?: ReviewerRole;
+  workflowStageForRow?: "checker" | "approver1" | "approver2" | "validator";
   editRequestReason?: string;
   editRequestDate?: string;
   period?: string;
@@ -2017,7 +2018,22 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
   const [activeForm, setActiveForm]         = useState<"A" | "B" | "C">("A");
 
   const hasAssessment = needsAssessment(row.type);
-  const effectiveReadOnly = readOnly || isFullyAssessed || row.status === "Validated";
+  const isFourStepType = row.type === "KPI" || row.type === "SMART Goals";
+  const isCheckerStage = isFourStepType && row.workflowStageForRow === "checker";
+  const isValidatorStage = isFourStepType && row.workflowStageForRow === "validator";
+  const primaryApproveLabel = isCheckerStage
+    ? "Tandai Checked"
+    : isValidatorStage
+    ? "Validate"
+    : "Approve";
+  const effectiveReadOnly =
+    readOnly ||
+    isFullyAssessed ||
+    row.status === "Validated" ||
+    row.status === "Checked" ||
+    row.status === "Pending-Approver 1" ||
+    row.status === "Pending-Approver 2" ||
+    row.status === "Pending-Validate";
   const badge = TYPE_BADGE[row.type] ?? { color: "bg-gray-50 text-gray-600 border-gray-200", icon: <ClipboardList className="w-3.5 h-3.5" /> };
 
   const handleRate = (key: string, val: number) => setAssessorRatings((prev) => ({ ...prev, [key]: val }));
@@ -2030,6 +2046,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
 
   // Check if all required items are filled across ALL forms
   const allFilled = (() => {
+    if (isCheckerStage || isValidatorStage) return true;
     if (row.type === "SMART Goals") {
       return (
         ownerGoalsForCheck.every((g) => assessorRatings[`sg-${g.id}`] != null) &&
@@ -2267,7 +2284,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                       className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <Check className="w-4 h-4" />
-                      Approve
+                      {primaryApproveLabel}
                     </button>
                   </>
                 )}
@@ -2309,9 +2326,12 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
             <div className="flex items-center justify-center w-14 h-14 rounded-full bg-green-50 mx-auto mb-4">
               <CheckCircle2 className="w-7 h-7 text-green-600" />
             </div>
-            <h3 className="text-base font-bold text-gray-900 mb-2 text-center">Confirm Approval</h3>
+            <h3 className="text-base font-bold text-gray-900 mb-2 text-center">
+              {isCheckerStage ? "Konfirmasi Tandai Checked" : isValidatorStage ? "Konfirmasi Validasi (Validate)" : "Confirm Approval"}
+            </h3>
             <p className="text-sm text-gray-600 mb-1 text-center">
-              Approve <span className="font-semibold text-gray-800">{row.type}</span> submission by
+              {isCheckerStage ? "Tandai Checked pengajuan" : isValidatorStage ? "Validasi pengajuan" : "Approve"}{" "}
+              <span className="font-semibold text-gray-800">{row.type}</span> submission by
             </p>
             <p className="text-sm font-semibold text-gray-800 mb-6 text-center">{row.name} ({row.employeeId})</p>
             <div className="flex items-center gap-3">
@@ -2325,7 +2345,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                 onClick={() => {
                   setShowApproveConfirm(false);
                   // Save assessment data for SMART Goals (uses Approve path, not Submit)
-                  if (row.type === "SMART Goals") {
+                  if (row.type === "SMART Goals" && !isCheckerStage && !isValidatorStage) {
                     const commentsToSave = Object.fromEntries(Object.entries(smartComments).map(([k, v]) => [k, v]));
                     saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }));
                   }
@@ -2333,7 +2353,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                 }}
                 className="flex-1 py-2.5 rounded-full bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors"
               >
-                Confirm Approve
+                {isCheckerStage ? "Ya, Tandai Checked" : isValidatorStage ? "Ya, Validate" : "Confirm Approve"}
               </button>
             </div>
           </div>

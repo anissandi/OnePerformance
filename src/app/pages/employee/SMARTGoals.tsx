@@ -709,8 +709,10 @@ export function SMARTGoalsPage() {
     const a1 = wfRec?.decisions.approver1?.status ?? "";
     const a2 = wfRec?.decisions.approver2?.status ?? "";
     const chk = wfRec?.decisions.checker?.status ?? "";
-    const isRev = a1 === "Revision" || a2 === "Revision" || chk === "Revision";
-    const isVal = a2 === "Validated" || a2 === "Approved" || a2.startsWith("Assessed");
+    const val = wfRec?.decisions.validator?.status ?? "";
+    const isRev = a1 === "Revision" || a2 === "Revision" || chk === "Revision" || val === "Revision";
+    const isVal = val === "Validated" || a2 === "Validated";
+    const isA2Done = a2 === "Approved" || a2.startsWith("Assessed") || a2 === "Validated";
     const isA1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
     const isChkDone = Boolean(chk && chk !== "Revision");
 
@@ -722,11 +724,14 @@ export function SMARTGoalsPage() {
     } else if (isVal) {
       statusLabel = "Validated";
       statusTone = "validated";
+    } else if (isA2Done) {
+      statusLabel = "Pending-Validate (HR ICF)";
+      statusTone = "in_progress";
     } else if (isA1Done) {
-      statusLabel = "Approved Approver 1 · Pending Approver 2 / Validate";
+      statusLabel = "Pending-Approver 2";
       statusTone = "in_progress";
     } else if (isChkDone) {
-      statusLabel = "Checked (HR Unit) · Pending Approver 1";
+      statusLabel = "Pending-Approver 1";
       statusTone = "in_progress";
     } else if (wfRec) {
       statusLabel = "Submitted · Pending Check HR Unit";
