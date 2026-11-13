@@ -178,9 +178,10 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "setting_user_mgmt",     label: "User Management",      path: "/settings/user-management",      icon: "Users",       isVisible: true,  order: 6, roles: HR_ADMIN },
       { id: "setting_access_mgmt",   label: "Access Management",    path: "/settings/access-management",    icon: "Shield",      isVisible: true,  order: 7, roles: ["Administrator"] as Role[] },
       { id: "setting_menu_mgmt",     label: "Menu Management",      path: "/settings/menu-management",      icon: "Menu",        isVisible: true,  order: 8, roles: ["Administrator"] as Role[] },
-      { id: "setting_notification",  label: "Notification Management", path: "/settings/notification-management", icon: "Bell",   isVisible: true,  order: 9, roles: ["Administrator", "HR ICF"] as Role[] },
-      { id: "setting_data_sync",     label: "Data Sync",            path: "/settings/data-sync",            icon: "RefreshCw",   isVisible: true,  order: 10, roles: HR_ADMIN },
-      { id: "setting_audit",         label: "Audit Trail",          path: "/settings/audit-trail",          icon: "FileSearch",  isVisible: false, order: 11, roles: HR_ROLES },
+      { id: "setting_login_mgmt",    label: "Login Management",     path: "/settings/login-management",     icon: "Shield",      isVisible: true,  order: 9, roles: ["Administrator", "HR ICF"] as Role[] },
+      { id: "setting_notification",  label: "Notification Management", path: "/settings/notification-management", icon: "Bell",   isVisible: true,  order: 10, roles: ["Administrator", "HR ICF"] as Role[] },
+      { id: "setting_data_sync",     label: "Data Sync",            path: "/settings/data-sync",            icon: "RefreshCw",   isVisible: true,  order: 11, roles: HR_ADMIN },
+      { id: "setting_audit",         label: "Audit Trail",          path: "/settings/audit-trail",          icon: "FileSearch",  isVisible: false, order: 12, roles: HR_ROLES },
     ],
   },
 ];

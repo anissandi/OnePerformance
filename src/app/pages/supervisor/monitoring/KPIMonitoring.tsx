@@ -1,6 +1,6 @@
 // @refresh reset
 import React, { useEffect, useState } from "react";
-import { Search, TrendingUp, BarChart2, AlertTriangle, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
+import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
@@ -978,6 +978,40 @@ function AchievementBar({ value }: { value: number }) {
 
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
+const KPI_WORKFLOW_STATUS_STYLE: Record<string, { bg: string; icon: React.ElementType }> = {
+  "Unsubmitted":        { bg: "bg-gray-100 text-gray-500",     icon: AlertCircle },
+  "Pending-Check":      { bg: "bg-amber-100 text-amber-700",   icon: Clock },
+  "Pending-Approver 1": { bg: "bg-amber-100 text-amber-700",   icon: Clock },
+  "Pending-Approver 2": { bg: "bg-sky-100 text-sky-700",       icon: Clock },
+  "Pending-Validate":   { bg: "bg-indigo-100 text-indigo-700", icon: Clock },
+  "Revision":           { bg: "bg-orange-100 text-orange-700", icon: AlertCircle },
+  "Validated":          { bg: "bg-green-100 text-green-700",   icon: CheckCircle2 },
+};
+
+function resolveSupKpiPhaseStatus(rec?: ReturnType<typeof loadWorkflowRecords>[number]): string {
+  if (!rec) return "Unsubmitted";
+  const val = rec.decisions.validator?.status ?? "";
+  const a2 = rec.decisions.approver2?.status ?? "";
+  const a1 = rec.decisions.approver1?.status ?? "";
+  const chk = rec.decisions.checker?.status ?? "";
+  if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") {
+    return "Revision";
+  }
+  if (val === "Validated" || a2 === "Validated") {
+    return "Validated";
+  }
+  if (a2 === "Approved" || a2.startsWith("Assessed")) {
+    return "Pending-Validate";
+  }
+  if (a1 === "Approved" || a1.startsWith("Assessed")) {
+    return "Pending-Approver 2";
+  }
+  if (chk && chk !== "Revision") {
+    return "Pending-Approver 1";
+  }
+  return "Pending-Check";
+}
+
 export function SupervisorMonitoringKPI() {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -1009,11 +1043,11 @@ export function SupervisorMonitoringKPI() {
         (w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
       );
       const setApproved = Boolean(
-        wfSet?.decisions.approver2 &&
-          (wfSet.decisions.approver2.status === "Validated" ||
-            wfSet.decisions.approver2.status === "Approved" ||
-            wfSet.decisions.approver2.status.startsWith("Assessed")),
+        wfSet?.decisions.validator?.status === "Validated" ||
+          wfSet?.decisions.approver2?.status === "Validated",
       );
+      const settingStatus = resolveSupKpiPhaseStatus(wfSet);
+      const measurementStatus = resolveSupKpiPhaseStatus(wfMeas);
       const hasActiveKpi = Boolean(setApproved || wfMeas);
       const kpi: KPIRecord = hasActiveKpi
         ? {
@@ -1040,7 +1074,7 @@ export function SupervisorMonitoringKPI() {
             rcaClosedSet: new Set<string>(),
             rcaItems: [],
           };
-      return { idx, emp, kpi };
+      return { idx, emp, kpi, settingStatus, measurementStatus };
     })
     .filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()) || emp.id.toLowerCase().includes(search.toLowerCase()));
 
@@ -1102,10 +1136,17 @@ export function SupervisorMonitoringKPI() {
                 <th className="py-3 px-5">Avg. Achievement</th>
                 <th className="py-3 px-5 text-center">RCA Req.</th>
                 <th className="py-3 px-5 text-center">RCA Done</th>
+                <th className="py-3 px-5">KPI Setting Status</th>
+                <th className="py-3 px-5">KPI Measurement Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ idx, emp, kpi }) => (
+              {rows.map(({ idx, emp, kpi, settingStatus, measurementStatus }) => {
+                const setSt = KPI_WORKFLOW_STATUS_STYLE[settingStatus] ?? KPI_WORKFLOW_STATUS_STYLE["Unsubmitted"];
+                const SetIcon = setSt.icon;
+                const measSt = KPI_WORKFLOW_STATUS_STYLE[measurementStatus] ?? KPI_WORKFLOW_STATUS_STYLE["Unsubmitted"];
+                const MeasIcon = measSt.icon;
+                return (
                 <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                   <td className="py-3.5 px-5 text-center text-xs font-semibold text-gray-400">{idx + 1}</td>
                   <td className="py-3.5 px-5">
@@ -1148,8 +1189,21 @@ export function SupervisorMonitoringKPI() {
                       ? <span className={`text-sm font-semibold ${kpi.rcaCompleted === kpi.rcaRequired ? "text-green-600" : "text-amber-600"}`}>{kpi.rcaCompleted}/{kpi.rcaRequired}</span>
                       : <span className="text-gray-300 text-sm">—</span>}
                   </td>
+                  <td className="py-3.5 px-5">
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${setSt.bg}`}>
+                      <SetIcon className="w-3 h-3" />
+                      {settingStatus}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-5">
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${measSt.bg}`}>
+                      <MeasIcon className="w-3 h-3" />
+                      {measurementStatus}
+                    </span>
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

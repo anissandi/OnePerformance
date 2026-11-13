@@ -4,6 +4,8 @@ import { loadRCASubmissions, deleteRCASubmission, saveRCASubmission, updateRCASu
 import type { StoredMasalahBlock, StoredRCAActionPlan } from "../shared/rcaStore";
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { DatePickerID } from "../../components/DatePickerID";
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
+import { getActiveUser } from "../../store/authStore";
 import {
   Plus, X, Eye, Send, CheckCircle2, Trash2, ChevronDown,
   Clock, ArrowLeft, Info, FilePlus, Upload, FileText, Edit3,
@@ -208,15 +210,8 @@ const CLOSED_RCA_DATA_C2: RCAItem[] = [{
   }],
 }];
 
-const INITIAL_OPEN_ROWS: RCARow[] = [
-  { id: "o1", no: 1, periode: "Jan", kpiIndicator: "Implementasi ERP System",  targetMonthly: "100%",      actual: "85%",     rcaPercentage: 0,  approvalStatus: "Pending-Approver 1", year: "2026", submitted: true,  submittedDate: "2026-01-20", lastApprovedDate: "—",          rcaData: ERP_RCA_DATA      },
-  { id: "o2", no: 2, periode: "Feb", kpiIndicator: "Training Completion Rate", targetMonthly: "≥ 90%",     actual: "78%",     rcaPercentage: 0,  approvalStatus: "Pending-Approver 2", year: "2026", submitted: true,  submittedDate: "2026-02-22", lastApprovedDate: "2026-02-24", rcaData: TRAINING_RCA_DATA },
-  { id: "o3", no: 3, periode: "Mar", kpiIndicator: "Recruitment Cycle Time",   targetMonthly: "≤ 30 hari", actual: "35 hari", rcaPercentage: 0,  approvalStatus: "Approved",           year: "2026", submitted: false, submittedDate: "—",          lastApprovedDate: "—",          rcaData: APPROVED_RCA_DATA },
-];
-const INITIAL_CLOSED_ROWS: RCARow[] = [
-  { id: "c1", no: 1, periode: "Jan", kpiIndicator: "Headcount Fulfilment",    targetMonthly: "100%",  actual: "80%", rcaPercentage: 100, approvalStatus: "Closed", year: "2026", submitted: true, submittedDate: "2026-01-18", lastApprovedDate: "2026-01-25", rcaData: CLOSED_RCA_DATA_C1 },
-  { id: "c2", no: 2, periode: "Des", kpiIndicator: "Employee Retention Rate", targetMonthly: "≥ 95%", actual: "90%", rcaPercentage: 100, approvalStatus: "Closed", year: "2025", submitted: true, submittedDate: "2025-12-12", lastApprovedDate: "2025-12-20", rcaData: CLOSED_RCA_DATA_C2 },
-];
+const INITIAL_OPEN_ROWS: RCARow[] = [];
+const INITIAL_CLOSED_ROWS: RCARow[] = [];
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 
@@ -1373,62 +1368,81 @@ export function RCAPage() {
   const [tab,         setTab]         = useState<"open" | "closed">("open");
   const [filterYear,  setFilterYear]  = useState("");
   const [filterMonth, setFilterMonth] = useState("");
-  const [openRows,    setOpenRows]    = useState<RCARow[]>(INITIAL_OPEN_ROWS);
-  const [closedRows]                  = useState<RCARow[]>(INITIAL_CLOSED_ROWS);
+  const [openRows,    setOpenRows]    = useState<RCARow[]>([]);
+  const [closedRows,  setClosedRows]  = useState<RCARow[]>([]);
   const [detailRow,   setDetailRow]   = useState<RCARow | null>(null);
   const [showCreate,  setShowCreate]  = useState(false);
 
-  useEffect(() => {
+  const syncRCARowsFromStore = () => {
     const stored = loadRCASubmissions();
-    if (!stored.length) return;
-    setOpenRows((prev) => {
-      const existingIds = new Set(prev.map((r) => r.id));
-      const merged = [...prev];
-      stored.forEach((s, si) => {
-        const rcaItem: RCAItem = {
-          id: s.id + "_item",
-          no: 1,
-          periode: s.periode,
-          kpi: s.kpiIndicator,
-          satuan: s.satuan,
-          baseline: s.baseline,
-          target: s.targetMonthly,
-          actual: s.actual,
-          masalahBlocks: s.masalahBlocks && s.masalahBlocks.length > 0
-            ? s.masalahBlocks.map((b, bi) => ({
-                id: b.id || s.id + `_block${bi}`,
-                masalahUtama: b.masalahUtama,
-                kenapaA: b.kenapaA,
-                kenapaB: b.kenapaB,
-                kenapaC: b.kenapaC,
-                actionPlans: b.actionPlans as ActionPlan[],
-              }))
-            : [{
-                id: s.id + "_block0",
-                masalahUtama: s.masalahUtama.join(" / "),
-                kenapaA: s.kenapaA,
-                kenapaB: s.kenapaB,
-                kenapaC: s.kenapaC,
-                actionPlans: s.actionPlans as ActionPlan[],
-              }],
-        };
-        if (existingIds.has(s.id)) {
-          const idx = merged.findIndex((r) => r.id === s.id);
-          if (idx >= 0) merged[idx] = { ...merged[idx], rcaData: [rcaItem], submittedDate: s.submittedDate, submitted: true };
-        } else {
-          merged.push({
-            id: s.id, no: prev.length + si + 1,
-            periode: s.periode, kpiIndicator: s.kpiIndicator,
-            targetMonthly: s.targetMonthly, actual: s.actual,
-            rcaPercentage: 0, approvalStatus: "Pending-Approver 1",
-            year: s.year, submitted: true, submittedDate: s.submittedDate,
-            lastApprovedDate: "—", rcaData: [rcaItem],
-          });
-          existingIds.add(s.id);
-        }
-      });
-      return merged;
+    const nextOpen: RCARow[] = [];
+    const nextClosed: RCARow[] = [];
+    stored.forEach((s) => {
+      const rcaItem: RCAItem = {
+        id: s.id + "_item",
+        no: 1,
+        periode: s.periode,
+        kpi: s.kpiIndicator,
+        satuan: s.satuan,
+        baseline: s.baseline,
+        target: s.targetMonthly,
+        actual: s.actual,
+        masalahBlocks: s.masalahBlocks && s.masalahBlocks.length > 0
+          ? s.masalahBlocks.map((b, bi) => ({
+              id: b.id || s.id + `_block${bi}`,
+              masalahUtama: b.masalahUtama,
+              kenapaA: b.kenapaA,
+              kenapaB: b.kenapaB,
+              kenapaC: b.kenapaC,
+              actionPlans: b.actionPlans as ActionPlan[],
+            }))
+          : [{
+              id: s.id + "_block0",
+              masalahUtama: s.masalahUtama.join(" / "),
+              kenapaA: s.kenapaA,
+              kenapaB: s.kenapaB,
+              kenapaC: s.kenapaC,
+              actionPlans: s.actionPlans as ActionPlan[],
+            }],
+      };
+      const status = (s.approvalStatus as ApprovalStatus) || "Pending-Approver 1";
+      const rowObj: RCARow = {
+        id: s.id,
+        no: status === "Closed" ? nextClosed.length + 1 : nextOpen.length + 1,
+        periode: s.periode,
+        kpiIndicator: s.kpiIndicator,
+        targetMonthly: s.targetMonthly,
+        actual: s.actual,
+        rcaPercentage: computeProgressAPs([rcaItem], status === "Closed"),
+        approvalStatus: status,
+        year: s.year || "2026",
+        submitted: true,
+        submittedDate: s.submittedDate,
+        lastApprovedDate: "—",
+        rcaData: [rcaItem],
+      };
+      if (status === "Closed") {
+        nextClosed.push(rowObj);
+      } else {
+        nextOpen.push(rowObj);
+      }
     });
+    setOpenRows(nextOpen);
+    setClosedRows(nextClosed);
+  };
+
+  useEffect(() => {
+    syncRCARowsFromStore();
+    window.addEventListener("pa-db-hydrated", syncRCARowsFromStore);
+    window.addEventListener("pa-auth-updated", syncRCARowsFromStore);
+    window.addEventListener("appraisal-updated", syncRCARowsFromStore);
+    window.addEventListener("storage", syncRCARowsFromStore);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", syncRCARowsFromStore);
+      window.removeEventListener("pa-auth-updated", syncRCARowsFromStore);
+      window.removeEventListener("appraisal-updated", syncRCARowsFromStore);
+      window.removeEventListener("storage", syncRCARowsFromStore);
+    };
   }, []);
 
   const filterRows = (rows: RCARow[]) =>
@@ -1455,7 +1469,7 @@ export function RCAPage() {
         );
         const existing = loadRCASubmissions().find((entry) => entry.key === storeKey);
         saveRCASubmission({
-          key: storeKey, id: row.id, employeeId: "EMP002", submittedDate: today,
+          key: storeKey, id: row.id, employeeId: getActiveUser().employeeId, submittedDate: today,
           periode: row.periode, monthLabel: row.periode, year: row.year,
           kpiIndicator: row.kpiIndicator, targetMonthly: row.targetMonthly, actual: row.actual,
           achievementPct: 0, satuan: updatedData[0]?.satuan ?? "", baseline: updatedData[0]?.baseline ?? "",
@@ -1471,8 +1485,8 @@ export function RCAPage() {
     setDetailRow(null);
   };
 
-  const handleCreated = (newRow: RCARow) => {
-    setOpenRows((prev) => [...prev, { ...newRow, no: prev.length + 1 }]);
+  const handleCreated = (_newRow: RCARow) => {
+    syncRCARowsFromStore();
     setShowCreate(false);
   };
 
@@ -1496,6 +1510,12 @@ export function RCAPage() {
           </button>
         </div>
       </div>
+
+      <ModuleApprovalStatusBar
+        module="RCA"
+        phase="measurement"
+        submittedOverride={openRows.length > 0 || closedRows.length > 0}
+      />
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-3 flex items-center gap-4 flex-wrap">
         <div className="flex gap-1 bg-gray-100 rounded-lg p-1">

@@ -125,6 +125,7 @@ const hrLinks = [
       { to: "/hr/settings/user-management", label: "User Management", icon: Users },
       { to: "/hr/settings/access-management", label: "Access Management", icon: Shield },
       { to: "/hr/settings/menu-management", label: "Menu Management", icon: Menu },
+      { to: "/hr/settings/login-management", label: "Login Management", icon: Shield },
       { to: "/hr/settings/data-sync", label: "Data Sync", icon: RefreshCw },
       { to: "/hr/settings/audit-trail", label: "Audit Trail", icon: FileSearch },
     ]
@@ -293,6 +294,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("setting_user_mgmt") ? [{ to: `${p}/settings/user-management`, label: "User Management", icon: Users }] : []),
       ...(canView("setting_access_mgmt") ? [{ to: `${p}/settings/access-management`, label: "Access Management", icon: Shield }] : []),
       ...(canView("setting_menu_mgmt") ? [{ to: `${p}/settings/menu-management`, label: "Menu Management", icon: Menu }] : []),
+      ...(canView("setting_login_mgmt") ? [{ to: `${p}/settings/login-management`, label: "Login Management", icon: Shield }] : []),
       ...(canView("setting_notification") ? [{ to: `${p}/settings/notification-management`, label: "Notification Management", icon: Bell }] : []),
       ...(canView("setting_data_sync") ? [{ to: `${p}/settings/data-sync`, label: "Data Sync", icon: RefreshCw }] : []),
       ...(canView("setting_audit") ? [{ to: `${p}/settings/audit-trail`, label: "Audit Trail", icon: FileSearch }] : []),

@@ -10,6 +10,7 @@ import {
 } from "../../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
 import { savePersistedState } from "../../../services/supabaseClient";
+import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
 import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock } from "lucide-react";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
@@ -4271,193 +4272,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   return (
     <div className="flex flex-col gap-5">
       {/* Up-to-date Approval Status Bar (Submitted -> HR Unit Check -> Approver 1 -> Approver 2 -> HR ICF Validate) */}
-      {!isCorporate && (() => {
-        const activeU = getActiveUser();
-        const chkDec = wfRecState?.decisions.checker;
-        const a1Dec = wfRecState?.decisions.approver1;
-        const a2Dec = wfRecState?.decisions.approver2;
-        const valDec = wfRecState?.decisions.validator;
-
-        const isRev =
-          chkDec?.status === "Revision" ||
-          a1Dec?.status === "Revision" ||
-          a2Dec?.status === "Revision" ||
-          valDec?.status === "Revision";
-        const isValDone = Boolean(valDec?.status === "Validated" || a2Dec?.status === "Validated");
-        const isA2Done = Boolean(a2Dec && (a2Dec.status === "Approved" || a2Dec.status.startsWith("Assessed") || a2Dec.status === "Validated"));
-        const isA1Done = Boolean(a1Dec && (a1Dec.status === "Approved" || a1Dec.status.startsWith("Assessed") || a1Dec.status === "Validated"));
-        const isChkDone = Boolean(
-          isA1Done ||
-            isA2Done ||
-            isValDone ||
-            (chkDec && chkDec.status !== "Revision"),
-        );
-        const isSubDone = Boolean(wfRecState || submitted);
-
-        let overallBadgeText = "Draft (Belum Disubmit)";
-        let overallBadgeCls = "bg-gray-100 text-gray-600 border-gray-200";
-        if (isRev) {
-          overallBadgeText = "Revision Requested";
-          overallBadgeCls = "bg-orange-50 text-orange-700 border-orange-300";
-        } else if (isValDone) {
-          overallBadgeText = "Validated";
-          overallBadgeCls = "bg-emerald-50 text-emerald-700 border-emerald-300";
-        } else if (isA2Done) {
-          overallBadgeText = "Pending-Validate (HR ICF)";
-          overallBadgeCls = "bg-indigo-50 text-indigo-700 border-indigo-200";
-        } else if (isA1Done) {
-          overallBadgeText = "Pending-Approver 2";
-          overallBadgeCls = "bg-sky-50 text-sky-700 border-sky-200";
-        } else if (isChkDone) {
-          overallBadgeText = "Pending-Approver 1";
-          overallBadgeCls = "bg-amber-50 text-amber-700 border-amber-200";
-        } else if (isSubDone) {
-          overallBadgeText = "Submitted · Pending HR Unit Check";
-          overallBadgeCls = "bg-blue-50 text-blue-700 border-blue-200";
-        }
-
-        const stepItems = [
-          {
-            label: "1. Submitted",
-            actor: activeU.name,
-            statusText: isSubDone ? "Submitted" : "Belum Submit",
-            date: wfRecState?.submittedDate || "—",
-            state: isSubDone ? "done" : "idle",
-          },
-          {
-            label: "2. HR Unit Check",
-            actor: chkDec?.approverName || `HR Unit (${activeU.company})`,
-            statusText:
-              chkDec?.status === "Revision"
-                ? "Revision"
-                : isChkDone
-                ? chkDec?.status === "Bypassed"
-                  ? "Bypassed"
-                  : "Checked"
-                : isSubDone
-                ? "Pending Check"
-                : "Waiting",
-            date: chkDec?.date || "—",
-            state: chkDec?.status === "Revision" ? "revision" : isChkDone ? "done" : isSubDone ? "active" : "idle",
-          },
-          {
-            label: "3. Approver 1",
-            actor: a1Dec?.approverName || activeU.regNoAp1 || "Approver 1",
-            statusText:
-              a1Dec?.status === "Revision"
-                ? "Revision"
-                : isA1Done
-                ? "Approved"
-                : isChkDone
-                ? "Pending-Approver 1"
-                : "Waiting",
-            date: a1Dec?.date || "—",
-            state: a1Dec?.status === "Revision" ? "revision" : isA1Done ? "done" : isChkDone ? "active" : "idle",
-          },
-          {
-            label: "4. Approver 2",
-            actor: a2Dec?.approverName || activeU.regNoAp2 || "Approver 2",
-            statusText:
-              a2Dec?.status === "Revision"
-                ? "Revision"
-                : isA2Done
-                ? "Approved"
-                : isA1Done
-                ? "Pending-Approver 2"
-                : "Waiting",
-            date: a2Dec?.date || "—",
-            state: a2Dec?.status === "Revision" ? "revision" : isA2Done ? "done" : isA1Done ? "active" : "idle",
-          },
-          {
-            label: "5. HR ICF Validate",
-            actor: valDec?.approverName || "HR ICF",
-            statusText:
-              valDec?.status === "Revision"
-                ? "Revision"
-                : isValDone
-                ? "Validated"
-                : isA2Done
-                ? "Pending-Validate"
-                : "Waiting",
-            date: valDec?.date || (isValDone ? a2Dec?.date || "—" : "—"),
-            state: valDec?.status === "Revision" ? "revision" : isValDone ? "done" : isA2Done ? "active" : "idle",
-          },
-        ];
-
-        const revHistory = wfRecState?.revisionHistory ?? [];
-
-        return (
-          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm space-y-3">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-[#1A284F]">
-                  Status Approval KPI Setting (Up-to-Date)
-                </span>
-              </div>
-              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${overallBadgeCls}`}>
-                {isValDone ? (
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                ) : (
-                  <span className="w-2 h-2 rounded-full bg-current" />
-                )}
-                {overallBadgeText}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
-              {stepItems.map((st) => {
-                const boxCls =
-                  st.state === "done"
-                    ? "border-emerald-200 bg-emerald-50/60"
-                    : st.state === "revision"
-                    ? "border-orange-300 bg-orange-50/70"
-                    : st.state === "active"
-                    ? "border-amber-300 bg-amber-50/60"
-                    : "border-gray-200 bg-gray-50/60";
-                const badgeCls =
-                  st.state === "done"
-                    ? "bg-emerald-100 text-emerald-800"
-                    : st.state === "revision"
-                    ? "bg-orange-100 text-orange-800"
-                    : st.state === "active"
-                    ? "bg-amber-100 text-amber-800"
-                    : "bg-gray-200 text-gray-600";
-                return (
-                  <div key={st.label} className={`rounded-lg border px-3 py-2.5 flex flex-col justify-between gap-1.5 ${boxCls}`}>
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="text-[11px] font-bold text-[#1A284F]">{st.label}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeCls}`}>
-                        {st.statusText}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-[10px] text-gray-500">
-                      <span className="truncate font-medium" title={st.actor}>{st.actor}</span>
-                      <span className="shrink-0">{st.date}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {revHistory.length > 0 && (
-              <div className="rounded-lg border border-orange-200 bg-orange-50/70 p-3 space-y-1.5">
-                <p className="text-xs font-bold text-orange-800">
-                  Catatan / Riwayat Revisi Approver ({revHistory.length}):
-                </p>
-                {revHistory.map((rev, idx) => (
-                  <div key={idx} className="bg-white border border-orange-100 rounded px-3 py-1.5 text-xs flex items-start justify-between gap-2">
-                    <div>
-                      <span className="font-semibold text-gray-800">{rev.role} ({rev.approverName}): </span>
-                      <span className="text-gray-700">{rev.note}</span>
-                    </div>
-                    <span className="text-[10px] text-gray-400 shrink-0">{rev.date}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      {!isCorporate && (
+        <ModuleApprovalStatusBar
+          module="KPI"
+          phase="setting"
+          submittedOverride={submitted}
+        />
+      )}
 
       {/* Controls row */}
       <div className="flex items-center justify-between gap-4 flex-wrap">

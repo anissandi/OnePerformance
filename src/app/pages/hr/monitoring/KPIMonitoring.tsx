@@ -1,9 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, TrendingUp, CheckCircle2, AlertCircle, Clock, Filter } from "lucide-react";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
-import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../../shared/appraisalWorkflowStore";
 
 // ─── Mock KPI data per employee ───────────────────────────────────────────────
+
+type KPIWorkflowStatus =
+  | "Unsubmitted"
+  | "Pending-Check"
+  | "Pending-Approver 1"
+  | "Pending-Approver 2"
+  | "Pending-Validate"
+  | "Revision"
+  | "Validated";
 
 interface KPIRecord {
   employeeId: string;
@@ -13,34 +22,48 @@ interface KPIRecord {
   perspektifBreakdown: { name: string; avg: number }[];
   rcaRequired: number;
   rcaCompleted: number;
-  status: "Submitted" | "Draft" | "Belum Mulai";
+  status: KPIWorkflowStatus;
+  measurementStatus: KPIWorkflowStatus;
   lastUpdated: string;
 }
 
-const KPI_DATA: KPIRecord[] = [
-  { employeeId: "E001", totalKPI: 12, submittedKPI: 12, avgAchievement: 94, perspektifBreakdown: [{ name: "Finansial", avg: 98 }, { name: "Proses", avg: 91 }, { name: "EHS", avg: 95 }, { name: "Customer", avg: 90 }, { name: "L&G", avg: 96 }], rcaRequired: 0, rcaCompleted: 0, status: "Submitted", lastUpdated: "2026-05-30" },
-  { employeeId: "E002", totalKPI: 8,  submittedKPI: 8,  avgAchievement: 78, perspektifBreakdown: [{ name: "Finansial", avg: 80 }, { name: "Proses", avg: 72 }, { name: "EHS", avg: 85 }, { name: "Customer", avg: 75 }, { name: "L&G", avg: 78 }], rcaRequired: 2, rcaCompleted: 2, status: "Submitted", lastUpdated: "2026-05-28" },
-  { employeeId: "E003", totalKPI: 10, submittedKPI: 10, avgAchievement: 88, perspektifBreakdown: [{ name: "Finansial", avg: 95 }, { name: "Proses", avg: 82 }, { name: "EHS", avg: 90 }, { name: "Customer", avg: 85 }, { name: "L&G", avg: 88 }], rcaRequired: 1, rcaCompleted: 1, status: "Submitted", lastUpdated: "2026-05-31" },
-  { employeeId: "E004", totalKPI: 7,  submittedKPI: 5,  avgAchievement: 65, perspektifBreakdown: [{ name: "Finansial", avg: 60 }, { name: "Proses", avg: 70 }, { name: "EHS", avg: 65 }, { name: "Customer", avg: 62 }, { name: "L&G", avg: 68 }], rcaRequired: 3, rcaCompleted: 1, status: "Draft",     lastUpdated: "2026-05-20" },
-  { employeeId: "E005", totalKPI: 9,  submittedKPI: 9,  avgAchievement: 91, perspektifBreakdown: [{ name: "Finansial", avg: 88 }, { name: "Proses", avg: 94 }, { name: "EHS", avg: 92 }, { name: "Customer", avg: 90 }, { name: "L&G", avg: 91 }], rcaRequired: 0, rcaCompleted: 0, status: "Submitted", lastUpdated: "2026-05-29" },
-  { employeeId: "E006", totalKPI: 11, submittedKPI: 11, avgAchievement: 82, perspektifBreakdown: [{ name: "Finansial", avg: 78 }, { name: "Proses", avg: 85 }, { name: "EHS", avg: 88 }, { name: "Customer", avg: 80 }, { name: "L&G", avg: 79 }], rcaRequired: 1, rcaCompleted: 1, status: "Submitted", lastUpdated: "2026-06-01" },
-  { employeeId: "E007", totalKPI: 6,  submittedKPI: 0,  avgAchievement: 0,  perspektifBreakdown: [],                                                                                                                                                      rcaRequired: 0, rcaCompleted: 0, status: "Belum Mulai", lastUpdated: "-" },
-  { employeeId: "E008", totalKPI: 14, submittedKPI: 14, avgAchievement: 97, perspektifBreakdown: [{ name: "Finansial", avg: 100 }, { name: "Proses", avg: 95 }, { name: "EHS", avg: 98 }, { name: "Customer", avg: 96 }, { name: "L&G", avg: 96 }], rcaRequired: 0, rcaCompleted: 0, status: "Submitted", lastUpdated: "2026-06-02" },
-  { employeeId: "E009", totalKPI: 7,  submittedKPI: 7,  avgAchievement: 73, perspektifBreakdown: [{ name: "Finansial", avg: 70 }, { name: "Proses", avg: 75 }, { name: "EHS", avg: 80 }, { name: "Customer", avg: 68 }, { name: "L&G", avg: 72 }], rcaRequired: 2, rcaCompleted: 0, status: "Submitted", lastUpdated: "2026-05-25" },
-  { employeeId: "E010", totalKPI: 10, submittedKPI: 10, avgAchievement: 86, perspektifBreakdown: [{ name: "Finansial", avg: 84 }, { name: "Proses", avg: 88 }, { name: "EHS", avg: 90 }, { name: "Customer", avg: 82 }, { name: "L&G", avg: 86 }], rcaRequired: 1, rcaCompleted: 1, status: "Submitted", lastUpdated: "2026-05-30" },
-  { employeeId: "E011", totalKPI: 6,  submittedKPI: 4,  avgAchievement: 55, perspektifBreakdown: [{ name: "Finansial", avg: 50 }, { name: "Proses", avg: 58 }, { name: "EHS", avg: 60 }, { name: "Customer", avg: 52 }, { name: "L&G", avg: 55 }], rcaRequired: 3, rcaCompleted: 0, status: "Draft",     lastUpdated: "2026-05-15" },
-  { employeeId: "E012", totalKPI: 9,  submittedKPI: 9,  avgAchievement: 89, perspektifBreakdown: [{ name: "Finansial", avg: 85 }, { name: "Proses", avg: 92 }, { name: "EHS", avg: 94 }, { name: "Customer", avg: 88 }, { name: "L&G", avg: 86 }], rcaRequired: 0, rcaCompleted: 0, status: "Submitted", lastUpdated: "2026-05-31" },
-  { employeeId: "E013", totalKPI: 8,  submittedKPI: 8,  avgAchievement: 84, perspektifBreakdown: [{ name: "Finansial", avg: 82 }, { name: "Proses", avg: 86 }, { name: "EHS", avg: 88 }, { name: "Customer", avg: 80 }, { name: "L&G", avg: 84 }], rcaRequired: 1, rcaCompleted: 1, status: "Submitted", lastUpdated: "2026-06-01" },
-  { employeeId: "E014", totalKPI: 7,  submittedKPI: 6,  avgAchievement: 71, perspektifBreakdown: [{ name: "Finansial", avg: 68 }, { name: "Proses", avg: 74 }, { name: "EHS", avg: 76 }, { name: "Customer", avg: 70 }, { name: "L&G", avg: 67 }], rcaRequired: 2, rcaCompleted: 1, status: "Draft",     lastUpdated: "2026-05-22" },
-];
+const KPI_DATA: KPIRecord[] = [];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const STATUS_STYLE = {
-  Submitted:    { bg: "bg-green-100 text-green-700",  icon: CheckCircle2 },
-  Draft:        { bg: "bg-amber-100 text-amber-700",  icon: Clock },
-  "Belum Mulai":{ bg: "bg-gray-100 text-gray-500",   icon: AlertCircle },
+const STATUS_STYLE: Record<string, { bg: string; icon: React.ElementType }> = {
+  "Unsubmitted":        { bg: "bg-gray-100 text-gray-500",    icon: AlertCircle },
+  "Pending-Check":      { bg: "bg-amber-100 text-amber-700",  icon: Clock },
+  "Pending-Approver 1": { bg: "bg-amber-100 text-amber-700",  icon: Clock },
+  "Pending-Approver 2": { bg: "bg-sky-100 text-sky-700",      icon: Clock },
+  "Pending-Validate":   { bg: "bg-indigo-100 text-indigo-700",icon: Clock },
+  "Revision":           { bg: "bg-orange-100 text-orange-700",icon: AlertCircle },
+  "Validated":          { bg: "bg-green-100 text-green-700",  icon: CheckCircle2 },
 };
+
+function resolveKpiPhaseStatus(rec?: WorkflowRecord): KPIWorkflowStatus {
+  if (!rec) return "Unsubmitted";
+  const val = rec.decisions.validator?.status ?? "";
+  const a2 = rec.decisions.approver2?.status ?? "";
+  const a1 = rec.decisions.approver1?.status ?? "";
+  const chk = rec.decisions.checker?.status ?? "";
+  if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") {
+    return "Revision";
+  }
+  if (val === "Validated" || a2 === "Validated") {
+    return "Validated";
+  }
+  if (a2 === "Approved" || a2.startsWith("Assessed")) {
+    return "Pending-Validate";
+  }
+  if (a1 === "Approved" || a1.startsWith("Assessed")) {
+    return "Pending-Approver 2";
+  }
+  if (chk && chk !== "Revision") {
+    return "Pending-Approver 1";
+  }
+  return "Pending-Check";
+}
 
 function AchievementBar({ value }: { value: number }) {
   const achieved = value >= 100;
@@ -59,6 +82,20 @@ function AchievementBar({ value }: { value: number }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
   const [statusFilter, setStatusFilter] = useState("Semua Status");
@@ -71,20 +108,34 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
 
   const allRows = filteredEmployees.map((emp) => {
     const normId = normalizeEmployeeId(emp.id);
-    const rec = workflows.find(
-      (w) => w.module === "KPI" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
+    const wfSet = workflows.find(
+      (w) => w.year === "2026" && w.module === "KPI" && w.phase === "setting" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
     );
-    const kpi: KPIRecord = rec
+    const wfMeas = workflows.find(
+      (w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
+    );
+    const settingStatus = resolveKpiPhaseStatus(wfSet);
+    const measurementStatus = resolveKpiPhaseStatus(wfMeas);
+    const hasAny = Boolean(wfSet || wfMeas);
+    const kpi: KPIRecord = hasAny
       ? {
           employeeId: emp.id,
           totalKPI: 8,
-          submittedKPI: 8,
-          avgAchievement: 85,
+          submittedKPI: wfMeas ? 8 : 0,
+          avgAchievement: wfMeas ? 85 : 0,
           perspektifBreakdown: [],
           rcaRequired: 0,
           rcaCompleted: 0,
-          status: "Submitted",
-          lastUpdated: rec.submittedDate || "-",
+          status: settingStatus,
+          measurementStatus,
+          lastUpdated:
+            wfMeas?.decisions.validator?.date ||
+            wfMeas?.decisions.approver2?.date ||
+            wfMeas?.submittedDate ||
+            wfSet?.decisions.validator?.date ||
+            wfSet?.decisions.approver2?.date ||
+            wfSet?.submittedDate ||
+            "-",
         }
       : {
           employeeId: emp.id,
@@ -94,7 +145,8 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
           perspektifBreakdown: [],
           rcaRequired: 0,
           rcaCompleted: 0,
-          status: "Belum Mulai",
+          status: "Unsubmitted",
+          measurementStatus: "Unsubmitted",
           lastUpdated: "-",
         };
     return { emp, kpi };
@@ -111,9 +163,9 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
 
   const hasActiveFilters = unitFilter !== "Semua Unit" || statusFilter !== "Semua Status";
 
-  const totalSubmitted = filteredKPI.filter((k) => k.status === "Submitted").length;
-  const totalDraft     = filteredKPI.filter((k) => k.status === "Draft").length;
-  const totalBlm       = filteredKPI.filter((k) => k.status === "Belum Mulai").length;
+  const totalSubmitted = filteredKPI.filter((k) => k.status === "Validated").length;
+  const totalDraft     = filteredKPI.filter((k) => k.status !== "Unsubmitted" && k.status !== "Validated").length;
+  const totalBlm       = filteredKPI.filter((k) => k.status === "Unsubmitted").length;
   const avgKPIList     = filteredKPI.filter((k) => k.avgAchievement > 0);
   const avgAch         = avgKPIList.length ? Math.round(avgKPIList.reduce((s, k) => s + k.avgAchievement, 0) / avgKPIList.length) : 0;
   const rcaPending     = filteredKPI.reduce((s, k) => s + (k.rcaRequired - k.rcaCompleted), 0);
@@ -163,7 +215,7 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
         </div>
         <div className="flex items-center gap-2">
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-sm outline-none bg-transparent text-gray-600 cursor-pointer">
-            {["All Status", "Submitted", "Draft", "Belum Mulai"].map((s) => <option key={s}>{s}</option>)}
+            {["All Status", "Unsubmitted", "Pending-Check", "Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Revision", "Validated"].map((s) => <option key={s}>{s}</option>)}
           </select>
         </div>
         {hasActiveFilters && (
@@ -185,14 +237,17 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
                 <th className="py-3 px-5">Avg. Achievement</th>
                 <th className="py-3 px-5 text-center">RCA Req.</th>
                 <th className="py-3 px-5 text-center">RCA Done</th>
-                <th className="py-3 px-5">Status</th>
+                <th className="py-3 px-5">KPI Setting Status</th>
+                <th className="py-3 px-5">KPI Measurement Status</th>
                 <th className="py-3 px-5">Last Updated</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {rows.map(({ emp, kpi }) => {
-                const st = STATUS_STYLE[kpi.status];
+                const st = STATUS_STYLE[kpi.status] ?? STATUS_STYLE["Unsubmitted"];
                 const Icon = st.icon;
+                const mst = STATUS_STYLE[kpi.measurementStatus] ?? STATUS_STYLE["Unsubmitted"];
+                const MIcon = mst.icon;
                 return (
                   <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3.5 px-5">
@@ -229,6 +284,12 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
                         {kpi.status}
                       </span>
                     </td>
+                    <td className="py-3.5 px-5">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${mst.bg}`}>
+                        <MIcon className="w-3 h-3" />
+                        {kpi.measurementStatus}
+                      </span>
+                    </td>
                     <td className="py-3.5 px-5 text-xs text-gray-500">{kpi.lastUpdated}</td>
                   </tr>
                 );
@@ -246,7 +307,7 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
         <h3 className="text-sm font-bold text-[#1A284F] mb-4">Avg. Achievement by Perspective</h3>
         <div className="flex flex-wrap gap-6">
           {["Finansial", "Proses", "EHS", "Customer", "L&G"].map((p) => {
-            const vals = KPI_DATA.flatMap((k) => k.perspektifBreakdown.filter((b) => b.name === p).map((b) => b.avg));
+            const vals = (filteredKPI.length ? filteredKPI : KPI_DATA).flatMap((k) => k.perspektifBreakdown.filter((b) => b.name === p).map((b) => b.avg));
             const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
             const color = avg >= 90 ? "bg-green-500" : avg >= 75 ? "bg-blue-500" : avg >= 60 ? "bg-amber-500" : "bg-rose-500";
             return (

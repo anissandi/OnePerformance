@@ -1022,11 +1022,9 @@ const COMPANY_COLORS = [
 function CompanyUnitPicker({
   users,
   onSelect,
-  onOpenLoginTab,
 }: {
   users: User[];
   onSelect: (company: string) => void;
-  onOpenLoginTab: (company: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const { getUnitLoginConfig } = useLoginManagement();
@@ -1040,13 +1038,6 @@ function CompanyUnitPicker({
           <p className="text-sm text-gray-500 mt-0.5">Select a Company Unit to manage its users</p>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => onOpenLoginTab(COMPANIES[0])}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold transition-colors"
-          >
-            <KeyRound size={14} /> Login Management
-          </button>
           <div className="text-sm text-gray-400 flex items-center gap-1">
             <span>&#8962;</span><span>Home</span><span className="mx-1">›</span><span>Setting</span><span className="mx-1">›</span>
             <span className="font-medium text-gray-700">User Management</span>
@@ -1523,9 +1514,54 @@ function LoginManagementTab({
 }
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
+export function LoginManagementPage() {
+  const [activeCompany, setActiveCompany] = useState<string>(COMPANIES[0]);
+  const [users, setUsers] = useState<User[]>(() => loadManagedUsers());
+
+  useEffect(() => {
+    const onSync = () => setUsers(loadManagedUsers());
+    window.addEventListener("pa-auth-updated", onSync);
+    window.addEventListener("pa-employees-imported", onSync);
+    window.addEventListener("pa-db-hydrated", onSync);
+    return () => {
+      window.removeEventListener("pa-auth-updated", onSync);
+      window.removeEventListener("pa-employees-imported", onSync);
+      window.removeEventListener("pa-db-hydrated", onSync);
+    };
+  }, []);
+
+  return (
+    <div className="p-6 w-full space-y-4">
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-[#1A284F]/8 flex items-center justify-center">
+            <KeyRound size={18} className="text-[#1A284F]" />
+          </div>
+          <div>
+            <h1 className="font-bold text-[#1A284F] text-xl">Login Management</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Konfigurasi metode login (OTP Telegram, WhatsApp, Email, atau Password) per Unit Usaha
+            </p>
+          </div>
+        </div>
+        <div className="text-sm text-gray-400 flex items-center gap-1">
+          <span>&#8962;</span><span>Home</span><span className="mx-1">›</span><span>Setting</span><span className="mx-1">›</span>
+          <span className="font-medium text-gray-700">Login Management</span>
+        </div>
+      </div>
+
+      <LoginManagementTab
+        activeCompany={activeCompany}
+        users={users}
+        onSwitchCompany={(comp) => setActiveCompany(comp)}
+      />
+    </div>
+  );
+}
+
 export function UserManagementPage() {
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useRouteTab<"users" | "grouping" | "login">(["users", "grouping", "login"], "users");
+  const [activeTab, setActiveTab] = useRouteTab<"users" | "grouping">(["users", "grouping"], "users");
   const [users, setUsers] = useState<User[]>(() => loadManagedUsers());
   const { roles: accessRoles, groups: accessGroups } = useAccessManagement();
   const {
@@ -1562,10 +1598,6 @@ export function UserManagementPage() {
       <CompanyUnitPicker
         users={users}
         onSelect={setSelectedCompany}
-        onOpenLoginTab={(comp) => {
-          setSelectedCompany(comp);
-          setActiveTab("login");
-        }}
       />
     );
   }
@@ -1651,27 +1683,10 @@ export function UserManagementPage() {
         >
           <Layers size={15} /> User Groupings
         </button>
-        <button
-          onClick={() => setActiveTab("login")}
-          className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
-            activeTab === "login" ? "border-[#1A284F] text-[#1A284F]" : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <KeyRound size={15} /> Login Management
-        </button>
       </div>
 
       {/* User Groupings tab */}
       {activeTab === "grouping" && <UserGroupingTab companyName={selectedCompany} />}
-
-      {/* Login Management tab */}
-      {activeTab === "login" && (
-        <LoginManagementTab
-          activeCompany={selectedCompany}
-          users={users}
-          onSwitchCompany={(comp) => setSelectedCompany(comp)}
-        />
-      )}
 
       {/* User Management tab content */}
       {activeTab === "users" && <>

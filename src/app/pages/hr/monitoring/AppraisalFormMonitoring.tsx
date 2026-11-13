@@ -288,6 +288,7 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
     return { emp, af };
   });
   const filteredAF = allRows.map((r) => r.af);
+  const data = filteredAF;
 
   const rows = allRows.filter(({ emp }) => {
     const q = search.toLowerCase();

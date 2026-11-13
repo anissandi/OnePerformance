@@ -17,7 +17,7 @@ interface SGRecord {
   completedAPs: number;
   completionPercent: number;
   settingStatus: "Unsubmitted" | "Draft" | "Pending-Approver" | "Revision" | "Validated";
-  measurementStatus: "Pending-Assessment" | "Revision" | "Validated";
+  measurementStatus: "Unsubmitted" | "Pending-Check" | "Pending-Approver 1" | "Pending-Approver 2" | "Pending-Validate" | "Pending-Assessment" | "Revision" | "Validated";
   lastUpdated: string;
   goals: SmartGoal[];
 }
@@ -74,6 +74,11 @@ const SETTING_STATUS_STYLE: Record<string, { bg: string; icon: React.ElementType
 };
 
 const MEASUREMENT_STATUS_STYLE: Record<string, { bg: string; icon: React.ElementType }> = {
+  "Unsubmitted":        { bg: "bg-gray-100 text-gray-500",    icon: AlertCircle },
+  "Pending-Check":      { bg: "bg-amber-100 text-amber-700",  icon: Clock },
+  "Pending-Approver 1": { bg: "bg-amber-100 text-amber-700",  icon: Clock },
+  "Pending-Approver 2": { bg: "bg-sky-100 text-sky-700",      icon: Clock },
+  "Pending-Validate":   { bg: "bg-indigo-100 text-indigo-700",icon: Clock },
   "Pending-Assessment": { bg: "bg-sky-100 text-sky-700",      icon: Clock },
   "Revision":           { bg: "bg-orange-100 text-orange-700",icon: AlertCircle },
   "Validated":          { bg: "bg-green-100 text-green-700",  icon: CheckCircle2 },
@@ -280,7 +285,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
   const divisions  = useMemo(() => [...new Set(baseEmployees.map(e => e.division))].sort(), [baseEmployees]);
   const positions  = useMemo(() => [...new Set(baseEmployees.map(e => e.position))].sort(), [baseEmployees]);
   const settingStatuses   = ["Unsubmitted", "Draft", "Pending-Approver", "Revision", "Validated"];
-  const measureStatuses   = ["Pending-Assessment", "Revision", "Validated"];
+  const measureStatuses   = ["Unsubmitted", "Pending-Check", "Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Revision", "Validated"];
 
   const buildLiveSG = (empId: string): SGRecord => {
     const normId = normalizeEmployeeId(empId);
@@ -302,7 +307,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
         completedAPs: 0,
         completionPercent: 0,
         settingStatus: "Unsubmitted",
-        measurementStatus: "Pending-Assessment",
+        measurementStatus: "Unsubmitted",
         lastUpdated: "-",
         goals: [],
       };
@@ -317,25 +322,37 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
         if (ci?.actionPlanStatuses?.[ap.id] === "Selesai") completedAPs++;
       }
     }
+    const setVal = wfSet?.decisions.validator?.status ?? "";
     const setA2 = wfSet?.decisions.approver2?.status ?? "";
     const setA1 = wfSet?.decisions.approver1?.status ?? "";
+    const setChk = wfSet?.decisions.checker?.status ?? "";
     const settingStatus: SGRecord["settingStatus"] =
-      setA2 === "Validated" || setA2 === "Approved" || setA2.startsWith("Assessed")
+      setVal === "Validated" || setA2 === "Validated"
         ? "Validated"
-        : setA2 === "Revision" || setA1 === "Revision"
+        : setVal === "Revision" || setA2 === "Revision" || setA1 === "Revision" || setChk === "Revision"
         ? "Revision"
         : wfSet
         ? "Pending-Approver"
         : "Draft";
 
+    const measVal = wfMeas?.decisions.validator?.status ?? "";
     const measA2 = wfMeas?.decisions.approver2?.status ?? "";
     const measA1 = wfMeas?.decisions.approver1?.status ?? "";
+    const measChk = wfMeas?.decisions.checker?.status ?? "";
     const measurementStatus: SGRecord["measurementStatus"] =
-      measA2 === "Validated" || measA2 === "Approved" || measA2.startsWith("Assessed")
-        ? "Validated"
-        : measA2 === "Revision" || measA1 === "Revision"
+      !wfMeas
+        ? "Unsubmitted"
+        : measVal === "Revision" || measA2 === "Revision" || measA1 === "Revision" || measChk === "Revision"
         ? "Revision"
-        : "Pending-Assessment";
+        : measVal === "Validated" || measA2 === "Validated"
+        ? "Validated"
+        : measA2 === "Approved" || measA2.startsWith("Assessed")
+        ? "Pending-Validate"
+        : measA1 === "Approved" || measA1.startsWith("Assessed")
+        ? "Pending-Approver 2"
+        : measChk && measChk !== "Revision"
+        ? "Pending-Approver 1"
+        : "Pending-Check";
 
     const measRatings = Object.values(
       wfMeas?.assessments.approver2?.ratings ?? wfMeas?.assessments.approver1?.ratings ?? {},
@@ -390,6 +407,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
         case "name":           av = a.emp.name;          bv = b.emp.name;          break;
         case "unit":           av = a.emp.unit;          bv = b.emp.unit;          break;
         case "division":       av = a.emp.division;      bv = b.emp.division;      break;
+        case "department":     av = a.emp.department ?? ""; bv = b.emp.department ?? ""; break;
         case "position":       av = a.emp.position;      bv = b.emp.position;      break;
         case "totalGoals":     av = a.sg.totalGoals;     bv = b.sg.totalGoals;     break;
         case "totalAPs":       av = a.sg.totalAPs;       bv = b.sg.totalAPs;       break;
@@ -560,7 +578,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
                     </td>
                     <td className="py-3 px-4 text-xs text-gray-600 max-w-[140px]"><span className="block truncate">{emp.unit}</span></td>
                     <td className="py-3 px-4 text-xs text-gray-600 max-w-[140px]"><span className="block truncate">{emp.division}</span></td>
-                    <td className="py-3 px-4 text-xs text-gray-400">—</td>
+                    <td className="py-3 px-4 text-xs text-gray-600 max-w-[140px]"><span className="block truncate">{emp.department || "—"}</span></td>
                     <td className="py-3 px-4 text-xs text-gray-600 max-w-[160px]"><span className="block truncate">{emp.position}</span></td>
                     <td className="py-3 px-4 text-center font-medium text-gray-700">{sg.totalGoals || "—"}</td>
                     <td className="py-3 px-4 text-center font-medium text-gray-700">{sg.totalAPs || "—"}</td>
@@ -568,10 +586,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
                     <td className="py-3 px-4"><ProgressBar value={goalsCompletion} /></td>
                     <td className="py-3 px-4"><StatusBadge status={sg.settingStatus} styleMap={SETTING_STATUS_STYLE} /></td>
                     <td className="py-3 px-4">
-                      {showMeasurementStatus
-                        ? <StatusBadge status={sg.measurementStatus} styleMap={MEASUREMENT_STATUS_STYLE} />
-                        : <span className="text-gray-400 text-sm font-medium">—</span>
-                      }
+                      <StatusBadge status={sg.measurementStatus} styleMap={MEASUREMENT_STATUS_STYLE} />
                     </td>
                     <td className="py-3 px-4 text-xs text-gray-500 whitespace-nowrap">{sg.lastUpdated}</td>
                   </tr>

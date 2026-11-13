@@ -10,6 +10,7 @@ import { loadApprovalDecisions, loadCheckInEntries, loadSubmittedGoals, saveChec
 import type { StoredCheckInEntry } from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { getActiveUser } from "../../store/authStore";
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX } from "../../utils/excelUtils";
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
@@ -1245,47 +1246,15 @@ export function SmartGoalsCheckInPage() {
           <p className="text-gray-500 text-sm">2026 Performance Appraisal — {goals.length} goal{goals.length !== 1 ? "s" : ""}</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {(submitted || statusTone === "revision") && (
-            <span
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
-                statusTone === "validated"
-                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                  : statusTone === "revision"
-                  ? "bg-orange-50 text-orange-700 border-orange-200"
-                  : "bg-amber-50 text-amber-700 border-amber-200"
-              }`}
-            >
-              {statusTone === "validated" ? (
-                <CheckCircle2 className="w-3.5 h-3.5" />
-              ) : statusTone === "revision" ? (
-                <RotateCcw className="w-3.5 h-3.5" />
-              ) : (
-                <Clock className="w-3.5 h-3.5" />
-              )}
-              Status Approval: {statusLabel}
-            </span>
-          )}
           <ExportImportButton onExport={handleExport} onImport={handleImport} size="sm" />
         </div>
       </div>
 
-      {statusTone === "revision" && wfRecState?.revisionHistory && wfRecState.revisionHistory.length > 0 && (
-        <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-4 space-y-2">
-          <div className="flex items-center gap-2 text-xs font-bold text-orange-800">
-            <RotateCcw className="w-4 h-4 text-orange-600" />
-            <span>Permintaan Revisi dari Approver (Silakan perbaiki dan Submit ulang):</span>
-          </div>
-          {wfRecState.revisionHistory.map((rev, i) => (
-            <div key={i} className="bg-white/90 border border-orange-100 rounded-lg px-3.5 py-2 text-xs">
-              <div className="flex items-center justify-between font-semibold text-gray-800">
-                <span>{rev.role} — {rev.approverName}</span>
-                <span className="text-[10px] text-gray-400">{rev.date}</span>
-              </div>
-              <p className="text-gray-700 mt-0.5">{rev.note}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      <ModuleApprovalStatusBar
+        module="SMART Goals"
+        phase="measurement"
+        submittedOverride={submitted}
+      />
 
       {/* Gate Banner: SMART Goals Setting belum Validated */}
       {!isSettingValidated && (

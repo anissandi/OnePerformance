@@ -16,6 +16,7 @@ import {
   type ProjectScope,
   type ProjectStatus,
 } from "../../store/projectStore";
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 
 type PageView = "input" | "preview";
 
@@ -428,6 +429,12 @@ export function ProjectOutsidePage() {
           )}
         </div>
       </div>
+
+      <ModuleApprovalStatusBar
+        module="Project"
+        phase="setting"
+        submittedOverride={submitted}
+      />
 
       {showReference && (
         <div className="flex flex-col gap-2">

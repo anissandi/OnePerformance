@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { X, CheckCircle2, FileCheck } from "lucide-react";
 import { saveMSSelfRatings, loadMSSelfRatings } from "../shared/msStore";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -241,6 +242,9 @@ export function SupervisorManagerialSkillCheckIn() {
 
   return (
     <div className="w-full flex flex-col h-full pb-20 relative">
+      <div className="mb-3 shrink-0">
+        <ModuleApprovalStatusBar module="Managerial Skill" phase="measurement" />
+      </div>
       {/* Form header */}
       <div className="bg-white border border-gray-100 rounded-xl py-5 text-center shadow-sm mb-4 shrink-0">
         <p className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-1">Performance Appraisal</p>

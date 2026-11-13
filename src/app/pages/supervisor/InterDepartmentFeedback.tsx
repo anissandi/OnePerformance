@@ -29,6 +29,7 @@ import {
   type FeedbackPerson,
   type FeedbackTask,
 } from "../shared/interDepartmentFeedbackStore"
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar"
 
 const personFrom = (
   employee: typeof mockEmployees[number],
@@ -343,7 +344,14 @@ export function InterDepartmentFeedback() {
         />
       )}
       {activeTab === "received" && actor && (
-        <ReceivedPanel
+        <div className="space-y-4">
+          <ModuleApprovalStatusBar
+            module="Inter-Department Feedback"
+            phase="measurement"
+            submittedOverride={Boolean(workflow?.summarySubmittedAt)}
+            submittedDateOverride={workflow?.summarySubmittedAt}
+          />
+          <ReceivedPanel
           actor={actor}
           workflow={workflow}
           approvalOpen={status.approval}
@@ -355,6 +363,7 @@ export function InterDepartmentFeedback() {
           }}
           onError={setError}
         />
+        </div>
       )}
 
       {confirmNomination && (

@@ -6,6 +6,7 @@ import {
 } from "../shared/appraisalFormStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { getActiveUser } from "../../store/authStore";
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -745,6 +746,13 @@ export function AppraisalForm() {
       </div>
 
       <div className="flex-1 overflow-y-auto flex flex-col gap-4">
+        <ModuleApprovalStatusBar
+          module="Appraisal Form"
+          phase="measurement"
+          submittedOverride={isSubmittedLocked}
+          submittedDateOverride={submittedDateLabel}
+        />
+
         {/* Form header + Real-time Approval Status & Scores Summary */}
         <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm shrink-0 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">

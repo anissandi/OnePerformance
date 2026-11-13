@@ -4,6 +4,7 @@ import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, I
 import { loadSubmittedGoals, saveSubmittedGoals } from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { getActiveUser } from "../../store/authStore";
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
 
@@ -849,80 +850,21 @@ export function SMARTGoalsPage() {
           <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">SMART Goals</h1>
           <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
         </div>
-        {(submitted || statusTone === "revision") && (
-          <span
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${
-              statusTone === "validated"
-                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                : statusTone === "revision"
-                ? "bg-orange-50 text-orange-700 border-orange-200"
-                : "bg-amber-50 text-amber-700 border-amber-200"
-            }`}
-          >
-            {statusTone === "validated" ? (
-              <CheckCircle2 className="w-3.5 h-3.5" />
-            ) : statusTone === "revision" ? (
-              <RotateCcw className="w-3.5 h-3.5" />
-            ) : (
-              <Clock className="w-3.5 h-3.5" />
-            )}
-            Status Approval: {statusLabel}
-          </span>
-        )}
       </div>
 
-      {statusTone === "revision" && wfRecState?.revisionHistory && wfRecState.revisionHistory.length > 0 && (
-        <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-4 space-y-2">
-          <div className="flex items-center gap-2 text-xs font-bold text-orange-800">
-            <RotateCcw className="w-4 h-4 text-orange-600" />
-            <span>Permintaan Revisi dari Approver (Silakan perbaiki dan Submit ulang):</span>
-          </div>
-          {wfRecState.revisionHistory.map((rev, i) => (
-            <div key={i} className="bg-white/90 border border-orange-100 rounded-lg px-3.5 py-2 text-xs">
-              <div className="flex items-center justify-between font-semibold text-gray-800">
-                <span>{rev.role} — {rev.approverName}</span>
-                <span className="text-[10px] text-gray-400">{rev.date}</span>
-              </div>
-              <p className="text-gray-700 mt-0.5">{rev.note}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      <ModuleApprovalStatusBar
+        module="SMART Goals"
+        phase="setting"
+        submittedOverride={submitted}
+      />
 
-      {/* Tabs */}
-      <div className="flex border-b border-gray-200">
-        {visibleTabs.map(({ id, label, icon: Icon }) => {
-          const inactive = id === "results" && !submitted;
-          return (
-            <button
-              key={id}
-              onClick={() => { if (!inactive) setView(id); }}
-              disabled={inactive}
-              className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
-                view === id
-                  ? "border-[#1A284F] text-[#1A284F] bg-gray-50"
-                  : inactive
-                  ? "border-transparent text-gray-300 cursor-not-allowed"
-                  : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50"
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-              {id === "results" && submitted && (
-                <span className="ml-1 w-2 h-2 rounded-full bg-green-500 inline-block" />
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {view === "input" && !submitted && (
+      {!submitted && view === "input" && (
         <InputView goals={goals} setGoals={setGoals} onPreview={() => setView("preview")} onExport={handleExport} onImport={handleImport} />
       )}
-      {view === "preview" && (
+      {!submitted && view === "preview" && (
         <PreviewView goals={goals} onBack={() => setView("input")} onSubmit={() => setShowConfirm(true)} />
       )}
-      {view === "results" && (
+      {submitted && (
         <ResultsView
           goals={resultGoals}
           statusLabel={statusLabel}

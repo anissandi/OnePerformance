@@ -787,7 +787,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
           subtitle={
             module !== "All Modules" && activeTimelineInfo
               ? `Showing: ${module} — ${PHASE_META[activeTimelineInfo.phase].label} (highlighted row)`
-              : `Jadwal otomatis mengikuti setup tanggal di Module Activation (/hr/modules) — posisi saat ini: ${todayLabel}`
+              : "Jadwal appraisal mengikuti SK Penilaian Kinerja yang sudah di tetapkan di masing-masing Unit Usaha."
           }
           collapsed={timelineCollapsed}
           onToggle={() => setTimelineCollapsed((c) => !c)}
@@ -873,42 +873,31 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                       )}
                     </div>
 
-                    <div className="flex-1 relative flex">
-                      {MONTHS.map((_, mi) => {
-                        const segIdx   = row.segments.findIndex(s => mi >= s.start && mi <= s.end);
-                        const activeSeg = segIdx >= 0 ? row.segments[segIdx] : undefined;
-                        const isFirst  = activeSeg ? mi === activeSeg.start : false;
-                        const isLast   = activeSeg ? mi === activeSeg.end   : false;
-
+                    <div className="flex-1 relative flex h-8">
+                      {MONTHS.map((_, mi) => (
+                        <div key={mi} className="flex-1 h-8 relative" />
+                      ))}
+                      {row.segments.map((s, si) => {
+                        const leftPct = (s.start / TOTAL_MONTHS) * 100;
+                        const widthPct = ((s.end - s.start + 1) / TOTAL_MONTHS) * 100;
                         return (
-                          <div key={mi} className="flex-1 h-8 relative">
-                            {activeSeg && (
-                              <div
-                                className={`absolute inset-y-1.5 inset-x-0 pa-bar-animate transition-opacity duration-300 ${isFirst ? "rounded-l-md" : ""} ${isLast ? "rounded-r-md" : ""}`}
-                                style={{ background: activeSeg.color, opacity: 0.85 }}
-                              >
-                                {isFirst && (
-                                  <span className="absolute inset-0 flex items-center px-2 text-[10px] font-bold text-white whitespace-nowrap overflow-hidden">
-                                    {activeSeg.phase}
-                                  </span>
-                                )}
-                              </div>
-                            )}
+                          <div
+                            key={si}
+                            className="absolute inset-y-1.5 rounded-md pa-bar-animate transition-opacity duration-300 flex items-center justify-center px-2 overflow-hidden"
+                            style={{
+                              left: `${leftPct}%`,
+                              width: `${widthPct}%`,
+                              background: s.color,
+                              opacity: 0.9,
+                            }}
+                            title={s.phase}
+                          >
+                            <span className="text-[10px] font-bold text-white whitespace-nowrap truncate">
+                              {s.phase}
+                            </span>
                           </div>
                         );
                       })}
-                    </div>
-
-                    <div className="w-40 shrink-0 pl-3 text-[10px] text-gray-500 leading-relaxed">
-                      {row.segments.length === 0 ? (
-                        <span className="text-gray-300 italic">Belum diatur</span>
-                      ) : (
-                        row.segments.map((s, si) => (
-                          <div key={si} className={isActiveRow ? "font-semibold" : ""} style={isActiveRow ? { color: PHASE_META[activeTimelineInfo!.phase].color } : undefined}>
-                            {s.phase}
-                          </div>
-                        ))
-                      )}
                     </div>
                   </div>
                 );

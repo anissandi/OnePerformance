@@ -36,7 +36,7 @@ import { SupervisorMonitoringManagerialSkill } from "./pages/supervisor/monitori
 import { SupervisorMonitoringManagementInterview } from "./pages/supervisor/monitoring/ManagementInterviewMonitoring"
 import { SupervisorMonitoringInterDeptFeedback } from "./pages/supervisor/monitoring/InterDepartmentFeedbackMonitoring"
 import { SupervisorSettingManagementInterview } from "./pages/supervisor/setting/ManagementInterviewSetting"
-import { UserManagementPage } from "./pages/hr/settings/UserManagement"
+import { LoginManagementPage, UserManagementPage } from "./pages/hr/settings/UserManagement"
 import { AccessManagementPage } from "./pages/hr/settings/AccessManagement"
 import { MenuManagementPage } from "./pages/hr/settings/MenuManagement"
 import { NotificationManagementPage } from "./pages/hr/settings/NotificationManagement"
@@ -273,9 +273,11 @@ export const router = createBrowserRouter([
       { path: "settings/approval-management", Component: HRApprovalManagement },
       { path: "settings/approval-management/:tab", Component: HRApprovalManagement },
       { path: "settings/user-management", Component: UserManagementPage },
+      { path: "settings/user-management/login", Component: LoginManagementPage },
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/login-management", Component: LoginManagementPage },
       { path: "settings/notification-management", Component: NotificationManagementPage },
       { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
       { path: "settings/notifications", Component: NotificationManagementPage },
@@ -423,9 +425,11 @@ export const router = createBrowserRouter([
       { path: "settings/approval-management", Component: HRApprovalManagement },
       { path: "settings/approval-management/:tab", Component: HRApprovalManagement },
       { path: "settings/user-management", Component: UserManagementPage },
+      { path: "settings/user-management/login", Component: LoginManagementPage },
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/login-management", Component: LoginManagementPage },
       { path: "settings/notification-management", Component: NotificationManagementPage },
       { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
       { path: "settings/notifications", Component: NotificationManagementPage },
@@ -542,9 +546,11 @@ export const router = createBrowserRouter([
       { path: "settings/approval-management", Component: HRApprovalManagement },
       { path: "settings/approval-management/:tab", Component: HRApprovalManagement },
       { path: "settings/user-management", Component: UserManagementPage },
+      { path: "settings/user-management/login", Component: LoginManagementPage },
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/login-management", Component: LoginManagementPage },
       { path: "settings/notification-management", Component: NotificationManagementPage },
       { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
       { path: "settings/notifications", Component: NotificationManagementPage },
@@ -651,9 +657,11 @@ export const router = createBrowserRouter([
       { path: "settings/approval-management", Component: HRApprovalManagement },
       { path: "settings/approval-management/:tab", Component: HRApprovalManagement },
       { path: "settings/user-management", Component: UserManagementPage },
+      { path: "settings/user-management/login", Component: LoginManagementPage },
       { path: "settings/user-management/:tab", Component: UserManagementPage },
       { path: "settings/access-management", Component: AccessManagementPage },
       { path: "settings/menu-management", Component: MenuManagementPage },
+      { path: "settings/login-management", Component: LoginManagementPage },
       { path: "settings/notification-management", Component: NotificationManagementPage },
       { path: "settings/notification-management/:tab", Component: NotificationManagementPage },
       { path: "settings/notifications", Component: NotificationManagementPage },
@@ -684,9 +692,11 @@ export const router = createBrowserRouter([
     Component: AppLayout,
     children: [
       { path: "user-management", Component: UserManagementPage },
+      { path: "user-management/login", Component: LoginManagementPage },
       { path: "user-management/:tab", Component: UserManagementPage },
       { path: "access-management", Component: AccessManagementPage },
       { path: "menu-management", Component: MenuManagementPage },
+      { path: "login-management", Component: LoginManagementPage },
       { path: "notification-management", Component: NotificationManagementPage },
       { path: "notification-management/:tab", Component: NotificationManagementPage },
       { path: "notifications", Component: NotificationManagementPage },

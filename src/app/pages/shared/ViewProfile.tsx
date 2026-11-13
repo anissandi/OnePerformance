@@ -379,6 +379,31 @@ export function ViewProfile() {
     const liveEmp = getLiveTransactionalEmployees().find(
       (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
     );
+    const normEmpId = normalizeEmployeeId(activeUser.employeeId);
+    const myWorkflows = loadWorkflowRecords().filter(
+      (w) =>
+        w.year === String(selectedYear) &&
+        (w.employeeId === normEmpId || w.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
+    );
+    const isModuleWorkflowDone = (modLabel: string): boolean => {
+      const wfKey =
+        modLabel === "Project Outside Job Scope"
+          ? "Project"
+          : modLabel;
+      const recs = myWorkflows.filter((w) => w.module === wfKey);
+      if (recs.length === 0) return false;
+      if (wfKey === "KPI" || wfKey === "SMART Goals") {
+        return recs.some(
+          (r) =>
+            r.decisions.validator?.status === "Validated" ||
+            r.decisions.approver2?.status === "Validated",
+        );
+      }
+      return recs.some((r) => {
+        const a2 = r.decisions.approver2?.status ?? "";
+        return a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed");
+      });
+    };
     // Hanya tampilkan modul yang di-allow pada setup Groupings masing-masing karyawan
     const base = getModuleResults(selectedYear).filter((m) =>
       allowed.includes(m.appraisalModuleKey),
@@ -400,7 +425,8 @@ export function ViewProfile() {
       else if (m.module === "Managerial Skill") score = liveEmp?.managerialSkill?.score ?? 0;
       else if (m.module === "Management Interview") score = liveEmp?.managementInterview?.score ?? 0;
       const grade = score === 0 ? "N/A" : score >= 90 ? "A+" : score >= 80 ? "A" : score >= 70 ? "B" : score >= 60 ? "C" : score >= 50 ? "D" : "E";
-      const status: ModuleStatus = score > 0 ? "approved" : "pending";
+      const isFullApproved = score > 0 || isModuleWorkflowDone(m.module);
+      const status: ModuleStatus = isFullApproved ? "approved" : "pending";
       return { ...m, weight, score, grade, status, weightedScore: parseFloat(((score * weight) / 100).toFixed(2)) };
     });
   }, [activeUser, selectedYear, isCurrent, tick]);

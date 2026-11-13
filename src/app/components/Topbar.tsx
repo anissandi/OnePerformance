@@ -75,6 +75,7 @@ const HR_ITEMS: SearchItem[] = [
   { label: "User Management", path: "/hr/settings/user-management", category: "Settings" },
   { label: "Access Management", path: "/hr/settings/access-management", category: "Settings" },
   { label: "Menu Management", path: "/hr/settings/menu-management", category: "Settings" },
+  { label: "Login Management", path: "/hr/settings/login-management", category: "Settings" },
   { label: "Notification Management", path: "/hr/settings/notification-management", category: "Settings" },
   { label: "Audit Trail", path: "/hr/settings/audit-trail", category: "Settings" },
   { label: "Data Sync", path: "/hr/settings/data-sync", category: "Settings" },

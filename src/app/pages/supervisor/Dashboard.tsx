@@ -6,7 +6,16 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { useNavigate } from "react-router";
-import { getActiveUser, getAllowedApprovalTypesForUser, getAuthorizedSubordinates, resolveReviewerRoleForTarget, useAuthStore } from "../../store/authStore";
+import {
+  getActiveUser,
+  getAllowedApprovalTypesForUser,
+  getAuthorizedSubordinates,
+  isAdminOrHrIcfRole,
+  resolveReviewerRoleForTarget,
+  resolveWorkflowStageForTarget,
+  shouldBypassCheckerForSubmission,
+  useAuthStore,
+} from "../../store/authStore";
 import { getLiveUserModuleApprovals, loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
@@ -69,8 +78,14 @@ type TabFilter = "All" | Module;
 // ─── Approval Dashboard ───────────────────────────────────────────────────────
 
 function formatDate(iso: string) {
-  const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${y}`;
+  if (!iso || iso === "-") return "—";
+  if (iso.includes("/")) return iso;
+  const parts = iso.split("-");
+  if (parts.length === 3) {
+    const [y, m, d] = parts;
+    if (d && m && y) return `${d}/${m}/${y}`;
+  }
+  return iso;
 }
 
 // Map module → Approvals route with the right tab
@@ -85,12 +100,14 @@ const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
 };
 
 const MODULE_SETTING_APPROVAL_ROUTE: Partial<Record<Module, string>> = {
-  "KPI":         "/supervisor/appraisals/setting/kpi",
-  "SMART Goals": "/supervisor/appraisals/setting/smart-goals",
+  "KPI":         "/supervisor/approvals/setting/kpi",
+  "SMART Goals": "/supervisor/approvals/setting/smart-goals",
 };
 
 function ApprovalDashboard() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const isHrPortal = location.pathname.startsWith("/hr");
   const { activeUser, allUsers } = useAuthStore();
   const [activeTab, setActiveTab] = useState<TabFilter>("All");
   const [search, setSearch]       = useState("");
@@ -130,7 +147,11 @@ function ApprovalDashboard() {
   }, [activeUser, tick]);
 
   const subordinates = useMemo(
-    () => getAuthorizedSubordinates(activeUser, allUsers).filter((u) => u.employeeId !== activeUser.employeeId),
+    () => {
+      const isGlobalValidator = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
+      if (isGlobalValidator) return allUsers;
+      return getAuthorizedSubordinates(activeUser, allUsers).filter((u) => u.employeeId !== activeUser.employeeId);
+    },
     [activeUser, allUsers, tick],
   );
 
@@ -145,16 +166,62 @@ function ApprovalDashboard() {
         (u) => normalizeEmployeeId(u.employeeId) === rec.employeeId || u.employeeId.toLowerCase() === rec.employeeId.toLowerCase(),
       );
       if (!sub) continue;
-      const a1 = rec.decisions.approver1?.status ?? "";
-      const a2 = rec.decisions.approver2?.status ?? "";
-      const a1Done = a1 === "Approved" || a1.startsWith("Assessed");
-      const a2Done = a2 === "Approved" || a2.startsWith("Assessed") || a2 === "Validated";
       const mod = (["KPI", "SMART Goals", "Appraisal Form", "Project", "Managerial Skill", "Inter-Department Feedback", "RCA"].includes(rec.module) ? rec.module : "KPI") as Module;
       if (!allowedSet.has(mod)) continue;
-      const roleForRec = resolveReviewerRoleForTarget(activeUser, sub.employeeId, a1Done, mod);
-      if (!roleForRec) continue;
-      if (roleForRec === "approver1" && a1Done) continue;
-      if (roleForRec === "approver2" && (!a1Done || a2Done)) continue;
+
+      const isFourStep = mod === "KPI" || mod === "SMART Goals";
+      const bypassCheck = isFourStep && shouldBypassCheckerForSubmission(sub.employeeId);
+      const chk = rec.decisions.checker?.status ?? "";
+      const a1 = rec.decisions.approver1?.status ?? "";
+      const a2 = rec.decisions.approver2?.status ?? "";
+      const val = rec.decisions.validator?.status ?? "";
+
+      const isRev = chk === "Revision" || a1 === "Revision" || a2 === "Revision" || val === "Revision";
+      if (isRev) continue;
+
+      const checkerDone = Boolean(bypassCheck || (chk && chk !== "Revision"));
+      const a1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
+      const a2Done = a2 === "Approved" || a2.startsWith("Assessed") || a2 === "Validated";
+      const validatorDone = Boolean(val === "Validated" || a2 === "Validated");
+
+      const stageForRec = resolveWorkflowStageForTarget(
+        activeUser,
+        sub.employeeId,
+        mod,
+        { checkerDone, a1Done, a2Done, validatorDone },
+      );
+      if (!stageForRec) continue;
+
+      let actionType: ActionType = mod === "Appraisal Form" ? "Complete Assessment" : "Approve";
+      let noteText = "";
+
+      if (isFourStep) {
+        if (validatorDone) continue;
+        if (!checkerDone) {
+          // Sebelum di-Check oleh HR Unit Usaha -> HANYA muncul di HR Unit Checker, TIDAK muncul di Approver 1!
+          if (stageForRec !== "checker") continue;
+          actionType = "Approve";
+          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} menunggu pemeriksaan (Check) HR Unit Anda.`;
+        } else if (!a1Done) {
+          if (stageForRec !== "approver1") continue;
+          actionType = "Approve";
+          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} telah di-Check HR Unit dan menunggu Approval 1 Anda.`;
+        } else if (!a2Done) {
+          if (stageForRec !== "approver2") continue;
+          actionType = "Approve";
+          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} telah disetujui Approver 1 dan menunggu Approval 2 Anda.`;
+        } else {
+          // a2Done && !validatorDone -> masuk ke HR ICF / Administrator untuk di-Validate!
+          if (stageForRec !== "validator") continue;
+          actionType = "Review & Validate";
+          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} telah disetujui Approver 2 dan menunggu Validasi (Validate) HR ICF Anda.`;
+        }
+      } else {
+        if (stageForRec === "approver1" && a1Done) continue;
+        if (stageForRec === "approver2" && (!a1Done || a2Done)) continue;
+        noteText = `Pengajuan ${rec.module} (${rec.phase}) dari ${sub.name} menunggu ${stageForRec === "approver2" ? "Approval 2" : "Approval 1"} Anda.`;
+      }
+
       seenKeys.add(`${normalizeEmployeeId(sub.employeeId)}:${mod}:${rec.phase}`);
       list.push({
         id: rec.key,
@@ -166,9 +233,9 @@ function ApprovalDashboard() {
         module: mod,
         phase: rec.phase,
         submissionType: `${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"})`,
-        actionNeeded: mod === "Appraisal Form" ? "Complete Assessment" : "Approve",
+        actionNeeded: actionType,
         submittedDate: rec.submittedDate || "2026-06-10",
-        notes: `Pengajuan ${rec.module} (${rec.phase}) dari ${sub.name} menunggu ${roleForRec === "approver2" ? "Approval 2" : "Approval 1"} Anda.`,
+        notes: noteText,
         urgent: false,
       });
     }
@@ -433,13 +500,16 @@ function ApprovalDashboard() {
                     : "bg-amber-50 text-amber-700 border-amber-200"
                   }`}>{item.actionNeeded}</span>
                   <button
-                    onClick={() =>
-                      navigate(
+                    onClick={() => {
+                      const rawRoute =
                         item.phase === "setting"
-                          ? MODULE_SETTING_APPROVAL_ROUTE[item.module] ?? "/supervisor/appraisals/setting"
-                          : MODULE_APPROVAL_ROUTE[item.module],
-                      )
-                    }
+                          ? MODULE_SETTING_APPROVAL_ROUTE[item.module] ?? "/supervisor/approvals/setting"
+                          : MODULE_APPROVAL_ROUTE[item.module];
+                      const targetRoute = isHrPortal
+                        ? rawRoute.replace(/^\/supervisor\//, "/hr/")
+                        : rawRoute;
+                      navigate(targetRoute);
+                    }}
                     className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${btnCls}`}
                   >
                     {item.actionNeeded === "Complete Assessment" ? "Fill Assessment" : "Review"}

@@ -635,7 +635,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                 <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Joined</th>
                 <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Tenure</th>
                 <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("approvalCompleteDate")}>
-                  <div className="flex items-center gap-1">Approval Date <SortIcon col="approvalCompleteDate" sortKey={sortKey} sortDir={sortDir} /></div>
+                  <div className="flex items-center gap-1">Last Updated <SortIcon col="approvalCompleteDate" sortKey={sortKey} sortDir={sortDir} /></div>
                 </th>
                 <th rowSpan={2} className="px-3 py-2.5 text-center whitespace-nowrap border border-gray-200 bg-blue-50 text-blue-700">KPI</th>
                 <th rowSpan={2} className="px-3 py-2.5 text-center whitespace-nowrap border border-gray-200 bg-blue-50 text-blue-700">SMART Goals</th>

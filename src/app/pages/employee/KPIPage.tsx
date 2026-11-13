@@ -22,6 +22,7 @@ import {
 } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
+import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -3380,6 +3381,13 @@ export function KPIPage() {
           {isKpiSettingValidated && <ExportImportButton onExport={handleExport} onImport={handleImport} />}
         </div>
       </div>
+
+      <ModuleApprovalStatusBar
+        module="KPI"
+        phase="measurement"
+        submittedOverride={submitted}
+        submittedDateOverride={submittedDate}
+      />
 
       {/* Gate Banner: KPI Setting belum Validated */}
       {!isKpiSettingValidated && (

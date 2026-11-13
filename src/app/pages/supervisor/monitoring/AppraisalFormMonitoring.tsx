@@ -152,6 +152,7 @@ export function SupervisorMonitoringAppraisalForm() {
   });
   const rows = allRows.filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
   const filteredAF = allRows.map((r) => r.af);
+  const data = filteredAF;
 
   const selfDone  = filteredAF.filter((k) => k.selfAssessmentStatus === "Selesai").length;
   const supDone   = filteredAF.filter((k) => k.supervisorAssessmentStatus === "Selesai").length;
@@ -273,7 +274,7 @@ export function SupervisorMonitoringAppraisalForm() {
         <h3 className="text-sm font-bold text-[#1A284F] mb-4">Avg. Score per Competency (Supervisor Assessment)</h3>
         <div className="flex flex-wrap gap-6">
           {["Kepemimpinan", "Kerja Tim", "Komunikasi", "Problem Solving", "Integritas"].map((comp) => {
-            const vals = AF_DATA.flatMap((k) => k.competencies.filter((c) => c.name === comp && c.supScore > 0).map((c) => c.supScore));
+            const vals = data.flatMap((k) => k.competencies.filter((c) => c.name === comp && c.supScore > 0).map((c) => c.supScore));
             const avg = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
             const color = avg >= 4.5 ? "bg-green-500" : avg >= 3.5 ? "bg-blue-500" : avg >= 2.5 ? "bg-amber-500" : "bg-rose-500";
             return (

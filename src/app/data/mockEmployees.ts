@@ -268,11 +268,26 @@ export function getLiveTransactionalEmployees(): Employee[] {
       ];
 
       const latestWorkflowDate = empWorkflows
-        .map((w) => w.decisions.approver2?.date || w.decisions.approver1?.date || w.submittedDate)
-        .filter(Boolean)
+        .flatMap((w) => [
+          w.decisions.validator?.date,
+          w.decisions.approver2?.date,
+          w.decisions.approver1?.date,
+          w.decisions.checker?.date,
+        ])
+        .filter((d): d is string => Boolean(d && d !== "-"))
         .sort()
         .pop();
       const prjDate = projectByEmp[normId]?.submittedDate || projectByEmp[u.employeeId]?.submittedDate;
+      const formatJoinDateDDMMYYYY = (raw?: string): string => {
+        if (!raw || raw === "—") return "—";
+        if (raw.includes("/")) return raw;
+        const parts = raw.split("-");
+        if (parts.length === 3) {
+          const [y, m, d] = parts;
+          if (d && m && y) return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
+        }
+        return raw;
+      };
 
       return {
         id: u.employeeId,
@@ -282,8 +297,8 @@ export function getLiveTransactionalEmployees(): Employee[] {
         section: u.bagian || "",
         division: u.division,
         companyUnit: u.company,
-        joined: u.joinDate || "—",
-        tenure: `${tenureYrs} year${tenureYrs !== 1 ? "s" : ""}`,
+        joined: formatJoinDateDDMMYYYY(u.joinDate),
+        tenure: `${tenureYrs} Tahun`,
         approvalCompleteDate: latestWorkflowDate || prjDate || "—",
         totalScore,
         grade,
