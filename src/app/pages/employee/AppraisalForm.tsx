@@ -7,6 +7,7 @@ import {
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { getActiveUser } from "../../store/authStore";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
+import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -645,11 +646,7 @@ export function AppraisalForm() {
 
   const handleConfirmSubmit = () => {
     if (isSubmittedLocked) return;
-    const todayStr = new Date().toLocaleDateString("id-ID", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
+    const todayStr = formatTodayDDMMYYYY();
     const allFormEntries = buildAllFormEntries(savedForms);
     saveAppraisalSelf(
       {
@@ -686,7 +683,7 @@ export function AppraisalForm() {
     saveAppraisalSelf(
       {
         forms: allFormEntries,
-        submittedAt: new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }),
+        submittedAt: formatTodayDDMMYYYY(),
         submitted: false,
       },
       { submitWorkflow: false },
@@ -708,6 +705,15 @@ export function AppraisalForm() {
 
   return (
     <div className="w-full flex flex-col h-full pb-20 relative">
+      <div className="mb-4 shrink-0">
+        <ModuleApprovalStatusBar
+          module="Appraisal Form"
+          phase="measurement"
+          submittedOverride={isSubmittedLocked}
+          submittedDateOverride={submittedDateLabel}
+        />
+      </div>
+
       {/* Tab bar */}
       <div className="flex border-b border-gray-200 mb-5 shrink-0">
         {formsList.map((f, idx) => {
@@ -746,137 +752,6 @@ export function AppraisalForm() {
       </div>
 
       <div className="flex-1 overflow-y-auto flex flex-col gap-4">
-        <ModuleApprovalStatusBar
-          module="Appraisal Form"
-          phase="measurement"
-          submittedOverride={isSubmittedLocked}
-          submittedDateOverride={submittedDateLabel}
-        />
-
-        {/* Form header + Real-time Approval Status & Scores Summary */}
-        <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm shrink-0 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-0.5">Performance Appraisal</p>
-              <h2 className="text-xl font-bold text-gray-900">{form.title} — Indikator Penilaian {form.subtitle}</h2>
-            </div>
-            <div className="flex items-center gap-2">
-              <span
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
-                  approvalStatusTone === "approved"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                    : approvalStatusTone === "pending_a2"
-                    ? "bg-sky-50 text-sky-700 border-sky-200"
-                    : approvalStatusTone === "pending_a1"
-                    ? "bg-amber-50 text-amber-700 border-amber-200"
-                    : approvalStatusTone === "revision"
-                    ? "bg-rose-50 text-rose-700 border-rose-200"
-                    : "bg-gray-100 text-gray-600 border-gray-200"
-                }`}
-              >
-                {approvalStatusTone === "approved" ? (
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                ) : approvalStatusTone === "revision" ? (
-                  <RotateCcw className="w-3.5 h-3.5" />
-                ) : (
-                  <Clock className="w-3.5 h-3.5" />
-                )}
-                {approvalStatusLabel}
-              </span>
-            </div>
-          </div>
-
-          {/* Ringkasan Nilai Hasil Assessment Diri Sendiri, Approver 1, Approver 2 */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-gray-100">
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-2.5 flex items-center justify-between">
-              <div>
-                <p className="text-[11px] font-semibold text-indigo-700">Assessment Diri Sendiri</p>
-                <p className="text-[10px] text-gray-500">
-                  {form.tab}: <strong>{avgScore > 0 ? avgScore.toFixed(2) : "—"}</strong> / 5.00
-                </p>
-                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[10px] text-indigo-700/80">
-                  {formsList.map((fDef) => {
-                    const fa = computeFormAvg(selfRatings as Record<string, number>, fDef);
-                    return (
-                      <span key={fDef.id}>
-                        {fDef.tab}: <strong>{fa !== null ? fa.toFixed(2) : "—"}</strong> / 5.00
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-lg font-extrabold text-[#1A284F]">
-                  {overallSelf5 !== null ? `${overallSelf5.toFixed(2)}` : "—"}
-                </span>
-                {overallSelf5 !== null && (
-                  <span className="block text-[10px] font-semibold text-indigo-600">
-                    ({Math.round((overallSelf5 / 5) * 100)}%)
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-sky-100 bg-sky-50/50 px-4 py-2.5 flex items-center justify-between">
-              <div>
-                <p className="text-[11px] font-semibold text-sky-700">Nilai Approver 1</p>
-                <p className="text-[10px] text-gray-500">
-                  {form.tab}: <strong>{activeFormA1Avg !== null ? activeFormA1Avg.toFixed(2) : "—"}</strong> / 5.00
-                </p>
-                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[10px] text-sky-700/80">
-                  {formsList.map((fDef) => {
-                    const fa = computeFormAvg(approver1Ratings, fDef);
-                    return (
-                      <span key={fDef.id}>
-                        {fDef.tab}: <strong>{fa !== null ? fa.toFixed(2) : "—"}</strong> / 5.00
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-lg font-extrabold text-sky-800">
-                  {overallA1_5 !== null ? `${overallA1_5.toFixed(2)}` : "—"}
-                </span>
-                {overallA1_5 !== null && (
-                  <span className="block text-[10px] font-semibold text-sky-600">
-                    ({Math.round((overallA1_5 / 5) * 100)}%)
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 px-4 py-2.5 flex items-center justify-between">
-              <div>
-                <p className="text-[11px] font-semibold text-emerald-700">Nilai Approver 2</p>
-                <p className="text-[10px] text-gray-500">
-                  {form.tab}: <strong>{activeFormA2Avg !== null ? activeFormA2Avg.toFixed(2) : "—"}</strong> / 5.00
-                </p>
-                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[10px] text-emerald-700/80">
-                  {formsList.map((fDef) => {
-                    const fa = computeFormAvg(approver2Ratings, fDef);
-                    return (
-                      <span key={fDef.id}>
-                        {fDef.tab}: <strong>{fa !== null ? fa.toFixed(2) : "—"}</strong> / 5.00
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-lg font-extrabold text-emerald-800">
-                  {overallA2_5 !== null ? `${overallA2_5.toFixed(2)}` : "—"}
-                </span>
-                {overallA2_5 !== null && (
-                  <span className="block text-[10px] font-semibold text-emerald-600">
-                    ({Math.round((overallA2_5 / 5) * 100)}%)
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Section header */}
         <div className="flex items-center justify-between bg-[#1A284F] text-white px-5 py-3 rounded-lg shrink-0">
           <span className="text-sm font-bold tracking-wide">{form.sectionTitle}</span>

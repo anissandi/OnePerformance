@@ -1,6 +1,13 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer"
 import { feedbackEligibilityError } from "./feedbackEligibility.ts"
-import { savePersistedState } from "../../services/supabaseClient"
+import { loadPersistedState, savePersistedState } from "../../services/supabaseClient"
+import {
+  normalizeEmployeeId,
+  registerWorkflowRows,
+  saveWorkflowDecision,
+  submitWorkflowModule,
+} from "./appraisalWorkflowStore"
+import { formatTodayDDMMYYYY } from "../../utils/dateFormat"
 
 export const FOLLOW_UP_COLUMNS = [
   "Aspek Perbaikan",
@@ -82,13 +89,21 @@ const KEY = "inter_department_feedback_workflows_v2"
 const LEGACY_KEY = "inter_department_feedback_submissions_v1"
 const now = () => new Date().toISOString()
 
+// In-memory backend-hydrated cache (disinkronkan penuh ke tabel pa_inter_dept_feedbacks di Supabase)
+let _idfBackendCache: FeedbackSubmission[] | null = null
+if (typeof window !== "undefined") {
+  window.addEventListener("pa-db-hydrated", () => {
+    _idfBackendCache = null
+  })
+}
+
 function emit() {
   window.dispatchEvent(new Event("feedback-updated"))
 }
 
 function safeRead(key: string): FeedbackSubmission[] {
   try {
-    const value = JSON.parse(localStorage.getItem(key) ?? "[]")
+    const value = loadPersistedState<FeedbackSubmission[]>(key, [])
     return Array.isArray(value) ? value : []
   } catch {
     return []
@@ -180,10 +195,17 @@ function normalize(record: FeedbackSubmission): FeedbackSubmission {
 }
 
 export function loadFeedbackSubmissions(): FeedbackSubmission[] {
+  if (_idfBackendCache) {
+    return _idfBackendCache
+  }
   const current = safeRead(KEY).map(normalize)
-  if (current.length) return current.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
+  if (current.length) {
+    _idfBackendCache = current.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
+    return _idfBackendCache
+  }
   const legacy = safeRead(LEGACY_KEY).map(normalize)
-  return legacy.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
+  _idfBackendCache = legacy.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
+  return _idfBackendCache
 }
 
 export function saveFeedbackSubmission(submission: FeedbackSubmission) {
@@ -192,6 +214,7 @@ export function saveFeedbackSubmission(submission: FeedbackSubmission) {
   )
   const normalized = normalize(submission)
   const next = [...records, normalized]
+  _idfBackendCache = next
   savePersistedState(KEY, next, {
     kind: "inter-dept-feedback",
     submission: normalized,
@@ -206,8 +229,11 @@ export function saveFeedbackSubmission(submission: FeedbackSubmission) {
 }
 
 export function getFeedbackSubmission(employeeId: string) {
+  const normTarget = normalizeEmployeeId(employeeId)
   return loadFeedbackSubmissions().find(
-    (entry) => entry.row.employeeId === employeeId,
+    (entry) =>
+      entry.row.employeeId === employeeId ||
+      normalizeEmployeeId(entry.row.employeeId) === normTarget,
   )
 }
 
@@ -254,9 +280,14 @@ export function nominateFeedbackGivers(
 }
 
 export function feedbackTasksFor(giverId: string): FeedbackTask[] {
+  const normGiver = normalizeEmployeeId(giverId)
   return loadFeedbackSubmissions().flatMap((submission) =>
     (submission.nominations ?? [])
-      .filter((nomination) => nomination.giver.id === giverId)
+      .filter(
+        (nomination) =>
+          nomination.giver.id === giverId ||
+          normalizeEmployeeId(nomination.giver.id) === normGiver,
+      )
       .map((nomination) => ({ submission, nomination })),
   )
 }
@@ -270,8 +301,11 @@ export function submitNominatedFeedback(
     throw new Error("Semua indikator feedback wajib diisi.")
   const submission = getFeedbackSubmission(recipientId)
   if (!submission) throw new Error("Permintaan feedback tidak ditemukan.")
+  const normGiver = normalizeEmployeeId(giverId)
   const nomination = submission.nominations?.find(
-    (entry) => entry.giver.id === giverId,
+    (entry) =>
+      entry.giver.id === giverId ||
+      normalizeEmployeeId(entry.giver.id) === normGiver,
   )
   if (!nomination || nomination.status === "Submitted")
     throw new Error("Tugas feedback sudah tidak tersedia.")
@@ -288,7 +322,7 @@ export function submitNominatedFeedback(
       feedback,
     ],
     nominations: submission.nominations?.map((entry) =>
-      entry.giver.id === giverId
+      entry.giver.id === giverId || normalizeEmployeeId(entry.giver.id) === normGiver
         ? { ...entry, status: "Submitted", submittedAt: now() }
         : entry,
     ),
@@ -315,16 +349,23 @@ export function submitFeedbackSummary(
     throw new Error("Semua summary feedback wajib diisi.")
   if (submission.summarySubmittedAt)
     throw new Error("Summary feedback sudah disubmit.")
+  const todayStr = formatTodayDDMMYYYY()
   saveFeedbackSubmission({
     ...submission,
     summaries,
     summarySubmittedAt: now(),
     row: {
       ...submission.row,
-      submittedDate: new Date().toLocaleDateString("id-ID"),
+      submittedDate: todayStr,
       status: "Pending",
     },
   })
+  submitWorkflowModule(
+    "Inter-Department Feedback",
+    "measurement",
+    todayStr,
+    submission.row.employeeId,
+  )
 }
 
 export function feedbackApprovalRows(role: ReviewerRole): ApprovalRow[] {
@@ -358,12 +399,20 @@ export function saveFeedbackFollowUp(
     throw new Error("Semua field tindak lanjut wajib diisi.")
   if (submission.followUps[role]?.length)
     throw new Error("Tindak lanjut sudah disubmit.")
+  const todayStr = formatTodayDDMMYYYY()
   saveFeedbackSubmission({
     ...submission,
     row: {
       ...submission.row,
-      approvalDate: new Date().toLocaleDateString("id-ID"),
+      approvalDate: todayStr,
+      status: role === "approver2" ? "Approved" : "Assessed-Approver 1",
     },
     followUps: { ...submission.followUps, [role]: rows },
   })
+  registerWorkflowRows([submission.row], role)
+  saveWorkflowDecision(
+    submission.row.no,
+    role === "approver2" ? "Approved" : "Assessed-Approver 1",
+    todayStr,
+  )
 }

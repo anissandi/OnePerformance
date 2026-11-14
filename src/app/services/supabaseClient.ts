@@ -833,6 +833,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       rolePermissions,
       menuConfigs,
       openLocks,
+      interDeptFeedbacks,
+      rcaSubmissions,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
@@ -848,6 +850,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_role_permissions", "select=*"),
       restSelect("pa_menu_configs", "select=*&id=eq.default&limit=1"),
       restSelect("pa_open_lock_requests", "select=*&order=updated_at.desc"),
+      restSelect("pa_inter_dept_feedbacks", "select=*&order=updated_at.desc"),
+      restSelect("pa_rca_submissions", "select=*&order=updated_at.desc"),
     ]);
     if (
       users.length > 0 ||
@@ -856,7 +860,9 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       evidenceFiles.length > 0 ||
       auditTrail.length > 0 ||
       workflowDocs.length > 0 ||
-      interviewSchedules.length > 0
+      interviewSchedules.length > 0 ||
+      interDeptFeedbacks.length > 0 ||
+      rcaSubmissions.length > 0
     ) {
       return {
         ok: true,
@@ -874,6 +880,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         rolePermissions,
         menuConfig: (menuConfigs[0] as { menus?: unknown } | undefined)?.menus ?? null,
         openLocks,
+        interDeptFeedbacks,
+        rcaSubmissions,
       };
     }
 
@@ -1155,6 +1163,49 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       localStorage.setItem("pa_open_lock_requests_v1", JSON.stringify(mappedLocks));
     }
 
+    // 15. Hydrate Inter-Department Feedback workflows from dedicated backend table pa_inter_dept_feedbacks
+    const idfRows = data.interDeptFeedbacks as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(idfRows) && idfRows.length > 0) {
+      const existingRaw = localStorage.getItem("inter_department_feedback_workflows_v2");
+      const existingList: Array<{ row?: { no?: string } }> = existingRaw ? JSON.parse(existingRaw) : [];
+      const byNo = new Map<string, unknown>();
+      for (const item of existingList) {
+        if (item?.row?.no) byNo.set(item.row.no, item);
+      }
+      for (const dbRow of idfRows) {
+        const sub = dbRow.submission as { row?: { no?: string } } | undefined;
+        const key = String(sub?.row?.no ?? dbRow.submission_id ?? "");
+        if (key && sub) {
+          byNo.set(key, sub);
+        }
+      }
+      if (byNo.size > 0) {
+        localStorage.setItem("inter_department_feedback_workflows_v2", JSON.stringify(Array.from(byNo.values())));
+      }
+    }
+
+    // 16. Hydrate RCA submissions from dedicated backend table pa_rca_submissions
+    const rcaRows = data.rcaSubmissions as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(rcaRows) && rcaRows.length > 0) {
+      const existingRaw = localStorage.getItem("kpi_rca_submissions");
+      const existingList: Array<{ key?: string; id?: string }> = existingRaw ? JSON.parse(existingRaw) : [];
+      const byKey = new Map<string, unknown>();
+      for (const item of existingList) {
+        const k = item?.key ?? item?.id;
+        if (k) byKey.set(k, item);
+      }
+      for (const dbRow of rcaRows) {
+        const sub = dbRow.submission as { key?: string; id?: string } | undefined;
+        const k = String(sub?.key ?? sub?.id ?? dbRow.doc_key ?? "");
+        if (k && sub) {
+          byKey.set(k, sub);
+        }
+      }
+      if (byKey.size > 0) {
+        localStorage.setItem("kpi_rca_submissions", JSON.stringify(Array.from(byKey.values())));
+      }
+    }
+
     window.dispatchEvent(new Event("pa-db-hydrated"));
     window.dispatchEvent(new Event("pa-auth-updated"));
     window.dispatchEvent(new Event("appraisal-updated"));
@@ -1164,6 +1215,24 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     window.dispatchEvent(new Event("pa-audit-updated"));
   } catch {
     // ignore hydration errors
+  }
+}
+
+export async function deleteBackendRecordFromSupabase(
+  table: string,
+  column: string,
+  value: string,
+): Promise<void> {
+  try {
+    await fetch(`${SUPABASE_REST_BASE}/${table}?${column}=eq.${encodeURIComponent(value)}`, {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    });
+  } catch {
+    // ignore network errors
   }
 }
 

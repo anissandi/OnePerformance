@@ -920,7 +920,8 @@ export function triggerApprovalTransactionNotification(params: {
     const approvalRoute = isSettingPhase ? "/approvals/setting" : "/approvals/measurement";
     const isFourStepMod =
       canonicalMod.toLowerCase().includes("kpi") ||
-      canonicalMod.toLowerCase().includes("smart");
+      canonicalMod.toLowerCase().includes("smart") ||
+      canonicalMod.toLowerCase().includes("rca");
 
     const findApproverUser = (refValue?: string): ManagedUser | undefined => {
       const ref = (refValue ?? "").trim().toLowerCase();

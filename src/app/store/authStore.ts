@@ -560,7 +560,7 @@ export function resolveWorkflowStageForTarget(
     );
   });
 
-  const isFourStepModule = moduleType === "KPI" || moduleType === "SMART Goals";
+  const isFourStepModule = moduleType === "KPI" || moduleType === "SMART Goals" || moduleType === "RCA";
   const checkerDone = Boolean(workflowStepState?.checkerDone);
   const a1Done = Boolean(workflowStepState?.a1Done);
   const a2Done = Boolean(workflowStepState?.a2Done);

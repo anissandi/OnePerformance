@@ -17,6 +17,8 @@ import { loadCheckInEntries, loadSubmittedGoals, type StoredSmartGoalEvidenceFil
 import { loadKPIComments, saveKPIComment, type KPIRowComments } from "../pages/shared/kpiCommentsStore";
 import { loadEvidenceFiles, type StoredEvidenceFile } from "../pages/shared/kpiEvidenceStore";
 import { saveAssessment, loadAssessment, loadSGAssessment } from "../pages/shared/approvalsStore";
+import { loadRCASubmissions } from "../pages/shared/rcaStore";
+import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../utils/dateFormat";
 import { MS_ITEMS, type MSItem } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPITableView } from "./KPITableView";
 import { FeedbackApprovalDrawer } from "./FeedbackApprovalDrawer";
@@ -109,8 +111,47 @@ const RCA_SAMPLE_2: RCAItem[] = [{
   ],
 }];
 
-function RCAReviewPreview({ reviewerRole }: { reviewerRole: ReviewerRole }) {
-  const data = reviewerRole === "approver1" ? RCA_SAMPLE_1 : RCA_SAMPLE_2;
+function RCAReviewPreview({ employeeId }: { employeeId: string }) {
+  const storedSubs = loadRCASubmissions(employeeId);
+  const data: RCAItem[] = storedSubs.flatMap((sub, idx) => {
+    const blocks =
+      sub.masalahBlocks && sub.masalahBlocks.length > 0
+        ? sub.masalahBlocks
+        : [
+            {
+              id: `${sub.id}_b0`,
+              masalahUtama: (sub.masalahUtama ?? []).join(" / "),
+              kenapaA: sub.kenapaA ?? "",
+              kenapaB: sub.kenapaB ?? "",
+              kenapaC: sub.kenapaC ?? "",
+              actionPlans: sub.actionPlans ?? [],
+            },
+          ];
+    return blocks.map((blk, bi) => ({
+      no: idx + bi + 1,
+      periode: sub.periode || "—",
+      kpi: sub.kpiIndicator || "—",
+      satuan: sub.satuan || "—",
+      baseline: sub.baseline || "—",
+      target: sub.targetMonthly || "—",
+      actual: sub.actual || "—",
+      masalahUtama: blk.masalahUtama || "—",
+      kenapaA: blk.kenapaA || "—",
+      kenapaB: blk.kenapaB || "—",
+      kenapaC: blk.kenapaC || "—",
+      actionPlans: (blk.actionPlans ?? []).map((ap) => ({
+        action: ap.action || "—",
+        targetDate: normalizeDateDDMMYYYY(ap.targetDate),
+        pic: ap.pic || "—",
+        status: (["Belum dilaksanakan", "Sedang dilaksanakan", "Selesai"].includes(ap.status)
+          ? ap.status
+          : "Belum dilaksanakan") as RCAStatus,
+        keterangan: Array.isArray(ap.keterangan) ? ap.keterangan : [],
+        output: Array.isArray(ap.output) ? ap.output : [],
+        evidence: Array.isArray(ap.evidence) ? ap.evidence : [],
+      })),
+    }));
+  });
 
   const th = "border border-[#1A284F]/30 py-3 px-3 text-center font-semibold text-xs whitespace-nowrap";
   const headers: [string, number][] = [
@@ -131,6 +172,11 @@ function RCAReviewPreview({ reviewerRole }: { reviewerRole: ReviewerRole }) {
         </span>
       </div>
 
+      {data.length === 0 ? (
+        <div className="py-14 text-center text-gray-400 text-sm border border-dashed border-gray-200 rounded-xl bg-gray-50/40">
+          Belum ada data Root Cause Analysis (RCA) yang disubmit oleh karyawan ini.
+        </div>
+      ) : (
       <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
         <table className="border-collapse text-xs" style={{ minWidth: 1900 }}>
           <thead>
@@ -208,6 +254,7 @@ function RCAReviewPreview({ reviewerRole }: { reviewerRole: ReviewerRole }) {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }
@@ -2018,7 +2065,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
   const [activeForm, setActiveForm]         = useState<"A" | "B" | "C">("A");
 
   const hasAssessment = needsAssessment(row.type);
-  const isFourStepType = row.type === "KPI" || row.type === "SMART Goals";
+  const isFourStepType = row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA";
   const isCheckerStage = isFourStepType && row.workflowStageForRow === "checker";
   const isValidatorStage = isFourStepType && row.workflowStageForRow === "validator";
   const primaryApproveLabel = isCheckerStage
@@ -2102,7 +2149,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
     if (row.type === "Project")          return <ProjectReview employeeId={row.employeeId} />;
     if (row.type === "Appraisal Form")   return <AppraisalFormReview {...sharedProps} />;
     if (row.type === "Managerial Skill") return <ManagerialSkillReview {...sharedProps} />;
-    if (row.type === "RCA")              return <RCAReviewPreview reviewerRole={reviewerRole} />;
+    if (row.type === "RCA")              return <RCAReviewPreview employeeId={row.employeeId} />;
     return (
       <div className="flex flex-col items-center gap-3 py-16 text-gray-400">
         <ClipboardList className="w-12 h-12" />
@@ -2347,7 +2394,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                   // Save assessment data for SMART Goals (uses Approve path, not Submit)
                   if (row.type === "SMART Goals" && !isCheckerStage && !isValidatorStage) {
                     const commentsToSave = Object.fromEntries(Object.entries(smartComments).map(([k, v]) => [k, v]));
-                    saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }));
+                    saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, formatTodayDDMMYYYY());
                   }
                   onApprove();
                 }}
@@ -2390,7 +2437,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                   const commentsToSave: Record<string, string> = Object.fromEntries(
                     Object.entries(smartComments).map(([k, v]) => [k, v]),
                   );
-                  saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }));
+                  saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, formatTodayDDMMYYYY());
                   onAssessed();
                 }}
                 className="flex-1 py-2.5 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"

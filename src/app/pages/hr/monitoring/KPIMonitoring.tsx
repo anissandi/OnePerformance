@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Search, TrendingUp, CheckCircle2, AlertCircle, Clock, Filter } from "lucide-react";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../../shared/appraisalWorkflowStore";
+import { dateToSortableKey, normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 
 // ─── Mock KPI data per employee ───────────────────────────────────────────────
 
@@ -117,6 +118,21 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
     const settingStatus = resolveKpiPhaseStatus(wfSet);
     const measurementStatus = resolveKpiPhaseStatus(wfMeas);
     const hasAny = Boolean(wfSet || wfMeas);
+    const latestKpiDate = [
+      wfMeas?.decisions.validator?.date,
+      wfMeas?.decisions.approver2?.date,
+      wfMeas?.decisions.approver1?.date,
+      wfMeas?.decisions.checker?.date,
+      wfMeas?.submittedDate,
+      wfSet?.decisions.validator?.date,
+      wfSet?.decisions.approver2?.date,
+      wfSet?.decisions.approver1?.date,
+      wfSet?.decisions.checker?.date,
+      wfSet?.submittedDate,
+    ]
+      .filter((d): d is string => Boolean(d && d !== "-" && d !== "—"))
+      .sort((a, b) => dateToSortableKey(a).localeCompare(dateToSortableKey(b)))
+      .pop();
     const kpi: KPIRecord = hasAny
       ? {
           employeeId: emp.id,
@@ -128,14 +144,7 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
           rcaCompleted: 0,
           status: settingStatus,
           measurementStatus,
-          lastUpdated:
-            wfMeas?.decisions.validator?.date ||
-            wfMeas?.decisions.approver2?.date ||
-            wfMeas?.submittedDate ||
-            wfSet?.decisions.validator?.date ||
-            wfSet?.decisions.approver2?.date ||
-            wfSet?.submittedDate ||
-            "-",
+          lastUpdated: normalizeDateDDMMYYYY(latestKpiDate),
         }
       : {
           employeeId: emp.id,

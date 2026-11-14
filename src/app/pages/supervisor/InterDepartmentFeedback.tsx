@@ -12,7 +12,8 @@ import {
   Users,
   X,
 } from "lucide-react"
-import { mockEmployees } from "../../data/mockEmployees"
+import { useAuthStore, type ManagedUser } from "../../store/authStore"
+import { normalizeDateDDMMYYYY } from "../../utils/dateFormat"
 import { feedbackEligibilityError } from "../shared/feedbackEligibility"
 import {
   FEEDBACK_ACTIVATION_EVENT,
@@ -31,26 +32,21 @@ import {
 } from "../shared/interDepartmentFeedbackStore"
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar"
 
-const personFrom = (
-  employee: typeof mockEmployees[number],
-): FeedbackPerson => ({
-  id: employee.id,
-  name: employee.fullName,
-  position: employee.position,
-  initials: employee.fullName
+const personFromManagedUser = (user: ManagedUser): FeedbackPerson => ({
+  id: user.employeeId,
+  name: user.name,
+  position: user.position,
+  initials: (user.name || "U")
     .split(/\s+/)
-    .map((name) => name[0])
+    .map((part) => part[0])
     .slice(0, 2)
     .join("")
     .toUpperCase(),
-  companyUnit: employee.companyUnit,
-  division: employee.division,
-  department: employee.department,
-  departmentId: employee.departmentId,
-  section: employee.section,
-  sectionId: employee.sectionId,
+  companyUnit: user.company,
+  division: user.division,
+  department: user.department,
+  section: user.bagian,
 })
-const people = mockEmployees.slice(0, 70).map(personFrom)
 const inputClass =
   "w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-800 outline-none transition focus:border-[#1A284F] focus:ring-2 focus:ring-[#1A284F]/15 disabled:cursor-not-allowed disabled:bg-gray-50"
 
@@ -88,13 +84,10 @@ function EmployeeBadge({ person }: { person: FeedbackPerson }) {
 }
 
 export function InterDepartmentFeedback() {
+  const { activeUser, allUsers } = useAuthStore()
   const [activeTab, setActiveTab] = useRouteTab<"nominate" | "tasks" | "received">(
     ["nominate", "tasks", "received"],
     "nominate",
-  )
-  const [activeId, setActiveId] = useState(
-    () =>
-      people.find((person) => person.id === "E002")?.id ?? people[0]?.id ?? "",
   )
   const [unit, setUnit] = useState("")
   const [division, setDivision] = useState("")
@@ -107,7 +100,21 @@ export function InterDepartmentFeedback() {
     loadFeedbackActivation("2026"),
   )
   const [version, setVersion] = useState(0)
-  const actor = people.find((person) => person.id === activeId) ?? people[0]
+  const people = useMemo(
+    () =>
+      allUsers
+        .filter((u) => u.status === "Active")
+        .map(personFromManagedUser),
+    [allUsers, version],
+  )
+  const actor = useMemo(
+    () =>
+      people.find(
+        (person) =>
+          person.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
+      ) ?? personFromManagedUser(activeUser),
+    [people, activeUser],
+  )
   const workflow = actor ? getFeedbackSubmission(actor.id) : undefined
   const status = feedbackWindow(activation)
   const refresh = () => setVersion((current) => current + 1)
@@ -119,10 +126,16 @@ export function InterDepartmentFeedback() {
     }
     window.addEventListener(FEEDBACK_ACTIVATION_EVENT, update)
     window.addEventListener("feedback-updated", update)
+    window.addEventListener("appraisal-updated", update)
+    window.addEventListener("pa-db-hydrated", update)
+    window.addEventListener("pa-auth-updated", update)
     window.addEventListener("storage", update)
     return () => {
       window.removeEventListener(FEEDBACK_ACTIVATION_EVENT, update)
       window.removeEventListener("feedback-updated", update)
+      window.removeEventListener("appraisal-updated", update)
+      window.removeEventListener("pa-db-hydrated", update)
+      window.removeEventListener("pa-auth-updated", update)
       window.removeEventListener("storage", update)
     }
   }, [])
@@ -134,11 +147,11 @@ export function InterDepartmentFeedback() {
     setDepartment("")
     setError("")
     setNotice("")
-  }, [activeId])
+  }, [activeUser.employeeId])
 
   const units = useMemo(
     () => [...new Set(people.map((person) => person.companyUnit))],
-    [],
+    [people],
   )
   const divisions = useMemo(
     () => [
@@ -148,7 +161,7 @@ export function InterDepartmentFeedback() {
           .map((person) => person.division),
       ),
     ],
-    [unit],
+    [people, unit],
   )
   const departments = useMemo(
     () => [
@@ -162,7 +175,7 @@ export function InterDepartmentFeedback() {
           .map((person) => person.department),
       ),
     ],
-    [unit, division],
+    [people, unit, division],
   )
   const candidates = people.filter(
     (person) =>
@@ -200,22 +213,6 @@ export function InterDepartmentFeedback() {
 
   return (
     <main className="w-full pb-16" data-feedback-version={version}>
-      <section className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-        <h2 className="font-semibold">
-          Jadwal Inter-Department Feedback · 2026
-        </h2>
-        <p className="mt-1">
-          Periode Nominasi, Feedback, Summary & Approval:{" "}
-          {activation?.startDate || "Belum diatur"} sampai{" "}
-          {activation?.endDate || "Belum diatur"}.
-        </p>
-        <p className="mt-2 font-medium">
-          {status.receiving
-            ? "Periode nominasi, pemberian feedback, summary, dan approval sedang terbuka."
-            : "Di luar jadwal aktif atau konfigurasi belum lengkap. Aksi submit diblokir."}
-        </p>
-      </section>
-
       <header className="mb-6 flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
           <h1 className="text-2xl font-bold uppercase tracking-wide text-[#1A284F]">
@@ -226,21 +223,22 @@ export function InterDepartmentFeedback() {
             untuk dirinya.
           </p>
         </div>
-        <label className="w-full max-w-md text-xs font-bold uppercase tracking-wide text-gray-500">
-          Simulasi sebagai karyawan
-          <select
-            value={activeId}
-            onChange={(event) => setActiveId(event.target.value)}
-            className={inputClass + " mt-1 normal-case font-medium"}
-          >
-            {people.map((person) => (
-              <option key={person.id} value={person.id}>
-                {person.name} · {person.position}
-              </option>
-            ))}
-          </select>
-        </label>
       </header>
+
+      <div className="mb-6">
+        <ModuleApprovalStatusBar
+          module="Inter-Department Feedback"
+          phase="measurement"
+          submittedOverride={Boolean(workflow?.summarySubmittedAt)}
+          submittedDateOverride={
+            workflow?.row.submittedDate && workflow.row.submittedDate !== "-"
+              ? normalizeDateDDMMYYYY(workflow.row.submittedDate)
+              : workflow?.summarySubmittedAt
+              ? normalizeDateDDMMYYYY(workflow.summarySubmittedAt)
+              : undefined
+          }
+        />
+      </div>
 
       {(notice || error) && (
         <p
@@ -344,14 +342,7 @@ export function InterDepartmentFeedback() {
         />
       )}
       {activeTab === "received" && actor && (
-        <div className="space-y-4">
-          <ModuleApprovalStatusBar
-            module="Inter-Department Feedback"
-            phase="measurement"
-            submittedOverride={Boolean(workflow?.summarySubmittedAt)}
-            submittedDateOverride={workflow?.summarySubmittedAt}
-          />
-          <ReceivedPanel
+        <ReceivedPanel
           actor={actor}
           workflow={workflow}
           approvalOpen={status.approval}
@@ -363,7 +354,6 @@ export function InterDepartmentFeedback() {
           }}
           onError={setError}
         />
-        </div>
       )}
 
       {confirmNomination && (

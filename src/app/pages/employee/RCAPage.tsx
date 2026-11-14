@@ -6,14 +6,24 @@ import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { DatePickerID } from "../../components/DatePickerID";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import { getActiveUser } from "../../store/authStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 import {
   Plus, X, Eye, Send, CheckCircle2, Trash2, ChevronDown,
-  Clock, ArrowLeft, Info, FilePlus, Upload, FileText, Edit3,
+  Clock, ArrowLeft, Info, FilePlus, Upload, FileText, Edit3, RotateCcw,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type ApprovalStatus = "Pending-Approver 1" | "Pending-Approver 2" | "Approved" | "Closed";
+type ApprovalStatus =
+  | "Pending-Check"
+  | "Pending-Approver 1"
+  | "Pending-Approver 2"
+  | "Pending-Validate"
+  | "Revision"
+  | "Validated"
+  | "Approved"
+  | "Closed";
 type StatusPerbaikan = "Belum dilaksanakan" | "Sedang dilaksanakan" | "Selesai" | "Ditunda" | "Dibatalkan";
 
 interface ActionPlan {
@@ -236,15 +246,20 @@ export function loadMeasurementRCARecords() {
 }
 
 function StatusBadge({ status }: { status: ApprovalStatus }) {
-  const cfg = {
-    "Pending-Approver 1": { cls: "bg-amber-50 text-amber-700 border-amber-200",  icon: Clock        },
-    "Pending-Approver 2": { cls: "bg-blue-50 text-blue-700 border-blue-200",     icon: Clock        },
-    "Approved":           { cls: "bg-green-50 text-green-700 border-green-200",  icon: CheckCircle2 },
-    "Closed":             { cls: "bg-green-100 text-green-800 border-green-300", icon: CheckCircle2 },
-  }[status];
-  const Icon = cfg.icon;
+  const cfg: Record<ApprovalStatus, { cls: string; icon: React.ElementType }> = {
+    "Pending-Check":      { cls: "bg-amber-50 text-amber-700 border-amber-200",       icon: Clock        },
+    "Pending-Approver 1": { cls: "bg-amber-50 text-amber-700 border-amber-200",       icon: Clock        },
+    "Pending-Approver 2": { cls: "bg-sky-50 text-sky-700 border-sky-200",             icon: Clock        },
+    "Pending-Validate":   { cls: "bg-indigo-50 text-indigo-700 border-indigo-200",    icon: Clock        },
+    "Revision":           { cls: "bg-orange-50 text-orange-700 border-orange-200",    icon: RotateCcw    },
+    "Validated":          { cls: "bg-emerald-50 text-emerald-700 border-emerald-200",icon: CheckCircle2 },
+    "Approved":           { cls: "bg-green-50 text-green-700 border-green-200",       icon: CheckCircle2 },
+    "Closed":             { cls: "bg-green-100 text-green-800 border-green-300",      icon: CheckCircle2 },
+  };
+  const meta = cfg[status] ?? cfg["Pending-Check"];
+  const Icon = meta.icon;
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${cfg.cls}`}>
+    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${meta.cls}`}>
       <Icon className="w-3 h-3" />{status}
     </span>
   );
@@ -1112,7 +1127,7 @@ function CreateRCADrawer({ onClose, onCreated }: { onClose: () => void; onCreate
   const handleConfirm = () => { setShowConfirm(false); setShowSuccess(true); };
   const handleSuccessClose = () => {
     setShowSuccess(false);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = formatTodayDDMMYYYY();
     const rowId = genId();
     // Persist each RCA item to rcaStore so KPIPage tags can sync
     items.forEach((item) => {
@@ -1133,7 +1148,7 @@ function CreateRCADrawer({ onClose, onCreated }: { onClose: () => void; onCreate
         monthLabel: item.periode,
         year: "2026",
         kpiIndicator: item.kpi,
-        approvalStatus: "Pending-Approver 1",
+        approvalStatus: "Pending-Check",
         targetMonthly: item.target,
         actual: item.actual,
         achievementPct: 0,
@@ -1153,7 +1168,7 @@ function CreateRCADrawer({ onClose, onCreated }: { onClose: () => void; onCreate
       kpiIndicator: items[0]?.kpi || "New RCA",
       targetMonthly: items[0]?.target || "—",
       actual: items[0]?.actual || "—",
-      rcaPercentage: 0, approvalStatus: "Pending-Approver 1", year: "2026",
+      rcaPercentage: 0, approvalStatus: "Pending-Check", year: "2026",
       submitted: true, submittedDate: today, lastApprovedDate: "—",
       rcaData: items,
     });
@@ -1313,10 +1328,10 @@ function RCAListTable({ rows, isClosed, onViewDetail, onDelete }: {
                   <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-1.5">
-                        {row.approvalStatus === "Approved" ? (
+                        {row.approvalStatus === "Validated" || row.approvalStatus === "Approved" || row.approvalStatus === "Revision" ? (
                           <button onClick={() => onViewDetail(row)}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-amber-700 border border-amber-300 bg-amber-50 hover:bg-amber-100 hover:border-amber-400 transition-colors">
-                            <Edit3 className="w-3.5 h-3.5" /> Update Progress
+                            <Edit3 className="w-3.5 h-3.5" /> {row.approvalStatus === "Revision" ? "Perbaiki Revisi" : "Update Progress"}
                           </button>
                         ) : (
                           <button onClick={() => onViewDetail(row)}
@@ -1348,9 +1363,9 @@ function RCAListTable({ rows, isClosed, onViewDetail, onDelete }: {
                       : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-green-50 text-green-700 border border-green-200">All done</span>}
                   </td>
                   <td className="px-4 py-3.5"><RCAPercentBar pct={pct} /></td>
-                  <td className="px-4 py-3.5 text-xs text-gray-500 whitespace-nowrap">{row.submittedDate}</td>
+                  <td className="px-4 py-3.5 text-xs text-gray-500 whitespace-nowrap">{normalizeDateDDMMYYYY(row.submittedDate)}</td>
                   <td className="px-4 py-3.5"><StatusBadge status={row.approvalStatus} /></td>
-                  <td className="px-4 py-3.5 text-xs text-gray-500 whitespace-nowrap">{row.lastApprovedDate}</td>
+                  <td className="px-4 py-3.5 text-xs text-gray-500 whitespace-nowrap">{normalizeDateDDMMYYYY(row.lastApprovedDate)}</td>
                 </tr>
               );
             })}
@@ -1375,6 +1390,41 @@ export function RCAPage() {
 
   const syncRCARowsFromStore = () => {
     const stored = loadRCASubmissions();
+    const activeUser = getActiveUser();
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    const wfRec = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "RCA" &&
+        r.phase === "measurement" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
+    );
+    const val = wfRec?.decisions.validator?.status ?? "";
+    const a2 = wfRec?.decisions.approver2?.status ?? "";
+    const a1 = wfRec?.decisions.approver1?.status ?? "";
+    const chk = wfRec?.decisions.checker?.status ?? "";
+    let wfDerivedStatus: ApprovalStatus | null = null;
+    let wfLastDate = "—";
+    if (wfRec) {
+      if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") {
+        wfDerivedStatus = "Revision";
+      } else if (val === "Validated" || a2 === "Validated") {
+        wfDerivedStatus = "Validated";
+        wfLastDate = wfRec.decisions.validator?.date || wfRec.decisions.approver2?.date || "—";
+      } else if (a2 === "Approved" || a2.startsWith("Assessed")) {
+        wfDerivedStatus = "Pending-Validate";
+        wfLastDate = wfRec.decisions.approver2?.date || "—";
+      } else if (a1 === "Approved" || a1.startsWith("Assessed")) {
+        wfDerivedStatus = "Pending-Approver 2";
+        wfLastDate = wfRec.decisions.approver1?.date || "—";
+      } else if (chk && chk !== "Revision") {
+        wfDerivedStatus = "Pending-Approver 1";
+        wfLastDate = wfRec.decisions.checker?.date || "—";
+      } else {
+        wfDerivedStatus = "Pending-Check";
+      }
+    }
+
     const nextOpen: RCARow[] = [];
     const nextClosed: RCARow[] = [];
     stored.forEach((s) => {
@@ -1405,7 +1455,8 @@ export function RCAPage() {
               actionPlans: s.actionPlans as ActionPlan[],
             }],
       };
-      const status = (s.approvalStatus as ApprovalStatus) || "Pending-Approver 1";
+      const rawSt = (s.approvalStatus as ApprovalStatus) || "Pending-Check";
+      const status: ApprovalStatus = rawSt === "Closed" ? "Closed" : wfDerivedStatus ?? rawSt;
       const rowObj: RCARow = {
         id: s.id,
         no: status === "Closed" ? nextClosed.length + 1 : nextOpen.length + 1,
@@ -1417,8 +1468,8 @@ export function RCAPage() {
         approvalStatus: status,
         year: s.year || "2026",
         submitted: true,
-        submittedDate: s.submittedDate,
-        lastApprovedDate: "—",
+        submittedDate: normalizeDateDDMMYYYY(s.submittedDate),
+        lastApprovedDate: normalizeDateDDMMYYYY(wfLastDate),
         rcaData: [rcaItem],
       };
       if (status === "Closed") {
@@ -1453,9 +1504,9 @@ export function RCAPage() {
     });
 
   const handleSubmit = (rowId: string, updatedData: RCAItem[]) => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = formatTodayDDMMYYYY();
     setOpenRows((prev) => {
-      const next = prev.map((r) => r.id !== rowId ? r : { ...r, rcaData: updatedData, approvalStatus: "Pending-Approver 1", submittedDate: today });
+      const next = prev.map((r) => r.id !== rowId ? r : { ...r, rcaData: updatedData, approvalStatus: "Pending-Check" as ApprovalStatus, submittedDate: today });
       // Persist updated approval status to rcaStore
       const row = prev.find((r) => r.id === rowId);
       if (row) {
@@ -1477,7 +1528,7 @@ export function RCAPage() {
           ...existing,
           masalahBlocks: storedBlocks,
           actionPlans: storedBlocks.flatMap((b) => b.actionPlans),
-          approvalStatus: "Pending-Approver 1",
+          approvalStatus: "Pending-Check",
         });
       }
       return next;

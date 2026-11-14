@@ -1288,19 +1288,6 @@ export function SmartGoalsCheckInPage() {
         </div>
       )}
 
-      {/* Info banner */}
-      {editable && (
-        <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">
-          <Info className="w-4 h-4 shrink-0 mt-0.5 text-blue-500" />
-          <div>
-            <p className="font-semibold mb-0.5">Petunjuk Pengisian</p>
-            <p className="text-xs leading-relaxed">
-              Pilih status masing-masing Action Plan. <em>Belum dilaksanakan</em> — isi kendala. <em>Sedang dilaksanakan</em> — isi progress &amp; kendala. <em>Selesai</em> — upload bukti. <em>Batal</em> — isi alasan pembatalan. Status "<strong>—</strong>" berarti belum dipilih.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* Accumulation card */}
       <AccumulationCard goals={goals} entries={entries} />
 

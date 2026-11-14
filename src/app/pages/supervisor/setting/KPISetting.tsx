@@ -11,6 +11,7 @@ import {
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
 import { savePersistedState } from "../../../services/supabaseClient";
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
+import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
 import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock } from "lucide-react";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
@@ -4210,7 +4211,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     setView("preview");
     const u = getActiveUser();
     const normId = normalizeEmployeeId(u.employeeId);
-    const todayStr = new Date().toLocaleDateString("id-ID");
+    const todayStr = formatTodayDDMMYYYY();
     try {
       const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
       const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
@@ -4371,7 +4372,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           )}
 
           {/* Approved / Validated state — all tabs */}
-          {kpiApproved && !pendingTargetEditRequest && !monthlyTargetPending && (
+          {isCorporate && kpiApproved && !pendingTargetEditRequest && !monthlyTargetPending && (
             <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-50 border border-green-300 text-green-700">
               <CheckCircle2 className="w-3.5 h-3.5" /> {useValidateTerms ? "Validated" : "Approved"}
             </span>

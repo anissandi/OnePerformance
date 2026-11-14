@@ -8,6 +8,7 @@ import {
   type WorkflowStageRole,
 } from "../../store/authStore";
 import { triggerApprovalTransactionNotification } from "../../store/notificationStore";
+import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 export const MOCK_EMPLOYEE_ID = "EMP-002";
 const KEY = "appraisal_workflow_v1";
@@ -119,17 +120,19 @@ function write(record: WorkflowRecord) {
 export function submitWorkflowModule(
   module: string,
   phase: WorkflowRecord["phase"] = "measurement",
-  date = new Date().toLocaleDateString("id-ID"),
+  date = formatTodayDDMMYYYY(),
   employeeId = getActiveUser().employeeId || MOCK_EMPLOYEE_ID,
 ) {
+  const normalizedDate = normalizeDateDDMMYYYY(date);
+  const effectiveDate = normalizedDate === "—" ? formatTodayDDMMYYYY() : normalizedDate;
   const key = keyFor(employeeId, module, phase);
   const bypassChecker =
-    (module === "KPI" || module === "SMART Goals") &&
+    (module === "KPI" || module === "SMART Goals" || module === "RCA") &&
     shouldBypassCheckerForSubmission(employeeId);
   const existing = loadWorkflowRecords().find((item) => item.key === key);
   const initialDecisions: WorkflowRecord["decisions"] = bypassChecker
     ? {
-        checker: { status: "Bypassed", date },
+        checker: { status: "Bypassed", date: effectiveDate },
       }
     : {};
   write({
@@ -138,7 +141,7 @@ export function submitWorkflowModule(
     module,
     phase,
     year: "2026",
-    submittedDate: date,
+    submittedDate: effectiveDate,
     decisions: initialDecisions,
     assessments: {},
     revisionHistory: existing?.revisionHistory ?? [],
@@ -156,7 +159,8 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
   const activeUser = getActiveUser();
   const existing = loadWorkflowRecords().find((item) => item.key === alias.key);
   const record: WorkflowRecord = existing ?? { ...alias, decisions: {}, assessments: {}, revisionHistory: [] };
-  const isFourStep = alias.module === "KPI" || alias.module === "SMART Goals";
+  const isFourStep = alias.module === "KPI" || alias.module === "SMART Goals" || alias.module === "RCA";
+  const effectiveDate = date && date !== "-" ? normalizeDateDDMMYYYY(date) : "-";
   const bypassCheck = isFourStep && shouldBypassCheckerForSubmission(alias.employeeId);
   const checkerDone = Boolean(
     bypassCheck ||
@@ -189,7 +193,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     const chkStatus = status === "Revision" ? "Revision" : "Checked";
     decisions.checker = {
       status: chkStatus,
-      date,
+      date: effectiveDate,
       note,
       approverName: activeUser.name,
     };
@@ -202,7 +206,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     const a1Status = status === "Revision" ? "Revision" : status === "Checked" ? "Assessed-Approver 1" : status;
     decisions.approver1 = {
       status: a1Status,
-      date,
+      date: effectiveDate,
       note,
       approverName: activeUser.name,
     };
@@ -221,7 +225,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
         : status;
     decisions.approver2 = {
       status: a2Status,
-      date,
+      date: effectiveDate,
       note,
       approverName: activeUser.name,
     };
@@ -230,7 +234,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     } else if (isAlsoValidator) {
       decisions.validator = {
         status: "Validated",
-        date,
+        date: effectiveDate,
         note,
         approverName: activeUser.name,
       };
@@ -243,7 +247,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     const valStatus = status === "Revision" ? "Revision" : "Validated";
     decisions.validator = {
       status: valStatus,
-      date,
+      date: effectiveDate,
       note,
       approverName: activeUser.name,
     };
@@ -252,7 +256,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
   } else {
     decisions.approver2 = {
       status,
-      date,
+      date: effectiveDate,
       note,
       approverName: activeUser.name,
     };
@@ -274,7 +278,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       role: roleLabel,
       approverName: activeUser.name || roleLabel,
       note: note.trim(),
-      date: date !== "-" ? date : new Date().toLocaleDateString("id-ID"),
+      date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
     });
   }
   write({ ...record, decisions, assessments, revisionHistory });
@@ -296,7 +300,7 @@ export function workflowRowStatus(row: ApprovalRow, role: ReviewerRole): Partial
   const alias = workflowAlias(row.no);
   const record = alias && loadWorkflowRecords().find((item) => item.key === alias.key);
   if (!record) return null;
-  const isFourStep = record.module === "KPI" || record.module === "SMART Goals";
+  const isFourStep = record.module === "KPI" || record.module === "SMART Goals" || record.module === "RCA";
   const stage: WorkflowStageRole = row.workflowStageForRow ?? alias?.stage ?? role;
 
   if (isFourStep) {

@@ -17,6 +17,7 @@ import {
   useAuthStore,
 } from "../../store/authStore";
 import { getLiveUserModuleApprovals, loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
 import { projectApprovalRows } from "../../store/projectStore";
@@ -78,14 +79,7 @@ type TabFilter = "All" | Module;
 // ─── Approval Dashboard ───────────────────────────────────────────────────────
 
 function formatDate(iso: string) {
-  if (!iso || iso === "-") return "—";
-  if (iso.includes("/")) return iso;
-  const parts = iso.split("-");
-  if (parts.length === 3) {
-    const [y, m, d] = parts;
-    if (d && m && y) return `${d}/${m}/${y}`;
-  }
-  return iso;
+  return normalizeDateDDMMYYYY(iso);
 }
 
 // Map module → Approvals route with the right tab
@@ -169,7 +163,7 @@ function ApprovalDashboard() {
       const mod = (["KPI", "SMART Goals", "Appraisal Form", "Project", "Managerial Skill", "Inter-Department Feedback", "RCA"].includes(rec.module) ? rec.module : "KPI") as Module;
       if (!allowedSet.has(mod)) continue;
 
-      const isFourStep = mod === "KPI" || mod === "SMART Goals";
+      const isFourStep = mod === "KPI" || mod === "SMART Goals" || mod === "RCA";
       const bypassCheck = isFourStep && shouldBypassCheckerForSubmission(sub.employeeId);
       const chk = rec.decisions.checker?.status ?? "";
       const a1 = rec.decisions.approver1?.status ?? "";
@@ -234,7 +228,7 @@ function ApprovalDashboard() {
         phase: rec.phase,
         submissionType: `${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"})`,
         actionNeeded: actionType,
-        submittedDate: rec.submittedDate || "2026-06-10",
+        submittedDate: rec.submittedDate || formatTodayDDMMYYYY(),
         notes: noteText,
         urgent: false,
       });
@@ -269,7 +263,7 @@ function ApprovalDashboard() {
           module: "Project",
           submissionType: "Project Outside Job Scope (Measurement)",
           actionNeeded: "Approve",
-          submittedDate: prjRow.submittedDate && prjRow.submittedDate !== "-" ? prjRow.submittedDate.split("/").reverse().join("-") : "2026-06-10",
+          submittedDate: prjRow.submittedDate && prjRow.submittedDate !== "-" ? prjRow.submittedDate : formatTodayDDMMYYYY(),
           notes: `Pengajuan Project Outside Job Scope dari ${sub.name} menunggu persetujuan Anda.`,
           urgent: false,
         });
@@ -298,7 +292,7 @@ function ApprovalDashboard() {
           module: "Inter-Department Feedback",
           submissionType: "Inter-Department Feedback (Measurement)",
           actionNeeded: "Approve",
-          submittedDate: fbRow.submittedDate && fbRow.submittedDate !== "-" ? fbRow.submittedDate.split("/").reverse().join("-") : "2026-06-10",
+          submittedDate: fbRow.submittedDate && fbRow.submittedDate !== "-" ? fbRow.submittedDate : formatTodayDDMMYYYY(),
           notes: `Pengajuan Inter-Department Feedback dari ${sub.name} menunggu persetujuan Anda.`,
           urgent: false,
         });

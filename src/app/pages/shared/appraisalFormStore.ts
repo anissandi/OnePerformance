@@ -1,6 +1,7 @@
 import { submitWorkflowModule, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
+import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 const SELF_BY_EMP_KEY     = "af_self_by_emp_v2";
 const APPROVER_BY_EMP_KEY = "af_approver_by_emp_v2";
 
@@ -81,7 +82,7 @@ export function saveAppraisalSelf(
       submitWorkflowModule(
         "Appraisal Form",
         "measurement",
-        data.submittedAt || new Date().toLocaleDateString("id-ID"),
+        data.submittedAt || formatTodayDDMMYYYY(),
         empId,
       );
     }

@@ -4,6 +4,7 @@ import { Search, Lightbulb, CheckCircle2, AlertCircle, Clock, ChevronUp, Chevron
 import { EMPLOYEES, filterMonitoringByModuleAccess } from "./monitoringData";
 import { loadSubmittedGoals, loadCheckInEntries } from "../../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { dateToSortableKey, normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -364,6 +365,22 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
         ? Math.round((completedAPs / totalAPs) * 100)
         : 0;
 
+    const latestSgDate = [
+      wfMeas?.decisions.validator?.date,
+      wfMeas?.decisions.approver2?.date,
+      wfMeas?.decisions.approver1?.date,
+      wfMeas?.decisions.checker?.date,
+      wfMeas?.submittedDate,
+      wfSet?.decisions.validator?.date,
+      wfSet?.decisions.approver2?.date,
+      wfSet?.decisions.approver1?.date,
+      wfSet?.decisions.checker?.date,
+      wfSet?.submittedDate,
+    ]
+      .filter((d): d is string => Boolean(d && d !== "-" && d !== "—"))
+      .sort((a, b) => dateToSortableKey(a).localeCompare(dateToSortableKey(b)))
+      .pop();
+
     return {
       employeeId: empId,
       totalGoals,
@@ -372,12 +389,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
       completionPercent,
       settingStatus,
       measurementStatus,
-      lastUpdated:
-        wfMeas?.decisions.approver2?.date ??
-        wfMeas?.submittedDate ??
-        wfSet?.decisions.approver2?.date ??
-        wfSet?.submittedDate ??
-        "-",
+      lastUpdated: normalizeDateDDMMYYYY(latestSgDate),
       goals,
     };
   };

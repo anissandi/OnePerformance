@@ -1,6 +1,7 @@
-import { savePersistedState } from "../../services/supabaseClient";
+import { deleteBackendRecordFromSupabase, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
+import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 const KEY = "kpi_rca_submissions";
 const DEMO_RCA_IDS = new Set(["o1", "o2", "o3", "c1", "c2", "r1", "r2", "r3", "r4", "r5"]);
@@ -99,7 +100,9 @@ export function saveRCASubmission(row: StoredRCASubmission): void {
   const activeUser = getActiveUser();
   const empId = row.employeeId && row.employeeId !== "EMP002" ? row.employeeId : activeUser.employeeId;
   const normEmpId = normalizeEmployeeId(empId);
-  row = { ...row, employeeId: normEmpId };
+  const effectiveDate = normalizeDateDDMMYYYY(row.submittedDate);
+  const finalDate = effectiveDate === "—" ? formatTodayDDMMYYYY() : effectiveDate;
+  row = { ...row, employeeId: normEmpId, submittedDate: finalDate };
   const all = loadAll();
   const idx = all.findIndex(
     (r) => r.key === row.key && (!r.employeeId || normalizeEmployeeId(r.employeeId) === normEmpId),
@@ -113,7 +116,7 @@ export function saveRCASubmission(row: StoredRCASubmission): void {
   submitWorkflowModule(
     "RCA",
     "measurement",
-    row.submittedDate || new Date().toLocaleDateString("id-ID"),
+    finalDate,
     empId,
   );
 }
@@ -129,7 +132,12 @@ export function loadRCASubmissions(employeeId?: string): StoredRCASubmission[] {
 }
 
 export function deleteRCASubmission(id: string): void {
-  saveAll(loadAll().filter((r) => r.id !== id && r.key !== id));
+  const current = loadAll();
+  const toDelete = current.filter((r) => r.id === id || r.key === id);
+  saveAll(current.filter((r) => r.id !== id && r.key !== id));
+  for (const item of toDelete) {
+    void deleteBackendRecordFromSupabase("pa_rca_submissions", "doc_key", String(item.key ?? item.id));
+  }
 }
 
 /** Update only masalahBlocks, actionPlans, and approvalStatus of an existing entry by key */

@@ -2,6 +2,7 @@ import type { SmartGoal } from "../employee/SMARTGoals";
 import { normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
+import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 
 const STORAGE_KEY = "sg_submitted_smart_goals";
 const GOALS_BY_EMP_KEY = "sg_goals_by_emp_v2";
@@ -65,7 +66,7 @@ export function saveSubmittedGoals(
         : {}),
     });
     if (isFinalSubmit) {
-      submitWorkflowModule("SMART Goals", "setting", new Date().toLocaleDateString("id-ID"), empId);
+      submitWorkflowModule("SMART Goals", "setting", formatTodayDDMMYYYY(), empId);
     }
   } catch {
     // ignore storage errors
@@ -154,7 +155,7 @@ export function saveCheckInEntries(
           (decision) => normalizeEmployeeId(decision.employeeId) !== normId,
         ),
       );
-      submitWorkflowModule("SMART Goals", "measurement", new Date().toLocaleDateString("id-ID"), empId);
+      submitWorkflowModule("SMART Goals", "measurement", formatTodayDDMMYYYY(), empId);
     }
   } catch { /* ignore */ }
 }

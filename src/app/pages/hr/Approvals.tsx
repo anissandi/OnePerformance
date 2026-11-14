@@ -17,6 +17,7 @@ import {
   getScopedFilterOptionsForUser,
   useAuthStore,
 } from "../../store/authStore";
+import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 const BASE_CHECKIN: ApprovalRow[] = [];
 const BASE_SETTING: ApprovalRow[] = [];
@@ -41,7 +42,6 @@ const filterOptionsSetting = {
   approvalType: ["KPI", "SMART Goals"],
 };
 
-const TODAY = "08/06/2026";
 const PAGE_SIZE = 8;
 type MainTab = "checkin" | "setting";
 
@@ -324,7 +324,10 @@ function ApprovalsTable({
     setList(list.includes(item) ? list.filter((i) => i !== item) : [...list, item]);
 
   // date format: "DD/MM/YYYY" — extract year (parts[2]) and month (parts[1])
-  const getDateParts = (d: string) => d !== "-" ? d.split("/") : null;
+  const getDateParts = (d: string) => {
+    const norm = normalizeDateDDMMYYYY(d);
+    return norm !== "—" ? norm.split("/") : null;
+  };
 
   const filtered = data.filter((row) => {
     const matchTab    = activeTab === "Pending" ? PENDING_STATUSES.has(row.status) : HISTORY_STATUSES.has(row.status);
@@ -381,9 +384,10 @@ function ApprovalsTable({
   };
 
   const handleApprove = (row: ApprovalRow) => {
+    const todayStr = formatTodayDDMMYYYY();
     const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
     const stage = row.workflowStageForRow ?? effectiveRole;
-    const isAssessedType = row.type === "KPI" || row.type === "SMART Goals";
+    const isAssessedType = row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA";
     let decisionStatus: string;
     let uiHistoryStatus: string;
     if (isAssessedType && stage === "checker") {
@@ -403,8 +407,8 @@ function ApprovalsTable({
         : "Approved";
       uiHistoryStatus = decisionStatus;
     }
-    saveOverride(row.no, decisionStatus, TODAY);
-    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: uiHistoryStatus, approvalDate: TODAY } : r));
+    saveOverride(row.no, decisionStatus, todayStr);
+    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: uiHistoryStatus, approvalDate: todayStr } : r));
     setReviewRow(null);
     setActiveTab("Approval History");
   };
@@ -417,10 +421,11 @@ function ApprovalsTable({
   };
 
   const handleAssessed = (row: ApprovalRow) => {
+    const todayStr = formatTodayDDMMYYYY();
     const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
     const newStatus = effectiveRole === "approver2" ? "Assessed-Approver 2" : "Assessed-Approver 1";
-    saveOverride(row.no, newStatus, TODAY);
-    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: TODAY } : r));
+    saveOverride(row.no, newStatus, todayStr);
+    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: todayStr } : r));
     setReviewRow(null);
     setActiveTab("Approval History");
   };
@@ -549,8 +554,8 @@ function ApprovalsTable({
                 <td className="py-4 px-4 text-sm text-gray-600">{row.division}</td>
                 <td className="py-4 px-4 text-sm text-gray-600">{row.companyUnit}</td>
                 <td className="py-4 px-4 text-sm font-medium text-gray-900">{row.type}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{row.submittedDate}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{isHistory ? row.approvalDate : "—"}</td>
+                <td className="py-4 px-4 text-sm text-gray-600">{normalizeDateDDMMYYYY(row.submittedDate)}</td>
+                <td className="py-4 px-4 text-sm text-gray-600">{isHistory ? normalizeDateDDMMYYYY(row.approvalDate) : "—"}</td>
               </tr>
             ))}
           </tbody>

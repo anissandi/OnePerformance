@@ -245,7 +245,7 @@ export function resolveDynamicApprovalRowsForUser(
     // Bagian XII Poin 2: HR Unit Checker bypass pengajuan KPI & SMART Goals miliknya sendiri
     if (
       (activeUser.role === "HR Unit" || activeUser.isHrUnitChecker) &&
-      (row.type === "KPI" || row.type === "SMART Goals") &&
+      (row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA") &&
       (normEmpId === normalizeEmployeeId(activeUser.employeeId) ||
         row.name.trim().toLowerCase() === activeUser.name.trim().toLowerCase()) &&
       shouldBypassCheckerForSubmission(activeUser.employeeId)
@@ -261,7 +261,7 @@ export function resolveDynamicApprovalRowsForUser(
         w.employeeId === normEmpId,
     );
     const bypassCheck =
-      (row.type === "KPI" || row.type === "SMART Goals") &&
+      (row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA") &&
       shouldBypassCheckerForSubmission(row.employeeId);
     const checkerDone = Boolean(
       bypassCheck ||

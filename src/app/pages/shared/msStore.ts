@@ -1,6 +1,7 @@
 import { submitWorkflowModule, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
+import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 const SELF_BY_EMP_KEY     = "ms_self_by_emp_v2";
 const APPROVER_BY_EMP_KEY = "ms_approver_by_emp_v2";
 
@@ -54,7 +55,7 @@ export function saveMSSelfRatings(data: MSSelfRatings): void {
         description: `Submitted Managerial Skill Self-Assessment by ${activeUser.name} (${activeUser.employeeId})`,
       },
     });
-    submitWorkflowModule("Managerial Skill", "measurement", new Date().toLocaleDateString("id-ID"), activeUser.employeeId);
+    submitWorkflowModule("Managerial Skill", "measurement", formatTodayDDMMYYYY(), activeUser.employeeId);
   } catch { /* ignore */ }
 }
 

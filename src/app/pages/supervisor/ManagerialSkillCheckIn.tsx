@@ -3,6 +3,7 @@ import { X, CheckCircle2, FileCheck } from "lucide-react";
 import { saveMSSelfRatings, loadMSSelfRatings } from "../shared/msStore";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
+import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -236,7 +237,7 @@ export function SupervisorManagerialSkillCheckIn() {
     saveMSSelfRatings({
       ratings: ratings as Record<number, number>,
       totalScore,
-      submittedAt: new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }),
+      submittedAt: formatTodayDDMMYYYY(),
     });
   };
 

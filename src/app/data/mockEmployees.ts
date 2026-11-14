@@ -8,6 +8,7 @@ import {
   resolveUserAllowedModules,
 } from "../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
+import { dateToSortableKey, normalizeDateDDMMYYYY } from "../utils/dateFormat";
 import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../pages/shared/appraisalFormStore";
 import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
@@ -273,21 +274,12 @@ export function getLiveTransactionalEmployees(): Employee[] {
           w.decisions.approver2?.date,
           w.decisions.approver1?.date,
           w.decisions.checker?.date,
+          w.submittedDate,
         ])
-        .filter((d): d is string => Boolean(d && d !== "-"))
-        .sort()
+        .filter((d): d is string => Boolean(d && d !== "-" && d !== "—"))
+        .sort((a, b) => dateToSortableKey(a).localeCompare(dateToSortableKey(b)))
         .pop();
       const prjDate = projectByEmp[normId]?.submittedDate || projectByEmp[u.employeeId]?.submittedDate;
-      const formatJoinDateDDMMYYYY = (raw?: string): string => {
-        if (!raw || raw === "—") return "—";
-        if (raw.includes("/")) return raw;
-        const parts = raw.split("-");
-        if (parts.length === 3) {
-          const [y, m, d] = parts;
-          if (d && m && y) return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
-        }
-        return raw;
-      };
 
       return {
         id: u.employeeId,
@@ -297,9 +289,9 @@ export function getLiveTransactionalEmployees(): Employee[] {
         section: u.bagian || "",
         division: u.division,
         companyUnit: u.company,
-        joined: formatJoinDateDDMMYYYY(u.joinDate),
+        joined: normalizeDateDDMMYYYY(u.joinDate),
         tenure: `${tenureYrs} Tahun`,
-        approvalCompleteDate: latestWorkflowDate || prjDate || "—",
+        approvalCompleteDate: normalizeDateDDMMYYYY(latestWorkflowDate || prjDate),
         totalScore,
         grade,
         modules,

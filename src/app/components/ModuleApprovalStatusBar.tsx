@@ -9,6 +9,7 @@ import {
   loadWorkflowRecords,
   normalizeEmployeeId,
 } from "../pages/shared/appraisalWorkflowStore";
+import { normalizeDateDDMMYYYY } from "../utils/dateFormat";
 
 export type StatusBarModule =
   | "KPI"
@@ -74,7 +75,7 @@ export function ModuleApprovalStatusBar({
       (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
   );
 
-  const isFourStep = module === "KPI" || module === "SMART Goals";
+  const isFourStep = module === "KPI" || module === "SMART Goals" || module === "RCA";
   const bypassCheck = isFourStep && shouldBypassCheckerForSubmission(activeUser.employeeId);
 
   const chkDec = wfRec?.decisions.checker;
@@ -130,7 +131,7 @@ export function ModuleApprovalStatusBar({
     (u) => u.status === "Active" && (u.role === "HR ICF" || Boolean(u.isHrIcfValidator)),
   );
 
-  const subDate = wfRec?.submittedDate || submittedDateOverride || "—";
+  const subDate = normalizeDateDDMMYYYY(wfRec?.submittedDate || submittedDateOverride);
 
   const steps = isFourStep
     ? [
@@ -155,7 +156,7 @@ export function ModuleApprovalStatusBar({
               : isSubmitted
               ? "Pending"
               : "Waiting",
-          date: isChkDone ? chkDec?.date || subDate : "—",
+          date: isChkDone ? normalizeDateDDMMYYYY(chkDec?.date || subDate) : "—",
           stepDone: isChkDone,
           stepRevision: chkDec?.status === "Revision",
         },
@@ -170,7 +171,7 @@ export function ModuleApprovalStatusBar({
               : isChkDone && isSubmitted
               ? "Pending"
               : "Waiting",
-          date: isA1Done ? a1Dec?.date || "—" : "—",
+          date: isA1Done ? normalizeDateDDMMYYYY(a1Dec?.date) : "—",
           stepDone: isA1Done,
           stepRevision: a1Dec?.status === "Revision",
         },
@@ -185,7 +186,7 @@ export function ModuleApprovalStatusBar({
               : isA1Done && isSubmitted
               ? "Pending"
               : "Waiting",
-          date: isA2Done ? a2Dec?.date || "—" : "—",
+          date: isA2Done ? normalizeDateDDMMYYYY(a2Dec?.date) : "—",
           stepDone: isA2Done,
           stepRevision: a2Dec?.status === "Revision",
         },
@@ -200,7 +201,7 @@ export function ModuleApprovalStatusBar({
               : isA2Done && isSubmitted
               ? "Pending"
               : "Waiting",
-          date: isValDone ? valDec?.date || a2Dec?.date || "—" : "—",
+          date: isValDone ? normalizeDateDDMMYYYY(valDec?.date || a2Dec?.date) : "—",
           stepDone: isValDone,
           stepRevision: valDec?.status === "Revision",
         },
@@ -225,7 +226,7 @@ export function ModuleApprovalStatusBar({
               : isSubmitted
               ? "Pending"
               : "Waiting",
-          date: isA1Done ? a1Dec?.date || "—" : "—",
+          date: isA1Done ? normalizeDateDDMMYYYY(a1Dec?.date) : "—",
           stepDone: isA1Done,
           stepRevision: a1Dec?.status === "Revision",
         },
@@ -240,7 +241,7 @@ export function ModuleApprovalStatusBar({
               : isA1Done && isSubmitted
               ? "Pending"
               : "Waiting",
-          date: isA2Done ? a2Dec?.date || "—" : "—",
+          date: isA2Done ? normalizeDateDDMMYYYY(a2Dec?.date) : "—",
           stepDone: isA2Done,
           stepRevision: a2Dec?.status === "Revision",
         },
@@ -319,7 +320,7 @@ export function ModuleApprovalStatusBar({
                 </span>
                 <span className="text-gray-700">{rev.note}</span>
               </div>
-              <span className="text-[10px] text-gray-400 shrink-0">{rev.date}</span>
+              <span className="text-[10px] text-gray-400 shrink-0">{normalizeDateDDMMYYYY(rev.date)}</span>
             </div>
           ))}
         </div>

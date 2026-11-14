@@ -5,6 +5,7 @@ import type { ApprovalRow, ReviewerRole } from "../components/ReviewDrawer";
 import type { ParsedExternalProjectRow } from "../utils/projectExcelUtils";
 import { getActiveUser, loadManagedUsers } from "./authStore";
 import { savePersistedState, syncToSupabase } from "../services/supabaseClient";
+import { formatTodayDDMMYYYY } from "../utils/dateFormat";
 
 export type ProjectCategory = "Improvement Project" | "Corporate Event" | "Komite/Task Force";
 export type ProjectScope =
@@ -160,7 +161,7 @@ export function importExternalProjectRows(
   parsedRows: ParsedExternalProjectRow[],
   fileName: string,
 ): { employeeCount: number; rowCount: number } {
-  const today = new Date().toLocaleDateString("id-ID");
+  const today = formatTodayDDMMYYYY();
   const managedUsers = loadManagedUsers();
   const grouped = new Map<string, ProjectExcelRow[]>();
 
@@ -254,7 +255,7 @@ export function projectApprovalRows(role: ReviewerRole): ApprovalRow[] {
       division: managedUser.division || "Divisi Operasional",
       companyUnit: managedUser.company || "PT RSUP (Industry)",
       type: "Project",
-      submittedDate: state.submittedDate || "10/08/2026",
+      submittedDate: state.submittedDate || formatTodayDDMMYYYY(),
       approvalDate: "-",
       status: "Pending",
       period: "Mid-Year Checkin 2026",
@@ -338,6 +339,7 @@ export function useProjectStore() {
     excelRows: excelState.rows,
     excelFileName: excelState.fileName,
     excelSubmitted: excelState.submitted,
+    excelSubmittedDate: excelState.submittedDate,
     maxFinalScore,
   };
 }

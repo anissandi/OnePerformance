@@ -3,6 +3,9 @@ import { useLocation } from "react-router"
 import { FeedbackApprovalDrawer } from "../../components/FeedbackApprovalDrawer"
 import { ModuleRouteNav } from "../../components/ModuleRouteNav"
 import type { ApprovalRow } from "../../components/ReviewDrawer"
+import { useAuthStore } from "../../store/authStore"
+import { normalizeDateDDMMYYYY } from "../../utils/dateFormat"
+import { resolveDynamicApprovalRowsForUser } from "./approvalsStore"
 import { feedbackApprovalRows } from "./interDepartmentFeedbackStore"
 import { useAppraisalRevision } from "./useAppraisalRevision"
 
@@ -13,18 +16,19 @@ export function FeedbackApprovalsPage({
 }) {
   useAppraisalRevision()
   const location = useLocation()
+  const { activeUser } = useAuthStore()
   const role = location.pathname.startsWith("/supervisor/") || location.pathname.startsWith("/employee/")
     ? "approver1"
     : "approver2"
   const moduleBase = location.pathname.replace(/\/inter-department-feedback\/?$/, "")
   const [selected, setSelected] = useState<ApprovalRow | null>(null)
   const [version, setVersion] = useState(0)
-  const rows = feedbackApprovalRows(role).filter(
-    (row) =>
-      (!lockedUnits || lockedUnits.includes(row.companyUnit)) &&
-      (role !== "approver1" ||
-        (row.companyUnit === "PT RSUP (Industry)" &&
-          row.division === "Divisi Sumber Daya Manusia")),
+  const rows = resolveDynamicApprovalRowsForUser(
+    feedbackApprovalRows(role),
+    activeUser,
+    "measurement",
+    new Set(["Inter-Department Feedback"]),
+    lockedUnits,
   )
   return (
     <main
@@ -80,7 +84,7 @@ export function FeedbackApprovalsPage({
                   row.division,
                   row.department,
                   row.position,
-                  row.submittedDate,
+                  normalizeDateDDMMYYYY(row.submittedDate),
                   row.status,
                 ].map((value, index) => (
                   <td key={index} className="whitespace-nowrap p-4">
@@ -111,7 +115,7 @@ export function FeedbackApprovalsPage({
         <FeedbackApprovalDrawer
           key={selected.no}
           row={selected}
-          reviewerRole={role}
+          reviewerRole={selected.reviewerRoleForRow ?? role}
           onClose={() => setSelected(null)}
           onAssessed={() => setVersion((previous) => previous + 1)}
           readOnly={selected.status !== "Pending"}

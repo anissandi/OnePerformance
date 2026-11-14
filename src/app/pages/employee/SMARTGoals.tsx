@@ -530,57 +530,8 @@ function ResultsView({
 
   return (
     <div className="flex flex-col gap-6">
-      <div
-        className={`rounded-xl px-4 py-3 text-sm font-medium flex items-center justify-between gap-3 border ${
-          statusTone === "validated"
-            ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-            : statusTone === "revision"
-            ? "bg-orange-50 border-orange-200 text-orange-800"
-            : "bg-blue-50 border-blue-200 text-blue-800"
-        }`}
-      >
-        <div className="flex items-center gap-2">
-          {statusTone === "validated" ? (
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-          ) : statusTone === "revision" ? (
-            <RotateCcw className="w-4 h-4 shrink-0 text-orange-600" />
-          ) : (
-            <Lock className="w-4 h-4 shrink-0 text-blue-600" />
-          )}
-          <span>
-            {statusTone === "validated"
-              ? "SMART Goals Setting telah disetujui penuh (Validated) dan otomatis aktif di SMART Goals Measurement."
-              : statusTone === "revision"
-              ? "Approver meminta revisi pada SMART Goals Setting Anda. Silakan periksa catatan di bawah dan lakukan perbaikan pada tab Input Form."
-              : "SMART Goals Setting telah disubmit (Read-Only) dan sedang dalam proses verifikasi / approval berjenjang."}
-          </span>
-        </div>
-        <span
-          className={`text-xs px-3 py-1 rounded-full font-bold border shrink-0 ${
-            statusTone === "validated"
-              ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-              : statusTone === "revision"
-              ? "bg-orange-100 text-orange-800 border-orange-300"
-              : "bg-amber-50 text-amber-700 border-amber-200"
-          }`}
-        >
-          {statusLabel}
-        </span>
-      </div>
-
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-[#1A284F]">SMART Goals — 2026 Performance Appraisal</h3>
-        <span
-          className={`text-xs px-3 py-1 rounded-full font-semibold border ${
-            statusTone === "validated"
-              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-              : statusTone === "revision"
-              ? "bg-orange-50 text-orange-700 border-orange-200"
-              : "bg-amber-50 text-amber-700 border-amber-200"
-          }`}
-        >
-          Status: {statusLabel}
-        </span>
       </div>
 
       <SmartTable goals={goals} editable={false} />
