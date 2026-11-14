@@ -364,9 +364,11 @@ export function getModuleScoreGrade(emp: Employee, module: string): { score: num
       return { score: emp.totalScore, grade: emp.grade };
     case "KPI (Setting)":
     case "KPI (Measurement)":
+    case "KPI (Tracking)":
       return emp.kpi;
     case "SMART Goals (Setting)":
     case "SMART Goals (Measurement)":
+    case "SMART Goals (Tracking)":
       return emp.smartGoals;
     case "Appraisal Form": {
       const avg = Math.round((emp.formA.score + emp.formB.score + emp.formC.score) / 3);

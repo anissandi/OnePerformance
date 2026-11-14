@@ -13,27 +13,77 @@
 @keyframes paFadeSlideUp {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px) scale(0.992);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes paFunnelPop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scaleX(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleX(1);
+  }
+}
+
+@keyframes paSoftPulseGlow {
+  0%, 100% {
+    opacity: 0.88;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
 .pa-bar-animate {
   transform-origin: left center;
   animation: paBarGrow 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
-  transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.3s ease;
+  transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1), left 0.55s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.3s ease, filter 0.25s ease, transform 0.25s ease;
 }
 
 .pa-card-motion {
-  animation: paFadeSlideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
-  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease;
+  animation: paFadeSlideUp 0.52s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.32s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.25s ease;
 }
 
 .pa-card-motion:hover {
-  transform: translateY(-2px);
+  transform: translateY(-3px);
+}
+
+.pa-infographic-surface {
+  animation: paFadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.34s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.28s ease;
+}
+
+.pa-infographic-surface:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 32px -12px rgba(26, 40, 79, 0.12), 0 4px 12px -4px rgba(26, 40, 79, 0.06);
+  border-color: rgba(26, 40, 79, 0.14);
+}
+
+.pa-donut-hover {
+  transition: transform 0.36s cubic-bezier(0.22, 1, 0.36, 1), filter 0.3s ease;
+}
+
+.group:hover .pa-donut-hover {
+  transform: scale(1.05);
+  filter: drop-shadow(0 4px 10px rgba(16, 185, 129, 0.14));
+}
+
+.pa-funnel-tier {
+  animation: paFunnelPop 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1), filter 0.26s ease;
+}
+
+.pa-funnel-tier:hover {
+  transform: scale(1.035);
+  filter: brightness(1.08) drop-shadow(0 4px 10px rgba(2, 132, 199, 0.25));
 }
 
 /* Smooth global bar fill animation for progress bars inside dashboards, profile & monitoring */
