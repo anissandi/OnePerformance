@@ -109,6 +109,8 @@ export interface StoredCheckInEntry {
   actionPlanProgress: Record<number, number>;
   /** action plan id → kendala text */
   actionPlanKendala: Record<number, string>;
+  /** action plan id → alasan batal text */
+  actionPlanAlasanBatal?: Record<number, string>;
   /** action plan id → evidence files */
   actionPlanEvidence?: Record<number, StoredSmartGoalEvidenceFile[]>;
   targetAchievementStatus: string;

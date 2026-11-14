@@ -157,6 +157,7 @@ export const router = createBrowserRouter([
       { index: true, Component: AnalyticsDashboard },
       { path: "analytics", Component: AnalyticsDashboard },
       { path: "dashboard", Component: SupervisorDashboard },
+      { path: "dashboard/my", Component: SupervisorDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
       { path: "appraisal", Component: SupervisorMyPerformanceAppraisal },
       { path: "appraisal/:tab", Component: SupervisorMyPerformanceAppraisal },
@@ -178,6 +179,10 @@ export const router = createBrowserRouter([
       },
       { path: "measurement/appraisal-form", Component: AppraisalForm },
       { path: "measurement/rca", Component: RCAPage },
+      {
+        path: "measurement/project",
+        Component: ProjectOutsideCombinedPage,
+      },
       {
         path: "measurement/project-outside",
         Component: ProjectOutsideCombinedPage,
@@ -302,6 +307,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: SupervisorDashboard },
       { path: "dashboard", Component: SupervisorDashboard },
+      { path: "dashboard/my", Component: SupervisorDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
       { path: "analytics", Component: AnalyticsDashboard },
       { path: "monitoring/kpi", Component: SupervisorMonitoringKPI },
@@ -334,6 +340,10 @@ export const router = createBrowserRouter([
       },
       { path: "measurement/appraisal-form", Component: AppraisalForm },
       { path: "measurement/rca", Component: RCAPage },
+      {
+        path: "measurement/project",
+        Component: ProjectOutsideCombinedPage,
+      },
       {
         path: "measurement/project-outside",
         Component: ProjectOutsideCombinedPage,
@@ -474,6 +484,10 @@ export const router = createBrowserRouter([
       },
       { path: "measurement/appraisal-form", Component: AppraisalForm },
       {
+        path: "measurement/project",
+        Component: ProjectOutsideCombinedPage,
+      },
+      {
         path: "measurement/project-outside",
         Component: ProjectOutsideCombinedPage,
       },
@@ -570,6 +584,7 @@ export const router = createBrowserRouter([
       { index: true, Component: BODAnalyticsDashboard },
       { path: "analytics", Component: BODAnalyticsDashboard },
       { path: "dashboard", Component: SupervisorDashboard },
+      { path: "dashboard/my", Component: SupervisorDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
       { path: "appraisal", Component: SupervisorMyPerformanceAppraisal },
       { path: "appraisal/:tab", Component: SupervisorMyPerformanceAppraisal },
@@ -585,6 +600,7 @@ export const router = createBrowserRouter([
       { path: "measurement/smart-goals-review", Component: SmartGoalsApproverReview },
       { path: "measurement/appraisal-form", Component: AppraisalForm },
       { path: "measurement/rca", Component: RCAPage },
+      { path: "measurement/project", Component: ProjectOutsideCombinedPage },
       { path: "measurement/project-outside", Component: ProjectOutsideCombinedPage },
       { path: "measurement/managerial-skill", Component: SupervisorManagerialSkillCheckIn },
       { path: "measurement/inter-department-feedback", Component: InterDepartmentFeedback },

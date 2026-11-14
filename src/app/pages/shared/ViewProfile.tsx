@@ -26,6 +26,11 @@ import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowSto
 import { loadAllAppraisalApprovers } from "./appraisalFormStore";
 import { loadApprovalDecisions } from "./smartGoalsStore";
 import { loadAllMSApprovers } from "./msStore";
+import { loadKPICommentsForEmployee } from "./kpiCommentsStore";
+import { loadMonthlyNotes } from "./kpiMonthlyNotesStore";
+import { loadFeedbackSubmissions } from "./interDepartmentFeedbackStore";
+import { loadRCAApprovalDecisions } from "./rcaApprovalStore";
+import type { StoredAssessment } from "./approvalsStore";
 
 // ─── User identity (from shared profile store) ─────────────────────────────────
 const USER = SUPERVISOR_PROFILE;
@@ -335,6 +340,7 @@ export function ViewProfile() {
     window.addEventListener("appraisal-updated", onRefresh);
     window.addEventListener("pa-auth-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("feedback-updated", onRefresh);
     window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
     window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
     window.addEventListener("storage", onRefresh);
@@ -342,6 +348,7 @@ export function ViewProfile() {
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("feedback-updated", onRefresh);
       window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);
       window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
       window.removeEventListener("storage", onRefresh);
@@ -431,7 +438,16 @@ export function ViewProfile() {
     });
   }, [activeUser, selectedYear, isCurrent, tick]);
 
-  const yearsOfService = new Date().getFullYear() - new Date(USER.joinDate).getFullYear();
+  const effectiveJoinDate = activeUser.joinDate || USER.joinDate;
+  const parsedJoinYear = new Date(effectiveJoinDate).getFullYear();
+  const yearsOfService = Number.isFinite(parsedJoinYear) ? Math.max(0, new Date().getFullYear() - parsedJoinYear) : 0;
+  const profileInitials =
+    (activeUser.name || USER.name)
+      .split(" ")
+      .filter((w) => /^[A-Za-z]/.test(w))
+      .slice(0, 2)
+      .map((w) => w[0].toUpperCase())
+      .join("") || USER.initials;
   const totalWeighted = activeModules.reduce((s, m) => s + m.weightedScore, 0);
   const dynamicModulesTotal = activeModules.length;
   const dynamicModulesApproved = activeModules.filter((m) => m.status === "approved").length;
@@ -504,6 +520,15 @@ export function ViewProfile() {
       notes.push({ ...item, note: text });
     };
 
+    const formatModDisplay = (mod: string, phase: "setting" | "measurement" = "measurement") => {
+      if (phase === "setting") return `${mod} (Setting)`;
+      if (mod === "KPI") return "KPI Tracking";
+      if (mod === "SMART Goals") return "SMART Goals (Measurement)";
+      if (mod === "Project") return "Project Outside Job Scope";
+      return mod;
+    };
+
+    // 1. WorkflowRecord (mencakup semua modul Setting & Measurement: KPI, SMART Goals, Appraisal Form, Managerial Skill, Project, RCA, Inter-Department Feedback)
     const wfRecords = loadWorkflowRecords().filter(
       (r) =>
         r.year === String(selectedYear) &&
@@ -511,16 +536,7 @@ export function ViewProfile() {
     );
 
     for (const rec of wfRecords) {
-      const modDisplay =
-        rec.phase === "setting"
-          ? `${rec.module} (Setting)`
-          : rec.module === "KPI"
-          ? "KPI Tracking"
-          : rec.module === "SMART Goals"
-          ? "SMART Goals (Measurement)"
-          : rec.module === "Project"
-          ? "Project Outside Job Scope"
-          : rec.module;
+      const modDisplay = formatModDisplay(rec.module, rec.phase);
 
       const a1Comment =
         rec.assessments.approver1?.comments?.["0"] ||
@@ -551,8 +567,91 @@ export function ViewProfile() {
           note: a2Comment,
         });
       }
+
+      // Sertakan juga catatan revisi dari Approver 1 & Approver 2 jika ada
+      for (const rev of rec.revisionHistory ?? []) {
+        if (rev.role === "Approver 1" || rev.role === "Approver 2") {
+          pushNote({
+            approver: rev.approverName || (rev.role === "Approver 1" ? ap1User?.name || "Approver 1" : ap2User?.name || "Approver 2"),
+            role: rev.role,
+            positionLabel: rev.role === "Approver 1" ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+            module: `${modDisplay} (Catatan Revisi)`,
+            date: rev.date || "-",
+            note: rev.note,
+          });
+        }
+      }
     }
 
+    // 2. Stored Assessments (all_assessments_v2) untuk karyawan ini sebagai fallback lintas modul
+    try {
+      const rawAss = localStorage.getItem("all_assessments_v2");
+      const assList: StoredAssessment[] = rawAss ? JSON.parse(rawAss) : [];
+      for (const item of assList) {
+        if (!item.rowNo.includes(`-${normId}-`)) continue;
+        const commentTxt = item.comments?.["0"] ?? "";
+        if (!commentTxt.trim()) continue;
+        const isA1 = item.approverRole === "approver1";
+        pushNote({
+          approver: isA1 ? ap1User?.name || activeUser.regNoAp1 || "Approver 1" : ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+          role: isA1 ? "Approver 1" : "Approver 2",
+          positionLabel: isA1 ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+          module: formatModDisplay(item.type, item.rowNo.includes("ST-") ? "setting" : "measurement"),
+          date: item.assessedDate || "-",
+          note: commentTxt,
+        });
+      }
+    } catch {
+      // ignore
+    }
+
+    // 3. KPI Tracking Comments & Monthly Notes
+    const kpiComments = loadKPICommentsForEmployee(activeUser.employeeId);
+    if (kpiComments.approver1?.text?.trim()) {
+      pushNote({
+        approver: kpiComments.approver1.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+        role: "Approver 1",
+        positionLabel: ap1User?.position || "Atasan Langsung (AP1)",
+        module: "KPI Tracking",
+        date: kpiComments.approver1.date || "-",
+        note: kpiComments.approver1.text,
+      });
+    }
+    if (kpiComments.approver2?.text?.trim()) {
+      pushNote({
+        approver: kpiComments.approver2.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+        role: "Approver 2",
+        positionLabel: ap2User?.position || "Atasan Langsung (AP2)",
+        module: "KPI Tracking",
+        date: kpiComments.approver2.date || "-",
+        note: kpiComments.approver2.text,
+      });
+    }
+    const monthlyNotes = loadMonthlyNotes();
+    for (const [mId, mEntry] of Object.entries(monthlyNotes)) {
+      if (mEntry?.approver1?.text?.trim()) {
+        pushNote({
+          approver: mEntry.approver1.approverName || ap1User?.name || "Approver 1",
+          role: "Approver 1",
+          positionLabel: ap1User?.position || "Atasan Langsung (AP1)",
+          module: `KPI Tracking (${mId.toUpperCase()})`,
+          date: mEntry.approver1.date || "-",
+          note: mEntry.approver1.text,
+        });
+      }
+      if (mEntry?.approver2?.text?.trim()) {
+        pushNote({
+          approver: mEntry.approver2.approverName || ap2User?.name || "Approver 2",
+          role: "Approver 2",
+          positionLabel: ap2User?.position || "Atasan Langsung (AP2)",
+          module: `KPI Tracking (${mId.toUpperCase()})`,
+          date: mEntry.approver2.date || "-",
+          note: mEntry.approver2.text,
+        });
+      }
+    }
+
+    // 4. Appraisal Form
     for (const af of loadAllAppraisalApprovers(activeUser.employeeId)) {
       if (af.overallComment?.trim() && (af.approverLevel === 1 || af.approverLevel === 2)) {
         pushNote({
@@ -566,6 +665,7 @@ export function ViewProfile() {
       }
     }
 
+    // 5. SMART Goals
     for (const sgDec of loadApprovalDecisions(activeUser.employeeId)) {
       if (sgDec.feedback?.trim() && (sgDec.approverLevel === 1 || sgDec.approverLevel === 2)) {
         pushNote({
@@ -579,6 +679,7 @@ export function ViewProfile() {
       }
     }
 
+    // 6. Managerial Skill
     for (const ms of loadAllMSApprovers(activeUser.employeeId)) {
       if (ms.comment?.trim() && (ms.approverLevel === 1 || ms.approverLevel === 2)) {
         pushNote({
@@ -588,6 +689,64 @@ export function ViewProfile() {
           module: "Managerial Skill",
           date: ms.reviewedDate || "-",
           note: ms.comment,
+        });
+      }
+    }
+
+    // 7. RCA Approval Notes (bila karyawan memiliki workflow RCA)
+    const hasMyRcaWf = wfRecords.some((r) => r.module === "RCA");
+    if (hasMyRcaWf) {
+      for (const rcaDec of loadRCAApprovalDecisions()) {
+        if (rcaDec.comment?.trim() && (rcaDec.approverLevel === 1 || rcaDec.approverLevel === 2)) {
+          pushNote({
+            approver: rcaDec.approverName || (rcaDec.approverLevel === 1 ? ap1User?.name || "Approver 1" : ap2User?.name || "Approver 2"),
+            role: rcaDec.approverLevel === 1 ? "Approver 1" : "Approver 2",
+            positionLabel: rcaDec.approverLevel === 1 ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+            module: "RCA",
+            date: rcaDec.reviewedDate || "-",
+            note: rcaDec.comment,
+          });
+        }
+      }
+    }
+
+    // 8. Inter-Department Feedback Follow-Ups dari Approver 1 & Approver 2
+    const myFeedbackSub = loadFeedbackSubmissions().find(
+      (s) =>
+        normalizeEmployeeId(s.row.employeeId) === normId ||
+        s.row.employeeId.trim().toLowerCase() === activeUser.employeeId.trim().toLowerCase(),
+    );
+    if (myFeedbackSub) {
+      const summarizeFollowUps = (items?: Array<Record<string, string>>) =>
+        (items ?? [])
+          .map((it) =>
+            [it["Aspek Perbaikan"], it["Rencana Pengembangan"], it["Tindak Lanjut"]]
+              .filter((v) => v?.trim())
+              .join(" — "),
+          )
+          .filter(Boolean)
+          .join("; ");
+
+      const fbA1Text = summarizeFollowUps(myFeedbackSub.followUps.approver1);
+      if (fbA1Text) {
+        pushNote({
+          approver: ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+          role: "Approver 1",
+          positionLabel: ap1User?.position || "Atasan Langsung (AP1)",
+          module: "Inter-Department Feedback",
+          date: myFeedbackSub.row.approvalDate !== "-" ? myFeedbackSub.row.approvalDate : myFeedbackSub.row.submittedDate || "-",
+          note: fbA1Text,
+        });
+      }
+      const fbA2Text = summarizeFollowUps(myFeedbackSub.followUps.approver2);
+      if (fbA2Text) {
+        pushNote({
+          approver: ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+          role: "Approver 2",
+          positionLabel: ap2User?.position || "Atasan Langsung (AP2)",
+          module: "Inter-Department Feedback",
+          date: myFeedbackSub.row.approvalDate !== "-" ? myFeedbackSub.row.approvalDate : myFeedbackSub.row.submittedDate || "-",
+          note: fbA2Text,
         });
       }
     }
@@ -647,13 +806,13 @@ export function ViewProfile() {
         <div className="px-8 pb-6">
           <div className="flex items-end gap-5 -mt-10 mb-4 flex-wrap">
             <div className="w-20 h-20 rounded-2xl bg-[#1A284F] border-4 border-white flex items-center justify-center shadow-md shrink-0">
-              <span className="text-2xl font-bold text-white tracking-wider">{USER.initials}</span>
+              <span className="text-2xl font-bold text-white tracking-wider">{profileInitials}</span>
             </div>
             <div className="flex-1 min-w-0 pt-12">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
-                  <h1 className="text-xl font-bold text-gray-900">{USER.name}</h1>
-                  <p className="text-sm text-gray-500">{USER.position}</p>
+                  <h1 className="text-xl font-bold text-gray-900">{activeUser.name || USER.name}</h1>
+                  <p className="text-sm text-gray-500">{activeUser.position || USER.position}</p>
                   <div className="flex items-center gap-2 mt-1.5">
                     <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${gradeColor(displayGrade)}`}>
                       Grade {displayGrade}
@@ -691,12 +850,12 @@ export function ViewProfile() {
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
             {[
-              { icon: Building2, label: USER.companyUnit },
-              { icon: Briefcase, label: USER.department },
-              { icon: MapPin,    label: USER.location },
-              { icon: Calendar,  label: `Joined ${USER.joinDate} · ${yearsOfService} yrs` },
-              { icon: Mail,      label: USER.email },
-              { icon: Phone,     label: USER.phone },
+              { icon: Building2, label: activeUser.company || USER.companyUnit },
+              { icon: Briefcase, label: activeUser.department || USER.department },
+              { icon: MapPin,    label: activeUser.division || USER.location },
+              { icon: Calendar,  label: `Joined ${effectiveJoinDate} · ${yearsOfService} yrs` },
+              { icon: Mail,      label: activeUser.email || USER.email },
+              { icon: Phone,     label: activeUser.telegramNo || USER.phone },
             ].map(({ icon: Icon, label }, idx) => (
               <div key={`${idx}-${label}`} className="flex items-center gap-2">
                 <Icon className="w-3.5 h-3.5 text-gray-400 shrink-0" />

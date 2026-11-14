@@ -8,6 +8,8 @@ import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/apprai
 import { FORMS } from "../pages/employee/AppraisalForm";
 import { MS_ITEMS } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPI_ITEMS as FULL_KPI_ITEMS } from "../pages/employee/KPIPage";
+import { loadManagedUsers, type ManagedUser } from "../store/authStore";
+import { normalizeDateDDMMYYYY } from "../utils/dateFormat";
 
 // ── Extra sample goals for non-EMP002 employees ───────────────────────────────
 
@@ -107,9 +109,22 @@ const INTERVIEW_DETAIL: InterviewDetail = {
 interface SettingApprovalDrawerProps {
   row: ApprovalRow;
   onClose: () => void;
-  onApprove: () => void;
+  onApprove: (note?: string) => void;
   onRevision: (note: string) => void;
   readOnly?: boolean;
+}
+
+function findUserByRef(allUsers: ManagedUser[], refValue?: string): ManagedUser | undefined {
+  const ref = (refValue ?? "").trim().toLowerCase();
+  if (!ref) return undefined;
+  const refNum = ref.replace(/^(?:emp-?|e)0*/i, "");
+  return allUsers.find(
+    (u) =>
+      (u.regNo ?? "").trim().toLowerCase() === ref ||
+      u.employeeId.trim().toLowerCase() === ref ||
+      u.name.trim().toLowerCase() === ref ||
+      Boolean(refNum && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === refNum),
+  );
 }
 
 export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, readOnly }: SettingApprovalDrawerProps) {
@@ -120,6 +135,14 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
   const [expandedKpi, setExpandedKpi]   = useState<string | null>(null);
 
   const normEmpId = normalizeEmployeeId(row.employeeId);
+  const allUsers = loadManagedUsers();
+  const ownerUser = allUsers.find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === normEmpId ||
+      u.employeeId.trim().toLowerCase() === row.employeeId.trim().toLowerCase(),
+  );
+  const ap1User = findUserByRef(allUsers, ownerUser?.regNoAp1);
+  const ap2User = findUserByRef(allUsers, ownerUser?.regNoAp2);
   const wfRec = loadWorkflowRecords().find(
     (r) =>
       r.year === "2026" &&
@@ -128,6 +151,14 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
       r.employeeId === normEmpId,
   );
   const revisionHistory = wfRec?.revisionHistory ?? [];
+  const ap1DisplayName =
+    wfRec?.decisions.approver1?.approverName || ap1User?.name || ownerUser?.regNoAp1 || "Approver 1";
+  const ap2DisplayName =
+    wfRec?.decisions.approver2?.approverName || ap2User?.name || ownerUser?.regNoAp2 || "Approver 2";
+  const prevA1Note = wfRec?.decisions.approver1?.note ?? "";
+  const prevA1Date = wfRec?.decisions.approver1?.date ?? "—";
+  const prevA2Note = wfRec?.decisions.approver2?.note ?? "";
+  const prevA2Date = wfRec?.decisions.approver2?.date ?? "—";
   const isFourStepType = row.type === "KPI" || row.type === "SMART Goals";
   const isCheckerStage =
     isFourStepType &&
@@ -135,6 +166,14 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
       (!row.workflowStageForRow && !wfRec?.decisions.checker));
   const isValidatorStage =
     isFourStepType && row.workflowStageForRow === "validator";
+  const workflowStage = isCheckerStage
+    ? "checker"
+    : isValidatorStage
+    ? "validator"
+    : row.workflowStageForRow ?? row.reviewerRoleForRow ?? "approver1";
+  const [approverComment, setApproverComment] = useState(() =>
+    workflowStage === "approver1" ? prevA1Note : workflowStage === "approver2" ? prevA2Note : "",
+  );
   const primaryActionLabel = isCheckerStage
     ? "Tandai Checked"
     : isValidatorStage
@@ -195,6 +234,26 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
           <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
           <span>Submitted: {row.submittedDate}</span>
         </div>
+
+        <div className="ml-auto shrink-0">
+          {isCheckerStage ? (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-amber-50 text-amber-700 border-amber-200">
+              Checker (HR Unit)
+            </span>
+          ) : isValidatorStage ? (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-emerald-50 text-emerald-700 border-emerald-200">
+              Validator (HR ICF)
+            </span>
+          ) : workflowStage === "approver1" ? (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-blue-50 text-blue-700 border-blue-200">
+              Approver 1 ({ap1DisplayName})
+            </span>
+          ) : (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-purple-50 text-purple-700 border-purple-200">
+              Approver 2 ({ap2DisplayName})
+            </span>
+          )}
+        </div>
       </div>
 
       {/* ── Content area ────────────────────────────────────────────────────── */}
@@ -225,6 +284,71 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
           {row.type === "Managerial Skill" && <ManSkillSettingContent />}
           {row.type === "Project Outside Job" && <ProjectContent />}
           {row.type === "Management Interview" && <InterviewContent />}
+
+          {/* History & Input Catatan Approver (Checker TIDAK memiliki catatan; Validator HANYA melihat history A1 & A2) */}
+          {!isCheckerStage && (
+            <div className="space-y-3 pt-2">
+              {(workflowStage === "approver2" || isValidatorStage) && (
+                <div className="border border-blue-200 rounded-2xl overflow-hidden bg-blue-50/40">
+                  <div className="px-4 py-2.5 flex items-center justify-between bg-blue-50 border-b border-blue-100">
+                    <span className="text-xs font-bold text-blue-800 flex items-center gap-1.5">
+                      <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                      History Catatan Approver 1 — {ap1DisplayName}
+                    </span>
+                    <span className="text-[10px] text-blue-500">{normalizeDateDDMMYYYY(prevA1Date)}</span>
+                  </div>
+                  <div className="p-4">
+                    <p className="text-xs text-gray-800 bg-white border border-blue-100 rounded-xl px-4 py-3">
+                      {prevA1Note || <span className="italic text-gray-400">Tidak ada catatan dari Approver 1.</span>}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {isValidatorStage && (
+                <div className="border border-purple-200 rounded-2xl overflow-hidden bg-purple-50/40">
+                  <div className="px-4 py-2.5 flex items-center justify-between bg-purple-50 border-b border-purple-100">
+                    <span className="text-xs font-bold text-purple-800 flex items-center gap-1.5">
+                      <MessageSquare className="w-3.5 h-3.5 text-purple-600" />
+                      History Catatan Approver 2 — {ap2DisplayName}
+                    </span>
+                    <span className="text-[10px] text-purple-500">{normalizeDateDDMMYYYY(prevA2Date)}</span>
+                  </div>
+                  <div className="p-4">
+                    <p className="text-xs text-gray-800 bg-white border border-purple-100 rounded-xl px-4 py-3">
+                      {prevA2Note || <span className="italic text-gray-400">Tidak ada catatan dari Approver 2.</span>}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!isValidatorStage && (
+                <div className="border border-indigo-100 rounded-2xl overflow-hidden bg-white shadow-sm">
+                  <div className="px-4 py-2.5 flex items-center gap-2 bg-indigo-50">
+                    <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+                    <span className="text-xs font-bold text-indigo-700">
+                      Komentar &amp; Catatan {workflowStage === "approver1" ? `Approver 1 (${ap1DisplayName})` : `Approver 2 (${ap2DisplayName})`}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    {readOnly || isAlreadyProcessed ? (
+                      <p className="text-xs text-gray-800 bg-indigo-50/40 border border-indigo-100 rounded-xl px-4 py-3">
+                        {approverComment || <span className="italic text-gray-400">Tidak ada catatan.</span>}
+                      </p>
+                    ) : (
+                      <textarea
+                        rows={3}
+                        value={approverComment}
+                        onChange={(e) => setApproverComment(e.target.value)}
+                        placeholder="Tambahkan komentar atau catatan untuk pengajuan ini..."
+                        className="w-full text-xs border-2 border-indigo-100 focus:border-indigo-400 rounded-xl px-3.5 py-2.5 outline-none resize-none text-gray-700"
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -322,7 +446,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
                 type="button"
                 onClick={() => {
                   setConfirmApproveOpen(false);
-                  onApprove();
+                  onApprove(!isCheckerStage && !isValidatorStage ? approverComment.trim() : undefined);
                 }}
                 className="flex-1 py-2.5 rounded-full bg-green-600 text-white text-sm font-semibold hover:bg-green-700"
               >

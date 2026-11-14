@@ -13,6 +13,7 @@ import { FORMS } from "../employee/AppraisalForm";
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../shared/appraisalFormStore";
 import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
+import { loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
 import type { MonthlyNoteEntry } from "../shared/kpiMonthlyNotesStore";
 import { loadRCASubmissions } from "../shared/rcaStore";
@@ -106,18 +107,23 @@ function SupvFileViewerModal({ name, url, mimeType, onClose }: {
             <X className="w-4 h-4 text-gray-500" />
           </button>
         </div>
-        <div className="flex-1 overflow-auto flex items-center justify-center p-4 bg-gray-50 min-h-0">
-          {isImg ? (
+        <div className="flex-1 overflow-auto flex items-center justify-center p-6 bg-gray-50 min-h-[360px]">
+          {url && isImg ? (
             <img src={url} alt={name} className="max-w-full max-h-[75vh] object-contain rounded-xl shadow" />
-          ) : isPdf ? (
+          ) : url && isPdf ? (
             <iframe src={url} title={name} className="w-full rounded-lg border border-gray-200" style={{ height: "75vh" }} />
           ) : (
             <div className="flex flex-col items-center gap-3 text-gray-400">
               <FileText className="w-12 h-12 opacity-30" />
-              <p className="text-sm">Format tidak bisa dipreview.</p>
-              <a href={url} download={name} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                <Download className="w-3.5 h-3.5" /> Download
-              </a>
+              <p className="text-sm font-semibold text-gray-700">{name}</p>
+              <p className="text-xs text-gray-500">
+                {url ? "Pratinjau langsung tidak tersedia untuk format ini, silakan unduh dokumen." : "Dokumen evidence tercatat di sistem."}
+              </p>
+              {url && (
+                <a href={url} download={name} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
+                  <Download className="w-3.5 h-3.5" /> Download
+                </a>
+              )}
             </div>
           )}
         </div>
@@ -128,36 +134,73 @@ function SupvFileViewerModal({ name, url, mimeType, onClose }: {
 
 function SupvEvidenceChip({ file }: { file: StoredEvidenceFile }) {
   const [viewing, setViewing] = useState<StoredEvidenceFile | null>(null);
-  const viewable = !!file.url && supvCanPreview(file.name, file.type);
+  const fileUrl = file.url || file.dataUrl || "";
   return (
     <>
       <button
         type="button"
-        onClick={() => viewable ? setViewing(file) : undefined}
-        className={[
-          "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-left transition-colors max-w-[200px]",
-          viewable
-            ? "bg-indigo-50 border-indigo-200 hover:bg-indigo-100 cursor-pointer"
-            : "bg-gray-50 border-gray-200 cursor-default",
-        ].join(" ")}
-        title={file.name}
+        onClick={() => setViewing(file)}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-left transition-colors max-w-[240px] bg-indigo-50 border-indigo-200 hover:bg-indigo-100 cursor-pointer"
+        title={`Klik untuk melihat ${file.name}`}
       >
-        <Paperclip className={["w-3 h-3 shrink-0", viewable ? "text-indigo-400" : "text-gray-400"].join(" ")} />
-        <span className={["text-xs font-medium truncate", viewable ? "text-indigo-700" : "text-gray-700"].join(" ")}>
+        <Paperclip className="w-3 h-3 shrink-0 text-indigo-500" />
+        <span className="text-xs font-medium truncate text-indigo-800">
           {file.name}
         </span>
         <span className="text-[10px] text-gray-400 shrink-0 ml-0.5">{fmtFileSize(file.size)}</span>
-        {viewable && <Eye className="w-3 h-3 text-indigo-400 shrink-0" />}
+        <Eye className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
       </button>
-      {viewing && <SupvFileViewerModal name={viewing.name} url={viewing.url} mimeType={viewing.type} onClose={() => setViewing(null)} />}
+      {viewing && <SupvFileViewerModal name={viewing.name} url={fileUrl} mimeType={viewing.type} onClose={() => setViewing(null)} />}
     </>
   );
 }
 
 function KPITab() {
-  const { months, cellsMap } = React.useMemo(() => loadKPITracking(), []);
-  const monthlyNotes = React.useMemo(() => loadMonthlyNotes(), []);
-  const evidenceFiles = React.useMemo(() => loadEvidenceFiles(), []);
+  const { activeUser } = useAuthStore();
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const onSync = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onSync);
+    window.addEventListener("pa-auth-updated", onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      window.removeEventListener("appraisal-updated", onSync);
+      window.removeEventListener("pa-auth-updated", onSync);
+      window.removeEventListener("storage", onSync);
+    };
+  }, []);
+  const { months, cellsMap } = React.useMemo(() => loadKPITracking(activeUser.employeeId), [activeUser.employeeId, tick]);
+  const monthlyNotes = React.useMemo(() => loadMonthlyNotes(), [tick]);
+  const evidenceFiles = React.useMemo(() => loadEvidenceFiles(activeUser.employeeId), [activeUser.employeeId, tick]);
+  const kpiComments = React.useMemo(() => loadKPICommentsForEmployee(activeUser.employeeId), [activeUser.employeeId, tick]);
+  const wfKpiMeas = React.useMemo(() => {
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    return loadWorkflowRecords().find(
+      (r) => r.year === "2026" && r.module === "KPI" && r.phase === "measurement" && r.employeeId === normId,
+    );
+  }, [activeUser.employeeId, tick]);
+  const generalA1Note =
+    wfKpiMeas?.decisions.approver1?.note ||
+    wfKpiMeas?.assessments.approver1?.comments?.["0"] ||
+    kpiComments.approver1?.text ||
+    "";
+  const generalA1Meta =
+    wfKpiMeas?.decisions.approver1?.approverName
+      ? `${wfKpiMeas.decisions.approver1.approverName} · ${wfKpiMeas.decisions.approver1.date || ""}`
+      : kpiComments.approver1
+      ? `${kpiComments.approver1.approverLabel} · ${kpiComments.approver1.date}`
+      : "";
+  const generalA2Note =
+    wfKpiMeas?.decisions.approver2?.note ||
+    wfKpiMeas?.assessments.approver2?.comments?.["0"] ||
+    kpiComments.approver2?.text ||
+    "";
+  const generalA2Meta =
+    wfKpiMeas?.decisions.approver2?.approverName
+      ? `${wfKpiMeas.decisions.approver2.approverName} · ${wfKpiMeas.decisions.approver2.date || ""}`
+      : kpiComments.approver2
+      ? `${kpiComments.approver2.approverLabel} · ${kpiComments.approver2.date}`
+      : "";
   const [notesOpen, setNotesOpen] = useState(true);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
 
@@ -434,7 +477,7 @@ function KPITab() {
         </table>
       </div>
 
-      {/* ── History Note Approver per Bulan (collapsible) ── */}
+      {/* ── History Catatan Approver (collapsible) ── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <button
           className="w-full flex items-center gap-2 px-5 py-3 bg-[#1A284F] hover:bg-[#1e3159] transition-colors text-left"
@@ -442,16 +485,55 @@ function KPITab() {
         >
           <FileText className="w-4 h-4 text-amber-300 shrink-0" />
           <span className="text-white text-sm font-bold flex-1">History Catatan Approver</span>
-          <span className="text-white/50 text-[10px] mr-2">per bulan</span>
           {notesOpen
             ? <ChevronUp className="w-4 h-4 text-white/60 shrink-0" />
             : <ChevronDown className="w-4 h-4 text-white/60 shrink-0" />}
         </button>
         {notesOpen && (
-          months.length === 0 ? (
+          months.length === 0 && !generalA1Note && !generalA2Note && !(wfKpiMeas?.revisionHistory?.length) ? (
             <p className="text-xs text-gray-400 italic p-5">Belum ada data bulan.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="flex flex-col">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-slate-50/70 border-b border-gray-200 text-xs">
+                <div className="bg-white rounded-xl border border-blue-100 p-3.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 mb-1">Catatan Approver 1</p>
+                  {generalA1Note ? (
+                    <>
+                      <p className="text-gray-800 leading-relaxed">{generalA1Note}</p>
+                      {generalA1Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA1Meta}</p>}
+                    </>
+                  ) : (
+                    <span className="text-gray-400 italic">Belum ada catatan dari Approver 1.</span>
+                  )}
+                </div>
+                <div className="bg-white rounded-xl border border-purple-100 p-3.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-purple-700 mb-1">Catatan Approver 2</p>
+                  {generalA2Note ? (
+                    <>
+                      <p className="text-gray-800 leading-relaxed">{generalA2Note}</p>
+                      {generalA2Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA2Meta}</p>}
+                    </>
+                  ) : (
+                    <span className="text-gray-400 italic">Belum ada catatan dari Approver 2.</span>
+                  )}
+                </div>
+              </div>
+              {(wfKpiMeas?.revisionHistory?.length ?? 0) > 0 && (
+                <div className="p-4 bg-orange-50/50 border-b border-orange-100 space-y-1.5 text-xs">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-orange-700">Riwayat Catatan Revisi</p>
+                  {wfKpiMeas!.revisionHistory!.map((rev, ri) => (
+                    <div key={ri} className="bg-white border border-orange-100 rounded-lg px-3 py-2 flex items-start justify-between gap-2">
+                      <div>
+                        <span className="font-semibold text-gray-800">{rev.role} ({rev.approverName}): </span>
+                        <span className="text-gray-700">{rev.note}</span>
+                      </div>
+                      <span className="text-[10px] text-gray-400 shrink-0">{rev.date}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {months.length > 0 && Object.keys(monthlyNotes).length > 0 && (
+              <div className="overflow-x-auto">
               <table className="w-full border-collapse text-xs" style={{ minWidth: 480 }}>
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-200">
@@ -489,6 +571,8 @@ function KPITab() {
                   })}
                 </tbody>
               </table>
+              </div>
+              )}
             </div>
           )
         )}
@@ -507,19 +591,19 @@ function KPITab() {
             ? <ChevronUp className="w-4 h-4 text-white/60 shrink-0" />
             : <ChevronDown className="w-4 h-4 text-white/60 shrink-0" />}
         </button>
-        {evidenceOpen && (months.length === 0 ? (
+        {evidenceOpen && (months.length === 0 && evidenceFiles.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-8 text-center">
             <Paperclip className="w-7 h-7 text-gray-200" />
             <p className="text-xs text-gray-400 italic">Belum ada data bulan di KPI tracking.</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {months.map((m) => {
-              const files = evidenceByMonth[m.label] ?? [];
+            {(months.length > 0 ? months.map((m) => m.label) : Object.keys(evidenceByMonth)).map((monthLabel) => {
+              const files = evidenceByMonth[monthLabel] ?? [];
               return (
-                <div key={m.id} className="flex gap-0">
+                <div key={monthLabel} className="flex gap-0">
                   <div className="w-20 shrink-0 bg-gray-50 border-r border-gray-100 flex items-start justify-center pt-3 pb-3">
-                    <span className="text-[10px] font-bold text-[#1A284F] uppercase tracking-widest">{displayMonthLabel(m.label)}</span>
+                    <span className="text-[10px] font-bold text-[#1A284F] uppercase tracking-widest">{displayMonthLabel(monthLabel)}</span>
                   </div>
                   <div className="flex-1 p-3">
                     {files.length === 0 ? (
@@ -1901,6 +1985,18 @@ function ProjFinalBadge({ value }: { value: number | null }) {
 
 function ProjectOutsideTab() {
   const { excelRows, excelSubmitted, maxFinalScore } = useProjectStore();
+  const { activeUser } = useAuthStore();
+  const normId = normalizeEmployeeId(activeUser.employeeId);
+  const wfProj = loadWorkflowRecords().find(
+    (r) => r.year === "2026" && r.module === "Project" && r.phase === "measurement" && r.employeeId === normId,
+  );
+  const a1Status = wfProj?.decisions.approver1?.status ?? "";
+  const a2Status = wfProj?.decisions.approver2?.status ?? "";
+  const isRev = a1Status === "Revision" || a2Status === "Revision";
+  const isA1Approved = a1Status === "Approved" || a1Status.startsWith("Assessed") || a1Status === "Validated";
+  const isA2Approved = a2Status === "Approved" || a2Status.startsWith("Assessed") || a2Status === "Validated";
+  const a1Comment = wfProj?.decisions.approver1?.note || wfProj?.assessments.approver1?.comments?.["0"] || "";
+  const a2Comment = wfProj?.decisions.approver2?.note || wfProj?.assessments.approver2?.comments?.["0"] || "";
   const moduleBobot = 10;
   const weightedContribution = maxFinalScore !== null ? Number(((maxFinalScore * moduleBobot) / 100).toFixed(2)) : null;
 
@@ -1936,9 +2032,21 @@ function ProjectOutsideTab() {
                   <td className="py-3 px-3 text-center text-xs text-gray-600 whitespace-nowrap">{row.finishDate}</td>
                   <td className="py-3 px-3 text-center text-xs font-semibold text-blue-700">{row.progressStatus}</td>
                   <td className="py-3 px-3 text-center">
-                    {excelSubmitted ? (
+                    {isRev ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-orange-100 text-orange-700">
+                        <AlertTriangle className="w-3 h-3" />Revision
+                      </span>
+                    ) : isA2Approved ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-green-100 text-green-700">
                         <ShieldCheck className="w-3 h-3" />Approved
+                      </span>
+                    ) : isA1Approved ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-sky-100 text-sky-700">
+                        <Clock className="w-3 h-3" />Pending Approver 2
+                      </span>
+                    ) : excelSubmitted ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-amber-100 text-amber-700">
+                        <Clock className="w-3 h-3" />Pending Approver 1
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-amber-100 text-amber-700">
@@ -1964,6 +2072,22 @@ function ProjectOutsideTab() {
       </div>
       {excelRows.length === 0 && (
         <div className="py-10 text-center text-gray-400 text-sm border-t border-gray-100">Belum ada project yang terdaftar.</div>
+      )}
+      {(a1Comment || a2Comment) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-slate-50/70 border-t border-gray-100 text-xs">
+          <div className="bg-white rounded-xl border border-blue-100 p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 mb-1">
+              Catatan Approver 1 {wfProj?.decisions.approver1?.approverName ? `(${wfProj.decisions.approver1.approverName})` : ""}
+            </p>
+            <p className="text-gray-700">{a1Comment || <span className="italic text-gray-400">Belum ada catatan</span>}</p>
+          </div>
+          <div className="bg-white rounded-xl border border-purple-100 p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-purple-700 mb-1">
+              Catatan Approver 2 {wfProj?.decisions.approver2?.approverName ? `(${wfProj.decisions.approver2.approverName})` : ""}
+            </p>
+            <p className="text-gray-700">{a2Comment || <span className="italic text-gray-400">Belum ada catatan</span>}</p>
+          </div>
+        </div>
       )}
       <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-600">
         <span>Rumus Penilaian: Ambil <strong>Final Score tertinggi</strong> dari daftar proyek karyawan, lalu kalikan dengan <strong>Bobot Modul ({moduleBobot}%)</strong>.</span>

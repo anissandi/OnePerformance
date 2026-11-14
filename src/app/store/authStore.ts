@@ -401,7 +401,9 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
 
   // 2. Collect structural hierarchy scope
   const calInvolvedUnits =
-    user.calibrationRoleByUnit && typeof user.calibrationRoleByUnit === "object"
+    isDirectorRoleOrGrouping(user) &&
+    user.calibrationRoleByUnit &&
+    typeof user.calibrationRoleByUnit === "object"
       ? Object.entries(user.calibrationRoleByUnit)
           .filter(([, v]) => v === "approver" || v === "mengetahui")
           .map(([k]) => k)
@@ -580,7 +582,12 @@ export function resolveWorkflowStageForTarget(
       target &&
       normOrgName(viewer.company) === normOrgName(target.company),
   );
-  const isHrIcfValidator = Boolean(isAdminOrHrIcfRole(viewer.role) || viewer.isHrIcfValidator);
+  const isHrIcfValidator = Boolean(
+    viewer.role === "HR ICF" ||
+      viewer.isHrIcfValidator ||
+      viewer.role === "Administrator" ||
+      viewer.role === "HR Admin",
+  );
 
   if (isFourStepModule) {
     if (isHrUnitChecker && !checkerDone) {
@@ -589,7 +596,7 @@ export function resolveWorkflowStageForTarget(
     if (isAp1 && (!isAp2 || !a1Done)) {
       return "approver1";
     }
-    if (isAp2 && (!isHrIcfValidator || !a2Done)) {
+    if (isAp2 && (!a2Done || viewer.role !== "HR ICF")) {
       return "approver2";
     }
     if (isHrIcfValidator) {
@@ -998,6 +1005,77 @@ export function getAllowedApprovalTypesForUser(
   });
 }
 
+/**
+ * Validator resmi adalah user dengan role "HR ICF" (tidak ada filter unit usaha).
+ */
+export function findHrIcfValidatorUser(allUsers = loadManagedUsers()): ManagedUser | undefined {
+  return (
+    allUsers.find((u) => u.status === "Active" && u.role === "HR ICF") ??
+    allUsers.find(
+      (u) => u.status === "Active" && Boolean(u.isHrIcfValidator) && u.role !== "Administrator",
+    ) ??
+    allUsers.find((u) => u.status === "Active" && Boolean(u.isHrIcfValidator))
+  );
+}
+
+/**
+ * Checker resmi adalah user dengan role "HR Unit" pada Unit Usaha yang sama (ada filter unit usaha).
+ */
+export function findHrUnitCheckerUserForCompany(
+  companyName: string,
+  excludeEmployeeId?: string,
+  allUsers = loadManagedUsers(),
+): ManagedUser | undefined {
+  const targetCompany = normOrgName(companyName);
+  const exNorm = (excludeEmployeeId ?? "").trim().toLowerCase();
+  const matchesUnitAndNotSelf = (u: ManagedUser) =>
+    u.status === "Active" &&
+    normOrgName(u.company) === targetCompany &&
+    (!exNorm || u.employeeId.trim().toLowerCase() !== exNorm);
+
+  return (
+    allUsers.find((u) => matchesUnitAndNotSelf(u) && u.role === "HR Unit") ??
+    allUsers.find((u) => matchesUnitAndNotSelf(u) && Boolean(u.isHrUnitChecker))
+  );
+}
+
+/**
+ * Menentukan filter Unit Usaha yang mengikat user aktif:
+ * - Administrator, HR ICF, BOD: undefined (semua unit usaha), kecuali dibatasi di Access Management
+ * - Director: seluruh unit dalam Group-nya (RSUP Group / Sambu Group) + akses khusus Access Management
+ * - GM & HR Unit: terkunci ke Unit Usaha tempatnya berada, KECUALI diberi akses khusus melalui Access Management / managedUnits
+ */
+export function getEffectiveLockedUnitsForUser(user: ManagedUser): string[] | undefined {
+  const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
+  const extraManaged = (user.managedUnits ?? []).filter(Boolean);
+
+  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD") {
+    if (roleAllowedUnits.length > 0) {
+      return Array.from(new Set([...roleAllowedUnits, ...extraManaged]));
+    }
+    return undefined;
+  }
+
+  if (isDirectorRoleOrGrouping(user)) {
+    if (roleAllowedUnits.length > 0) {
+      return Array.from(new Set([...roleAllowedUnits, ...extraManaged]));
+    }
+    return getGroupCompaniesForUnit(user.company, extraManaged);
+  }
+
+  if (user.role === "GM" || user.role === "HR Unit") {
+    return Array.from(
+      new Set([user.company, ...roleAllowedUnits, ...extraManaged].filter(Boolean)),
+    );
+  }
+
+  if (roleAllowedUnits.length > 0) {
+    return Array.from(new Set([...roleAllowedUnits, ...extraManaged]));
+  }
+
+  return Array.from(new Set([user.company, ...extraManaged].filter(Boolean)));
+}
+
 export function loginWithCompanyAndEmployeeId(
   companyName: string,
   employeeIdInput: string,
@@ -1081,16 +1159,8 @@ export function useAuthStore() {
   const activeUser = getActiveUser();
   const allUsers = loadManagedUsers();
   const allowedModules = resolveUserAllowedModules(activeUser);
-  const isHrUnitLocked = activeUser.role === "HR Unit";
-  const isAdminOrIcf = isAdminOrHrIcfRole(activeUser.role);
-  const roleAllowedUnits = getRoleAllowedCompanyUnits(activeUser.role);
-  const lockedUnits = isHrUnitLocked
-    ? Array.from(new Set([activeUser.company, ...roleAllowedUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
-    : isAdminOrIcf
-    ? undefined
-    : roleAllowedUnits.length > 0
-    ? Array.from(new Set([...roleAllowedUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
-    : undefined;
+  const isHrUnitLocked = activeUser.role === "HR Unit" || activeUser.role === "GM";
+  const lockedUnits = getEffectiveLockedUnitsForUser(activeUser);
 
   return {
     activeUser,

@@ -1253,14 +1253,35 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const { t } = useLanguage();
   const { lockedUnits: authLockedUnits } = useAuthStore();
   const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
+  const defaultCompanyUnit =
+    effectiveLockedUnits && effectiveLockedUnits.length === 1
+      ? effectiveLockedUnits[0]
+      : "All Units";
+  const companyUnitOptions = useMemo(() => {
+    if (!effectiveLockedUnits || effectiveLockedUnits.length === 0) {
+      return filterOptions.companyUnit;
+    }
+    if (effectiveLockedUnits.length === 1) {
+      return [effectiveLockedUnits[0]];
+    }
+    return ["All Units", ...effectiveLockedUnits];
+  }, [effectiveLockedUnits]);
   const [timelineCollapsed, setTimelineCollapsed] = useState(false);
-  const [companyUnit, setCompanyUnit] = useState("All Units");
+  const [companyUnit, setCompanyUnit] = useState(() => defaultCompanyUnit);
   const [division, setDivision] = useState("All Divisions");
   const [department, setDepartment] = useState("All Departments");
   const [module, setModule] = useState("All Modules");
   const [year, setYear] = useState("2026");
   const [month, setMonth] = useState("All Months");
   const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!companyUnitOptions.includes(companyUnit)) {
+      setCompanyUnit(defaultCompanyUnit);
+      setDivision("All Divisions");
+      setDepartment("All Departments");
+    }
+  }, [companyUnitOptions, companyUnit, defaultCompanyUnit]);
 
   useEffect(() => {
     const onRefresh = () => setTick((v) => v + 1);
@@ -1434,7 +1455,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   }, [module, scopedUsers, workflows, year]);
 
   const hasActiveFilters =
-    companyUnit !== "All Units" ||
+    companyUnit !== defaultCompanyUnit ||
     division !== "All Divisions" ||
     department !== "All Departments" ||
     module !== "All Modules" ||
@@ -1459,7 +1480,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         <div className="grid gap-2.5 grid-cols-2 md:grid-cols-3 xl:grid-cols-6 items-end">
           <FilterSelect
             label={t("Company Unit")}
-            options={effectiveLockedUnits ? ["All Units", ...effectiveLockedUnits] : filterOptions.companyUnit}
+            options={companyUnitOptions}
             value={companyUnit}
             onChange={(val) => {
               setCompanyUnit(val);
@@ -1504,7 +1525,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
               <button
                 type="button"
                 onClick={() => {
-                  setCompanyUnit("All Units");
+                  setCompanyUnit(defaultCompanyUnit);
                   setDivision("All Divisions");
                   setDepartment("All Departments");
                   setModule("All Modules");

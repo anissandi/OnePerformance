@@ -14,6 +14,7 @@ import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBa
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX } from "../../utils/excelUtils";
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1080,7 +1081,7 @@ export function SmartGoalsCheckInPage() {
               type: f.type || "application/octet-stream",
               dataUrl: f.dataUrl,
             })),
-            alasanBatal: "",
+            alasanBatal: st.actionPlanAlasanBatal?.[ap.id] ?? "",
           };
         });
         return {
@@ -1152,6 +1153,9 @@ export function SmartGoalsCheckInPage() {
         actionPlanKendala: Object.fromEntries(
           Object.entries(e.actionPlanExtras).map(([k, v]) => [Number(k), (v as ActionPlanExtra).kendala])
         ),
+        actionPlanAlasanBatal: Object.fromEntries(
+          Object.entries(e.actionPlanExtras).map(([k, v]) => [Number(k), (v as ActionPlanExtra).alasanBatal])
+        ),
         actionPlanEvidence: Object.fromEntries(
           Object.entries(e.actionPlanExtras).map(([k, v]) => [Number(k), (v as ActionPlanExtra).evidence])
         ),
@@ -1210,6 +1214,58 @@ export function SmartGoalsCheckInPage() {
   }
 
   const editable = isSettingValidated && view === "input" && !submitted;
+
+  // Validasi kelengkapan seluruh field SMART Goals Measurement (Poin 9)
+  const smartGoalsValidation = React.useMemo(() => {
+    const missing: string[] = [];
+    if (!goals || goals.length === 0) {
+      missing.push("Belum ada data SMART Goals.");
+      return { isComplete: false, missing };
+    }
+
+    for (const goal of goals) {
+      const entry = entries.find((e) => e.goalId === goal.id);
+      const ta = targetActuals.find((t) => t.goalId === goal.id);
+
+      goal.actionPlans.forEach((ap, apIdx) => {
+        const st: LocalStatus = entry?.actionPlanStatuses?.[ap.id] ?? "-";
+        const extra = entry?.actionPlanExtras?.[ap.id] ?? getDefaultExtra();
+        const apName = `${goal.label} — Action Plan ${apIdx + 1}`;
+        if (st === "-") {
+          missing.push(`${apName}: Status belum dipilih`);
+        } else if (st === "Belum dilaksanakan" && !extra.kendala.trim()) {
+          missing.push(`${apName}: Kendala/Hambatan wajib diisi`);
+        } else if (st === "Sedang dilaksanakan") {
+          if (extra.progressPct <= 0) {
+            missing.push(`${apName}: Persentase Progress (> 0%) wajib diisi`);
+          }
+          if (!extra.kendala.trim()) {
+            missing.push(`${apName}: Kendala/Hambatan wajib diisi`);
+          }
+        } else if (st === "Selesai" && extra.evidence.length === 0) {
+          missing.push(`${apName}: Bukti/Evidence wajib diupload`);
+        } else if (st === "Batal" && !extra.alasanBatal.trim()) {
+          missing.push(`${apName}: Alasan Action Plan Batal wajib diisi`);
+        }
+      });
+
+      if (!ta?.actual?.trim()) {
+        missing.push(`${goal.label} (Target vs Actual): Nilai Actual wajib diisi`);
+      }
+      if (!ta?.status) {
+        missing.push(`${goal.label} (Target vs Actual): Status pencapaian wajib dipilih`);
+      } else if (ta.status === "Tidak Tercapai" && !ta.alasanTidakTercapai.trim()) {
+        missing.push(`${goal.label} (Target vs Actual): Alasan Tidak Tercapai wajib diisi`);
+      } else if (ta.status === "Tercapai" && (ta.evidenceFiles?.length ?? 0) === 0) {
+        missing.push(`${goal.label} (Target vs Actual): Evidence wajib diupload`);
+      }
+    }
+
+    return {
+      isComplete: missing.length === 0,
+      missing,
+    };
+  }, [goals, entries, targetActuals]);
 
   // Ekstrak nilai & catatan terbaru dari Approver 1 & Approver 2 untuk Penilaian Akhir
   const activeUser = getActiveUser();
@@ -1276,15 +1332,11 @@ export function SmartGoalsCheckInPage() {
         </div>
       )}
 
-      {/* Status banner */}
-      {view === "preview" && (
-        <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium border ${
-          submitted ? "bg-green-50 border-green-200 text-green-700" : "bg-amber-50 border-amber-200 text-amber-700"
-        }`}>
-          {submitted ? <Lock className="w-4 h-4 shrink-0" /> : <Eye className="w-4 h-4 shrink-0" />}
-          {submitted
-            ? `SMART Goals Measurement telah disubmit (Read-Only) — Status: ${statusLabel}.`
-            : "Preview mode — periksa kembali data sebelum submit."}
+      {/* Preview mode banner (hanya tampil saat belum disubmit; tag read-only dihapus sesuai Poin 19) */}
+      {view === "preview" && !submitted && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium border bg-amber-50 border-amber-200 text-amber-700">
+          <Eye className="w-4 h-4 shrink-0" />
+          Preview mode — periksa kembali data sebelum submit.
         </div>
       )}
 
@@ -1332,14 +1384,40 @@ export function SmartGoalsCheckInPage() {
                 <Eye className="w-4 h-4" />
                 Preview
               </button>
-              <button
-                type="button"
-                onClick={() => setShowConfirm(true)}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
-              >
-                <Send className="w-4 h-4" />
-                Submit Measurement
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex">
+                    <button
+                      type="button"
+                      disabled={!smartGoalsValidation.isComplete}
+                      onClick={() => setShowConfirm(true)}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Send className="w-4 h-4" />
+                      Submit SMART Goals
+                    </button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-sm bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                  {smartGoalsValidation.isComplete ? (
+                    <p className="text-xs font-medium">Seluruh field telah lengkap. Klik untuk Submit SMART Goals.</p>
+                  ) : (
+                    <div>
+                      <p className="font-bold text-xs mb-1">
+                        Lengkapi seluruh field berikut sebelum Submit SMART Goals ({smartGoalsValidation.missing.length} belum selesai):
+                      </p>
+                      <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90 max-h-48 overflow-y-auto">
+                        {smartGoalsValidation.missing.slice(0, 8).map((item, idx) => (
+                          <li key={idx}>{item}</li>
+                        ))}
+                        {smartGoalsValidation.missing.length > 8 && (
+                          <li>...dan {smartGoalsValidation.missing.length - 8} field lainnya.</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                </TooltipContent>
+              </Tooltip>
             </>
           ) : (
             <>
@@ -1351,14 +1429,40 @@ export function SmartGoalsCheckInPage() {
                 <Edit3 className="w-4 h-4" />
                 Back to Edit
               </button>
-              <button
-                type="button"
-                onClick={() => setShowConfirm(true)}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
-              >
-                <Send className="w-4 h-4" />
-                Submit Measurement
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex">
+                    <button
+                      type="button"
+                      disabled={!smartGoalsValidation.isComplete}
+                      onClick={() => setShowConfirm(true)}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Send className="w-4 h-4" />
+                      Submit SMART Goals
+                    </button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-sm bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                  {smartGoalsValidation.isComplete ? (
+                    <p className="text-xs font-medium">Seluruh field telah lengkap. Klik untuk Submit SMART Goals.</p>
+                  ) : (
+                    <div>
+                      <p className="font-bold text-xs mb-1">
+                        Lengkapi seluruh field berikut sebelum Submit SMART Goals ({smartGoalsValidation.missing.length} belum selesai):
+                      </p>
+                      <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90 max-h-48 overflow-y-auto">
+                        {smartGoalsValidation.missing.slice(0, 8).map((item, idx) => (
+                          <li key={idx}>{item}</li>
+                        ))}
+                        {smartGoalsValidation.missing.length > 8 && (
+                          <li>...dan {smartGoalsValidation.missing.length - 8} field lainnya.</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                </TooltipContent>
+              </Tooltip>
             </>
           )}
         </div>

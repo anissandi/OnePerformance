@@ -752,6 +752,7 @@ function SubmitConfirmModal({ onConfirm, onCancel }: { onConfirm: () => void; on
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function CalibrationSetting() {
+  const { lockedUnits: authLockedUnits } = useAuthStore();
   const [companyUnits, setCompanyUnits] = useState<CompanyUnit[]>(() => {
     try {
       const saved = localStorage.getItem("calibration_hc_settings_2026") ?? localStorage.getItem("calibration_submitted_units");
@@ -889,7 +890,10 @@ export function CalibrationSetting() {
               : "Select a company unit to review its Calibration settings."}
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {companyUnits.map((unit, idx) => {
+            {(authLockedUnits && authLockedUnits.length > 0
+              ? companyUnits.filter((u) => authLockedUnits.includes(u.name))
+              : companyUnits
+            ).map((unit, idx) => {
               const gradients = ["from-blue-600 to-blue-800","from-emerald-600 to-emerald-800","from-violet-600 to-violet-800","from-amber-500 to-orange-700","from-sky-500 to-cyan-700","from-rose-500 to-red-700","from-teal-500 to-teal-700","from-indigo-500 to-indigo-700"];
               const gradient = gradients[idx % gradients.length];
               return (
@@ -919,3 +923,4 @@ export function CalibrationSetting() {
     </>
   );
 }
+import { useAuthStore } from "../../store/authStore";

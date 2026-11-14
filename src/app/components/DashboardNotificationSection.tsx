@@ -286,6 +286,7 @@ export function DashboardNotificationSection() {
             const resolvedRoute = resolveNotificationRouteForUser(
               item.ctaRoute,
               activeUser,
+              item,
             );
 
             return (

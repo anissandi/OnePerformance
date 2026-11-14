@@ -107,9 +107,13 @@ function getScopedCompanyUnits(): string[] {
   const activeUser = getActiveUser();
   const roleUnits = getRoleAllowedCompanyUnits(activeUser.role);
   if (roleUnits.length > 0) {
-    return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+    const base =
+      activeUser.role === "GM" || activeUser.role === "HR Unit"
+        ? [activeUser.company, ...roleUnits, ...(activeUser.managedUnits ?? [])]
+        : [...roleUnits, ...(activeUser.managedUnits ?? [])];
+    return Array.from(new Set(base.filter(Boolean)));
   }
-  if (activeUser.role === "HR Unit") {
+  if (activeUser.role === "HR Unit" || activeUser.role === "GM") {
     return Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
   }
   if (isDirectorRoleOrGrouping(activeUser)) {

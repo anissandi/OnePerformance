@@ -481,7 +481,7 @@ export function Topbar({
                 ) : (
                   userNotifications.slice(0, 6).map((n) => {
                     const catMeta = NOTIFICATION_CATEGORY_META[n.category] ?? NOTIFICATION_CATEGORY_META.Info;
-                    const resolvedRoute = resolveNotificationRouteForUser(n.ctaRoute, activeUser);
+                    const resolvedRoute = resolveNotificationRouteForUser(n.ctaRoute, activeUser, n);
                     return (
                       <div
                         key={n.id}

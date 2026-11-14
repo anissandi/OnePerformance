@@ -1273,6 +1273,7 @@ export async function replaceAllBackendUsersAndResetForTrial(
     "kpi_tracking_submit_v1_staff",
     "kpi_approval_comments",
     "kpi_evidence_files",
+    "kpi_evidence_files_by_emp_v1",
     "kpi_monthly_notes",
     "kpi_rca_submissions",
     "rca_approval_decisions_v1",

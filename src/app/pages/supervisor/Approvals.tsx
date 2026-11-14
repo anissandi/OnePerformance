@@ -386,7 +386,7 @@ function ApprovalsTable({
     setActiveTab("Approval History");
   };
 
-  const handleApprove = (row: ApprovalRow) => {
+  const handleApprove = (row: ApprovalRow, note?: string) => {
     const todayStr = formatTodayDDMMYYYY();
     const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
     const stage = row.workflowStageForRow ?? effectiveRole;
@@ -401,12 +401,14 @@ function ApprovalsTable({
       decisionStatus = "Assessed-Approver 1";
       uiHistoryStatus = "Pending-Approver 2";
     } else if (isFourStep && stage === "approver2") {
-      const isAlsoValidator = Boolean(activeUser.role === "HR ICF" || activeUser.role === "Administrator" || activeUser.isHrIcfValidator);
-      decisionStatus = isAlsoValidator ? "Validated" : "Assessed-Approver 2";
-      uiHistoryStatus = isAlsoValidator ? "Validated" : "Pending-Validate";
+      decisionStatus = "Assessed-Approver 2";
+      uiHistoryStatus = "Pending-Validate";
     } else if (isFourStep && stage === "validator") {
       decisionStatus = "Validated";
       uiHistoryStatus = "Validated";
+    } else if (stage === "approver1") {
+      decisionStatus = isAssessedType ? "Assessed-Approver 1" : "Approved";
+      uiHistoryStatus = "Pending-Approver 2";
     } else {
       decisionStatus = isAssessedType
         ? effectiveRole === "approver2"
@@ -415,15 +417,15 @@ function ApprovalsTable({
         : "Approved";
       uiHistoryStatus = decisionStatus;
     }
-    saveOverride(row.no, decisionStatus, todayStr);
+    saveOverride(row.no, decisionStatus, todayStr, note);
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: uiHistoryStatus, approvalDate: todayStr } : r));
-    if (row.type === "RCA") {
+    if (row.type === "RCA" && (stage === "approver1" || stage === "approver2")) {
       saveRCAApprovalDecision({
         approverName: activeUser.name || "Approver",
         approverRole: effectiveRole === "approver2" ? "Approver 2" : "Approver 1",
         approverLevel: effectiveRole === "approver2" ? 2 : 1,
         status: decisionStatus,
-        comment: "",
+        comment: note ?? "",
         reviewedDate: todayStr,
       });
     }
@@ -450,19 +452,20 @@ function ApprovalsTable({
     setActiveTab("Approval History");
   };
 
-  const handleAssessed = (row: ApprovalRow) => {
+  const handleAssessed = (row: ApprovalRow, note?: string) => {
     const todayStr = formatTodayDDMMYYYY();
     const effectiveRole = row.reviewerRoleForRow ?? reviewerRole;
     const newStatus = effectiveRole === "approver2" ? "Assessed-Approver 2" : "Assessed-Approver 1";
-    saveOverride(row.no, newStatus, todayStr);
-    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: newStatus, approvalDate: todayStr } : r));
+    const uiStatus = effectiveRole === "approver1" ? "Pending-Approver 2" : newStatus;
+    saveOverride(row.no, newStatus, todayStr, note);
+    onDataChange(data.map((r) => r.no === row.no ? { ...r, status: uiStatus, approvalDate: todayStr } : r));
     if (row.type === "RCA") {
       saveRCAApprovalDecision({
         approverName: activeUser.name || "Approver",
         approverRole: effectiveRole === "approver2" ? "Approver 2" : "Approver 1",
         approverLevel: effectiveRole === "approver2" ? 2 : 1,
         status: newStatus,
-        comment: "",
+        comment: note ?? "",
         reviewedDate: todayStr,
       });
     }
@@ -629,10 +632,10 @@ function ApprovalsTable({
       </div>
 
       {reviewRow && !isSetting && (
-        <ReviewDrawer row={reviewRow} reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={() => handleAssessed(reviewRow)} readOnly={reviewFromHistory} />
+        <ReviewDrawer row={reviewRow} reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole} onClose={() => setReviewRow(null)} onApprove={(note) => handleApprove(reviewRow, note)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={(note) => handleAssessed(reviewRow, note)} readOnly={reviewFromHistory} />
       )}
       {reviewRow && isSetting && (
-        <SettingApprovalDrawer row={reviewRow} onClose={() => setReviewRow(null)} onApprove={() => handleApprove(reviewRow)} onRevision={(note) => handleRevision(reviewRow, note)} readOnly={reviewFromHistory} />
+        <SettingApprovalDrawer row={reviewRow} onClose={() => setReviewRow(null)} onApprove={(note) => handleApprove(reviewRow, note)} onRevision={(note) => handleRevision(reviewRow, note)} readOnly={reviewFromHistory} />
       )}
       {editReviewRow && (
         <EditRequestReviewModal

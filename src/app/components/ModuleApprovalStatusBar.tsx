@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
+  findHrIcfValidatorUser,
+  findHrUnitCheckerUserForCompany,
   getActiveUser,
   loadManagedUsers,
   shouldBypassCheckerForSubmission,
@@ -121,17 +123,40 @@ export function ModuleApprovalStatusBar({
 
   const ap1User = resolveUserByRef(allUsers, activeUser.regNoAp1);
   const ap2User = resolveUserByRef(allUsers, activeUser.regNoAp2);
-  const hrUnitUser = allUsers.find(
-    (u) =>
-      u.status === "Active" &&
-      u.company.trim().toLowerCase() === activeUser.company.trim().toLowerCase() &&
-      (u.role === "HR Unit" || Boolean(u.isHrUnitChecker)),
-  );
-  const hrIcfUser = allUsers.find(
-    (u) => u.status === "Active" && (u.role === "HR ICF" || Boolean(u.isHrIcfValidator)),
-  );
+  const hrUnitUser = findHrUnitCheckerUserForCompany(activeUser.company, activeUser.employeeId, allUsers);
+  const hrIcfUser = findHrIcfValidatorUser(allUsers);
+
+  const resolveCheckerDisplayName = () => {
+    if (chkDec?.status === "Bypassed") {
+      return hrUnitUser?.name || `HR Unit (${activeUser.company})`;
+    }
+    if (chkDec?.approverName) {
+      const decUser = resolveUserByRef(allUsers, chkDec.approverName);
+      if (
+        decUser &&
+        decUser.role === "HR Unit" &&
+        decUser.company.trim().toLowerCase() === activeUser.company.trim().toLowerCase()
+      ) {
+        return decUser.name;
+      }
+      if (!hrUnitUser) return chkDec.approverName;
+    }
+    return hrUnitUser?.name || `HR Unit (${activeUser.company})`;
+  };
+
+  const resolveValidatorDisplayName = () => {
+    if (valDec?.approverName) {
+      const decUser = resolveUserByRef(allUsers, valDec.approverName);
+      if (decUser && decUser.role === "HR ICF") {
+        return decUser.name;
+      }
+      if (!hrIcfUser) return valDec.approverName;
+    }
+    return hrIcfUser?.name || "HR ICF";
+  };
 
   const subDate = normalizeDateDDMMYYYY(wfRec?.submittedDate || submittedDateOverride);
+  const isProjectTwoStep = module === "Project";
 
   const steps = isFourStep
     ? [
@@ -145,7 +170,7 @@ export function ModuleApprovalStatusBar({
         },
         {
           title: "2. HR Unit Check",
-          actor: chkDec?.approverName || hrUnitUser?.name || `HR Unit (${activeUser.company})`,
+          actor: resolveCheckerDisplayName(),
           badge:
             chkDec?.status === "Revision"
               ? "Revision"
@@ -192,7 +217,7 @@ export function ModuleApprovalStatusBar({
         },
         {
           title: "5. HR ICF Validate",
-          actor: valDec?.approverName || hrIcfUser?.name || "HR ICF",
+          actor: resolveValidatorDisplayName(),
           badge:
             valDec?.status === "Revision"
               ? "Revision"
@@ -204,6 +229,39 @@ export function ModuleApprovalStatusBar({
           date: isValDone ? normalizeDateDDMMYYYY(valDec?.date || a2Dec?.date) : "—",
           stepDone: isValDone,
           stepRevision: valDec?.status === "Revision",
+        },
+      ]
+    : isProjectTwoStep
+    ? [
+        {
+          title: "1. Approver 1",
+          actor: a1Dec?.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+          badge:
+            a1Dec?.status === "Revision"
+              ? "Revision"
+              : isA1Done
+              ? "Approved"
+              : isSubmitted
+              ? "Pending"
+              : "Waiting",
+          date: isA1Done ? normalizeDateDDMMYYYY(a1Dec?.date) : "—",
+          stepDone: isA1Done,
+          stepRevision: a1Dec?.status === "Revision",
+        },
+        {
+          title: "2. Approver 2",
+          actor: a2Dec?.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+          badge:
+            a2Dec?.status === "Revision"
+              ? "Revision"
+              : isA2Done
+              ? "Approved"
+              : isA1Done && isSubmitted
+              ? "Pending"
+              : "Waiting",
+          date: isA2Done ? normalizeDateDDMMYYYY(a2Dec?.date) : "—",
+          stepDone: isA2Done,
+          stepRevision: a2Dec?.status === "Revision",
         },
       ]
     : [
@@ -273,7 +331,11 @@ export function ModuleApprovalStatusBar({
     <div className="space-y-2">
       <div
         className={`grid gap-2 ${
-          isFourStep ? "grid-cols-1 sm:grid-cols-5" : "grid-cols-1 sm:grid-cols-3"
+          isFourStep
+            ? "grid-cols-1 sm:grid-cols-5"
+            : isProjectTwoStep
+            ? "grid-cols-1 sm:grid-cols-2"
+            : "grid-cols-1 sm:grid-cols-3"
         }`}
       >
         {steps.map((st) => (

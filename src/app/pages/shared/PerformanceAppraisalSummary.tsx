@@ -8,7 +8,7 @@ import {
 import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
-import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole } from "../../store/authStore";
+import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole, useAuthStore } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 
 type Role = "hr" | "supervisor";
@@ -465,14 +465,16 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   const activeUser = getActiveUser();
   const scopedMeta = getScopedFilterOptionsForUser(activeUser);
   const isGlobalViewer = isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
-  const isHrUnitScoped = activeUser.role === "HR Unit";
+  const isUnitScopedRole = activeUser.role === "HR Unit" || activeUser.role === "GM";
+  const { lockedUnits: authLockedUnits } = useAuthStore();
   const effectiveLockedUnits =
     lockedUnits ??
-    (isHrUnitScoped
+    authLockedUnits ??
+    (isUnitScopedRole
       ? Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
       : undefined);
   const supervisorAllowedIds = new Set(
-    !isGlobalViewer || role === "supervisor" || isHrUnitScoped
+    !isGlobalViewer || role === "supervisor" || isUnitScopedRole
       ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
       : [],
   );
@@ -493,7 +495,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   };
 
   const filtered = liveEmployees.filter(emp => {
-    if (!isGlobalViewer || role === "supervisor" || isHrUnitScoped) {
+    if (!isGlobalViewer || role === "supervisor" || isUnitScopedRole) {
       if (!supervisorAllowedIds.has(emp.id.toLowerCase())) return false;
     }
     if (effectiveLockedUnits && !effectiveLockedUnits.includes(emp.companyUnit)) return false;
@@ -535,7 +537,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
               ? "Consolidated appraisal results for all employees with completed approvals"
               : "Appraisal results for employees under your hierarchical & approval authority"}
           </p>
-          {(role === "supervisor" || isHrUnitScoped) && (
+          {(role === "supervisor" || isUnitScopedRole) && (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-[#1A284F] border border-blue-200">
               Cakupan Wewenang: {scopedMeta.authorityLabel}
             </span>
@@ -550,12 +552,18 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
             label="Company Unit"
             options={
               effectiveLockedUnits
-                ? ["All Units", ...effectiveLockedUnits]
+                ? effectiveLockedUnits.length === 1
+                  ? [effectiveLockedUnits[0]]
+                  : ["All Units", ...effectiveLockedUnits]
                 : role === "supervisor" && scopedMeta.units.length > 0
                 ? ["All Units", ...scopedMeta.units]
                 : filterOptions.companyUnit
             }
-            value={companyUnit}
+            value={
+              effectiveLockedUnits && effectiveLockedUnits.length === 1
+                ? effectiveLockedUnits[0]
+                : companyUnit
+            }
             onChange={setCompanyUnit}
           />
           <FilterSelect

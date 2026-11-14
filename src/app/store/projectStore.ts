@@ -127,7 +127,7 @@ export function loadAllIcfProjectsByEmployee(): Record<string, EmployeeIcfProjec
   }
 }
 
-export function loadIcfProjectRows(employeeId?: string): { rows: ProjectExcelRow[]; fileName: string; submitted: boolean } {
+export function loadIcfProjectRows(employeeId?: string): { rows: ProjectExcelRow[]; fileName: string; submitted: boolean; submittedDate?: string } {
   try {
     const targetId = employeeId ?? getActiveUser().employeeId;
     const normId = normalizeEmployeeId(targetId);

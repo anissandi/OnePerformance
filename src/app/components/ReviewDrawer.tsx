@@ -11,17 +11,25 @@ import {
   FileText, ChevronDown, ChevronUp, Target,
 } from "lucide-react";
 import { FORMS, type FormItem } from "../pages/employee/AppraisalForm";
-import { KPI_ITEMS, INITIAL_MONTHS, computeTotal2026 } from "../pages/employee/KPIPage";
+import { KPI_ITEMS, loadKPITracking } from "../pages/employee/KPIPage";
 import { SAMPLE_GOALS, ROWS } from "../pages/employee/SMARTGoals";
 import { loadCheckInEntries, loadSubmittedGoals, type StoredSmartGoalEvidenceFile } from "../pages/shared/smartGoalsStore";
-import { loadKPIComments, saveKPIComment, type KPIRowComments } from "../pages/shared/kpiCommentsStore";
+import { loadKPIComments, loadKPICommentsForEmployee, saveKPIComment } from "../pages/shared/kpiCommentsStore";
 import { loadEvidenceFiles, type StoredEvidenceFile } from "../pages/shared/kpiEvidenceStore";
 import { saveAssessment, loadAssessment, loadSGAssessment } from "../pages/shared/approvalsStore";
-import { loadRCASubmissions } from "../pages/shared/rcaStore";
+import { loadRCASubmissions, type StoredRCASubmission } from "../pages/shared/rcaStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../utils/dateFormat";
 import { MS_ITEMS, type MSItem } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPITableView } from "./KPITableView";
 import { FeedbackApprovalDrawer } from "./FeedbackApprovalDrawer";
+import {
+  getActiveUser,
+  loadManagedUsers,
+  resolveEffectiveUserGrouping,
+  type ManagedUser,
+  type WorkflowStageRole,
+} from "../store/authStore";
+import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -53,10 +61,23 @@ interface Props {
   row: ApprovalRow;
   reviewerRole: ReviewerRole;
   onClose: () => void;
-  onApprove: () => void;
+  onApprove: (note?: string) => void;
   onRevision: (note: string) => void;
-  onAssessed: () => void;
+  onAssessed: (note?: string) => void;
   readOnly?: boolean;
+}
+
+function resolveUserByRef(allUsers: ManagedUser[], refValue?: string): ManagedUser | undefined {
+  const ref = (refValue ?? "").trim().toLowerCase();
+  if (!ref) return undefined;
+  const refNum = ref.replace(/^(?:emp-?|e)0*/i, "");
+  return allUsers.find(
+    (u) =>
+      (u.regNo ?? "").trim().toLowerCase() === ref ||
+      u.employeeId.trim().toLowerCase() === ref ||
+      u.name.trim().toLowerCase() === ref ||
+      Boolean(refNum && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === refNum),
+  );
 }
 
 // ─── RCA Review Preview ────────────────────────────────────────────────────────
@@ -354,105 +375,40 @@ const SELF_RATINGS: Record<string, number> = {
 
 // ─── KPI Review ────────────────────────────────────────────────────────────────
 
-const MONTHS = INITIAL_MONTHS;
-const CELLS: Record<string, Record<string, string>> = Object.fromEntries(
-  MONTHS.map((m) => [m.id, m.cells])
-);
-
 function formatEvidenceSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function KPIReview({ row, reviewerRole, readOnly }: { row: ApprovalRow; reviewerRole: ReviewerRole; readOnly?: boolean }) {
-  const kpiItems = KPI_ITEMS.slice(0, 4);
-  const storeFiles: StoredEvidenceFile[] = loadEvidenceFiles();
-  const ASSESSED_EVIDENCE: StoredEvidenceFile[] = [
-    { id: "ae-1", month: "Jan-26", name: "Laporan_KPI_Jan2026.xlsx", size: 245000, url: "" },
-    { id: "ae-2", month: "Feb-26", name: "Laporan_KPI_Feb2026.xlsx", size: 238000, url: "" },
-    { id: "ae-3", month: "Mar-26", name: "Realisasi_Produksi_Q1.pdf", size: 512000, url: "" },
-    { id: "ae-4", month: "Apr-26", name: "Laporan_KPI_Apr2026.xlsx", size: 251000, url: "" },
-    { id: "ae-5", month: "May-26", name: "Laporan_KPI_Mei2026.xlsx", size: 263000, url: "" },
-    { id: "ae-6", month: "May-26", name: "Bukti_Pencapaian_Target.pdf", size: 892000, url: "" },
-  ];
-  const isAssessed = row.status === "Assessed-Approver 2";
-  const evidenceFiles: StoredEvidenceFile[] = isAssessed ? ASSESSED_EVIDENCE : storeFiles;
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
-
-  const initialComments = loadKPIComments(row.no);
-  const [myComment, setMyComment] = useState(
-    isAssessed ? APPROVER2_KPI_COMMENT : (initialComments[reviewerRole]?.text ?? "")
-  );
-
-  const handleCommentChange = (text: string) => {
-    if (readOnly || isAssessed) return;
-    setMyComment(text);
-    saveKPIComment(row.no, reviewerRole, text);
-  };
-
-  const ap1Comment = isAssessed
-    ? { text: "Verifikasi data KPI telah dilakukan. Realisasi Q1 dan Q2 sesuai dengan laporan operasional. Beberapa KPI di bawah target namun masih dalam toleransi yang dapat diterima.", date: "17/05/2026" }
-    : initialComments.approver1;
-  const ap2Comment = reviewerRole === "approver2" ? null : initialComments.approver2;
+function KPIReview({ row }: { row: ApprovalRow }) {
+  const kpiItems = KPI_ITEMS;
+  const { months: ownerMonths, cellsMap: ownerCellsMap } = loadKPITracking(row.employeeId);
+  const evidenceFiles: StoredEvidenceFile[] = loadEvidenceFiles(row.employeeId);
+  const rcaSubmissions = loadRCASubmissions(row.employeeId);
+  const [previewRCA, setPreviewRCA] = useState<StoredRCASubmission | null>(null);
+  const [previewEvFile, setPreviewEvFile] = useState<StoredEvidenceFile | null>(null);
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2 mb-1">
         <TrendingUp className="w-4 h-4 text-blue-600" />
         <h3 className="font-bold text-[#1A284F]">KPI Tracking — 2026</h3>
-        <span className="ml-auto text-sm text-gray-400">Months: {MONTHS.map((m) => m.label).join(", ")}</span>
-        <button
-          onClick={() => setViewMode(viewMode === "cards" ? "table" : "cards")}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
-        >
-          <Eye className="w-3.5 h-3.5" />
-          {viewMode === "cards" ? "View Table Format" : "View Cards"}
-        </button>
+        <span className="ml-auto text-xs font-medium text-gray-500">
+          Bulan Disubmit:{" "}
+          <strong className="text-[#1A284F]">
+            {ownerMonths.length > 0 ? ownerMonths.map((m) => m.label).join(", ") : "Belum ada bulan"}
+          </strong>
+        </span>
       </div>
-      
-      {viewMode === "cards" ? (
-        <>
-          {kpiItems.map((kpi) => {
-            const scoreRow = kpi.subRows.find((s) => s.label === "Score" || s.label === "Score Total");
-            const totalVal = scoreRow
-              ? computeTotal2026(kpi, kpi.subRows.indexOf(scoreRow), CELLS, MONTHS)
-              : "—";
-            return (
-              <div key={kpi.no} className="bg-gray-50 rounded-xl border border-gray-200 px-5 py-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-bold bg-[#1A284F] text-white px-2 py-0.5 rounded">{kpi.no}</span>
-                      <span className="text-sm font-semibold text-[#1A284F] truncate">{kpi.kpi.split("\n")[0]}</span>
-                    </div>
-                    <p className="text-xs text-gray-500">{kpi.perspektif} · {kpi.satuan} · {kpi.formula}</p>
-                  </div>
-                  <span className="text-sm font-bold text-blue-700 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200">{totalVal}</span>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  {MONTHS.map((m) => {
-                    const actual = m.cells[`${kpi.no}__0`] ?? "—";
-                    const target = m.cells[`${kpi.no}__1`] ?? "—";
-                    return (
-                      <div key={m.id} className="text-xs text-gray-600 bg-white rounded-lg border border-gray-100 px-3 py-2">
-                        <span className="font-bold text-gray-800">{m.label}</span>
-                        <span className="mx-2 text-gray-300">|</span>
-                        Actual: <span className="font-semibold">{actual}</span>
-                        <span className="mx-2 text-gray-300">|</span>
-                        Target: <span className="font-semibold">{target}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-          <p className="text-xs text-gray-400 text-center">Showing top {kpiItems.length} of {KPI_ITEMS.length} KPI items</p>
-        </>
-      ) : (
-        <KPITableView kpiItems={kpiItems} months={MONTHS} cells={CELLS} />
-      )}
+
+      <KPITableView
+        kpiItems={kpiItems}
+        months={ownerMonths}
+        cells={ownerCellsMap}
+        rcaSubmissions={rcaSubmissions}
+        onPreviewRCA={(sub) => setPreviewRCA(sub)}
+      />
 
       {/* ── Evidence Documents Section ───────────────────────────────────────── */}
       <div className="border-t border-gray-200 pt-5 flex flex-col gap-3 mt-2">
@@ -481,25 +437,34 @@ function KPIReview({ row, reviewerRole, readOnly }: { row: ApprovalRow; reviewer
                     {month}
                   </span>
                   <div className="flex flex-col gap-1.5 pl-1">
-                    {monthFiles.map((file) => (
+                    {monthFiles.map((file) => {
+                      const fileHref = file.url || file.dataUrl || "";
+                      return (
                       <div key={file.id} className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
                         <Paperclip className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                         <span className="text-[11px] text-gray-700 flex-1 truncate font-medium">{file.name}</span>
                         <span className="text-[10px] text-gray-400 shrink-0 mr-1">{formatEvidenceSize(file.size)}</span>
-                        {file.url ? (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewEvFile(file)}
+                          className="p-1 rounded hover:bg-blue-50 text-blue-600 hover:text-[#1A284F] transition-colors shrink-0"
+                          title="Lihat Evidence"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        {fileHref ? (
                           <a
-                            href={file.url}
+                            href={fileHref}
                             download={file.name}
                             className="p-1 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700 transition-colors shrink-0"
                             title="Download"
                           >
                             <Download className="w-3.5 h-3.5" />
                           </a>
-                        ) : (
-                          <span className="text-[10px] text-gray-300 shrink-0 italic">file unavailable</span>
-                        )}
+                        ) : null}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -508,71 +473,182 @@ function KPIReview({ row, reviewerRole, readOnly }: { row: ApprovalRow; reviewer
         )}
       </div>
 
-      {/* ── Approver Comments Section ────────────────────────────────────────── */}
-      <div className="border-t border-gray-200 pt-5 flex flex-col gap-4 mt-2">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 text-[#1A284F]" />
-          <h4 className="font-bold text-[#1A284F] text-sm">Catatan Approver</h4>
+      {/* Modal Preview RCA dari Tag RCA pada Tabel KPI Tracking */}
+      {previewRCA && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPreviewRCA(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 bg-[#1A284F] text-white flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold">{previewRCA.kpiIndicator}</h4>
+                <p className="text-[11px] text-white/70">
+                  Detail Root Cause Analysis (RCA) — Periode {previewRCA.monthLabel || previewRCA.periode}
+                </p>
+              </div>
+              <button type="button" onClick={() => setPreviewRCA(null)} className="text-white/70 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-4 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Periode</span>
+                  <span className="font-semibold text-gray-800">{previewRCA.monthLabel || `${previewRCA.periode} ${previewRCA.year}`}</span>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Target</span>
+                  <span className="font-semibold text-gray-800">{previewRCA.targetMonthly || "—"}</span>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Actual</span>
+                  <span className="font-semibold text-gray-800">{previewRCA.actual || "—"}</span>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Capaian</span>
+                  <span className="font-bold text-rose-600">{previewRCA.achievementPct}%</span>
+                </div>
+              </div>
+              {(previewRCA.masalahBlocks && previewRCA.masalahBlocks.length > 0
+                ? previewRCA.masalahBlocks
+                : [
+                    {
+                      id: "b0",
+                      masalahUtama: (previewRCA.masalahUtama ?? []).join(", "),
+                      kenapaA: previewRCA.kenapaA,
+                      kenapaB: previewRCA.kenapaB,
+                      kenapaC: previewRCA.kenapaC,
+                      actionPlans: previewRCA.actionPlans,
+                    },
+                  ]
+              ).map((blk, bi) => (
+                <div key={blk.id || bi} className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-2 font-bold text-[#1A284F] border-b border-gray-200">
+                    Masalah Utama #{bi + 1}: {blk.masalahUtama || "—"}
+                  </div>
+                  <div className="p-4 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div className="bg-slate-50 rounded p-2 border border-slate-100">
+                        <span className="text-[10px] font-bold text-gray-400 block">Kenapa A?</span>
+                        <span className="text-gray-700">{blk.kenapaA || "—"}</span>
+                      </div>
+                      <div className="bg-slate-50 rounded p-2 border border-slate-100">
+                        <span className="text-[10px] font-bold text-gray-400 block">Kenapa B?</span>
+                        <span className="text-gray-700">{blk.kenapaB || "—"}</span>
+                      </div>
+                      <div className="bg-slate-50 rounded p-2 border border-slate-100">
+                        <span className="text-[10px] font-bold text-gray-400 block">Kenapa C?</span>
+                        <span className="text-gray-700">{blk.kenapaC || "—"}</span>
+                      </div>
+                    </div>
+                    {blk.actionPlans?.length > 0 && (
+                      <table className="w-full border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 text-[10px] uppercase text-gray-500">
+                            <th className="border border-gray-200 px-2.5 py-1.5 text-left">Action Plan</th>
+                            <th className="border border-gray-200 px-2.5 py-1.5 text-center">Target Date</th>
+                            <th className="border border-gray-200 px-2.5 py-1.5 text-left">PIC</th>
+                            <th className="border border-gray-200 px-2.5 py-1.5 text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {blk.actionPlans.map((ap, ai) => (
+                            <tr key={ai}>
+                              <td className="border border-gray-200 px-2.5 py-1.5">{ap.action || "—"}</td>
+                              <td className="border border-gray-200 px-2.5 py-1.5 text-center">{normalizeDateDDMMYYYY(ap.targetDate)}</td>
+                              <td className="border border-gray-200 px-2.5 py-1.5">{ap.pic || "—"}</td>
+                              <td className="border border-gray-200 px-2.5 py-1.5 text-center font-semibold">{ap.status || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
+      )}
 
-        {/* Approver 2 sees Approver 1's comment (read-only) */}
-        {reviewerRole === "approver2" && (
-          <div className="flex flex-col gap-2">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-blue-600">
-              Supervisor (Approver 1)
-            </p>
-            {ap1Comment?.text ? (
-              <div className="bg-blue-50/60 border border-blue-200 rounded-xl px-4 py-3 flex flex-col gap-1">
-                <p className="text-sm text-blue-800 leading-relaxed">{ap1Comment.text}</p>
-                <p className="text-[10px] text-blue-400 mt-1">{ap1Comment.date}</p>
+      {/* Modal Preview Evidence KPI */}
+      {previewEvFile && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPreviewEvFile(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 bg-[#1A284F] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <Paperclip className="w-4 h-4 shrink-0" />
+                <span className="text-sm font-bold truncate">{previewEvFile.name}</span>
+                <span className="text-xs text-white/70 shrink-0">({previewEvFile.month})</span>
               </div>
-            ) : (
-              <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
-                <p className="text-xs text-gray-400 italic">Belum ada catatan dari Approver 1.</p>
+              <div className="flex items-center gap-2">
+                {(previewEvFile.url || previewEvFile.dataUrl) && (
+                  <a
+                    href={previewEvFile.url || previewEvFile.dataUrl}
+                    download={previewEvFile.name}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-semibold"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download
+                  </a>
+                )}
+                <button type="button" onClick={() => setPreviewEvFile(null)} className="text-white/70 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-            )}
+            </div>
+            <div className="flex-1 overflow-auto p-6 bg-gray-100 flex items-center justify-center min-h-[380px]">
+              {(previewEvFile.url || previewEvFile.dataUrl) ? (
+                previewEvFile.type?.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp)$/i.test(previewEvFile.name) ? (
+                  <img
+                    src={previewEvFile.url || previewEvFile.dataUrl}
+                    alt={previewEvFile.name}
+                    className="max-h-[72vh] max-w-full object-contain rounded-xl shadow bg-white p-2"
+                  />
+                ) : previewEvFile.type === "application/pdf" || /\.pdf$/i.test(previewEvFile.name) ? (
+                  <iframe
+                    src={previewEvFile.url || previewEvFile.dataUrl}
+                    title={previewEvFile.name}
+                    className="w-full h-[72vh] rounded-xl bg-white border border-gray-200"
+                  />
+                ) : (
+                  <div className="bg-white rounded-2xl p-8 text-center space-y-3 border border-gray-200 max-w-md">
+                    <FileText className="w-12 h-12 text-[#1A284F] mx-auto" />
+                    <p className="text-sm font-bold text-gray-800">{previewEvFile.name}</p>
+                    <p className="text-xs text-gray-500">
+                      Bulan: {previewEvFile.month} · Ukuran: {formatEvidenceSize(previewEvFile.size)}
+                    </p>
+                    <a
+                      href={previewEvFile.url || previewEvFile.dataUrl}
+                      download={previewEvFile.name}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#1A284F] text-white text-xs font-semibold hover:bg-[#131d3b]"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download Dokumen
+                    </a>
+                  </div>
+                )
+              ) : (
+                <div className="bg-white rounded-2xl p-8 text-center space-y-2 border border-gray-200 max-w-md">
+                  <FileText className="w-12 h-12 text-[#1A284F] mx-auto" />
+                  <p className="text-sm font-bold text-gray-800">{previewEvFile.name}</p>
+                  <p className="text-xs text-gray-500">
+                    Bulan: {previewEvFile.month} · Ukuran: {formatEvidenceSize(previewEvFile.size)}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
-        )}
-
-        {/* Approver 1's own input area */}
-        {reviewerRole === "approver1" && (
-          <div className="flex flex-col gap-2">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-blue-600">
-              Catatan Anda (Supervisor — Approver 1)
-            </label>
-            <textarea
-              rows={4}
-              value={myComment}
-              onChange={(e) => handleCommentChange(e.target.value)}
-              placeholder="Tambahkan catatan atau masukan untuk karyawan dan Approver 2…"
-              className="w-full text-sm border-2 border-blue-100 focus:border-blue-400 rounded-xl px-4 py-3 outline-none resize-none transition-colors placeholder-blue-200 text-gray-700"
-            />
-            {myComment && (
-              <p className="text-[10px] text-blue-500 font-medium">✓ Catatan tersimpan otomatis</p>
-            )}
-          </div>
-        )}
-
-        {/* Approver 2's own input area */}
-        {reviewerRole === "approver2" && (
-          <div className="flex flex-col gap-2">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-purple-600">
-              Catatan Approver 2 (HR Admin)
-            </label>
-            <textarea
-              rows={4}
-              value={myComment}
-              onChange={(e) => handleCommentChange(e.target.value)}
-              readOnly={readOnly || isAssessed}
-              placeholder="Tambahkan catatan atau masukan untuk karyawan…"
-              className={`w-full text-sm border-2 rounded-xl px-4 py-3 outline-none resize-none transition-colors text-gray-700 ${readOnly || isAssessed ? "bg-purple-50/40 border-purple-100 cursor-default" : "border-purple-100 focus:border-purple-400 placeholder-purple-200"}`}
-            />
-            {myComment && !(readOnly || isAssessed) && (
-              <p className="text-[10px] text-purple-500 font-medium">✓ Catatan tersimpan otomatis</p>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -747,14 +823,18 @@ function SG_StatusOverview({ goals, apStatuses }: { goals: typeof SAMPLE_GOALS; 
 function SG_GoalCard({
   goal,
   apStatuses,
+  apProgress,
   apNotes,
+  apAlasanBatal,
   apEvidence,
   onPreviewFile,
   defaultOpen,
 }: {
   goal: typeof SAMPLE_GOALS[0];
   apStatuses: Record<number, SG_LocalStatus>;
+  apProgress: Record<number, number>;
   apNotes: Record<number, string>;
+  apAlasanBatal: Record<number, string>;
   apEvidence: Record<number, StoredSmartGoalEvidenceFile[]>;
   onPreviewFile: (file: StoredSmartGoalEvidenceFile) => void;
   defaultOpen?: boolean;
@@ -829,25 +909,55 @@ function SG_GoalCard({
                       <td className="border-t border-gray-200 border-r border-gray-200 px-3 py-2 align-middle"><span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Status</span></td>
                       {goal.actionPlans.map((ap, idx) => {
                         const st: SG_LocalStatus = apStatuses[ap.id] ?? "-";
+                        const progPct = apProgress[ap.id] ?? 0;
                         return (
                           <td key={ap.id} className={`border-t border-gray-200 px-2 py-2 text-center align-middle ${idx < goal.actionPlans.length - 1 ? "border-r border-gray-200" : ""}`}>
-                            <span className={`inline-flex items-center gap-1 text-[10px] rounded-lg px-2 py-1 font-semibold leading-tight ${SG_AP_COLOR[st]}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${SG_AP_DOT[st]}`} />
-                              {st === "-" ? "—" : st === "Belum dilaksanakan" ? "Belum" : st === "Sedang dilaksanakan" ? "Berjalan" : st}
-                            </span>
+                            <div className="flex flex-col items-center gap-1">
+                              <span className={`inline-flex items-center gap-1 text-[10px] rounded-lg px-2 py-1 font-semibold leading-tight ${SG_AP_COLOR[st]}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${SG_AP_DOT[st]}`} />
+                                {st === "-"
+                                  ? "—"
+                                  : st === "Sedang dilaksanakan"
+                                  ? `Sedang dilaksanakan (${progPct}%)`
+                                  : st}
+                              </span>
+                              {st === "Sedang dilaksanakan" && (
+                                <div className="w-full max-w-[130px] flex items-center gap-1.5">
+                                  <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${PCT_BAR_COLOR(progPct)}`}
+                                      style={{ width: `${Math.min(100, Math.max(0, progPct))}%` }}
+                                    />
+                                  </div>
+                                  <span className={`text-[10px] font-bold ${PCT_TEXT_COLOR(progPct)}`}>{progPct}%</span>
+                                </div>
+                              )}
+                            </div>
                           </td>
                         );
                       })}
                     </tr>
                     <tr className="bg-white">
                       <td className="border-t border-gray-200 border-r border-gray-200 px-3 py-2 align-top"><span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Catatan</span></td>
-                      {goal.actionPlans.map((ap, idx) => (
-                        <td key={ap.id} className={`border-t border-gray-200 px-3 py-2 align-top text-[11px] leading-relaxed ${idx < goal.actionPlans.length - 1 ? "border-r border-gray-200" : ""}`}>
-                          {apNotes[ap.id]
-                            ? <span className="text-gray-700">{apNotes[ap.id]}</span>
-                            : <span className="italic text-gray-300">—</span>}
-                        </td>
-                      ))}
+                      {goal.actionPlans.map((ap, idx) => {
+                        const st: SG_LocalStatus = apStatuses[ap.id] ?? "-";
+                        const batalText = apAlasanBatal[ap.id];
+                        const noteText = apNotes[ap.id];
+                        return (
+                          <td key={ap.id} className={`border-t border-gray-200 px-3 py-2 align-top text-[11px] leading-relaxed ${idx < goal.actionPlans.length - 1 ? "border-r border-gray-200" : ""}`}>
+                            {st === "Batal" && batalText ? (
+                              <div className="text-red-700 bg-red-50 border border-red-100 rounded-lg px-2 py-1.5">
+                                <span className="font-bold text-[10px] uppercase block text-red-500">Alasan Batal</span>
+                                <span>{batalText}</span>
+                              </div>
+                            ) : noteText ? (
+                              <span className="text-gray-700">{noteText}</span>
+                            ) : (
+                              <span className="italic text-gray-300">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                     <tr className="bg-gray-50">
                       <td className="border-t border-gray-200 border-r border-gray-200 px-3 py-2 align-top"><span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Evidence</span></td>
@@ -1049,21 +1159,29 @@ function SmartGoalsApproverReview({
   onRate,
   submitted,
   reviewerRole,
+  workflowStage,
+  ap1Name,
+  ap2Name,
   comments,
   onComment,
   employeeId,
   rowNo,
   position,
+  companyUnit,
 }: {
   assessorRatings: Record<string, number>;
   onRate: (key: string, val: number) => void;
   submitted: boolean;
   reviewerRole: ReviewerRole;
+  workflowStage: WorkflowStageRole;
+  ap1Name: string;
+  ap2Name: string;
   comments: Record<number, string>;
   onComment: (goalId: number, text: string) => void;
   employeeId?: string;
   rowNo?: string;
   position?: string;
+  companyUnit?: string;
 }) {
   const [previewEvidenceFile, setPreviewEvidenceFile] = useState<StoredSmartGoalEvidenceFile | null>(null);
   const live = loadSubmittedGoals(employeeId);
@@ -1072,7 +1190,9 @@ function SmartGoalsApproverReview({
 
   // Bangun status Action Plan, catatan, evidence, dan Target vs Actual murni dari data owner (karyawan pemilik)
   const ownerApStatuses: Record<number, SG_LocalStatus> = {};
+  const ownerApProgress: Record<number, number> = {};
   const ownerApNotes: Record<number, string> = {};
+  const ownerApAlasanBatal: Record<number, string> = {};
   const ownerApEvidence: Record<number, StoredSmartGoalEvidenceFile[]> = {};
   const ownerTargetActuals: Record<number, SG_TargetActual & { files?: StoredSmartGoalEvidenceFile[] }> = {};
 
@@ -1081,8 +1201,12 @@ function SmartGoalsApproverReview({
     for (const ap of g.actionPlans) {
       const st = (ci?.actionPlanStatuses?.[ap.id] as SG_LocalStatus | undefined) ?? "-";
       ownerApStatuses[ap.id] = st;
+      ownerApProgress[ap.id] = ci?.actionPlanProgress?.[ap.id] ?? 0;
       if (ci?.actionPlanKendala?.[ap.id]) {
         ownerApNotes[ap.id] = ci.actionPlanKendala[ap.id];
+      }
+      if (ci?.actionPlanAlasanBatal?.[ap.id]) {
+        ownerApAlasanBatal[ap.id] = ci.actionPlanAlasanBatal[ap.id];
       }
       if (ci?.actionPlanEvidence?.[ap.id]) {
         ownerApEvidence[ap.id] = ci.actionPlanEvidence[ap.id];
@@ -1090,6 +1214,7 @@ function SmartGoalsApproverReview({
     }
     const files = ci?.evidenceFiles ?? [];
     ownerTargetActuals[g.id] = {
+      goalId: g.id,
       actual: ci?.actual ?? "",
       status: (ci?.targetAchievementStatus as "Tercapai" | "Tidak Tercapai" | "") ?? "",
       alasan: ci?.alasanTidakTercapai ?? "",
@@ -1098,37 +1223,88 @@ function SmartGoalsApproverReview({
     };
   }
 
-  // Load Approver 1 stored assessment (for Approver 2 view)
+  const isCheckerStage = workflowStage === "checker";
+  const isValidatorStage = workflowStage === "validator";
+
+  // Load Approver 1 & Approver 2 stored assessments from workflow record
+  const normEmpId = employeeId ? normalizeEmployeeId(employeeId) : "";
+  const sgWfRec = loadWorkflowRecords().find(
+    (r) =>
+      r.year === "2026" &&
+      r.module === "SMART Goals" &&
+      r.phase === "measurement" &&
+      r.employeeId === normEmpId,
+  );
   const storedA1 = rowNo ? loadSGAssessment(rowNo) : null;
-  const a1Ratings: Record<number, number> = storedA1
-    ? Object.fromEntries(
-        Object.entries(storedA1.ratings)
-          .filter(([k]) => k.startsWith("sg-"))
-          .map(([k, v]) => [Number(k.slice(3)), v])
-      )
-    : {};
-  const a1GlobalComment = storedA1?.globalComment ?? "";
-  const a1AssessedDate  = storedA1?.assessedDate  ?? "—";
+  const rawA1Ratings = sgWfRec?.assessments.approver1?.ratings ?? storedA1?.ratings ?? {};
+  const a1Ratings: Record<number, number> = Object.fromEntries(
+    Object.entries(rawA1Ratings)
+      .filter(([k]) => k.startsWith("sg-"))
+      .map(([k, v]) => [Number(k.slice(3)), v]),
+  );
+  const a1GlobalComment =
+    sgWfRec?.assessments.approver1?.comments?.["0"] ??
+    sgWfRec?.decisions.approver1?.note ??
+    storedA1?.globalComment ??
+    "";
+  const a1AssessedDate =
+    sgWfRec?.decisions.approver1?.date ??
+    sgWfRec?.assessments.approver1?.date ??
+    storedA1?.assessedDate ??
+    "—";
+
+  const storedA2 = rowNo ? loadAssessment(rowNo, "approver2") : null;
+  const rawA2Ratings = sgWfRec?.assessments.approver2?.ratings ?? storedA2?.ratings ?? {};
+  const a2RatingsStored: Record<number, number> = Object.fromEntries(
+    Object.entries(rawA2Ratings)
+      .filter(([k]) => k.startsWith("sg-"))
+      .map(([k, v]) => [Number(k.slice(3)), v]),
+  );
+  const a2GlobalComment =
+    sgWfRec?.assessments.approver2?.comments?.["0"] ??
+    sgWfRec?.decisions.approver2?.note ??
+    storedA2?.comments?.["0"] ??
+    "";
+  const a2AssessedDate =
+    sgWfRec?.decisions.approver2?.date ??
+    sgWfRec?.assessments.approver2?.date ??
+    storedA2?.assessedDate ??
+    "—";
+
   const assessorColor = reviewerRole === "approver1" ? "indigo" : "teal";
-  const assessorLabel = reviewerRole === "approver1" ? "Penilaian Approver 1" : "Penilaian Approver 2";
+  const assessorLabel =
+    reviewerRole === "approver1"
+      ? `Penilaian Approver 1 - ${ap1Name}`
+      : `Penilaian Approver 2 - ${ap2Name}`;
 
   const filledScores = goals.map((g) => assessorRatings[`sg-${g.id}`] ?? null).filter((v): v is number => v != null);
   const totalAvg = filledScores.length > 0 ? Math.round(filledScores.reduce((s, v) => s + v, 0) / filledScores.length) : null;
 
   // Final Score computation (visible when both A1 & A2 data exist OR for approver2 view)
-  const storedA2 = rowNo && reviewerRole !== "approver2" ? loadAssessment(rowNo, "approver2") : null;
-  const a2RatingsStored: Record<number, number> = storedA2
-    ? Object.fromEntries(
-        Object.entries(storedA2.ratings)
-          .filter(([k]) => k.startsWith("sg-"))
-          .map(([k, v]) => [Number(k.slice(3)), v])
-      )
-    : (reviewerRole === "approver2" ? Object.fromEntries(goals.map((g) => [g.id, assessorRatings[`sg-${g.id}`] ?? 0])) : {});
-  const a2RatingsMap: Record<number, number> = reviewerRole === "approver2"
-    ? Object.fromEntries(goals.map((g) => [g.id, assessorRatings[`sg-${g.id}`] ?? 0]))
-    : a2RatingsStored;
+  const a2RatingsMap: Record<number, number> =
+    workflowStage === "approver2"
+      ? Object.fromEntries(goals.map((g) => [g.id, assessorRatings[`sg-${g.id}`] ?? a2RatingsStored[g.id] ?? 0]))
+      : a2RatingsStored;
   const hasA2Data = Object.keys(a2RatingsMap).length > 0 && goals.some((g) => (a2RatingsMap[g.id] ?? 0) > 0);
-  const bobot = position ? getBobotByPosition(position) : 25;
+  const bobot = (() => {
+    const allUsers = loadManagedUsers();
+    const owner = allUsers.find((u) => normalizeEmployeeId(u.employeeId) === normEmpId);
+    const unit = owner?.company || companyUnit || "PT RSUP (Industry)";
+    const grp = owner ? resolveEffectiveUserGrouping(owner) : "";
+    const col: ScoreWeightColumn =
+      grp === "Ka./Wa.Ka.Div ke atas" || grp === "Direktur / Director"
+        ? "kepalaDivisi"
+        : grp === "Ka./Wa.Ka.Dept"
+        ? "kepalaDepartement"
+        : grp === "Ka./Wa.Ka.Bagian"
+        ? "pengawasKepalaBagian"
+        : grp === "Ka./Wa.Ka.Seksi"
+        ? "kaWaKaSeksi"
+        : "operasional";
+    const rawW = loadUnitScoreWeights(unit)["SMART Goals"]?.[col];
+    const parsed = rawW && rawW !== "-" ? parseFloat(String(rawW).replace("%", "").trim()) : NaN;
+    return Number.isFinite(parsed) ? parsed : (position ? getBobotByPosition(position) : 20);
+  })();
   const perGoalAvgRatings = goals.map((g) => {
     const r1 = a1Ratings[g.id] ?? 0;
     const r2 = a2RatingsMap[g.id] ?? 0;
@@ -1136,7 +1312,7 @@ function SmartGoalsApproverReview({
   });
   const overallAvg = hasA2Data ? Math.round(perGoalAvgRatings.reduce((s, r) => s + r.avg, 0) / perGoalAvgRatings.length) : null;
   const finalScore = overallAvg != null ? Math.round(overallAvg * bobot / 100 * 10) / 10 : null; // percentage points weighted by bobot
-  const showFinalScore = hasA2Data || (reviewerRole === "approver2" && filledScores.length > 0);
+  const showFinalScore = isValidatorStage || hasA2Data || (workflowStage === "approver2" && filledScores.length > 0);
 
   return (
     <div className="flex flex-col gap-5">
@@ -1161,7 +1337,9 @@ function SmartGoalsApproverReview({
             key={goal.id}
             goal={goal}
             apStatuses={ownerApStatuses}
+            apProgress={ownerApProgress}
             apNotes={ownerApNotes}
+            apAlasanBatal={ownerApAlasanBatal}
             apEvidence={ownerApEvidence}
             onPreviewFile={(file) => setPreviewEvidenceFile(file)}
             defaultOpen={idx === 0}
@@ -1176,18 +1354,23 @@ function SmartGoalsApproverReview({
         onPreviewFile={(file) => setPreviewEvidenceFile(file)}
       />
 
-      {/* Divider */}
-      <div className="flex items-center gap-3">
-        <div className="flex-1 border-t border-gray-200" />
-        <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Penilaian Approver</span>
-        <div className="flex-1 border-t border-gray-200" />
-      </div>
+      {/* Section Penilaian Approver DISEMBUNYIKAN pada level Checker (HR Unit) */}
+      {!isCheckerStage && (
+        <>
+          {/* Divider */}
+          <div className="flex items-center gap-3">
+            <div className="flex-1 border-t border-gray-200" />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Penilaian Approver</span>
+            <div className="flex-1 border-t border-gray-200" />
+          </div>
 
-      {/* 4 — Approver 1 summary (visible to Approver 2 only) */}
-      {reviewerRole === "approver2" && (
+          {/* History Penilaian Approver 1 — tampil untuk Approver 2 maupun Validator HR ICF */}
+          {(workflowStage === "approver2" || isValidatorStage) && (
         <div className="rounded-2xl border-2 border-blue-200 bg-blue-50/40 px-5 py-4 flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-blue-600">Penilaian Approver 1 (Supervisor)</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">
+              Penilaian Approver 1 - {ap1Name}
+            </p>
             <span className="ml-auto text-[10px] text-blue-400">Dinilai: {a1AssessedDate}</span>
           </div>
           <div className="flex flex-col gap-2 mb-1">
@@ -1204,12 +1387,14 @@ function SmartGoalsApproverReview({
               );
             })}
           </div>
-          {a1GlobalComment && (
-            <div className="flex flex-col gap-1">
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-blue-700"><MessageSquare className="w-3.5 h-3.5" />Komentar Approver 1</label>
-              <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-blue-50/50 border-blue-100 text-blue-800">{a1GlobalComment}</p>
-            </div>
-          )}
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-blue-700">
+              <MessageSquare className="w-3.5 h-3.5" />Komentar Approver 1
+            </label>
+            <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-white/80 border-blue-100 text-blue-900">
+              {a1GlobalComment || <span className="italic text-gray-400">Belum ada komentar dari Approver 1.</span>}
+            </p>
+          </div>
           <div className="border-t border-blue-200 pt-3 flex items-center justify-between">
             <span className="text-sm font-bold text-blue-700">Rata-Rata Approver 1</span>
             {(() => {
@@ -1221,7 +1406,58 @@ function SmartGoalsApproverReview({
         </div>
       )}
 
-      {/* 5 — Penilaian Approver: unified table for all goals */}
+          {/* History Penilaian Approver 2 — khusus tampilan Validator HR ICF (Read-Only Subsection ke-2) */}
+          {isValidatorStage && (
+            <div className="rounded-2xl border-2 border-teal-200 bg-teal-50/40 px-5 py-4 flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-teal-700">
+                  Penilaian Approver 2 - {ap2Name}
+                </p>
+                <span className="ml-auto text-[10px] text-teal-500">Dinilai: {a2AssessedDate}</span>
+              </div>
+              <div className="flex flex-col gap-2 mb-1">
+                {goals.map((goal, idx) => {
+                  const v = a2RatingsStored[goal.id];
+                  return (
+                    <div key={goal.id} className="flex items-center gap-3 text-xs">
+                      <span className="text-gray-500 w-5 shrink-0 font-semibold">{idx + 1}.</span>
+                      <span className="text-gray-700 flex-1 truncate">{goal.label}</span>
+                      {v != null ? (
+                        <>
+                          <div className="w-24 bg-gray-200 rounded-full h-1.5 overflow-hidden shrink-0">
+                            <div className={`h-1.5 rounded-full ${PCT_BAR_COLOR(v)}`} style={{ width: `${v}%` }} />
+                          </div>
+                          <span className={`font-bold w-10 text-right shrink-0 ${PCT_TEXT_COLOR(v)}`}>{v}%</span>
+                        </>
+                      ) : (
+                        <span className="text-gray-300 w-10 text-right shrink-0">—</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-1.5 text-xs font-semibold text-teal-700">
+                  <MessageSquare className="w-3.5 h-3.5" />Komentar Approver 2
+                </label>
+                <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-white/80 border-teal-100 text-teal-900">
+                  {a2GlobalComment || <span className="italic text-gray-400">Belum ada komentar dari Approver 2.</span>}
+                </p>
+              </div>
+              <div className="border-t border-teal-200 pt-3 flex items-center justify-between">
+                <span className="text-sm font-bold text-teal-700">Rata-Rata Approver 2</span>
+                {(() => {
+                  const vals = goals.map((g) => a2RatingsStored[g.id] ?? null).filter((v): v is number => v != null);
+                  const avg = vals.length > 0 ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length) : null;
+                  return <span className={`text-2xl font-black ${avg != null ? PCT_TEXT_COLOR(avg) : "text-gray-300"}`}>{avg != null ? `${avg}%` : "—"}</span>;
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* 5 — Penilaian Approver Aktif (Hanya untuk Approver 1 atau Approver 2, TIDAK untuk Validator / Checker) */}
+          {!isValidatorStage && (
+            <>
       <div className={`border rounded-2xl overflow-hidden ${assessorColor === "indigo" ? "border-indigo-100" : "border-teal-100"}`}>
         <div className={`px-4 py-3 flex items-center gap-2 ${assessorColor === "indigo" ? "bg-indigo-600" : "bg-teal-600"}`}>
           <span className="text-white text-sm font-bold">{assessorLabel}</span>
@@ -1333,8 +1569,10 @@ function SmartGoalsApproverReview({
           </span>
         </div>
       </div>
+            </>
+          )}
 
-      {/* 7 — Final Score (shown when A2 data available) */}
+      {/* 7 — Final Score (Subsection ke-3 pada Validator HR ICF, dan muncul di Approver 2) */}
       {showFinalScore && (
         <div className="rounded-2xl bg-[#1A284F] px-6 py-5 flex flex-col gap-4">
           <div className="flex items-center justify-between">
@@ -1393,6 +1631,8 @@ function SmartGoalsApproverReview({
 
           <p className="text-[10px] text-blue-300/60 text-center">Bobot jabatan "{position ?? "—"}" = {bobot}%</p>
         </div>
+      )}
+        </>
       )}
 
       {/* Modal Preview Evidence di Browser */}
@@ -2026,6 +2266,59 @@ export function ReviewDrawer(props: Props) {
 function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevision, onAssessed, readOnly }: Props) {
   const { t } = useLanguage();
   const isFullyAssessed = row.status === "Assessed-Approver 2";
+  const activeUser = getActiveUser();
+  const allUsers = loadManagedUsers();
+  const normEmpId = normalizeEmployeeId(row.employeeId);
+  const ownerUser = allUsers.find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === normEmpId ||
+      u.employeeId.trim().toLowerCase() === row.employeeId.trim().toLowerCase(),
+  );
+  const ap1User = resolveUserByRef(allUsers, ownerUser?.regNoAp1);
+  const ap2User = resolveUserByRef(allUsers, ownerUser?.regNoAp2);
+  const wfRec = loadWorkflowRecords().find(
+    (r) =>
+      r.year === "2026" &&
+      r.phase === "measurement" &&
+      r.module === row.type &&
+      r.employeeId === normEmpId,
+  );
+  const ap1DisplayName =
+    wfRec?.decisions.approver1?.approverName || ap1User?.name || ownerUser?.regNoAp1 || "Approver 1";
+  const ap2DisplayName =
+    wfRec?.decisions.approver2?.approverName || ap2User?.name || ownerUser?.regNoAp2 || "Approver 2";
+
+  const workflowStage: WorkflowStageRole = row.workflowStageForRow ?? reviewerRole;
+  const isFourStepType = row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA";
+  const isCheckerStage = isFourStepType && workflowStage === "checker";
+  const isValidatorStage = isFourStepType && workflowStage === "validator";
+
+  const kpiEmpComments = row.type === "KPI" ? loadKPICommentsForEmployee(row.employeeId) : {};
+  const kpiRowComments = row.type === "KPI" ? loadKPIComments(row.no) : {};
+  const prevA1CommentText =
+    wfRec?.decisions.approver1?.note ||
+    wfRec?.assessments.approver1?.comments?.["0"] ||
+    kpiEmpComments.approver1?.text ||
+    kpiRowComments.approver1?.text ||
+    "";
+  const prevA1CommentDate =
+    wfRec?.decisions.approver1?.date ||
+    wfRec?.assessments.approver1?.date ||
+    kpiEmpComments.approver1?.date ||
+    kpiRowComments.approver1?.date ||
+    "—";
+  const prevA2CommentText =
+    wfRec?.decisions.approver2?.note ||
+    wfRec?.assessments.approver2?.comments?.["0"] ||
+    kpiEmpComments.approver2?.text ||
+    kpiRowComments.approver2?.text ||
+    "";
+  const prevA2CommentDate =
+    wfRec?.decisions.approver2?.date ||
+    wfRec?.assessments.approver2?.date ||
+    kpiEmpComments.approver2?.date ||
+    kpiRowComments.approver2?.date ||
+    "—";
 
   const [step, setStep]                     = useState<"review" | "revision">("review");
   const [revisionNote, setRevisionNote]     = useState("");
@@ -2046,6 +2339,8 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
     if (stored?.comments && Object.keys(stored.comments).length > 0) {
       return Object.fromEntries(Object.entries(stored.comments).map(([k, v]) => [Number(k), v]));
     }
+    if (workflowStage === "approver1" && prevA1CommentText) return { 0: prevA1CommentText };
+    if (workflowStage === "approver2" && prevA2CommentText) return { 0: prevA2CommentText };
     if (isFullyAssessed && row.type === "SMART Goals") return { 0: APPROVER2_SG_COMMENT_FALLBACK };
     return {};
   });
@@ -2065,9 +2360,6 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
   const [activeForm, setActiveForm]         = useState<"A" | "B" | "C">("A");
 
   const hasAssessment = needsAssessment(row.type);
-  const isFourStepType = row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA";
-  const isCheckerStage = isFourStepType && row.workflowStageForRow === "checker";
-  const isValidatorStage = isFourStepType && row.workflowStageForRow === "validator";
   const primaryApproveLabel = isCheckerStage
     ? "Tandai Checked"
     : isValidatorStage
@@ -2132,18 +2424,22 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
       activeForm,
       setActiveForm,
     };
-    if (row.type === "KPI")             return <KPIReview row={row} reviewerRole={reviewerRole} readOnly={effectiveReadOnly} />;
+    if (row.type === "KPI")             return <KPIReview row={row} />;
     if (row.type === "SMART Goals")     return (
       <SmartGoalsApproverReview
         assessorRatings={assessorRatings}
         onRate={handleRate}
         submitted={assessmentSubmitted || effectiveReadOnly}
         reviewerRole={reviewerRole}
+        workflowStage={workflowStage}
+        ap1Name={ap1DisplayName}
+        ap2Name={ap2DisplayName}
         comments={smartComments}
         onComment={(id, text) => { if (!effectiveReadOnly) setSmartComments((prev) => ({ ...prev, [id]: text })); }}
         employeeId={row.employeeId}
         rowNo={row.no}
         position={row.position}
+        companyUnit={row.companyUnit}
       />
     );
     if (row.type === "Project")          return <ProjectReview employeeId={row.employeeId} />;
@@ -2200,13 +2496,23 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
         </div>
 
         <div className="ml-auto shrink-0">
-          <span className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${
-            reviewerRole === "approver1"
-              ? "bg-blue-50 text-blue-700 border-blue-200"
-              : "bg-purple-50 text-purple-700 border-purple-200"
-          }`}>
-            {reviewerRole === "approver1" ? "Approver 1 (Supervisor)" : "Approver 2 (HR Admin)"}
-          </span>
+          {isCheckerStage ? (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-amber-50 text-amber-700 border-amber-200">
+              Checker (HR Unit)
+            </span>
+          ) : isValidatorStage ? (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-emerald-50 text-emerald-700 border-emerald-200">
+              Validator (HR ICF)
+            </span>
+          ) : workflowStage === "approver1" ? (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-blue-50 text-blue-700 border-blue-200">
+              Approver 1 ({ap1DisplayName})
+            </span>
+          ) : (
+            <span className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-purple-50 text-purple-700 border-purple-200">
+              Approver 2 ({ap2DisplayName})
+            </span>
+          )}
         </div>
       </div>
 
@@ -2214,32 +2520,101 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
       <div className="flex-1 overflow-y-auto">
         {step === "review" ? (
           <div className="px-8 py-8 space-y-6">
+            {/* Riwayat Revisi jika ada */}
+            {(wfRec?.revisionHistory?.length ?? 0) > 0 && (
+              <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-4 space-y-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-orange-800">
+                  <RotateCcw className="w-4 h-4 text-orange-600" />
+                  <span>Riwayat Catatan Revisi ({wfRec!.revisionHistory!.length})</span>
+                </div>
+                <div className="space-y-1.5">
+                  {wfRec!.revisionHistory!.map((rev, idx) => (
+                    <div key={idx} className="bg-white border border-orange-100 rounded-lg px-3.5 py-2 text-xs flex items-start justify-between gap-3">
+                      <div>
+                        <span className="font-bold text-gray-800">{rev.role} — {rev.approverName}: </span>
+                        <span className="text-gray-700">{rev.note}</span>
+                      </div>
+                      <span className="text-[10px] text-gray-400 shrink-0">{normalizeDateDDMMYYYY(rev.date)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {renderContent()}
 
-            {/* Mandatory Komentar & Catatan Approver untuk modul selain SMART Goals */}
-            {row.type !== "SMART Goals" && (
-              <div className="border border-indigo-100 rounded-2xl overflow-hidden bg-white shadow-sm">
-                <div className="px-4 py-2.5 flex items-center gap-2 bg-indigo-50">
-                  <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
-                  <span className="text-xs font-bold text-indigo-700">
-                    Komentar &amp; Catatan Approver <span className="text-rose-500">* (Wajib Diisi)</span>
-                  </span>
-                </div>
-                <div className="p-4">
-                  {effectiveReadOnly || assessmentSubmitted ? (
-                    <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-indigo-50/40 border-indigo-100 text-indigo-900">
-                      {smartComments[0] || <span className="text-gray-400 italic">Tidak ada komentar.</span>}
-                    </p>
-                  ) : (
-                    <textarea
-                      rows={3}
-                      value={smartComments[0] ?? ""}
-                      onChange={(e) => setSmartComments((prev) => ({ ...prev, 0: e.target.value }))}
-                      placeholder={`Wajib diisi: tuliskan komentar atau catatan review untuk ${row.type} ini sebelum melakukan Submit / Approve...`}
-                      className="w-full text-xs border-2 border-indigo-100 focus:border-indigo-400 rounded-xl px-3.5 py-2.5 outline-none resize-none text-gray-700"
-                    />
-                  )}
-                </div>
+            {/* Komentar & History Komentar Approver (untuk modul selain SMART Goals, dan DISEMBUNYIKAN pada Checker HR Unit) */}
+            {row.type !== "SMART Goals" && !isCheckerStage && (
+              <div className="space-y-4">
+                {/* History Komentar Approver 1 — tampil untuk Approver 2 dan Validator HR ICF */}
+                {(workflowStage === "approver2" || isValidatorStage) && (
+                  <div className="border border-blue-200 rounded-2xl overflow-hidden bg-blue-50/40 shadow-sm">
+                    <div className="px-4 py-2.5 flex items-center justify-between gap-2 bg-blue-50 border-b border-blue-100">
+                      <div className="flex items-center gap-2">
+                        <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                        <span className="text-xs font-bold text-blue-800">
+                          History Komentar / Catatan Approver 1 — {ap1DisplayName}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-blue-500 font-medium">{normalizeDateDDMMYYYY(prevA1CommentDate)}</span>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-white border-blue-100 text-gray-800">
+                        {prevA1CommentText || <span className="text-gray-400 italic">Belum ada catatan dari Approver 1.</span>}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* History Komentar Approver 2 — tampil untuk Validator HR ICF (atau saat Approver 1 melihat History setelah A2 selesai) */}
+                {(isValidatorStage || (workflowStage === "approver1" && effectiveReadOnly && Boolean(prevA2CommentText))) && (
+                  <div className="border border-purple-200 rounded-2xl overflow-hidden bg-purple-50/40 shadow-sm">
+                    <div className="px-4 py-2.5 flex items-center justify-between gap-2 bg-purple-50 border-b border-purple-100">
+                      <div className="flex items-center gap-2">
+                        <MessageSquare className="w-3.5 h-3.5 text-purple-600" />
+                        <span className="text-xs font-bold text-purple-800">
+                          History Komentar / Catatan Approver 2 — {ap2DisplayName}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-purple-500 font-medium">{normalizeDateDDMMYYYY(prevA2CommentDate)}</span>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-white border-purple-100 text-gray-800">
+                        {prevA2CommentText || <span className="text-gray-400 italic">Belum ada catatan dari Approver 2.</span>}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Input Komentar (HANYA 1 field untuk masing-masing Approver 1 / Approver 2; Validator TIDAK memiliki field input komentar) */}
+                {!isValidatorStage && (
+                  <div className="border border-indigo-100 rounded-2xl overflow-hidden bg-white shadow-sm">
+                    <div className="px-4 py-2.5 flex items-center gap-2 bg-indigo-50">
+                      <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+                      <span className="text-xs font-bold text-indigo-700">
+                        Komentar &amp; Catatan {workflowStage === "approver1" ? `Approver 1 (${ap1DisplayName})` : `Approver 2 (${ap2DisplayName})`}{" "}
+                        {!effectiveReadOnly && <span className="text-rose-500">* (Wajib Diisi)</span>}
+                      </span>
+                    </div>
+                    <div className="p-4">
+                      {effectiveReadOnly || assessmentSubmitted ? (
+                        <p className="text-xs leading-relaxed rounded-xl px-4 py-3 border bg-indigo-50/40 border-indigo-100 text-indigo-900">
+                          {(smartComments[0] || (workflowStage === "approver1" ? prevA1CommentText : prevA2CommentText)) || (
+                            <span className="text-gray-400 italic">Tidak ada komentar.</span>
+                          )}
+                        </p>
+                      ) : (
+                        <textarea
+                          rows={3}
+                          value={smartComments[0] ?? ""}
+                          onChange={(e) => setSmartComments((prev) => ({ ...prev, 0: e.target.value }))}
+                          placeholder={`Wajib diisi: tuliskan komentar atau catatan review untuk ${row.type} ini sebelum melakukan Submit / Approve...`}
+                          className="w-full text-xs border-2 border-indigo-100 focus:border-indigo-400 rounded-xl px-3.5 py-2.5 outline-none resize-none text-gray-700"
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2391,12 +2766,18 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
               <button
                 onClick={() => {
                   setShowApproveConfirm(false);
-                  // Save assessment data for SMART Goals (uses Approve path, not Submit)
+                  const commentNote = !isCheckerStage && !isValidatorStage ? (smartComments[0] ?? "").trim() : undefined;
+                  const todayStr = formatTodayDDMMYYYY();
                   if (row.type === "SMART Goals" && !isCheckerStage && !isValidatorStage) {
                     const commentsToSave = Object.fromEntries(Object.entries(smartComments).map(([k, v]) => [k, v]));
-                    saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, formatTodayDDMMYYYY());
+                    saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, todayStr);
+                  } else if (!isCheckerStage && !isValidatorStage && commentNote) {
+                    saveAssessment(row.no, reviewerRole, row.type, assessorRatings, { "0": commentNote }, todayStr);
+                    if (row.type === "KPI") {
+                      saveKPIComment(row.no, reviewerRole, commentNote, activeUser.name, row.employeeId);
+                    }
                   }
-                  onApprove();
+                  onApprove(commentNote);
                 }}
                 className="flex-1 py-2.5 rounded-full bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors"
               >
@@ -2434,11 +2815,12 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                 onClick={() => {
                   setShowSubmitConfirm(false);
                   // Save assessment for Appraisal Form and Managerial Skill (use Submit path)
+                  const commentNote = (smartComments[0] ?? "").trim();
                   const commentsToSave: Record<string, string> = Object.fromEntries(
                     Object.entries(smartComments).map(([k, v]) => [k, v]),
                   );
                   saveAssessment(row.no, reviewerRole, row.type, assessorRatings, commentsToSave, formatTodayDDMMYYYY());
-                  onAssessed();
+                  onAssessed(commentNote);
                 }}
                 className="flex-1 py-2.5 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"
               >

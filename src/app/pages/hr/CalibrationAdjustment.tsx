@@ -10,7 +10,7 @@ import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import { normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
-import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
+import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { applyImportedEmployeesDistribution, orgSlug } from "./CalibrationSetting";
 
@@ -2544,8 +2544,10 @@ function loadFromSetting(): { units: CompanyUnit[]; submittedAt: string | null }
 
 export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   useAppraisalRevision();
+  const { lockedUnits: authLockedUnits } = useAuthStore();
+  const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
   const [{ units: allCompanyUnits, submittedAt }, setLoadedSetting] = useState(loadFromSetting);
-  const companyUnits = lockedUnits ? allCompanyUnits.filter(u => lockedUnits.includes(u.name)) : allCompanyUnits;
+  const companyUnits = effectiveLockedUnits ? allCompanyUnits.filter(u => effectiveLockedUnits.includes(u.name)) : allCompanyUnits;
   const [selectedUnit, setSelectedUnit] = useState<CompanyUnit | null>(null);
   const [pageMode, setPageMode]         = useState<PageMode>(() =>
     loadPersistedState<PageMode>("pa_calibration_adj_mode_v1", "edit")

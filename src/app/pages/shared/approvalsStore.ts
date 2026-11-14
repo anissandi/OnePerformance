@@ -131,7 +131,12 @@ export function saveOverride(no: string, status: string, approvalDate: string, n
     savePersistedState(KEY, [...existing, { no, status, approvalDate }]);
     saveWorkflowDecision(no, status, approvalDate, note);
     const alias = workflowAlias(no);
-    if (alias && alias.module === "SMART Goals" && alias.phase === "measurement") {
+    if (
+      alias &&
+      alias.module === "SMART Goals" &&
+      alias.phase === "measurement" &&
+      (alias.stage === "approver1" || alias.stage === "approver2" || !alias.stage)
+    ) {
       const assessment = loadAssessment(no, alias.role);
       const values = Object.values(assessment?.ratings ?? {});
       const activeUser = getActiveUser();

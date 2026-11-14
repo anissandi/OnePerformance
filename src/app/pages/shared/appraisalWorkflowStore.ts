@@ -1,8 +1,11 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
 import { savePersistedState } from "../../services/supabaseClient";
 import {
+  findHrIcfValidatorUser,
+  findHrUnitCheckerUserForCompany,
   getActiveUser,
   isAdminOrHrIcfRole,
+  loadManagedUsers,
   resolveUserAllowedModules,
   shouldBypassCheckerForSubmission,
   type WorkflowStageRole,
@@ -186,6 +189,24 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
 
   const decisions: WorkflowRecord["decisions"] = { ...record.decisions };
   const assessments = { ...record.assessments };
+  const allUsers = loadManagedUsers();
+  const ownerUser = allUsers.find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === alias.employeeId ||
+      u.employeeId.trim().toLowerCase() === alias.employeeId.trim().toLowerCase(),
+  );
+  const resolvedCheckerName =
+    activeUser.role === "HR Unit"
+      ? activeUser.name
+      : findHrUnitCheckerUserForCompany(
+          ownerUser?.company || activeUser.company,
+          ownerUser?.employeeId || alias.employeeId,
+          allUsers,
+        )?.name || activeUser.name;
+  const resolvedValidatorName =
+    activeUser.role === "HR ICF"
+      ? activeUser.name
+      : findHrIcfValidatorUser(allUsers)?.name || activeUser.name;
   let notifStatus = status;
   let notifRole: string = effectiveStage;
 
@@ -194,8 +215,8 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     decisions.checker = {
       status: chkStatus,
       date: effectiveDate,
-      note,
-      approverName: activeUser.name,
+      note: status === "Revision" ? note : undefined,
+      approverName: resolvedCheckerName,
     };
     delete decisions.approver1;
     delete decisions.approver2;
@@ -210,17 +231,23 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       note,
       approverName: activeUser.name,
     };
+    if (note?.trim()) {
+      assessments.approver1 = {
+        ratings: assessments.approver1?.ratings ?? {},
+        comments: { ...(assessments.approver1?.comments ?? {}), "0": note.trim() },
+        date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
+      };
+    }
     delete decisions.approver2;
     delete decisions.validator;
     delete assessments.approver2;
     notifStatus = a1Status;
     notifRole = "approver1";
   } else if (isFourStep && effectiveStage === "approver2") {
-    const isAlsoValidator = Boolean(isAdminOrHrIcfRole(activeUser.role) || activeUser.isHrIcfValidator);
     const a2Status =
       status === "Revision"
         ? "Revision"
-        : status === "Validated" && !isAlsoValidator
+        : status === "Validated"
         ? "Assessed-Approver 2"
         : status;
     decisions.approver2 = {
@@ -229,27 +256,23 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       note,
       approverName: activeUser.name,
     };
-    if (status === "Revision") {
-      delete decisions.validator;
-    } else if (isAlsoValidator) {
-      decisions.validator = {
-        status: "Validated",
-        date: effectiveDate,
-        note,
-        approverName: activeUser.name,
+    if (note?.trim() && status !== "Revision") {
+      assessments.approver2 = {
+        ratings: assessments.approver2?.ratings ?? {},
+        comments: { ...(assessments.approver2?.comments ?? {}), "0": note.trim() },
+        date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
       };
-    } else {
-      delete decisions.validator;
     }
-    notifStatus = isAlsoValidator && status !== "Revision" ? "Validated" : a2Status;
+    delete decisions.validator;
+    notifStatus = a2Status;
     notifRole = "approver2";
   } else if (isFourStep && effectiveStage === "validator") {
     const valStatus = status === "Revision" ? "Revision" : "Validated";
     decisions.validator = {
       status: valStatus,
       date: effectiveDate,
-      note,
-      approverName: activeUser.name,
+      note: status === "Revision" ? note : undefined,
+      approverName: resolvedValidatorName,
     };
     notifStatus = valStatus;
     notifRole = "validator";
@@ -260,6 +283,13 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       note,
       approverName: activeUser.name,
     };
+    if (note?.trim() && status !== "Revision") {
+      assessments.approver2 = {
+        ratings: assessments.approver2?.ratings ?? {},
+        comments: { ...(assessments.approver2?.comments ?? {}), "0": note.trim() },
+        date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
+      };
+    }
     notifStatus = status;
     notifRole = "approver2";
   }
@@ -274,9 +304,15 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
         : effectiveStage === "approver2"
         ? "Approver 2"
         : "Approver 1";
+    const revActor =
+      effectiveStage === "checker"
+        ? resolvedCheckerName
+        : effectiveStage === "validator"
+        ? resolvedValidatorName
+        : activeUser.name || roleLabel;
     revisionHistory.push({
       role: roleLabel,
-      approverName: activeUser.name || roleLabel,
+      approverName: revActor,
       note: note.trim(),
       date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
     });
@@ -391,22 +427,43 @@ export function workflowRowStatus(row: ApprovalRow, role: ReviewerRole): Partial
     (second.status === "Approved" ||
       second.status.startsWith("Assessed") ||
       second.status === "Validated");
+  const ownerUser = loadManagedUsers().find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === record.employeeId ||
+      u.employeeId.trim().toLowerCase() === record.employeeId.trim().toLowerCase(),
+  );
+  const hasSecondApprover = ownerUser ? Boolean((ownerUser.regNoAp2 ?? "").trim()) : true;
 
   // Jika Approver 2 sudah menyelesaikan penilaian/approval, maka di Approver 1 juga harus terupdate (tidak lagi Pending-Approver 2)
-  if (a2Completed) {
+  if (a2Completed || (!hasSecondApprover && ready)) {
     const finalStatus =
       record.module === "Project" || record.module === "Inter-Department Feedback"
         ? "Approved"
-        : second.status;
+        : second?.status || first?.status || "Approved";
     return {
       status: finalStatus,
       submittedDate: record.submittedDate,
-      approvalDate: second.date || own?.date || "-",
+      approvalDate: second?.date || first?.date || own?.date || "-",
     };
   }
-  if (second?.status === "Revision") {
+  if (first?.status === "Revision" || second?.status === "Revision") {
     return {
       status: "Revision",
+      submittedDate: record.submittedDate,
+      approvalDate: "-",
+    };
+  }
+
+  if (ready) {
+    if (role === "approver1") {
+      return {
+        status: "Pending-Approver 2",
+        submittedDate: record.submittedDate,
+        approvalDate: first?.date ?? "-",
+      };
+    }
+    return {
+      status: "Pending",
       submittedDate: record.submittedDate,
       approvalDate: "-",
     };

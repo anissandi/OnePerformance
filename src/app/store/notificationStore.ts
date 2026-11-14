@@ -4,6 +4,7 @@ import {
   getActiveUser,
   loadManagedUsers,
   resolveEffectiveUserGrouping,
+  resolvePortalPathForRole,
   resolveUserAllowedModules,
   type AppraisalModuleName,
   type ManagedUser,
@@ -477,25 +478,116 @@ function buildSeedNotifications(): AppNotificationItem[] {
   return [];
 }
 
-export function resolveNotificationRouteForUser(rawRoute?: string, user = getActiveUser()): string | undefined {
-  if (!rawRoute) return undefined;
-  if (
-    rawRoute.startsWith("/hr/") ||
-    rawRoute.startsWith("/supervisor/") ||
-    rawRoute.startsWith("/employee/") ||
-    rawRoute.startsWith("/bod/")
-  ) {
-    return rawRoute;
+export function resolveModuleShortcutSubpath(
+  moduleName?: string,
+  options?: { forApprover?: boolean; approvalStatus?: string; title?: string },
+): string | undefined {
+  const canonical = resolveCanonicalModuleName(moduleName);
+  const lower = canonical.toLowerCase();
+  const statusLower = (options?.approvalStatus ?? "").toLowerCase();
+  const titleLower = (options?.title ?? "").toLowerCase();
+  const isForApprover =
+    options?.forApprover ??
+    (statusLower.startsWith("pending") ||
+      titleLower.includes("menunggu pemeriksaan") ||
+      titleLower.includes("menunggu persetujuan") ||
+      titleLower.includes("menunggu validasi"));
+
+  if (isForApprover) {
+    if (lower === "kpi setting") return "/approvals/setting/kpi";
+    if (lower === "smart goals setting") return "/approvals/setting/smart-goals";
+    if (lower.includes("kpi business")) return "/settings/kpi";
+    if (lower === "kpi measurement") return "/approvals/measurement/kpi";
+    if (lower === "smart measurement") return "/approvals/measurement/smart-goals";
+    if (lower === "rca") return "/approvals/measurement/rca";
+    if (lower === "appraisal form") return "/approvals/measurement/appraisal-form";
+    if (lower === "managerial skill") return "/approvals/measurement/managerial-skill";
+    if (lower === "project outside job scope") return "/approvals/measurement/project";
+    if (lower === "inter-departement feedback") return "/approvals/measurement/inter-department-feedback";
+    if (lower === "management interview") return "/approvals/management-interview";
+    if (lower === "calibration") return "/approvals/calibration";
+    return "/approvals/measurement";
   }
-  const portal =
-    user.role === "Employee"
-      ? "/employee"
-      : user.role === "BOD"
-      ? "/bod"
-      : user.role === "Administrator" || user.role === "HR ICF"
-      ? "/hr"
-      : "/supervisor";
-  return `${portal}${rawRoute.startsWith("/") ? rawRoute : `/${rawRoute}`}`;
+
+  if (lower === "kpi setting" || lower.includes("kpi business")) return "/setting/kpi";
+  if (lower === "smart goals setting") return "/setting/smart-goals";
+  if (lower === "kpi measurement") return "/measurement/kpi-tracking";
+  if (lower === "smart measurement") return "/measurement/smart-goals";
+  if (lower === "rca") return "/measurement/rca";
+  if (lower === "appraisal form") return "/measurement/appraisal-form";
+  if (lower === "managerial skill") return "/measurement/managerial-skill";
+  if (lower === "project outside job scope") return "/measurement/project-outside";
+  if (lower === "inter-departement feedback") return "/measurement/inter-department-feedback";
+  if (lower === "management interview") return "/calibration/management-interview";
+  if (lower === "calibration") return "/calibration/team-performance";
+  return undefined;
+}
+
+export function resolveNotificationRouteForUser(
+  rawRoute?: string,
+  user = getActiveUser(),
+  item?: Pick<AppNotificationItem, "moduleName" | "approvalStatus" | "title">,
+): string | undefined {
+  const portal = resolvePortalPathForRole(
+    user.role,
+    user.position,
+    resolveEffectiveUserGrouping(user),
+  );
+
+  // Strip existing portal prefix if present so we can normalize to the active user's portal
+  let subpath = (rawRoute ?? "").trim();
+  if (
+    subpath.startsWith("/hr/") ||
+    subpath.startsWith("/supervisor/") ||
+    subpath.startsWith("/employee/") ||
+    subpath.startsWith("/bod/")
+  ) {
+    subpath = "/" + subpath.split("/").slice(2).join("/");
+  } else if (
+    subpath === "/hr" ||
+    subpath === "/supervisor" ||
+    subpath === "/employee" ||
+    subpath === "/bod"
+  ) {
+    subpath = "";
+  }
+
+  const isGenericRoute =
+    !subpath ||
+    subpath === "/appraisal" ||
+    subpath === "/approvals" ||
+    subpath === "/approvals/setting" ||
+    subpath === "/approvals/measurement";
+
+  if (isGenericRoute && item?.moduleName) {
+    const forApprover =
+      subpath.startsWith("/approvals") ||
+      (item.approvalStatus ?? "").toLowerCase().startsWith("pending") ||
+      (item.title ?? "").toLowerCase().includes("menunggu pemeriksaan") ||
+      (item.title ?? "").toLowerCase().includes("menunggu persetujuan") ||
+      (item.title ?? "").toLowerCase().includes("menunggu validasi");
+    const derived = resolveModuleShortcutSubpath(item.moduleName, {
+      forApprover,
+      approvalStatus: item.approvalStatus,
+      title: item.title,
+    });
+    if (derived) {
+      subpath = derived;
+    }
+  }
+
+  if (!subpath) return undefined;
+
+  // Normalize legacy subpaths to registered router paths
+  if (subpath === "/kpi-tracking") subpath = "/measurement/kpi-tracking";
+  if (subpath === "/smart-goals") subpath = "/measurement/smart-goals";
+  if (subpath === "/measurement/project") subpath = "/measurement/project-outside";
+  if (subpath === "/appraisals/setting") subpath = "/approvals/setting";
+  if (subpath.startsWith("/appraisals/setting/")) {
+    subpath = subpath.replace(/^\/appraisals\/setting\//, "/approvals/setting/");
+  }
+
+  return `${portal}${subpath.startsWith("/") ? subpath : `/${subpath}`}`;
 }
 
 /**
@@ -779,6 +871,10 @@ export function triggerApprovalTransactionNotification(params: {
   }
 
   const canonicalMod = resolveCanonicalModuleName(params.moduleName);
+  const ownerModuleRoute =
+    params.ctaRoute ||
+    resolveModuleShortcutSubpath(canonicalMod, { forApprover: false }) ||
+    "/appraisal";
 
   const templates = loadAutoNotificationTemplates().filter((tpl) => {
     if (!tpl.active) return false;
@@ -835,7 +931,7 @@ export function triggerApprovalTransactionNotification(params: {
       approvalStatus: "Submitted",
       approverName: ctx.approverName,
       ctaLabel: `Buka ${canonicalMod}`,
-      ctaRoute: params.ctaRoute || "/appraisal",
+      ctaRoute: ownerModuleRoute,
       targetAll: !targetUser,
       targetEmployeeIds: targetUser ? [targetUser.employeeId] : undefined,
       channels: ["Notifikasi Sistem"],
@@ -861,7 +957,7 @@ export function triggerApprovalTransactionNotification(params: {
       approvalStatus: mappedStatus,
       approverName: ctx.approverName,
       ctaLabel: `Buka ${canonicalMod}`,
-      ctaRoute: params.ctaRoute || "/appraisal",
+      ctaRoute: ownerModuleRoute,
       targetAll: !targetUser,
       targetEmployeeIds: targetUser ? [targetUser.employeeId] : undefined,
       channels: ["Notifikasi Sistem"],
@@ -898,7 +994,10 @@ export function triggerApprovalTransactionNotification(params: {
         approvalStatus: mappedStatus,
         approverName: ruleCtx.approverName,
         ctaLabel: `Buka ${tplModuleName}`,
-        ctaRoute: params.ctaRoute || "/appraisal",
+        ctaRoute:
+          params.ctaRoute ||
+          resolveModuleShortcutSubpath(tplModuleName, { forApprover: false }) ||
+          ownerModuleRoute,
         targetAll: !targetUser,
         targetEmployeeIds: targetUser ? [targetUser.employeeId] : undefined,
         channels: tpl.channels?.length ? tpl.channels : ["Notifikasi Sistem"],
@@ -917,7 +1016,9 @@ export function triggerApprovalTransactionNotification(params: {
   // Kirim notifikasi tindak lanjut ke Approver 1 (saat Submitted) atau Approver 2 (saat Approved oleh Approver 1)
   if (targetUser) {
     const isSettingPhase = canonicalMod.toLowerCase().includes("setting");
-    const approvalRoute = isSettingPhase ? "/approvals/setting" : "/approvals/measurement";
+    const approvalRoute =
+      resolveModuleShortcutSubpath(canonicalMod, { forApprover: true }) ||
+      (isSettingPhase ? "/approvals/setting" : "/approvals/measurement");
     const isFourStepMod =
       canonicalMod.toLowerCase().includes("kpi") ||
       canonicalMod.toLowerCase().includes("smart") ||
@@ -965,21 +1066,35 @@ export function triggerApprovalTransactionNotification(params: {
       );
     };
 
-    const findUnitCheckerUsers = (companyName: string): ManagedUser[] =>
-      allUsers.filter(
+    const findUnitCheckerUsers = (companyName: string): ManagedUser[] => {
+      const hrUnitRoleUsers = allUsers.filter(
         (u) =>
           u.status === "Active" &&
           u.company.trim().toLowerCase() === companyName.trim().toLowerCase() &&
-          (u.role === "HR Unit" || Boolean(u.isHrUnitChecker)) &&
+          u.role === "HR Unit" &&
           u.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase(),
       );
-
-    const findHrIcfValidators = (): ManagedUser[] =>
-      allUsers.filter(
+      if (hrUnitRoleUsers.length > 0) return hrUnitRoleUsers;
+      return allUsers.filter(
         (u) =>
           u.status === "Active" &&
-          (u.role === "HR ICF" || u.role === "Administrator" || Boolean(u.isHrIcfValidator)),
+          u.company.trim().toLowerCase() === companyName.trim().toLowerCase() &&
+          Boolean(u.isHrUnitChecker) &&
+          u.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase(),
       );
+    };
+
+    const findHrIcfValidators = (): ManagedUser[] => {
+      const hrIcfRoleUsers = allUsers.filter(
+        (u) => u.status === "Active" && u.role === "HR ICF",
+      );
+      if (hrIcfRoleUsers.length > 0) return hrIcfRoleUsers;
+      return allUsers.filter(
+        (u) =>
+          u.status === "Active" &&
+          (Boolean(u.isHrIcfValidator) || u.role === "Administrator"),
+      );
+    };
 
     if (mappedStatus === "Submitted") {
       const isSelfChecker = Boolean(targetUser.role === "HR Unit" || targetUser.isHrUnitChecker);

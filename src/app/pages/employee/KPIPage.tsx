@@ -3,12 +3,13 @@ import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router";
 import { DatePickerID } from "../../components/DatePickerID";
 import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info } from "lucide-react";
-import { loadAllKPIComments } from "../shared/kpiCommentsStore";
+import { loadAllKPIComments, loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { saveEvidenceFiles, loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
 import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
 import type { MonthlyNoteEntry } from "../shared/kpiMonthlyNotesStore";
 import { toast } from "sonner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import { saveRCASubmission, loadRCASubmissions } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
@@ -2589,6 +2590,7 @@ interface EvidenceFile {
   size: number;
   type: string;
   url: string;
+  dataUrl?: string;
   month: string; // e.g. "Jan-26"
 }
 
@@ -2634,20 +2636,53 @@ function EvidenceUploadSection({
   const handleFiles = (raw: FileList | null) => {
     if (!raw || !selectedMonth) return;
     const rawArr = Array.from(raw);
-    rawArr.forEach((rawFile) => {
-      void uploadEvidenceFileToSupabase(rawFile, {
-        moduleType: "KPI Tracking",
-        period: "2026",
-        month: selectedMonth,
-      });
+    Promise.all(
+      rawArr.map(
+        (f) =>
+          new Promise<EvidenceFile>((resolve) => {
+            const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const reader = new FileReader();
+            reader.onload = async () => {
+              const dataUrl = typeof reader.result === "string" ? reader.result : "";
+              let remoteUrl = "";
+              try {
+                const up = await uploadEvidenceFileToSupabase(f, {
+                  moduleType: "KPI Tracking",
+                  period: "2026",
+                  month: selectedMonth,
+                });
+                if (up && typeof up === "object" && "url" in up && typeof (up as { url?: string }).url === "string") {
+                  remoteUrl = (up as { url: string }).url;
+                }
+              } catch {
+                // fallback to dataUrl
+              }
+              resolve({
+                id,
+                name: f.name,
+                size: f.size,
+                type: f.type,
+                url: remoteUrl || dataUrl || URL.createObjectURL(f),
+                dataUrl: dataUrl || undefined,
+                month: selectedMonth,
+              });
+            };
+            reader.onerror = () => {
+              resolve({
+                id,
+                name: f.name,
+                size: f.size,
+                type: f.type,
+                url: URL.createObjectURL(f),
+                month: selectedMonth,
+              });
+            };
+            reader.readAsDataURL(f);
+          }),
+      ),
+    ).then((newFiles) => {
+      setStaged({ files: newFiles, month: selectedMonth });
     });
-    const newFiles: EvidenceFile[] = Array.from(raw).map((f) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      name: f.name, size: f.size, type: f.type,
-      url: URL.createObjectURL(f),
-      month: selectedMonth,
-    }));
-    setStaged({ files: newFiles, month: selectedMonth });
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -2679,6 +2714,17 @@ function EvidenceUploadSection({
           <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#1A284F]/10 text-[#1A284F]">
             {files.length} file{files.length !== 1 ? "s" : ""}
           </span>
+          {monthLabels.length > 0 && (
+            <span
+              className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                monthsWithFiles.length === monthLabels.length
+                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                  : "bg-amber-50 text-amber-700 border-amber-200"
+              }`}
+            >
+              {monthsWithFiles.length}/{monthLabels.length} bulan terpenuhi (Wajib semua bulan)
+            </span>
+          )}
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
@@ -2741,7 +2787,7 @@ function EvidenceUploadSection({
                         {monthFiles.map((f) => (
                           <div key={f.id} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-50 border border-gray-100 hover:border-gray-200 transition-colors max-w-[220px]">
                             <span className="text-sm shrink-0 leading-none">{fileIcon(f.type)}</span>
-                            <a href={f.url} target="_blank" rel="noopener noreferrer"
+                            <a href={f.url || f.dataUrl || "#"} download={f.name}
                               className="text-xs font-medium text-[#1A284F] hover:underline truncate" title={f.name}>
                               {f.name}
                             </a>
@@ -2886,7 +2932,35 @@ function ApproverCommentsPanel() {
 
 function KPIHistorySection({ months }: { months: MonthEntry[] }) {
   const [notesOpen, setNotesOpen] = useState(true);
-  const monthlyNotes = React.useMemo(() => loadMonthlyNotes(), []);
+  const activeUser = getActiveUser();
+  const normId = normalizeEmployeeId(activeUser.employeeId);
+  const monthlyNotes = loadMonthlyNotes();
+  const kpiComments = loadKPICommentsForEmployee(activeUser.employeeId);
+  const wfMeas = loadWorkflowRecords().find(
+    (r) => r.year === "2026" && r.module === "KPI" && r.phase === "measurement" && r.employeeId === normId,
+  );
+  const generalA1 =
+    wfMeas?.decisions.approver1?.note ||
+    wfMeas?.assessments.approver1?.comments?.["0"] ||
+    kpiComments.approver1?.text ||
+    "";
+  const generalA1Meta =
+    wfMeas?.decisions.approver1?.approverName
+      ? `${wfMeas.decisions.approver1.approverName} · ${wfMeas.decisions.approver1.date || ""}`
+      : kpiComments.approver1
+      ? `${kpiComments.approver1.approverLabel} · ${kpiComments.approver1.date}`
+      : "";
+  const generalA2 =
+    wfMeas?.decisions.approver2?.note ||
+    wfMeas?.assessments.approver2?.comments?.["0"] ||
+    kpiComments.approver2?.text ||
+    "";
+  const generalA2Meta =
+    wfMeas?.decisions.approver2?.approverName
+      ? `${wfMeas.decisions.approver2.approverName} · ${wfMeas.decisions.approver2.date || ""}`
+      : kpiComments.approver2
+      ? `${kpiComments.approver2.approverLabel} · ${kpiComments.approver2.date}`
+      : "";
 
   return (
     <div className="flex flex-col gap-4">
@@ -2905,13 +2979,41 @@ function KPIHistorySection({ months }: { months: MonthEntry[] }) {
           {notesOpen ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
         </button>
         {notesOpen && (
-          months.length === 0 ? (
+          months.length === 0 && !generalA1 && !generalA2 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <MessageSquare className="w-7 h-7 text-gray-200" />
               <p className="text-xs text-gray-400 italic">Belum ada data bulan di KPI tracking.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="flex flex-col gap-0">
+              {(generalA1 || generalA2) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-slate-50/70 border-b border-gray-200 text-xs">
+                  <div className="bg-white rounded-xl border border-blue-100 p-3">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 mb-1">Catatan Approver 1</p>
+                    {generalA1 ? (
+                      <>
+                        <p className="text-gray-800 leading-relaxed">{generalA1}</p>
+                        {generalA1Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA1Meta}</p>}
+                      </>
+                    ) : (
+                      <span className="text-gray-300 italic">Belum ada catatan</span>
+                    )}
+                  </div>
+                  <div className="bg-white rounded-xl border border-purple-100 p-3">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-purple-700 mb-1">Catatan Approver 2</p>
+                    {generalA2 ? (
+                      <>
+                        <p className="text-gray-800 leading-relaxed">{generalA2}</p>
+                        {generalA2Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA2Meta}</p>}
+                      </>
+                    ) : (
+                      <span className="text-gray-300 italic">Belum ada catatan</span>
+                    )}
+                  </div>
+                </div>
+              )}
+              {months.length > 0 && (
+              <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr className="bg-[#1A284F]/5 border-b border-gray-200">
@@ -2955,6 +3057,8 @@ function KPIHistorySection({ months }: { months: MonthEntry[] }) {
                   })}
                 </tbody>
               </table>
+              </div>
+              )}
             </div>
           )
         )}
@@ -3065,6 +3169,7 @@ export function KPIPage() {
       const st = loadSubmitState();
       setSubmitted(st.submitted);
       setSubmittedDate(st.submittedDate);
+      setEvidenceFiles(loadEvidenceFiles(activeUser.employeeId));
       setWfRefreshTick((v) => v + 1);
     };
     window.addEventListener("focus", sync);
@@ -3161,19 +3266,19 @@ export function KPIPage() {
     saveSubmitState(submitted, submittedDate);
   }, [submitted, submittedDate]);
 
-  const [evidenceFiles, setEvidenceFiles] = useState<EvidenceFile[]>(() => loadEvidenceFiles());
+  const [evidenceFiles, setEvidenceFiles] = useState<EvidenceFile[]>(() => loadEvidenceFiles(activeUser.employeeId));
 
   const addEvidence = (files: EvidenceFile[]) =>
     setEvidenceFiles((prev) => {
       const next = [...prev, ...files];
-      saveEvidenceFiles(next);
+      saveEvidenceFiles(next, activeUser.employeeId);
       return next;
     });
 
   const removeEvidence = (id: string) =>
     setEvidenceFiles((prev) => {
       const next = prev.filter((f) => f.id !== id);
-      saveEvidenceFiles(next);
+      saveEvidenceFiles(next, activeUser.employeeId);
       return next;
     });
 
@@ -3308,8 +3413,77 @@ export function KPIPage() {
 
   const [showEvidenceWarn, setShowEvidenceWarn] = useState(false);
 
+  const [businessCellsMap, setBusinessCellsMap] = useState<Record<string, Record<CellKey, string>>>(() => {
+    try {
+      const raw = localStorage.getItem("kpi_business_tracking_cells_v1");
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+    return {};
+  });
+  const updateBusinessCell = (monthId: string, key: CellKey, val: string) => {
+    setBusinessCellsMap((prev) => {
+      const next = {
+        ...prev,
+        [monthId]: { ...(prev[monthId] ?? {}), [key]: val },
+      };
+      savePersistedState("kpi_business_tracking_cells_v1", next);
+      return next;
+    });
+  };
+
+  // Poin 6 & 7: Validasi wajib sudah ada aksi pengisian bulan KPI DAN upload evidence wajib untuk SEMUA bulan
+  const kpiSubmitValidation = React.useMemo(() => {
+    const reasons: string[] = [];
+    if (months.length === 0) {
+      reasons.push("Belum ada bulan KPI Tracking yang ditambahkan (+ Add Month).");
+    } else {
+      let hasAnyActualInput = false;
+      const incompleteMonths: string[] = [];
+      for (const m of months) {
+        const mCells = cellsMap[m.id] ?? m.cells ?? {};
+        let monthHasEmpty = false;
+        const targetList = hasDualKpiTabs && directorKpiTab === "business" ? BUSINESS_KPI_ITEMS : KPI_ITEMS;
+        const activeMap = hasDualKpiTabs && directorKpiTab === "business" ? (businessCellsMap[m.id] ?? {}) : mCells;
+        for (const kpi of targetList) {
+          for (let si = 0; si < kpi.subRows.length; si++) {
+            const sub = kpi.subRows[si];
+            if (sub.compute) continue;
+            if (sub.label.toLowerCase().startsWith("target")) continue;
+            const v = String(activeMap[ck(kpi.no, si)] ?? "").trim();
+            if (v.length > 0 && v !== "—") {
+              hasAnyActualInput = true;
+            } else {
+              monthHasEmpty = true;
+            }
+          }
+        }
+        if (monthHasEmpty) {
+          incompleteMonths.push(m.label);
+        }
+      }
+      if (!hasAnyActualInput) {
+        reasons.push("Belum ada nilai aktual KPI yang diisi.");
+      } else if (incompleteMonths.length > 0) {
+        reasons.push(`Nilai aktual belum lengkap pada bulan: ${incompleteMonths.join(", ")}.`);
+      }
+
+      const monthsWithoutEvidence = months
+        .map((m) => m.label)
+        .filter((mLabel) => !evidenceFiles.some((f) => f.month === mLabel));
+      if (monthsWithoutEvidence.length > 0) {
+        reasons.push(`Evidence wajib diupload untuk semua bulan (belum ada: ${monthsWithoutEvidence.join(", ")}).`);
+      }
+    }
+    return {
+      canSubmit: reasons.length === 0,
+      reasons,
+    };
+  }, [months, cellsMap, businessCellsMap, evidenceFiles, hasDualKpiTabs, directorKpiTab]);
+
   const handleSubmitClick = () => {
-    if (evidenceFiles.length === 0) {
+    if (!kpiSubmitValidation.canSubmit) {
       setShowEvidenceWarn(true);
       return;
     }
@@ -3332,25 +3506,6 @@ export function KPIPage() {
     setView("preview");
   };
 
-  const [businessCellsMap, setBusinessCellsMap] = useState<Record<string, Record<CellKey, string>>>(() => {
-    try {
-      const raw = localStorage.getItem("kpi_business_tracking_cells_v1");
-      if (raw) return JSON.parse(raw);
-    } catch {
-      // ignore
-    }
-    return {};
-  });
-  const updateBusinessCell = (monthId: string, key: CellKey, val: string) => {
-    setBusinessCellsMap((prev) => {
-      const next = {
-        ...prev,
-        [monthId]: { ...(prev[monthId] ?? {}), [key]: val },
-      };
-      savePersistedState("kpi_business_tracking_cells_v1", next);
-      return next;
-    });
-  };
   const handlePullCascadingFromUnits = () => {
     if (months.length === 0) {
       toast.error("Tambahkan bulan tracking terlebih dahulu.");
@@ -3417,13 +3572,31 @@ export function KPIPage() {
                 <Eye className="w-4 h-4" />
                 Preview
               </button>
-              <button
-                onClick={handleSubmitClick}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
-              >
-                <Send className="w-4 h-4" />
-                Submit KPI Tracking
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex">
+                    <button
+                      type="button"
+                      disabled={!kpiSubmitValidation.canSubmit}
+                      onClick={handleSubmitClick}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Send className="w-4 h-4" />
+                      Submit KPI Tracking
+                    </button>
+                  </span>
+                </TooltipTrigger>
+                {!kpiSubmitValidation.canSubmit && (
+                  <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                    <p className="font-bold text-xs mb-1">Belum dapat Submit KPI Tracking:</p>
+                    <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90">
+                      {kpiSubmitValidation.reasons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  </TooltipContent>
+                )}
+              </Tooltip>
             </>
           )}
           {view === "preview" && (
@@ -3438,13 +3611,31 @@ export function KPIPage() {
                 </button>
               )}
               {!submitted && !isLockedByDeadline && (
-                <button
-                  onClick={handleSubmitClick}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
-                >
-                  <Send className="w-4 h-4" />
-                  Submit KPI Tracking
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} className="inline-flex">
+                      <button
+                        type="button"
+                        disabled={!kpiSubmitValidation.canSubmit}
+                        onClick={handleSubmitClick}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Send className="w-4 h-4" />
+                        Submit KPI Tracking
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  {!kpiSubmitValidation.canSubmit && (
+                    <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                      <p className="font-bold text-xs mb-1">Belum dapat Submit KPI Tracking:</p>
+                      <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90">
+                        {kpiSubmitValidation.reasons.map((r, i) => (
+                          <li key={i}>{r}</li>
+                        ))}
+                      </ul>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
               )}
               {submitted && !pendingEditRequest && !editRequestApproved && (
                 <button
@@ -3540,8 +3731,12 @@ export function KPIPage() {
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-amber-800">Evidence wajib diupload sebelum submit.</p>
-            <p className="text-xs text-amber-700 mt-0.5">Silakan upload evidence terlebih dahulu di bagian <span className="font-bold">Evidence Documents</span> di bawah ini.</p>
+            <p className="text-sm font-semibold text-amber-800">Syarat Submit KPI Tracking belum terpenuhi:</p>
+            <ul className="list-disc pl-4 text-xs text-amber-700 mt-1 space-y-0.5">
+              {kpiSubmitValidation.reasons.map((r, idx) => (
+                <li key={idx}>{r}</li>
+              ))}
+            </ul>
           </div>
           <button type="button" onClick={() => setShowEvidenceWarn(false)} className="shrink-0 text-amber-500 hover:text-amber-700 transition-colors">
             <X className="w-4 h-4" />
@@ -3609,28 +3804,6 @@ export function KPIPage() {
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 border border-amber-400 text-amber-700">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
               Supervisor 1
-            </span>
-          </div>
-        </div>
-      )}
-
-      {submitted && !pendingEditRequest && (
-        <div className="flex items-center gap-3 flex-wrap px-4 py-3 rounded-xl border border-green-200 bg-green-50">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-green-600" />
-          <span className="text-sm font-medium text-green-700">KPI Tracking has been submitted and is pending Approver review.</span>
-          <div className="w-px h-4 bg-green-300 mx-1" />
-          <span className="text-[11px] font-bold uppercase tracking-widest text-green-700/60">Submission Info</span>
-          <div className="w-px h-4 bg-green-300" />
-          <div className="flex items-center gap-1.5 text-xs text-gray-600">
-            <span className="font-semibold text-gray-500">Date Submitted:</span>
-            <span className="font-bold text-gray-800">{submittedDate || "—"}</span>
-          </div>
-          <div className="w-px h-4 bg-green-300" />
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="font-semibold text-gray-500">Approval Status:</span>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 border border-amber-200 text-amber-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              HR Check
             </span>
           </div>
         </div>

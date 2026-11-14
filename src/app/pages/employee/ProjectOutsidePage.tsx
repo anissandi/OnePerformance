@@ -17,6 +17,7 @@ import {
   type ProjectStatus,
 } from "../../store/projectStore";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
+import { submitWorkflowModule } from "../shared/appraisalWorkflowStore";
 
 type PageView = "input" | "preview";
 
@@ -378,6 +379,7 @@ export function ProjectOutsidePage() {
   const handleSuccessClose = () => {
     setShowSuccess(false);
     projectStore.submitAll();
+    submitWorkflowModule("Project", "measurement");
     setView("preview");
   };
 
@@ -432,7 +434,7 @@ export function ProjectOutsidePage() {
 
       <ModuleApprovalStatusBar
         module="Project"
-        phase="setting"
+        phase="measurement"
         submittedOverride={submitted}
       />
 
