@@ -835,6 +835,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       openLocks,
       interDeptFeedbacks,
       rcaSubmissions,
+      kpiTrackings,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
@@ -852,6 +853,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_open_lock_requests", "select=*&order=updated_at.desc"),
       restSelect("pa_inter_dept_feedbacks", "select=*&order=updated_at.desc"),
       restSelect("pa_rca_submissions", "select=*&order=updated_at.desc"),
+      restSelect("pa_kpi_trackings", "select=*&order=updated_at.desc"),
     ]);
     if (
       users.length > 0 ||
@@ -862,7 +864,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       workflowDocs.length > 0 ||
       interviewSchedules.length > 0 ||
       interDeptFeedbacks.length > 0 ||
-      rcaSubmissions.length > 0
+      rcaSubmissions.length > 0 ||
+      kpiTrackings.length > 0
     ) {
       return {
         ok: true,
@@ -882,6 +885,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         openLocks,
         interDeptFeedbacks,
         rcaSubmissions,
+        kpiTrackings,
       };
     }
 
@@ -1203,6 +1207,20 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       }
       if (byKey.size > 0) {
         localStorage.setItem("kpi_rca_submissions", JSON.stringify(Array.from(byKey.values())));
+      }
+    }
+
+    // 17. Hydrate KPI Trackings per employee from dedicated backend table pa_kpi_trackings
+    const kpiTrackingRows = data.kpiTrackings as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(kpiTrackingRows) && kpiTrackingRows.length > 0) {
+      for (const kt of kpiTrackingRows) {
+        const rawEmpId = String(kt.employee_id ?? "").trim();
+        if (!rawEmpId) continue;
+        const numMatch = rawEmpId.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmpId;
+        const months = Array.isArray(kt.months) ? kt.months : [];
+        const cellsMap = kt.cells_map && typeof kt.cells_map === "object" ? kt.cells_map : {};
+        localStorage.setItem(`kpi_tracking_v1_${normId}`, JSON.stringify({ months, cellsMap }));
       }
     }
 

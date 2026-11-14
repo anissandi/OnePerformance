@@ -204,6 +204,11 @@ function DetailDrawer({ employee, liveMIScore, onClose }: {
                         {mod.icon}
                       </span>
                       <span className="text-sm font-semibold">{mod.name}</span>
+                      {activeTab === "2026" && mod.name === "KPI" && employee.kpiIsYtd && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-bold leading-none">
+                          YTD
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-bold text-gray-900">{mod.score}%</span>
@@ -366,7 +371,7 @@ function DistributionByGroup({ employees, calibrationTargets }: { employees: Emp
   );
 }
 
-function ModuleCell({ data, settingValidated }: { data: ScoreGrade | null; settingValidated?: boolean }) {
+function ModuleCell({ data, settingValidated, isYtd }: { data: ScoreGrade | null; settingValidated?: boolean; isYtd?: boolean }) {
   if (!data || data.score <= 0) {
     if (settingValidated) {
       return (
@@ -379,7 +384,17 @@ function ModuleCell({ data, settingValidated }: { data: ScoreGrade | null; setti
   }
   return (
     <div className="flex flex-col items-center gap-0.5">
-      <span className="font-semibold text-gray-800 text-xs">{data.score}%</span>
+      <div className="inline-flex items-center gap-1">
+        <span className="font-semibold text-gray-800 text-xs">{data.score}%</span>
+        {isYtd && (
+          <span
+            className="px-1 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-bold leading-none"
+            title="Nilai berjalan Year-to-Date (menunggu kelengkapan 12 bulan & Validated HR ICF)"
+          >
+            YTD
+          </span>
+        )}
+      </div>
       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${gradeColor(data.grade)}`}>{data.grade}</span>
     </div>
   );
@@ -697,7 +712,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.joined}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.tenure}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.approvalCompleteDate}</td>
-                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.kpi} settingValidated={isSettingFullyApproved(emp.id, "KPI")} /></td>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.kpi} settingValidated={isSettingFullyApproved(emp.id, "KPI")} isYtd={emp.kpiIsYtd} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.smartGoals} settingValidated={isSettingFullyApproved(emp.id, "SMART Goals")} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formA} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formB} /></td>

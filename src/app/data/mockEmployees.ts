@@ -13,7 +13,7 @@ import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/sc
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../pages/shared/appraisalFormStore";
 import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
 import { loadAllIcfProjectsByEmployee } from "../store/projectStore";
-import { KPI_ITEMS, computeKPIAchievement, loadKPITracking, parseBobotDecimal } from "../pages/employee/KPIPage";
+import { evaluateEmployeeKPITracking } from "../pages/employee/KPIPage";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export interface ScoreGrade { score: number; grade: string; }
@@ -26,6 +26,10 @@ export interface Employee {
   modules: ModuleScore[];
   kpi: ScoreGrade; smartGoals: ScoreGrade; formA: ScoreGrade; formB: ScoreGrade; formC: ScoreGrade;
   project: ScoreGrade; managerialSkill: ScoreGrade | null; managementInterview: ScoreGrade | null;
+  kpiIsYtd?: boolean;
+  kpiTrackedMonths?: number;
+  kpiFullyValidated?: boolean;
+  isCalibrationReady?: boolean;
 }
 export interface CalibrationTarget { grade: string; target: number; color: string; }
 
@@ -171,6 +175,20 @@ export function getLiveTransactionalEmployees(): Employee[] {
       let msScore = extractAssessmentScore("Managerial Skill");
       const miScore = extractAssessmentScore("Management Interview");
 
+      // Evaluasi KPI Tracking per karyawan (bulan terisi 0..12 & skor berjalan YTD) untuk seluruh karyawan
+      const evalKpi = evaluateEmployeeKPITracking(u.employeeId);
+      const wfKpiMeas = empWorkflows.find((w) => w.module === "KPI" && w.phase === "measurement");
+      const kpiMeasValidated = Boolean(
+        wfKpiMeas &&
+          (wfKpiMeas.decisions.validator?.status === "Validated" ||
+            wfKpiMeas.decisions.approver2?.status === "Validated"),
+      );
+      const kpiFullyValidated = evalKpi.isFullYearMonthsComplete && kpiMeasValidated;
+      if (evalKpi.ytdScore > 0) {
+        kpiScore = Math.round(evalKpi.ytdScore);
+      }
+      const kpiIsYtd = kpiScore > 0 && !kpiFullyValidated;
+
       // Baca skor Appraisal Form & Managerial Skill milik karyawan terkait (terisolasi per employeeId)
       if (afScore === 0) {
         const afApprovers = loadAllAppraisalApprovers(u.employeeId);
@@ -197,15 +215,6 @@ export function getLiveTransactionalEmployees(): Employee[] {
           msScore = msSelf.totalScore <= 5 ? Math.round((msSelf.totalScore / 5) * 100) : Math.round(msSelf.totalScore);
         }
       }
-      if (isSelf && kpiScore === 0 && empWorkflows.some((w) => w.module === "KPI")) {
-        const { months, cellsMap } = loadKPITracking();
-        const totalKpi = KPI_ITEMS.reduce((sum, k) => {
-          const ach = computeKPIAchievement(k, cellsMap, months);
-          if (ach === null) return sum;
-          return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
-        }, 0);
-        if (totalKpi > 0) kpiScore = Math.round(totalKpi);
-      }
 
       const prjRows = projectByEmp[normId]?.rows ?? projectByEmp[u.employeeId]?.rows ?? [];
       const prjScore = prjRows.length > 0 ? Math.max(...prjRows.map((r) => Number(r.finalScore ?? 0))) : 0;
@@ -214,6 +223,32 @@ export function getLiveTransactionalEmployees(): Employee[] {
       const allowedMods = resolveUserAllowedModules(u);
       const hasManagerial = allowedMods.includes("Managerial Skill");
       const hasInterview = allowedMods.includes("Management Interview");
+
+      // Cek kesiapan kalibrasi: seluruh modul Measurement yang wajib pada User Grouping karyawan harus Validated / Approved penuh
+      const isTwoStepDone = (modName: string): boolean => {
+        const rec = empWorkflows.find((w) => w.module === modName && w.phase === "measurement");
+        if (!rec) return false;
+        const a2 = rec.decisions.approver2?.status ?? "";
+        const a1 = rec.decisions.approver1?.status ?? "";
+        return (
+          a2 === "Approved" ||
+          a2 === "Validated" ||
+          a2.startsWith("Assessed") ||
+          (!u.regNoAp2 && (a1 === "Approved" || a1.startsWith("Assessed")))
+        );
+      };
+      const wfSgMeas = empWorkflows.find((w) => w.module === "SMART Goals" && w.phase === "measurement");
+      const sgFullyValidated = Boolean(
+        wfSgMeas &&
+          (wfSgMeas.decisions.validator?.status === "Validated" ||
+            wfSgMeas.decisions.approver2?.status === "Validated"),
+      );
+      const isCalibrationReady =
+        (!allowedMods.includes("KPI (Setting/Measurement)") || kpiFullyValidated) &&
+        (!allowedMods.includes("SMART Goals (Setting/Measurement)") || sgFullyValidated) &&
+        (!allowedMods.includes("Appraisals Form") || isTwoStepDone("Appraisal Form")) &&
+        (!allowedMods.includes("Project Outside Job Scope") || isTwoStepDone("Project")) &&
+        (!allowedMods.includes("Managerial Skill") || isTwoStepDone("Managerial Skill"));
 
       const unitWeights = loadUnitScoreWeights(u.company);
       const weightCol: ScoreWeightColumn =
@@ -303,6 +338,10 @@ export function getLiveTransactionalEmployees(): Employee[] {
         project: { score: prjScore, grade: prjScore > 0 ? gradeFromScore(prjScore).grade : "—" },
         managerialSkill: hasManagerial ? { score: msScore, grade: msScore > 0 ? gradeFromScore(msScore).grade : "—" } : null,
         managementInterview: hasInterview ? { score: miScore, grade: miScore > 0 ? gradeFromScore(miScore).grade : "—" } : null,
+        kpiIsYtd,
+        kpiTrackedMonths: evalKpi.trackedMonthsCount,
+        kpiFullyValidated,
+        isCalibrationReady,
       };
     });
   } catch {

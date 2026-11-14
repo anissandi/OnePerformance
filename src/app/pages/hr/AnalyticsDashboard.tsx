@@ -12,6 +12,7 @@ import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from ".
 import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "./settings/AccessManagement";
+import { evaluateEmployeeKPITracking } from "../employee/KPIPage";
 
 // ── Live Transactional Completion Calculator ──────────────────────────────────
 function computeModuleStatsForUsers(
@@ -70,6 +71,39 @@ function computeModuleStatsForUsers(
         w.phase === phase &&
         (w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
     );
+    if (modLabel === "KPI (Tracking)") {
+      const evalKpi = evaluateEmployeeKPITracking(u.employeeId);
+      const isVal = Boolean(
+        rec &&
+          (rec.decisions.validator?.status === "Validated" ||
+            rec.decisions.approver2?.status === "Validated"),
+      );
+      if (evalKpi.isFullYearMonthsComplete && isVal) {
+        completed++;
+      } else if (rec || evalKpi.hasAnyTrackingData) {
+        inProgress++;
+      } else {
+        pending++;
+      }
+      continue;
+    }
+    if (
+      modLabel === "KPI (Setting)" ||
+      modLabel === "SMART Goals (Setting)" ||
+      modLabel === "SMART Goals (Tracking)"
+    ) {
+      if (!rec) {
+        pending++;
+      } else if (
+        rec.decisions.validator?.status === "Validated" ||
+        rec.decisions.approver2?.status === "Validated"
+      ) {
+        completed++;
+      } else {
+        inProgress++;
+      }
+      continue;
+    }
     if (!rec) {
       if (modLabel === "Project OJS") {
         const prj = projectByEmp[normId] ?? projectByEmp[u.employeeId];
@@ -661,21 +695,62 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     let inProgress = 0;
     let pending = 0;
 
+    let projectByEmpAll: Record<string, { rows?: unknown[] }> = {};
+    try {
+      projectByEmpAll = JSON.parse(localStorage.getItem("pa_project_icf_by_emp_v1") ?? "{}");
+    } catch {
+      projectByEmpAll = {};
+    }
+
     for (const u of scopedUsers) {
       const normId = normalizeEmployeeId(u.employeeId);
+      const allowed = resolveUserAllowedModules(u);
       const userRecs = workflows.filter(
         (w) => w.year === year && (w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
       );
-      if (userRecs.length === 0) {
-        pending++;
+      const evalKpi = evaluateEmployeeKPITracking(u.employeeId);
+      const prj = projectByEmpAll[normId] ?? projectByEmpAll[u.employeeId];
+      const hasPrjRows = Boolean(prj && Array.isArray(prj.rows) && prj.rows.length > 0);
+
+      const isTwoStepDone = (modName: string) => {
+        const rec = userRecs.find((r) => r.module === modName && r.phase === "measurement");
+        if (!rec) return false;
+        const a2 = rec.decisions.approver2?.status ?? "";
+        const a1 = rec.decisions.approver1?.status ?? "";
+        return (
+          a2 === "Approved" ||
+          a2 === "Validated" ||
+          a2.startsWith("Assessed") ||
+          (!u.regNoAp2 && (a1 === "Approved" || a1.startsWith("Assessed")))
+        );
+      };
+      const wfKpiMeas = userRecs.find((r) => r.module === "KPI" && r.phase === "measurement");
+      const kpiDone = Boolean(
+        evalKpi.isFullYearMonthsComplete &&
+          wfKpiMeas &&
+          (wfKpiMeas.decisions.validator?.status === "Validated" ||
+            wfKpiMeas.decisions.approver2?.status === "Validated"),
+      );
+      const wfSgMeas = userRecs.find((r) => r.module === "SMART Goals" && r.phase === "measurement");
+      const sgDone = Boolean(
+        wfSgMeas &&
+          (wfSgMeas.decisions.validator?.status === "Validated" ||
+            wfSgMeas.decisions.approver2?.status === "Validated"),
+      );
+
+      const allRequiredDone =
+        (!allowed.includes("KPI (Setting/Measurement)") || kpiDone) &&
+        (!allowed.includes("SMART Goals (Setting/Measurement)") || sgDone) &&
+        (!allowed.includes("Appraisals Form") || isTwoStepDone("Appraisal Form")) &&
+        (!allowed.includes("Project Outside Job Scope") || isTwoStepDone("Project")) &&
+        (!allowed.includes("Managerial Skill") || isTwoStepDone("Managerial Skill"));
+
+      if (allRequiredDone) {
+        completed++;
+      } else if (userRecs.length > 0 || evalKpi.hasAnyTrackingData || hasPrjRows) {
+        inProgress++;
       } else {
-        const allDone = userRecs.every((r) => {
-          const a2 = r.decisions.approver2?.status ?? "";
-          const a1 = r.decisions.approver1?.status ?? "";
-          return a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed") || (!u.regNoAp2 && (a1 === "Approved" || a1.startsWith("Assessed")));
-        });
-        if (allDone) completed++;
-        else inProgress++;
+        pending++;
       }
     }
 

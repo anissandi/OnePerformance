@@ -503,20 +503,114 @@ export function saveKPITracking(data: KPITrackingSnapshot): void {
   } catch { /* ignore */ }
 }
 
-export function loadKPITracking(): KPITrackingSnapshot {
+export const FULL_YEAR_KPI_MONTHS = [
+  "Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26",
+  "Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26",
+] as const;
+
+export interface EmployeeKPITrackingEvaluation {
+  months: MonthEntry[];
+  cellsMap: Record<string, Record<CellKey, string>>;
+  trackedMonthsCount: number;
+  isFullYearMonthsComplete: boolean;
+  ytdScore: number;
+  hasAnyTrackingData: boolean;
+  totalKPI: number;
+  trackedKpiCount: number;
+}
+
+export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
   try {
     const activeUser = getActiveUser();
-    const normId = normalizeEmployeeId(activeUser.employeeId);
+    const targetEmpId = employeeId ?? activeUser.employeeId;
+    const normId = normalizeEmployeeId(targetEmpId);
     const byEmpRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
     if (byEmpRaw) return JSON.parse(byEmpRaw) as KPITrackingSnapshot;
-    const raw = localStorage.getItem(KPI_STORE_KEY);
-    if (raw) return JSON.parse(raw) as KPITrackingSnapshot;
+    // Hanya baca legacy global key bila sedang memuat milik user aktif sendiri (mencegah kebocoran lintas karyawan)
+    if (!employeeId || normId === normalizeEmployeeId(activeUser.employeeId)) {
+      const raw = localStorage.getItem(KPI_STORE_KEY);
+      if (raw) return JSON.parse(raw) as KPITrackingSnapshot;
+    }
   } catch { /* ignore */ }
   // Default: INITIAL_MONTHS merged with pre-filled targets
   const cellsMap = Object.fromEntries(
     INITIAL_MONTHS.map((m) => [m.id, { ...getPrefilledCells(m.label), ...m.cells }])
   );
   return { months: INITIAL_MONTHS, cellsMap };
+}
+
+export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrackingEvaluation {
+  const normId = normalizeEmployeeId(employeeId);
+  let snap: KPITrackingSnapshot = { months: [], cellsMap: {} };
+  try {
+    const byEmpRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
+    if (byEmpRaw) {
+      snap = JSON.parse(byEmpRaw) as KPITrackingSnapshot;
+    }
+  } catch {
+    snap = { months: [], cellsMap: {} };
+  }
+
+  const months = Array.isArray(snap.months) ? snap.months : [];
+  const cellsMap = snap.cellsMap && typeof snap.cellsMap === "object" ? snap.cellsMap : {};
+
+  // Hitung jumlah bulan unik (Jan-26 s/d Dec-26) yang sudah memiliki minimal 1 input aktual terisi
+  const filledMonthLabels = new Set<string>();
+  for (const m of months) {
+    if (!FULL_YEAR_KPI_MONTHS.includes(m.label as typeof FULL_YEAR_KPI_MONTHS[number])) continue;
+    const monthCells = cellsMap[m.id] ?? m.cells ?? {};
+    const hasActualValue = KPI_ITEMS.some((kpi) =>
+      kpi.subRows.some((sub, si) => {
+        if (sub.compute) return false;
+        if (sub.label.toLowerCase().startsWith("target")) return false;
+        const val = String(monthCells[ck(kpi.no, si)] ?? "").trim();
+        return val.length > 0 && val !== "—";
+      }),
+    );
+    if (hasActualValue) {
+      filledMonthLabels.add(m.label);
+    }
+  }
+
+  const trackedMonthsCount = filledMonthLabels.size;
+  const isFullYearMonthsComplete = trackedMonthsCount >= FULL_YEAR_KPI_MONTHS.length;
+  const hasAnyTrackingData = trackedMonthsCount > 0;
+
+  let totalKPI = KPI_ITEMS.length;
+  try {
+    const rawSet = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+    const setMap = rawSet ? (JSON.parse(rawSet) as Record<string, unknown[]>) : {};
+    const empSetItems = setMap[normId] ?? setMap[employeeId];
+    if (Array.isArray(empSetItems) && empSetItems.length > 0) {
+      totalKPI = empSetItems.length;
+    }
+  } catch {
+    // ignore
+  }
+
+  let trackedKpiCount = 0;
+  let weightedSum = 0;
+  if (hasAnyTrackingData) {
+    for (const k of KPI_ITEMS) {
+      const ach = computeKPIAchievement(k, cellsMap, months);
+      if (ach !== null) {
+        trackedKpiCount++;
+        weightedSum += (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
+      }
+    }
+  }
+  const ytdScore = weightedSum > 0 ? Math.round(weightedSum * 10) / 10 : 0;
+
+  return {
+    months,
+    cellsMap,
+    trackedMonthsCount,
+    isFullYearMonthsComplete,
+    ytdScore,
+    hasAnyTrackingData,
+    totalKPI,
+    trackedKpiCount,
+  };
 }
 
 // ─── SubRow definitions ───────────────────────────────────────────────────────

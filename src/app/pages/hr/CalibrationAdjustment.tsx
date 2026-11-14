@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { getPenilai1ScoreAsPercent, subscribeScores } from "../supervisor/managementInterviewScoreStore";
-import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye } from "lucide-react";
+import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye, AlertTriangle } from "lucide-react";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Dot } from "recharts";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
-import { applyYearEndScorePolicy, isYearEndInactive } from "../shared/yearEndWorkflowStore";
+import { applyYearEndScorePolicy, isYearEndInactive, loadYearEndState } from "../shared/yearEndWorkflowStore";
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
+import { normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules } from "../../store/authStore";
@@ -54,6 +55,9 @@ type Employee = {
   departmentName?: string;
   bagianName?: string;
   base: EmpScores;
+  kpiIsYtd?: boolean;
+  kpiFullyValidated?: boolean;
+  isCalibrationReady?: boolean;
 };
 
 // ─── Default data ─────────────────────────────────────────────────────────────
@@ -301,6 +305,9 @@ function buildLiveCalibrationEmployees(): Employee[] {
         managementInterview: hasIntv ? (live?.managementInterview?.score ?? null) : null,
         projectOutsideJobScope: live?.project.score ?? 0,
       },
+      kpiIsYtd: live?.kpiIsYtd ?? false,
+      kpiFullyValidated: live?.kpiFullyValidated ?? false,
+      isCalibrationReady: live?.isCalibrationReady ?? false,
     };
   });
 }
@@ -1118,18 +1125,21 @@ function AppraisalDetailCard({
                   {/* Score component breakdown */}
                   <div className="flex flex-col gap-1 pt-1 border-t border-gray-200">
                     {([
-                      { label: "KPI",                   score: effectiveScores.kpi,                    weight: LEVEL_WEIGHTS[emp.level].kpi },
+                      { label: "KPI",                   score: effectiveScores.kpi,                    weight: LEVEL_WEIGHTS[emp.level].kpi, isYtd: emp.kpiIsYtd },
                       { label: "Smart Goals",           score: effectiveScores.smartGoals,             weight: LEVEL_WEIGHTS[emp.level].smartGoals },
                       { label: "Appraisal Form",        score: effectiveScores.appraisalForm,          weight: LEVEL_WEIGHTS[emp.level].appraisalForm },
                       { label: "Managerial Skill",      score: effectiveScores.managerialSkill,        weight: LEVEL_WEIGHTS[emp.level].managerialSkill },
                       { label: "Management Interview",  score: effectiveScores.managementInterview,    weight: LEVEL_WEIGHTS[emp.level].managementInterview, isMI: true },
                       { label: "Project Outside",       score: effectiveScores.projectOutsideJobScope, weight: LEVEL_WEIGHTS[emp.level].projectOutsideJobScope },
-                    ] as { label: string; score: number | null; weight: number; isMI?: boolean }[])
+                    ] as { label: string; score: number | null; weight: number; isMI?: boolean; isYtd?: boolean }[])
                       .filter(r => r.weight > 0)
                       .map(r => (
                         <div key={r.label} className="flex items-center justify-between text-[10px]">
                           <span className={`flex items-center gap-1 ${r.isMI ? "text-indigo-600 font-semibold" : "text-gray-500"}`}>
                             {r.label}
+                            {r.isYtd && (
+                              <span className="px-1 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 font-bold text-[9px]">YTD</span>
+                            )}
                             {r.isMI && r.score !== null && (
                               <span className="px-1 py-0.5 rounded bg-indigo-100 text-indigo-600 font-bold text-[9px]">Assessment</span>
                             )}
@@ -1857,8 +1867,13 @@ function EmployeeAdjustmentSection({
               const step      = freeEdit ? 1.0 : parseFloat((base * 0.01).toFixed(2));
               const minFinal  = freeEdit ? 0   : parseFloat((base * 0.95).toFixed(2));
               const maxFinal  = freeEdit ? 100 : parseFloat((base * 1.05).toFixed(2));
-              const canDec    = freeEdit ? final > 0   : final > minFinal + 0.001;
-              const canInc    = freeEdit ? final < 100 : final < maxFinal - 0.001;
+              const yeState   = loadYearEndState();
+              const normEmpId = normalizeEmployeeId(emp.employeeId);
+              const isExempt  = yeState.inactive.some((id) => normalizeEmployeeId(id) === normEmpId) ||
+                                yeState.ignored.some((id) => normalizeEmployeeId(id) === normEmpId);
+              const empReadyForCal = Boolean(emp.isCalibrationReady || isExempt);
+              const canDec    = empReadyForCal && (freeEdit ? final > 0   : final > minFinal + 0.001);
+              const canInc    = empReadyForCal && (freeEdit ? final < 100 : final < maxFinal - 0.001);
 
               const divisiName = emp.divisionName ?? DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "—";
               const deptName   = emp.departmentName ?? DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "—";
@@ -1899,7 +1914,17 @@ function EmployeeAdjustmentSection({
                   </td>
 
                   <td className="border border-gray-100 px-3 py-2 text-center bg-gray-50 text-xs font-semibold text-gray-600">
-                    {emp.base.kpi}%
+                    <div className="inline-flex items-center justify-center gap-1">
+                      <span>{emp.base.kpi}%</span>
+                      {emp.kpiIsYtd && (
+                        <span
+                          className="px-1 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 text-[9px] font-bold leading-none"
+                          title="Nilai berjalan Year-to-Date (menunggu KPI 12 bulan lengkap & Validated HR ICF)"
+                        >
+                          YTD
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="border border-gray-100 px-3 py-2 text-center bg-gray-50 text-xs font-semibold text-gray-600">
                     {emp.base.projectOutsideJobScope}%
@@ -1925,22 +1950,34 @@ function EmployeeAdjustmentSection({
                   {/* Nilai Akhir – editable ±5% of base score */}
                   <td className="border border-gray-100 px-2 py-2 text-center">
                     {editMode ? (
-                      <div className="flex flex-col items-center gap-0.5">
-                        <div className="flex items-center gap-0.5">
-                          <button disabled={!canDec}
-                            onClick={() => setFinal(emp, Math.max(minFinal, parseFloat((final - step).toFixed(2))))}
-                            className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-gray-700 font-bold text-xs transition-colors select-none">−</button>
-                          <span className={`w-16 text-center font-bold text-sm tabular-nums ${diff > 0 ? "text-emerald-600" : diff < 0 ? "text-red-500" : "text-gray-800"}`}>
-                            {final.toFixed(2)}%
+                      empReadyForCal ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <div className="flex items-center gap-0.5">
+                            <button disabled={!canDec}
+                              onClick={() => setFinal(emp, Math.max(minFinal, parseFloat((final - step).toFixed(2))))}
+                              className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-gray-700 font-bold text-xs transition-colors select-none">−</button>
+                            <span className={`w-16 text-center font-bold text-sm tabular-nums ${diff > 0 ? "text-emerald-600" : diff < 0 ? "text-red-500" : "text-gray-800"}`}>
+                              {final.toFixed(2)}%
+                            </span>
+                            <button disabled={!canInc}
+                              onClick={() => setFinal(emp, Math.min(maxFinal, parseFloat((final + step).toFixed(2))))}
+                              className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-gray-700 font-bold text-xs transition-colors select-none">+</button>
+                          </div>
+                          <span className={`text-[10px] font-bold tabular-nums ${diffPct > 0 ? "text-emerald-500" : diffPct < 0 ? "text-red-400" : "text-gray-300"}`}>
+                            {diffPct > 0 ? `+${diffPct.toFixed(1)}%` : diffPct < 0 ? `${diffPct.toFixed(1)}%` : "base"}
                           </span>
-                          <button disabled={!canInc}
-                            onClick={() => setFinal(emp, Math.min(maxFinal, parseFloat((final + step).toFixed(2))))}
-                            className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-gray-700 font-bold text-xs transition-colors select-none">+</button>
                         </div>
-                        <span className={`text-[10px] font-bold tabular-nums ${diffPct > 0 ? "text-emerald-500" : diffPct < 0 ? "text-red-400" : "text-gray-300"}`}>
-                          {diffPct > 0 ? `+${diffPct.toFixed(1)}%` : diffPct < 0 ? `${diffPct.toFixed(1)}%` : "base"}
-                        </span>
-                      </div>
+                      ) : (
+                        <div
+                          className="flex flex-col items-center gap-0.5"
+                          title="Seluruh modul wajib (termasuk KPI Full-Year 12 Bulan) harus berstatus Validated sebelum dapat dikalibrasi"
+                        >
+                          <span className="font-bold text-sm tabular-nums text-gray-400">{final.toFixed(2)}%</span>
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-semibold whitespace-nowrap">
+                            <Lock className="w-2.5 h-2.5" /> Perlu Validated
+                          </span>
+                        </div>
+                      )
                     ) : (
                       <div className="flex flex-col items-center">
                         <span className={`font-bold text-sm tabular-nums ${diff !== 0 ? (diff > 0 ? "text-emerald-600" : "text-red-500") : "text-gray-800"}`}>
@@ -2377,8 +2414,31 @@ function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBa
   const [editMode,     setEditMode]     = useState(false);
   const [isSaved,      setIsSaved]      = useState(false);
   const [saveVersion,  setSaveVersion]  = useState(0);
+  const revision = useAppraisalRevision();
+  const [yeTick, setYeTick] = useState(0);
 
-  const canSubmit = isSaved || pageMode === "preview";
+  useEffect(() => {
+    const bump = () => setYeTick((v) => v + 1);
+    window.addEventListener("year-end-updated", bump);
+    window.addEventListener("pa-db-hydrated", bump);
+    return () => {
+      window.removeEventListener("year-end-updated", bump);
+      window.removeEventListener("pa-db-hydrated", bump);
+    };
+  }, []);
+
+  const unvalidatedUnitEmployees = useMemo(() => {
+    const ye = loadYearEndState();
+    return ALL_EMPLOYEES.filter((e) => {
+      if (e.companyUnit !== unit.name) return false;
+      const norm = normalizeEmployeeId(e.employeeId);
+      if (ye.inactive.some((id) => normalizeEmployeeId(id) === norm)) return false;
+      if (ye.ignored.some((id) => normalizeEmployeeId(id) === norm)) return false;
+      return !e.isCalibrationReady;
+    });
+  }, [unit.name, saveVersion, revision, yeTick]);
+
+  const canSubmit = (isSaved || pageMode === "preview") && unvalidatedUnitEmployees.length === 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -2412,6 +2472,15 @@ function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBa
           <Clock className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-800 font-medium">
             Calibration adjustment has been submitted and is <strong>Pending Approval Management</strong>. Editing is disabled until the approval is completed.
+          </p>
+        </div>
+      )}
+
+      {pageMode !== "submitted" && unvalidatedUnitEmployees.length > 0 && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3.5">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-900 leading-relaxed">
+            Terdapat <strong>{unvalidatedUnitEmployees.length} karyawan</strong> pada unit <strong>{unit.name}</strong> yang nilainya masih berstatus <strong>YTD / Belum Validated penuh</strong> (misalnya bulan KPI Tracking belum genap 12 bulan atau modul wajib belum divalidasi HR ICF). Nilai berjalan (YTD) sudah ditampilkan, namun perlu berstatus <strong>Validated</strong> penuh untuk dapat diproses dan disubmit di Calibration Adjustment.
           </p>
         </div>
       )}

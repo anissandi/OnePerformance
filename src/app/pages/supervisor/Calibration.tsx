@@ -84,6 +84,7 @@ interface TeamMember {
   notes: string;
   evidence: string;
   kpi: number;
+  kpiIsYtd?: boolean;
   smartGoals: number;
   appraisalForm: number;
   managerialSkill: number | null;
@@ -115,6 +116,7 @@ function buildLiveSupervisorTeamMembers(): TeamMember[] {
       notes: adjComments[e.id] ?? adjComments[`emp-${e.id}`] ?? "",
       evidence: "",
       kpi: e.kpi.score,
+      kpiIsYtd: e.kpiIsYtd,
       smartGoals: e.smartGoals.score,
       appraisalForm: Math.round((e.formA.score + e.formB.score + e.formC.score) / 3),
       managerialSkill: e.managerialSkill ? e.managerialSkill.score : null,
@@ -301,7 +303,13 @@ function EmployeeDetailCard({ member, onClose }: { member: TeamMember; onClose: 
                   <div className="flex flex-col gap-1 pt-1 border-t border-gray-200">
                     {weights.map(w => (
                       <div key={w.label} className="flex items-center justify-between text-[10px]">
-                        <span className="text-gray-500">{w.label} <span className="text-gray-300">({w.weight}%)</span></span>
+                        <span className="text-gray-500 flex items-center gap-1">
+                          {w.label}
+                          {w.label === "KPI" && member.kpiIsYtd && (
+                            <span className="px-1 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 font-bold text-[9px] leading-none">YTD</span>
+                          )}
+                          <span className="text-gray-300">({w.weight}%)</span>
+                        </span>
                         <span className="font-bold text-gray-700 tabular-nums">{w.score.toFixed(1)}%</span>
                       </div>
                     ))}

@@ -7,6 +7,7 @@ import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWor
 import { loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
 import { isExcludedFromVerification, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
+import { evaluateEmployeeKPITracking } from "../employee/KPIPage";
 
 interface VerificationCompanyUnit {
   id: string;
@@ -50,7 +51,11 @@ function buildImportedVerificationEmployees(): Employee[] {
     .filter((u) => u.status === "Active" && !isExcludedFromVerification(u))
     .map((u) => {
       const allowed = resolveUserAllowedModules(u);
+      const hasKpi = allowed.includes("KPI (Setting/Measurement)");
+      const hasSg = allowed.includes("SMART Goals (Setting/Measurement)");
+      const hasAf = allowed.includes("Appraisals Form");
       const hasMs = allowed.includes("Managerial Skill");
+      const hasPrj = allowed.includes("Project Outside Job Scope");
       const hasIdf = allowed.includes("Inter-Departement Feedback");
       return {
         id: u.employeeId,
@@ -59,11 +64,11 @@ function buildImportedVerificationEmployees(): Employee[] {
         division: u.division,
         department: u.department,
         position: u.position,
-        kpi: "incomplete",
-        smartGoals: "incomplete",
-        appraisalForm: "incomplete",
+        kpi: hasKpi ? "incomplete" : "na",
+        smartGoals: hasSg ? "incomplete" : "na",
+        appraisalForm: hasAf ? "incomplete" : "na",
         managerialSkill: hasMs ? "incomplete" : "na",
-        projectOJS: "incomplete",
+        projectOJS: hasPrj ? "incomplete" : "na",
         interDept: hasIdf ? "incomplete" : "na",
         overall: "Incomplete",
       };
@@ -291,10 +296,58 @@ export function YearEndVerification() {
     const projectsByEmp = loadAllIcfProjectsByEmployee();
     return baseList.map((employee) => {
     const updated = { ...employee };
-    const modules = { "KPI": "kpi", "SMART Goals": "smartGoals", "Appraisal Form": "appraisalForm", "Managerial Skill": "managerialSkill", "Project": "projectOJS" } as const;
+    const normId = normalizeEmployeeId(employee.id);
+
+    // 1. Evaluasi kolom KPI: centang hijau HANYA jika 12 bulan lengkap + Validated HR ICF
+    if (updated.kpi !== "na") {
+      const evalKpi = evaluateEmployeeKPITracking(employee.id);
+      const wfKpiMeas = workflow.find(
+        (item) => item.employeeId === normId && item.module === "KPI" && item.phase === "measurement" && item.year === "2026",
+      );
+      const wfKpiSet = workflow.find(
+        (item) => item.employeeId === normId && item.module === "KPI" && item.phase === "setting" && item.year === "2026",
+      );
+      const isKpiValidated = Boolean(
+        wfKpiMeas &&
+          (wfKpiMeas.decisions.validator?.status === "Validated" ||
+            wfKpiMeas.decisions.approver2?.status === "Validated"),
+      );
+      if (evalKpi.isFullYearMonthsComplete && isKpiValidated) {
+        updated.kpi = "complete";
+      } else if (evalKpi.hasAnyTrackingData || wfKpiMeas || wfKpiSet) {
+        updated.kpi = "pending";
+      } else {
+        updated.kpi = "incomplete";
+      }
+    }
+
+    // 2. Evaluasi kolom SMART Goals: centang hijau jika SMART Goals Measurement sudah Validated HR ICF
+    if (updated.smartGoals !== "na") {
+      const wfSgMeas = workflow.find(
+        (item) => item.employeeId === normId && item.module === "SMART Goals" && item.phase === "measurement" && item.year === "2026",
+      );
+      const wfSgSet = workflow.find(
+        (item) => item.employeeId === normId && item.module === "SMART Goals" && item.phase === "setting" && item.year === "2026",
+      );
+      const isSgValidated = Boolean(
+        wfSgMeas &&
+          (wfSgMeas.decisions.validator?.status === "Validated" ||
+            wfSgMeas.decisions.approver2?.status === "Validated"),
+      );
+      if (isSgValidated) {
+        updated.smartGoals = "complete";
+      } else if (wfSgMeas || wfSgSet) {
+        updated.smartGoals = "pending";
+      } else {
+        updated.smartGoals = "incomplete";
+      }
+    }
+
+    // 3. Evaluasi modul 2-tahap (Appraisal Form, Managerial Skill, Project OJS)
+    const modules = { "Appraisal Form": "appraisalForm", "Managerial Skill": "managerialSkill", "Project": "projectOJS" } as const;
     for (const [module, field] of Object.entries(modules)) {
       if (updated[field] === "na") continue;
-      const record = workflow.find((item) => item.employeeId === normalizeEmployeeId(employee.id) && item.module === module && item.phase === "measurement" && item.year === "2026");
+      const record = workflow.find((item) => item.employeeId === normId && item.module === module && item.phase === "measurement" && item.year === "2026");
       if (record) {
         const decision = record.decisions.approver2?.status;
         updated[field] = decision === "Approved" || decision?.startsWith("Assessed") ? "complete" : "pending";

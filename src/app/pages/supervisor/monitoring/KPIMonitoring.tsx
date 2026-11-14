@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { evaluateEmployeeKPITracking } from "../../employee/KPIPage";
 
 const TEAM_IDS   = ["E002", "E011"];
 const TEAM_UNIT  = "PT. RSUP (Industri)";
@@ -980,6 +981,7 @@ function AchievementBar({ value }: { value: number }) {
 
 const KPI_WORKFLOW_STATUS_STYLE: Record<string, { bg: string; icon: React.ElementType }> = {
   "Unsubmitted":        { bg: "bg-gray-100 text-gray-500",     icon: AlertCircle },
+  "Tracking Progress":  { bg: "bg-sky-100 text-sky-700",       icon: Clock },
   "Pending-Check":      { bg: "bg-amber-100 text-amber-700",   icon: Clock },
   "Pending-Approver 1": { bg: "bg-amber-100 text-amber-700",   icon: Clock },
   "Pending-Approver 2": { bg: "bg-sky-100 text-sky-700",       icon: Clock },
@@ -996,6 +998,39 @@ function resolveSupKpiPhaseStatus(rec?: ReturnType<typeof loadWorkflowRecords>[n
   const chk = rec.decisions.checker?.status ?? "";
   if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") {
     return "Revision";
+  }
+  if (val === "Validated" || a2 === "Validated") {
+    return "Validated";
+  }
+  if (a2 === "Approved" || a2.startsWith("Assessed")) {
+    return "Pending-Validate";
+  }
+  if (a1 === "Approved" || a1.startsWith("Assessed")) {
+    return "Pending-Approver 2";
+  }
+  if (chk && chk !== "Revision") {
+    return "Pending-Approver 1";
+  }
+  return "Pending-Check";
+}
+
+function resolveSupKpiMeasurementStatus(empId: string, rec?: ReturnType<typeof loadWorkflowRecords>[number]): string {
+  const val = rec?.decisions.validator?.status ?? "";
+  const a2 = rec?.decisions.approver2?.status ?? "";
+  const a1 = rec?.decisions.approver1?.status ?? "";
+  const chk = rec?.decisions.checker?.status ?? "";
+  if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") {
+    return "Revision";
+  }
+  const evalKpi = evaluateEmployeeKPITracking(empId);
+  if (!rec && !evalKpi.hasAnyTrackingData) {
+    return "Unsubmitted";
+  }
+  if (!evalKpi.isFullYearMonthsComplete) {
+    return "Tracking Progress";
+  }
+  if (!rec) {
+    return "Tracking Progress";
   }
   if (val === "Validated" || a2 === "Validated") {
     return "Validated";
@@ -1046,15 +1081,16 @@ export function SupervisorMonitoringKPI() {
         wfSet?.decisions.validator?.status === "Validated" ||
           wfSet?.decisions.approver2?.status === "Validated",
       );
+      const evalKpi = evaluateEmployeeKPITracking(emp.id);
       const settingStatus = resolveSupKpiPhaseStatus(wfSet);
-      const measurementStatus = resolveSupKpiPhaseStatus(wfMeas);
-      const hasActiveKpi = Boolean(setApproved || wfMeas);
+      const measurementStatus = resolveSupKpiMeasurementStatus(emp.id, wfMeas);
+      const hasActiveKpi = Boolean(setApproved || wfMeas || evalKpi.hasAnyTrackingData);
       const kpi: KPIRecord = hasActiveKpi
         ? {
             employeeId: emp.id,
-            totalKPI: KPI_DEFS_E002.length,
-            submittedKPI: wfMeas ? KPI_DEFS_E002.length : 0,
-            avgAchievement: wfMeas ? 85 : 0,
+            totalKPI: evalKpi.totalKPI || KPI_DEFS_E002.length,
+            submittedKPI: evalKpi.trackedKpiCount,
+            avgAchievement: evalKpi.ytdScore > 0 ? Math.round(evalKpi.ytdScore) : 0,
             rcaRequired: 0,
             rcaCompleted: 0,
             kpiDefs: KPI_DEFS_E002,

@@ -3,11 +3,13 @@ import { Search, TrendingUp, CheckCircle2, AlertCircle, Clock, Filter } from "lu
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../../shared/appraisalWorkflowStore";
 import { dateToSortableKey, normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
+import { evaluateEmployeeKPITracking } from "../../employee/KPIPage";
 
 // ─── Mock KPI data per employee ───────────────────────────────────────────────
 
 type KPIWorkflowStatus =
   | "Unsubmitted"
+  | "Tracking Progress"
   | "Pending-Check"
   | "Pending-Approver 1"
   | "Pending-Approver 2"
@@ -34,6 +36,7 @@ const KPI_DATA: KPIRecord[] = [];
 
 const STATUS_STYLE: Record<string, { bg: string; icon: React.ElementType }> = {
   "Unsubmitted":        { bg: "bg-gray-100 text-gray-500",    icon: AlertCircle },
+  "Tracking Progress":  { bg: "bg-sky-100 text-sky-700",      icon: Clock },
   "Pending-Check":      { bg: "bg-amber-100 text-amber-700",  icon: Clock },
   "Pending-Approver 1": { bg: "bg-amber-100 text-amber-700",  icon: Clock },
   "Pending-Approver 2": { bg: "bg-sky-100 text-sky-700",      icon: Clock },
@@ -115,9 +118,10 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
     const wfMeas = workflows.find(
       (w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
     );
+    const evalKpi = evaluateEmployeeKPITracking(emp.id);
     const settingStatus = resolveKpiPhaseStatus(wfSet);
-    const measurementStatus = resolveKpiPhaseStatus(wfMeas);
-    const hasAny = Boolean(wfSet || wfMeas);
+    const measurementStatus = resolveKpiMeasurementStatus(emp.id, wfMeas);
+    const hasAny = Boolean(wfSet || wfMeas || evalKpi.hasAnyTrackingData);
     const latestKpiDate = [
       wfMeas?.decisions.validator?.date,
       wfMeas?.decisions.approver2?.date,
@@ -136,9 +140,9 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
     const kpi: KPIRecord = hasAny
       ? {
           employeeId: emp.id,
-          totalKPI: 8,
-          submittedKPI: wfMeas ? 8 : 0,
-          avgAchievement: wfMeas ? 85 : 0,
+          totalKPI: evalKpi.totalKPI,
+          submittedKPI: evalKpi.trackedKpiCount,
+          avgAchievement: evalKpi.ytdScore > 0 ? Math.round(evalKpi.ytdScore) : 0,
           perspektifBreakdown: [],
           rcaRequired: 0,
           rcaCompleted: 0,
@@ -166,7 +170,11 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
     const q = search.toLowerCase();
     const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
     const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;
-    const matchStatus = statusFilter === "Semua Status" || statusFilter === "All Status" || kpi.status === statusFilter;
+    const matchStatus =
+      statusFilter === "Semua Status" ||
+      statusFilter === "All Status" ||
+      kpi.status === statusFilter ||
+      kpi.measurementStatus === statusFilter;
     return matchSearch && matchUnit && matchStatus;
   });
 
@@ -224,7 +232,7 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
         </div>
         <div className="flex items-center gap-2">
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-sm outline-none bg-transparent text-gray-600 cursor-pointer">
-            {["All Status", "Unsubmitted", "Pending-Check", "Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Revision", "Validated"].map((s) => <option key={s}>{s}</option>)}
+            {["All Status", "Unsubmitted", "Tracking Progress", "Pending-Check", "Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Revision", "Validated"].map((s) => <option key={s}>{s}</option>)}
           </select>
         </div>
         {hasActiveFilters && (
@@ -334,4 +342,37 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
       </div>
     </div>
   );
+}
+function resolveKpiMeasurementStatus(empId: string, rec?: WorkflowRecord): KPIWorkflowStatus {
+  const val = rec?.decisions.validator?.status ?? "";
+  const a2 = rec?.decisions.approver2?.status ?? "";
+  const a1 = rec?.decisions.approver1?.status ?? "";
+  const chk = rec?.decisions.checker?.status ?? "";
+  if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") {
+    return "Revision";
+  }
+  const evalKpi = evaluateEmployeeKPITracking(empId);
+  if (!rec && !evalKpi.hasAnyTrackingData) {
+    return "Unsubmitted";
+  }
+  // Selama bulan tracking belum genap 12 bulan (Jan–Des), statusnya Tracking Progress
+  if (!evalKpi.isFullYearMonthsComplete) {
+    return "Tracking Progress";
+  }
+  if (!rec) {
+    return "Tracking Progress";
+  }
+  if (val === "Validated" || a2 === "Validated") {
+    return "Validated";
+  }
+  if (a2 === "Approved" || a2.startsWith("Assessed")) {
+    return "Pending-Validate";
+  }
+  if (a1 === "Approved" || a1.startsWith("Assessed")) {
+    return "Pending-Approver 2";
+  }
+  if (chk && chk !== "Revision") {
+    return "Pending-Approver 1";
+  }
+  return "Pending-Check";
 }
