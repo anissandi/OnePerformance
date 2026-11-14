@@ -1,4 +1,5 @@
-import { createBrowserRouter } from "react-router"
+import { useEffect } from "react"
+import { createBrowserRouter, useRouteError } from "react-router"
 import { LoginPage } from "./pages/LoginPage"
 import { AppLayout } from "./components/Layout"
 import { AnalyticsDashboard } from "./pages/hr/AnalyticsDashboard"
@@ -141,18 +142,57 @@ function HREvidenceInterview() {
   return <EvidencePage type="Management Interview" />
 }
 
+function RouteErrorFallback() {
+  const error = useRouteError() as Error | undefined
+  const msg = error?.message || "Unexpected runtime error"
+  const isHookHmrError =
+    msg.includes("Rendered more hooks") ||
+    msg.includes("Rendered fewer hooks") ||
+    msg.includes("change in the order of Hooks")
+
+  useEffect(() => {
+    if (isHookHmrError) {
+      const key = "pa_hmr_hook_reload_ts"
+      const last = Number(sessionStorage.getItem(key) || "0")
+      if (Date.now() - last > 3000) {
+        sessionStorage.setItem(key, String(Date.now()))
+        window.location.reload()
+      }
+    }
+  }, [isHookHmrError])
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-8 max-w-md w-full text-center space-y-4">
+        <h2 className="text-lg font-bold text-[#1A284F]">Memuat Ulang Halaman</h2>
+        <p className="text-xs text-gray-500 leading-relaxed">{msg}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="px-5 py-2.5 rounded-xl bg-[#1A284F] text-white text-xs font-semibold hover:bg-[#131d3b] transition-colors"
+        >
+          Muat Ulang Sekarang
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export const router = createBrowserRouter([
   {
     path: "/login",
     Component: LoginPage,
+    ErrorBoundary: RouteErrorFallback,
   },
   {
     path: "/",
     Component: LoginPage,
+    ErrorBoundary: RouteErrorFallback,
   },
   {
     path: "/hr",
     Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
     children: [
       { index: true, Component: AnalyticsDashboard },
       { path: "analytics", Component: AnalyticsDashboard },
@@ -304,6 +344,7 @@ export const router = createBrowserRouter([
   {
     path: "/supervisor",
     Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
     children: [
       { index: true, Component: SupervisorDashboard },
       { path: "dashboard", Component: SupervisorDashboard },
@@ -455,6 +496,7 @@ export const router = createBrowserRouter([
   {
     path: "/employee",
     Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
     children: [
       { index: true, Component: StaffDashboard },
       { path: "dashboard", Component: StaffDashboard },
@@ -580,6 +622,7 @@ export const router = createBrowserRouter([
   {
     path: "/bod",
     Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
     children: [
       { index: true, Component: BODAnalyticsDashboard },
       { path: "analytics", Component: BODAnalyticsDashboard },
@@ -698,6 +741,7 @@ export const router = createBrowserRouter([
   {
     path: "/dashboard",
     Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
     children: [
       { index: true, Component: SupervisorDashboard },
       { path: ":tab", Component: SupervisorDashboard },
@@ -706,6 +750,7 @@ export const router = createBrowserRouter([
   {
     path: "/settings",
     Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
     children: [
       { path: "user-management", Component: UserManagementPage },
       { path: "user-management/login", Component: LoginManagementPage },
@@ -722,5 +767,6 @@ export const router = createBrowserRouter([
   {
     path: "*",
     Component: LoginPage,
+    ErrorBoundary: RouteErrorFallback,
   },
 ])

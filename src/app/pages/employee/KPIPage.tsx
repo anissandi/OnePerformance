@@ -3434,7 +3434,7 @@ export function KPIPage() {
   };
 
   // Poin 6 & 7: Validasi wajib sudah ada aksi pengisian bulan KPI DAN upload evidence wajib untuk SEMUA bulan
-  const kpiSubmitValidation = React.useMemo(() => {
+  const kpiSubmitValidation = (() => {
     const reasons: string[] = [];
     if (months.length === 0) {
       reasons.push("Belum ada bulan KPI Tracking yang ditambahkan (+ Add Month).");
@@ -3480,7 +3480,7 @@ export function KPIPage() {
       canSubmit: reasons.length === 0,
       reasons,
     };
-  }, [months, cellsMap, businessCellsMap, evidenceFiles, hasDualKpiTabs, directorKpiTab]);
+  })();
 
   const handleSubmitClick = () => {
     if (!kpiSubmitValidation.canSubmit) {

@@ -1,3 +1,4 @@
+// @refresh reset
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { getPenilai1ScoreAsPercent, subscribeScores } from "../supervisor/managementInterviewScoreStore";

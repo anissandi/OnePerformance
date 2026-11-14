@@ -1190,33 +1190,8 @@ export function SmartGoalsCheckInPage() {
 
   const handleImport = async (_file: File) => { /* placeholder */ };
 
-  if (!goals) {
-    return (
-      <div className="w-full flex flex-col gap-6">
-        <div>
-          <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">SMART Goals Measurement</h1>
-          <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
-        </div>
-        <div className="flex flex-col items-center justify-center py-20 gap-4 border border-dashed border-gray-200 rounded-2xl bg-gray-50/50">
-          <div className="w-14 h-14 rounded-full bg-amber-50 flex items-center justify-center">
-            <AlertCircle className="w-7 h-7 text-amber-500" />
-          </div>
-          <div className="text-center max-w-sm">
-            <p className="text-base font-bold text-gray-800 mb-1">No SMART Goals Data</p>
-            <p className="text-sm text-gray-500 leading-relaxed">
-              Data akan muncul setelah SMART Goals disubmit dari{" "}
-              <span className="font-semibold text-[#1A284F]">Performance Appraisal Setting → SMART Goals</span>.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const editable = isSettingValidated && view === "input" && !submitted;
-
-  // Validasi kelengkapan seluruh field SMART Goals Measurement (Poin 9)
-  const smartGoalsValidation = React.useMemo(() => {
+  // Validasi kelengkapan seluruh field SMART Goals Measurement (tanpa menambah hook baru agar aman saat HMR)
+  const smartGoalsValidation = (() => {
     const missing: string[] = [];
     if (!goals || goals.length === 0) {
       missing.push("Belum ada data SMART Goals.");
@@ -1265,7 +1240,32 @@ export function SmartGoalsCheckInPage() {
       isComplete: missing.length === 0,
       missing,
     };
-  }, [goals, entries, targetActuals]);
+  })();
+
+  if (!goals) {
+    return (
+      <div className="w-full flex flex-col gap-6">
+        <div>
+          <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">SMART Goals Measurement</h1>
+          <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
+        </div>
+        <div className="flex flex-col items-center justify-center py-20 gap-4 border border-dashed border-gray-200 rounded-2xl bg-gray-50/50">
+          <div className="w-14 h-14 rounded-full bg-amber-50 flex items-center justify-center">
+            <AlertCircle className="w-7 h-7 text-amber-500" />
+          </div>
+          <div className="text-center max-w-sm">
+            <p className="text-base font-bold text-gray-800 mb-1">No SMART Goals Data</p>
+            <p className="text-sm text-gray-500 leading-relaxed">
+              Data akan muncul setelah SMART Goals disubmit dari{" "}
+              <span className="font-semibold text-[#1A284F]">Performance Appraisal Setting → SMART Goals</span>.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const editable = isSettingValidated && view === "input" && !submitted;
 
   // Ekstrak nilai & catatan terbaru dari Approver 1 & Approver 2 untuk Penilaian Akhir
   const activeUser = getActiveUser();
