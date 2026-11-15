@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { createBrowserRouter, useRouteError } from "react-router"
+import { Navigate, createBrowserRouter, useRouteError } from "react-router"
 import { LoginPage } from "./pages/LoginPage"
 import { AppLayout } from "./components/Layout"
 import { AnalyticsDashboard } from "./pages/hr/AnalyticsDashboard"
@@ -77,6 +77,9 @@ import {
   getGroupCompaniesForUnit,
   getRoleAllowedCompanyUnits,
   isDirectorRoleOrGrouping,
+  peekSessionValidity,
+  resolveEffectiveUserGrouping,
+  resolvePortalPathForRole,
 } from "./store/authStore"
 
 function HRAppraisalSummary() {
@@ -181,6 +184,20 @@ function RouteErrorFallback() {
   )
 }
 
+function RootEntryPage() {
+  const { valid } = peekSessionValidity()
+  if (valid) {
+    const user = getActiveUser()
+    const dest = resolvePortalPathForRole(
+      user.role,
+      user.position,
+      resolveEffectiveUserGrouping(user),
+    )
+    return <Navigate to={dest} replace />
+  }
+  return <LoginPage />
+}
+
 export const router = createBrowserRouter([
   {
     path: "/login",
@@ -189,7 +206,7 @@ export const router = createBrowserRouter([
   },
   {
     path: "/",
-    Component: LoginPage,
+    Component: RootEntryPage,
     ErrorBoundary: RouteErrorFallback,
   },
   {

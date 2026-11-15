@@ -1,5 +1,6 @@
+// @refresh reset
 import { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import {
   Building2,
   ChevronDown,
@@ -12,12 +13,17 @@ import {
   CheckCircle2,
   ShieldAlert,
   HelpCircle,
+  Users,
+  Clock,
 } from "lucide-react";
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
+import { TrialUserPicker } from "../components/TrialUserPicker";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import worldMap from "@/imports/image-3.png";
 import {
   COMPANY_UNIT_LOCATIONS,
+  SESSION_EXPIRED_NOTICE_KEY,
+  evaluateAndSyncSession,
   loadManagedUsers,
   loginWithCompanyAndEmployeeId,
 } from "../store/authStore";
@@ -47,6 +53,7 @@ const METHOD_LABELS: Record<LoginMethodOption, string> = {
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { getUnitLoginConfig } = useLoginManagement();
   const [locOpen, setLocOpen] = useState(false);
   const [selectedLoc, setSelectedLoc] = useState(locations[0]);
@@ -56,6 +63,10 @@ export function LoginPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const otpRef = useRef<HTMLInputElement>(null);
+  const [userPickerOpen, setUserPickerOpen] = useState(false);
+  const userPickerRef = useRef<HTMLDivElement>(null);
+  const [, setUsersTick] = useState(0);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
 
   // Password login & change-default-password states
   const unitLoginCfg = getUnitLoginConfig(selectedLoc.company);
@@ -87,10 +98,57 @@ export function LoginPage() {
     setPasswordInput("");
     setMustChangeStep(false);
     setError("");
+    setUserPickerOpen(false);
   }, [selectedLoc.company, unitLoginCfg.enabledMethods.join(",")]);
+
+  useEffect(() => {
+    // Finalisasi sesi yang kadaluarsa saat diarahkan ke halaman login
+    const sessionStatus = evaluateAndSyncSession(false);
+    let expired = sessionStatus.expiredNow;
+    try {
+      if (sessionStorage.getItem(SESSION_EXPIRED_NOTICE_KEY) === "1") {
+        expired = true;
+        sessionStorage.removeItem(SESSION_EXPIRED_NOTICE_KEY);
+      }
+    } catch {
+      // ignore
+    }
+    if (expired) {
+      setSessionExpiredNotice(true);
+    }
+
+    const onUsersRefresh = () => setUsersTick((t) => t + 1);
+    const onDocClick = (e: MouseEvent) => {
+      if (userPickerRef.current && !userPickerRef.current.contains(e.target as Node)) {
+        setUserPickerOpen(false);
+      }
+    };
+    window.addEventListener("pa-db-hydrated", onUsersRefresh);
+    window.addEventListener("pa-auth-updated", onUsersRefresh);
+    document.addEventListener("mousedown", onDocClick);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onUsersRefresh);
+      window.removeEventListener("pa-auth-updated", onUsersRefresh);
+      document.removeEventListener("mousedown", onDocClick);
+    };
+  }, []);
+
+  function resolvePostLoginDestination(defaultPortalPath: string): string {
+    const from = (location.state as { from?: string } | null)?.from;
+    if (
+      typeof from === "string" &&
+      (from === defaultPortalPath || from.startsWith(`${defaultPortalPath}/`))
+    ) {
+      return from;
+    }
+    return defaultPortalPath;
+  }
 
   const unitUsers = loadManagedUsers().filter(
     (u) => u.company === selectedLoc.company && u.status === "Active",
+  );
+  const selectedUnitUser = unitUsers.find(
+    (u) => u.employeeId.toLowerCase() === employeeId.trim().toLowerCase(),
   );
   const matchedEmployee = loadManagedUsers().find(
     (u) =>
@@ -142,7 +200,7 @@ export function LoginPage() {
         setError(res.error);
         return;
       }
-      navigate(res.redirectPath);
+      navigate(resolvePostLoginDestination(res.redirectPath), { replace: true });
       return;
     }
 
@@ -153,7 +211,7 @@ export function LoginPage() {
       setError(res.error);
       return;
     }
-    navigate(res.redirectPath);
+    navigate(resolvePostLoginDestination(res.redirectPath), { replace: true });
   }
 
   function handleSaveMandatoryNewPassword() {
@@ -325,6 +383,14 @@ export function LoginPage() {
             </div>
           ) : (
             <>
+          {sessionExpiredNotice && (
+            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800 flex items-start gap-2">
+              <Clock className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+              <span>
+                Sesi login 30 menit Anda telah berakhir karena tidak aktif di halaman Sistem PA. Silakan login kembali.
+              </span>
+            </div>
+          )}
           {/* Lokasi Usaha */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2">
@@ -377,24 +443,48 @@ export function LoginPage() {
               className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]/40 transition-colors disabled:bg-gray-50 disabled:text-gray-500"
             />
             {unitUsers.length > 0 && !otpSent && (
-              <div className="mt-2">
-                <select
-                  value={unitUsers.some((u) => u.employeeId === employeeId) ? employeeId : ""}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      setEmployeeId(e.target.value);
-                      setError("");
-                    }
-                  }}
-                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-600 bg-gray-50/80 focus:outline-none focus:border-[#1A284F]/40"
+              <div className="mt-2 relative" ref={userPickerRef}>
+                <button
+                  type="button"
+                  onClick={() => setUserPickerOpen((o) => !o)}
+                  className="w-full flex items-center justify-between gap-2 border border-gray-200 rounded-xl px-3 py-2 text-xs bg-gray-50/90 hover:bg-gray-100/80 text-gray-700 transition-colors focus:outline-none focus:border-[#1A284F]/40"
                 >
-                  <option value="">— Pilih Akun {selectedLoc.company} (User Management) —</option>
-                  {unitUsers.map((u) => (
-                    <option key={u.employeeId} value={u.employeeId}>
-                      {u.employeeId} · {u.name} ({u.role} — {u.position})
-                    </option>
-                  ))}
-                </select>
+                  <span className="flex items-center gap-2 min-w-0 truncate">
+                    <Users className="w-3.5 h-3.5 text-[#1A284F] shrink-0" />
+                    {selectedUnitUser ? (
+                      <span className="truncate">
+                        <span className="font-mono font-semibold text-[#1A284F]">{selectedUnitUser.employeeId}</span>
+                        {" · "}
+                        <span className="font-semibold text-gray-800">{selectedUnitUser.name}</span>
+                        {" ("}
+                        <span className="text-gray-600">{selectedUnitUser.position || "—"}</span>
+                        {")"}
+                      </span>
+                    ) : (
+                      <span className="text-gray-500 truncate">
+                        Pilih Akun {selectedLoc.company} ({unitUsers.length} user)
+                      </span>
+                    )}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-gray-400 shrink-0 transition-transform ${userPickerOpen ? "rotate-180" : ""}`} />
+                </button>
+
+                {userPickerOpen && (
+                  <div className="absolute left-0 right-0 z-30 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl p-2.5">
+                    <TrialUserPicker
+                      users={unitUsers}
+                      selectedEmployeeId={employeeId.trim()}
+                      placeholder={`Cari ID, nama, atau jabatan di ${selectedLoc.company}...`}
+                      maxHeightClass="max-h-60"
+                      autoFocusSearch
+                      onSelect={(u) => {
+                        setEmployeeId(u.employeeId);
+                        setError("");
+                        setUserPickerOpen(false);
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>

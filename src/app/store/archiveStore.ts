@@ -83,7 +83,7 @@ export function restoreArchivedUser(archiveId: string): ManagedUser | null {
   return restored;
 }
 
-const PROTECTED_KEYS = new Set([ARCHIVE_KEY, "pa_active_user_v1", "pa_managed_users_v1"]);
+const PROTECTED_KEYS = new Set([ARCHIVE_KEY, "pa_active_user_v1", "pa_auth_session_v1", "pa_managed_users_v1"]);
 
 /** Hapus permanen user arsip beserta seluruh history PA & evidence miliknya. */
 export function permanentlyDeleteArchivedUser(archiveId: string): boolean {

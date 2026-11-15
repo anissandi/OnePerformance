@@ -509,16 +509,15 @@ function ExpandHint({ expanded }: { expanded: boolean }) {
   );
 }
 
-const DIVISION_MODULES: Array<{ key: string; label: string; scoreKey?: keyof Employee }> = [
-  { key: "KPI (Setting)", label: "KPI Setting", scoreKey: "kpi" },
-  { key: "KPI (Tracking)", label: "KPI Tracking", scoreKey: "kpi" },
-  { key: "SMART Goals (Setting)", label: "SMART Goals Setting", scoreKey: "smartGoals" },
-  { key: "SMART Goals (Tracking)", label: "SMART Goals Measurement", scoreKey: "smartGoals" },
-  { key: "RCA", label: "RCA" },
-  { key: "Appraisal Form", label: "Appraisal Form", scoreKey: "formA" },
-  { key: "Managerial Skill", label: "Managerial Skill", scoreKey: "managerialSkill" },
-  { key: "Project OJS", label: "Project Outside Job Scope", scoreKey: "project" },
-  { key: "Inter-Department Feedback", label: "Inter-Department Feedback" },
+const DIVISION_MODULES: Array<{ key: string; label: string; shortLabel: string; scoreKey?: keyof Employee }> = [
+  { key: "KPI (Setting)", label: "KPI Setting", shortLabel: "KPI Setting", scoreKey: "kpi" },
+  { key: "KPI (Tracking)", label: "KPI Tracking", shortLabel: "KPI Tracking", scoreKey: "kpi" },
+  { key: "SMART Goals (Setting)", label: "SMART Goals Setting", shortLabel: "SMART Set.", scoreKey: "smartGoals" },
+  { key: "SMART Goals (Tracking)", label: "SMART Goals Measurement", shortLabel: "SMART Meas.", scoreKey: "smartGoals" },
+  { key: "Appraisal Form", label: "Appraisal Form", shortLabel: "Appraisal", scoreKey: "formA" },
+  { key: "Managerial Skill", label: "Managerial Skill", shortLabel: "Managerial", scoreKey: "managerialSkill" },
+  { key: "Project OJS", label: "Project Outside Job Scope", shortLabel: "Project OJS", scoreKey: "project" },
+  { key: "Inter-Department Feedback", label: "Inter-Department Feedback", shortLabel: "IDF" },
 ];
 
 function employeeModuleScore(emp: Employee, scoreKey?: keyof Employee): number | null {
@@ -551,11 +550,11 @@ function MultiModuleDivisionSection({
 }) {
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
   const radarData = useMemo(() => {
-    return DIVISION_MODULES.map(({ key, label }) => {
+    return DIVISION_MODULES.map(({ key, label, shortLabel }) => {
       const st = computeModuleStatsForUsers(scopedUsers, workflows, key, year);
       const pct = st.total > 0 ? Math.round((st.completed / st.total) * 1000) / 10 : 0;
       return {
-        subject: label,
+        subject: shortLabel,
         key,
         fullLabel: MODULE_SHORT[key] ?? label,
         pct,
@@ -633,7 +632,7 @@ function MultiModuleDivisionSection({
       </button>
 
       <div key={`mm-${motionKey}`} className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1 items-stretch pa-card-motion">
-        {/* Left: Module Completion lines (klik untuk filter divisi) */}
+        {/* Left: Module Completion Spider Diagram (klik label/titik untuk filter divisi) */}
         <div className="flex flex-col">
           <div className="flex items-center justify-between gap-2 mb-2">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">MODULE COMPLETION</p>
@@ -647,35 +646,114 @@ function MultiModuleDivisionSection({
               </button>
             )}
           </div>
-          <div className="flex flex-col gap-1">
-            {radarData.map((d) => {
-              const active = selectedModule === d.key;
-              const dimmed = selectedModule !== null && !active;
-              return (
-                <button
-                  key={d.key}
-                  type="button"
-                  onClick={() => setSelectedModule(active ? null : d.key)}
-                  title={`${d.fullLabel}: ${d.completed}/${d.total} completed — klik untuk filter Average Score by Division`}
-                  className={`group w-full rounded-lg px-2 py-1.5 text-left transition-all duration-300 ${
-                    active ? "bg-sky-50 ring-1 ring-sky-300" : "hover:bg-slate-50"
-                  } ${dimmed ? "opacity-50" : ""}`}
-                >
-                  <div className="flex items-center justify-between gap-2 text-[10.5px]">
-                    <span className={`truncate font-medium ${active ? "text-sky-800" : "text-slate-600"}`}>{d.subject}</span>
-                    <span className="shrink-0 font-bold text-slate-700">
-                      {d.pct}% <span className="font-normal text-slate-400">({d.completed}/{d.total})</span>
-                    </span>
-                  </div>
-                  <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ${active ? "bg-sky-600" : "bg-sky-400 group-hover:bg-sky-500"}`}
-                      style={{ width: `${Math.min(100, d.pct)}%` }}
-                    />
-                  </div>
-                </button>
-              );
-            })}
+          <div className="flex-1 min-h-[225px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart
+                cx="50%"
+                cy="52%"
+                outerRadius={expanded ? "72%" : "64%"}
+                data={radarData}
+                onClick={(state) => {
+                  const lbl = (state as { activeLabel?: string } | null)?.activeLabel;
+                  if (!lbl) return;
+                  const hit = radarData.find((item) => item.subject === lbl);
+                  if (hit) setSelectedModule((cur) => (cur === hit.key ? null : hit.key));
+                }}
+              >
+                <PolarGrid stroke="#CBD5E1" strokeOpacity={0.7} />
+                <PolarAngleAxis
+                  dataKey="subject"
+                  tick={(props: {
+                    payload?: { value?: string };
+                    x?: number | string;
+                    y?: number | string;
+                    textAnchor?: "start" | "middle" | "end" | "inherit";
+                  }) => {
+                    const val = String(props.payload?.value ?? "");
+                    const hit = radarData.find((item) => item.subject === val);
+                    const isActive = Boolean(hit && selectedModule === hit.key);
+                    return (
+                      <text
+                        x={props.x}
+                        y={props.y}
+                        textAnchor={props.textAnchor}
+                        dominantBaseline="central"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (hit) setSelectedModule((cur) => (cur === hit.key ? null : hit.key));
+                        }}
+                        style={{ cursor: "pointer" }}
+                        fontSize={9.5}
+                        fontWeight={isActive ? 700 : 500}
+                        fill={isActive ? "#0369A1" : "#475569"}
+                      >
+                        {val}
+                      </text>
+                    );
+                  }}
+                />
+                <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
+                <Radar
+                  name="Completion"
+                  dataKey="pct"
+                  stroke="#0284C7"
+                  strokeWidth={2}
+                  fill="#0EA5E9"
+                  fillOpacity={0.22}
+                  dot={(props: {
+                    cx?: number;
+                    cy?: number;
+                    index?: number;
+                    payload?: { payload?: { key?: string } };
+                  }) => {
+                    const rowKey =
+                      (typeof props.index === "number" ? radarData[props.index]?.key : undefined) ??
+                      props.payload?.payload?.key;
+                    const isActive = Boolean(rowKey && selectedModule === rowKey);
+                    return (
+                      <circle
+                        key={rowKey ?? `radar-dot-${props.index ?? 0}`}
+                        cx={props.cx ?? 0}
+                        cy={props.cy ?? 0}
+                        r={isActive ? 5.5 : 3.5}
+                        fill={isActive ? "#0369A1" : "#0284C7"}
+                        stroke={isActive ? "#BAE6FD" : "#FFFFFF"}
+                        strokeWidth={isActive ? 2.5 : 1}
+                        style={{ cursor: "pointer" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (rowKey) setSelectedModule((cur) => (cur === rowKey ? null : rowKey));
+                        }}
+                      />
+                    );
+                  }}
+                  activeDot={{ r: 5.5, fill: "#0369A1" }}
+                  isAnimationActive={true}
+                  animationDuration={900}
+                  animationEasing="ease-out"
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const d = payload[0].payload as {
+                      fullLabel: string;
+                      pct: number;
+                      completed: number;
+                      total: number;
+                    };
+                    return (
+                      <div className="bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-lg text-xs">
+                        <p className="font-bold text-[#1A284F] mb-0.5">{d.fullLabel}</p>
+                        <p className="text-gray-600">
+                          Completed: <span className="font-bold text-sky-700">{d.pct}%</span> ({d.completed}/{d.total})
+                        </p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Klik untuk filter divisi</p>
+                      </div>
+                    );
+                  }}
+                />
+              </RadarChart>
+            </ResponsiveContainer>
           </div>
         </div>
 
@@ -817,10 +895,10 @@ function ApprovalTrackingBottleneckSection({
 
     const stages = [
       { stage: "Submitted", funnelLabel: "Submitted", completed: 0, waiting: 0, revision: 0 },
-      { stage: "HR Unit Check", funnelLabel: "HR Unit Check", completed: 0, waiting: 0, revision: 0 },
+      { stage: "Checking", funnelLabel: "Checking", completed: 0, waiting: 0, revision: 0 },
       { stage: "Approval 1", funnelLabel: "Approval 1", completed: 0, waiting: 0, revision: 0 },
       { stage: "Approval 2", funnelLabel: "Approval 2", completed: 0, waiting: 0, revision: 0 },
-      { stage: "HR ICF Validate", funnelLabel: "HR ICF Validate", completed: 0, waiting: 0, revision: 0 },
+      { stage: "Validate", funnelLabel: "Validate", completed: 0, waiting: 0, revision: 0 },
     ];
 
     for (const rec of relevant) {
@@ -840,7 +918,7 @@ function ApprovalTrackingBottleneckSection({
         ? Boolean(bypassCheck || a1Done || a2Done || valDone || (chk && chk !== "Revision"))
         : true;
 
-      // HR Unit Check stage
+      // Checking stage
       if (isFourStep) {
         if (chk === "Revision") {
           stages[1].revision += 1;
@@ -871,7 +949,7 @@ function ApprovalTrackingBottleneckSection({
         stages[3].waiting += 1;
       }
 
-      // HR ICF Validate stage
+      // Validate stage
       if (isFourStep) {
         if (val === "Revision") {
           stages[4].revision += 1;

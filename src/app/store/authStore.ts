@@ -797,6 +797,154 @@ export function defaultAllowedModulesForGrouping(group: string): AppraisalModule
 const USERS_KEY = "pa_managed_users_v1";
 const ACTIVE_USER_KEY = "pa_active_user_v1";
 const GROUP_RULES_BY_UNIT_KEY = "pa_group_rules_by_unit_v1";
+export const AUTH_SESSION_KEY = "pa_auth_session_v1";
+export const SESSION_EXPIRED_NOTICE_KEY = "pa_session_expired_notice_v1";
+export const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 menit di luar halaman Sistem PA
+
+export interface AuthSessionState {
+  isAuthenticated: boolean;
+  employeeId: string;
+  loginAt: number;
+  /**
+   * null selama user berada & aktif melihat halaman Sistem PA (timer tidak menghitung).
+   * Berisi timestamp (ms) saat user keluar/tidak berada di halaman Sistem PA, sehingga
+   * hitungan mundur 30 menit berjalan; di-reset kembali ke null bila user kembali sebelum 30 menit.
+   */
+  awayStartedAt: number | null;
+  /** Heartbeat terakhir saat halaman Sistem PA terbuka & terlihat. */
+  lastActiveAt: number;
+}
+
+function readAuthSessionRaw(): AuthSessionState | null {
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AuthSessionState;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function startOrRefreshAuthSession(employeeId: string): AuthSessionState {
+  const now = Date.now();
+  const next: AuthSessionState = {
+    isAuthenticated: true,
+    employeeId,
+    loginAt: now,
+    awayStartedAt: null,
+    lastActiveAt: now,
+  };
+  try {
+    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
+    sessionStorage.removeItem(SESSION_EXPIRED_NOTICE_KEY);
+  } catch {
+    // ignore storage errors
+  }
+  return next;
+}
+
+export function logoutCurrentUser(reason: "manual" | "expired" = "manual"): void {
+  try {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+    localStorage.removeItem(ACTIVE_USER_KEY);
+    if (reason === "expired") {
+      sessionStorage.setItem(SESSION_EXPIRED_NOTICE_KEY, "1");
+    } else {
+      sessionStorage.removeItem(SESSION_EXPIRED_NOTICE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+  window.dispatchEvent(new Event("pa-auth-updated"));
+}
+
+/** Pengecekan murni tanpa side-effect (aman dipanggil saat render komponen guard). */
+export function peekSessionValidity(now = Date.now()): { valid: boolean; expired: boolean } {
+  const session = readAuthSessionRaw();
+  if (!session || !session.isAuthenticated || !session.employeeId) {
+    return { valid: false, expired: false };
+  }
+  let hasActiveUser = false;
+  try {
+    hasActiveUser = Boolean(localStorage.getItem(ACTIVE_USER_KEY));
+  } catch {
+    hasActiveUser = false;
+  }
+  if (!hasActiveUser) {
+    return { valid: false, expired: false };
+  }
+  if (session.awayStartedAt !== null) {
+    if (now - session.awayStartedAt >= SESSION_TIMEOUT_MS) {
+      return { valid: false, expired: true };
+    }
+    return { valid: true, expired: false };
+  }
+  // Cadangan bila browser ditutup paksa/crash tanpa sempat menembakkan event pagehide/visibilitychange
+  const lastBeat = session.lastActiveAt || session.loginAt || now;
+  if (now - lastBeat >= SESSION_TIMEOUT_MS) {
+    return { valid: false, expired: true };
+  }
+  return { valid: true, expired: false };
+}
+
+/**
+ * Evaluasi & sinkronisasi status sesi 30 menit:
+ * - Saat `onPaPageVisible === true` dan sesi masih valid: `awayStartedAt` di-reset ke `null`
+ *   (hitungan 30 menit tidak berjalan selama di halaman PA, dan reset penuh bila baru kembali).
+ * - Saat `onPaPageVisible === false`: `awayStartedAt` mulai mencatat waktu keluar halaman PA.
+ * - Bila waktu di luar halaman PA mencapai >= 30 menit: otomatis logout (`expired`).
+ */
+export function evaluateAndSyncSession(
+  onPaPageVisible: boolean,
+  now = Date.now(),
+): { authenticated: boolean; expiredNow: boolean } {
+  const check = peekSessionValidity(now);
+  if (!check.valid) {
+    if (check.expired) {
+      logoutCurrentUser("expired");
+    }
+    return { authenticated: false, expiredNow: check.expired };
+  }
+  const session = readAuthSessionRaw()!;
+  try {
+    if (onPaPageVisible) {
+      if (session.awayStartedAt !== null || now - (session.lastActiveAt || 0) >= 10_000) {
+        const updated: AuthSessionState = {
+          ...session,
+          awayStartedAt: null,
+          lastActiveAt: now,
+        };
+        localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(updated));
+      }
+    } else if (session.awayStartedAt === null) {
+      const updated: AuthSessionState = {
+        ...session,
+        awayStartedAt: now,
+      };
+      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(updated));
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return { authenticated: true, expiredNow: false };
+}
+
+/** Tandai user baru saja keluar dari halaman Sistem PA agar hitungan 30 menit dimulai. */
+export function markSessionAwayFromPaPage(now = Date.now()): void {
+  const session = readAuthSessionRaw();
+  if (!session || !session.isAuthenticated) return;
+  if (session.awayStartedAt !== null) return;
+  try {
+    localStorage.setItem(
+      AUTH_SESSION_KEY,
+      JSON.stringify({ ...session, awayStartedAt: now }),
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
 
 export function loadManagedUsers(): ManagedUser[] {
   try {
@@ -1137,6 +1285,7 @@ export function loginWithCompanyAndEmployeeId(
   const updatedList = users.map((u) => (u.id === matched.id ? updatedUser : u));
   localStorage.setItem(USERS_KEY, JSON.stringify(updatedList));
   localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(updatedUser));
+  startOrRefreshAuthSession(updatedUser.employeeId);
   window.dispatchEvent(new Event("pa-auth-updated"));
   void notifyLoginToSupabase({
     employeeId: updatedUser.employeeId,
@@ -1154,6 +1303,7 @@ export function switchActiveUserByEmployeeId(employeeId: string): ManagedUser | 
   const found = users.find((u) => u.employeeId.toUpperCase() === employeeId.toUpperCase());
   if (!found) return null;
   localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(found));
+  startOrRefreshAuthSession(found.employeeId);
   window.dispatchEvent(new Event("pa-auth-updated"));
   return found;
 }

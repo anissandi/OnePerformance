@@ -3,7 +3,12 @@ import { Bell, User, LogOut, ChevronDown, Clock, ArrowRight, X, CheckCheck, Sear
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router";
 import { STAFF_PROFILE, SUPERVISOR_PROFILE } from "../store/profileStore";
-import { resolvePortalPathForRole, switchActiveUserByEmployeeId, useAuthStore } from "../store/authStore";
+import {
+  logoutCurrentUser,
+  resolvePortalPathForRole,
+  switchActiveUserByEmployeeId,
+  useAuthStore,
+} from "../store/authStore";
 import {
   NOTIFICATION_CATEGORY_META,
   resolveNotificationRouteForUser,
@@ -13,6 +18,7 @@ import {
   updateEmployeeNewPassword,
   validateNewPasswordPolicy,
 } from "../store/loginManagementStore";
+import { TrialUserPicker } from "./TrialUserPicker";
 
 // ─── Search data ──────────────────────────────────────────────────────────────
 
@@ -578,7 +584,7 @@ export function Topbar({
           </button>
 
           {dropOpen && (
-            <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-50">
+            <div className="absolute right-0 top-full mt-2 w-80 sm:w-[340px] bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden z-50">
               <div className="px-4 py-2.5 bg-gray-50/80 border-b border-gray-100">
                 <p className="text-xs font-bold text-[#1A284F] truncate">{activeUser.name}</p>
                 <p className="text-[11px] text-gray-600 truncate">{activeUser.position || "—"}</p>
@@ -604,33 +610,32 @@ export function Topbar({
                 <KeyRound className="w-4 h-4 text-indigo-500" />
                 Ganti Password
               </button>
-              <div className="px-4 py-2 border-t border-gray-100">
-                <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+              <div className="px-4 py-2.5 border-t border-gray-100">
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">
                   Pindah Akun (User Management)
                 </label>
-                <select
-                  value={activeUser.employeeId}
-                  onChange={(e) => {
-                    const switched = switchActiveUserByEmployeeId(e.target.value);
+                <TrialUserPicker
+                  users={allUsers.filter((u) => u.status === "Active" && Boolean(u.employeeId))}
+                  selectedEmployeeId={activeUser.employeeId}
+                  showCompany
+                  placeholder="Cari ID, nama, jabatan, unit..."
+                  maxHeightClass="max-h-56"
+                  onSelect={(u) => {
+                    const switched = switchActiveUserByEmployeeId(u.employeeId);
                     setDropOpen(false);
                     if (switched) {
                       navigate(resolvePortalPathForRole(switched.role, switched.position));
                     }
                   }}
-                  className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-[#1A284F]"
-                >
-                  {allUsers
-                    .filter((u) => u.status === "Active" && u.role)
-                    .map((u) => (
-                      <option key={u.employeeId} value={u.employeeId}>
-                        {u.employeeId} · {u.name} ({u.role} - {u.company})
-                      </option>
-                    ))}
-                </select>
+                />
               </div>
               <div className="h-px bg-gray-100" />
               <button
-                onClick={() => { setDropOpen(false); navigate("/login"); }}
+                onClick={() => {
+                  setDropOpen(false);
+                  logoutCurrentUser("manual");
+                  navigate("/login", { replace: true });
+                }}
                 className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors"
               >
                 <LogOut className="w-4 h-4" />
