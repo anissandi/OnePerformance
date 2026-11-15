@@ -351,7 +351,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("pa_setting_kpi") ? [{ to: "/hr/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
         ...(canView("pa_setting_smart") ? [{ to: "/hr/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
         ...(canView("pa_setting_project") ? [{ to: "/hr/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-        ...(canView("pa_setting_interview") ? [{ to: "/hr/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
       ];
       if (canView("pa_setting") && paSettingSubs.length > 0) {
         list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
@@ -364,7 +363,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("pa_measurement_project") ? [{ to: "/hr/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
         ...(canView("pa_measurement_managerial") ? [{ to: "/hr/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
         ...(canView("pa_measurement_feedback") ? [{ to: "/hr/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-        ...(canView("pa_measurement_interview") ? [{ to: "/hr/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
       ];
       if (canView("pa_measurement") && paMeasSubs.length > 0) {
         list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
@@ -420,13 +418,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       const evLink = buildEvidenceLink("/hr");
       if (evLink) list.push(evLink);
 
-      const miSubs: NavSubLink[] = [
-        ...(canView("mgmt_interview_invitation") ? [{ to: "/hr/management-interview/invitation", label: "Invitation", icon: MessageSquare }] : []),
-      ];
-      if (canView("management_interview") && miSubs.length > 0) {
-        list.push({ label: "Management Interview", icon: MessageSquare, subLinks: miSubs });
-      }
-
       if (canView("history")) {
         list.push({ to: "/hr/history", icon: BookOpen, label: "PA Cycle History" });
       }
@@ -473,7 +464,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("pa_setting_kpi") && hasKpi ? [{ to: "/bod/setting/kpi", label: "KPI", icon: TrendingUp }] : []),
         ...(canView("pa_setting_smart") && hasSmart ? [{ to: "/bod/setting/smart-goals", label: "SMART Goals", icon: Lightbulb }] : []),
         ...(canView("pa_setting_project") && hasProject ? [{ to: "/bod/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-        ...(canView("pa_setting_interview") && hasMi ? [{ to: "/bod/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
       ];
       if (canView("pa_setting") && paSettingSubs.length > 0) {
         list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
@@ -487,7 +477,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("pa_measurement_project") && hasProject ? [{ to: "/bod/measurement/project-outside", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
         ...(canView("pa_measurement_managerial") && hasManagerial ? [{ to: "/bod/measurement/managerial-skill", label: "Managerial Skill", icon: Briefcase }] : []),
         ...(canView("pa_measurement_feedback") && hasIdf ? [{ to: "/bod/measurement/inter-department-feedback", label: "Inter-Department Feedback", icon: Users }] : []),
-        ...(canView("pa_measurement_interview") && hasMi ? [{ to: "/bod/setting/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
       ];
       if (canView("pa_measurement") && paMeasSubs.length > 0) {
         list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });
@@ -613,7 +602,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("pa_setting_kpi") && hasKpi ? [{ to: `${prefix}/setting/kpi`, label: "KPI", icon: TrendingUp }] : []),
       ...(canView("pa_setting_smart") && hasSmart ? [{ to: `${prefix}/setting/smart-goals`, label: "SMART Goals", icon: Lightbulb }] : []),
       ...(canView("pa_setting_project") && hasProject ? [{ to: `${prefix}/setting/project`, label: "Project Outside Job Scope", icon: FolderKanban }] : []),
-      ...(canView("pa_setting_interview") && hasMi ? [{ to: `${prefix}/setting/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
     ];
     if (canView("pa_setting") && paSettingSubs.length > 0) {
       list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
@@ -628,7 +616,6 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("pa_measurement_project") && hasProject ? [{ to: `${prefix}/measurement/project-outside`, label: "Project Outside Job Scope", icon: FolderKanban }] : []),
       ...(canView("pa_measurement_managerial") && hasManagerial ? [{ to: `${prefix}/measurement/managerial-skill`, label: "Managerial Skill", icon: Briefcase }] : []),
       ...(canView("pa_measurement_feedback") && hasIdf ? [{ to: `${prefix}/measurement/inter-department-feedback`, label: "Inter-Department Feedback", icon: Users }] : []),
-      ...(canView("pa_measurement_interview") && hasMi ? [{ to: `${prefix}/setting/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
     ];
     if (canView("pa_measurement") && paMeasSubs.length > 0) {
       list.push({ label: "Performance Appraisal Measurement", icon: Clock, subLinks: paMeasSubs });

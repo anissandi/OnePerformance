@@ -14,6 +14,8 @@ import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../shared/appraisa
 import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
 import { SmartGoalsScoreHistory } from "../../components/SmartGoalsScoreHistory";
+import { InterDeptFeedbackAppraisalSummary } from "../../components/InterDeptFeedbackAppraisalSummary";
+import { AppraisalRCASection } from "../employee/RCAPage";
 import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
 import { loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
@@ -1633,6 +1635,10 @@ function ManagerialSkillTab() {
 // ─── RCA Tab — live data ──────────────────────────────────────────────────────
 
 function RCATab() {
+  return <AppraisalRCASection />;
+}
+
+function _LegacySupervisorRCATabUnused() {
   const submissions = React.useMemo(() => loadRCASubmissions(), []);
   const submitted   = submissions.filter((s) => s.submittedDate && s.submittedDate !== "—");
 
@@ -2370,6 +2376,10 @@ const _UNUSED_IDF_APPROVER_SUBMITTED: Record<"a1" | "a2", IDFApproverRow[]> = {
 };
 
 function InterDeptFeedbackTab() {
+  return <InterDeptFeedbackAppraisalSummary />;
+}
+
+function _LegacyInterDeptFeedbackTabUnused() {
   const [activeFbTab, setActiveFbTab] = useState(0);
   // panelCollapsed: whether the entire indicator section for the active tab is collapsed
   const [panelCollapsed, setPanelCollapsed] = useState(false);

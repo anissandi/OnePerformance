@@ -185,6 +185,7 @@ const MODULE_RESULTS: (ModuleResult & { status: ModuleStatus; appraisalModuleKey
     id: "m6_idf",
     module: "Inter-Department Feedback",
     appraisalModuleKey: "Inter-Departement Feedback",
+    weightIndicatorKey: "Inter-Departement Feedback",
     submissionType: "Inter-Department Feedback — Measurement",
     completedDate: "—",
     score: 0,
@@ -381,6 +382,21 @@ export function ViewProfile() {
         (w.employeeId === normEmpId || w.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
     );
     const isModuleWorkflowDone = (modLabel: string): boolean => {
+      if (modLabel === "Inter-Department Feedback") {
+        const myFb = loadFeedbackSubmissions().find(
+          (s) =>
+            normalizeEmployeeId(s.row.employeeId) === normEmpId ||
+            s.row.employeeId.trim().toLowerCase() === activeUser.employeeId.trim().toLowerCase(),
+        );
+        const hasSecondAp = Boolean((activeUser.regNoAp2 ?? "").trim());
+        if (
+          myFb &&
+          Boolean(myFb.followUps.approver1?.length) &&
+          (!hasSecondAp || Boolean(myFb.followUps.approver2?.length))
+        ) {
+          return true;
+        }
+      }
       const wfKey =
         modLabel === "Project Outside Job Scope"
           ? "Project"
@@ -979,20 +995,57 @@ export function ViewProfile() {
               )}
             </div>
             <div className="flex flex-col gap-4">
-              {activeModules.map(m => (
-                <div key={m.id} className="flex items-center gap-4">
-                  <div className="flex items-center gap-2 w-52 shrink-0">
-                    <m.icon className={`w-4 h-4 shrink-0 ${m.color}`} />
-                    <span className="text-xs text-gray-700 font-medium truncate">{m.module}</span>
+              {activeModules.map(m => {
+                const isIdfUnweighted =
+                  m.module === "Inter-Department Feedback" && m.weight <= 0;
+                const isIdfFullApproved =
+                  m.module === "Inter-Department Feedback" && m.status === "approved";
+                const barClass =
+                  isIdfFullApproved && isIdfUnweighted
+                    ? "bg-gray-600"
+                    : gradeBar(m.grade);
+                const barWidth =
+                  isIdfFullApproved && isIdfUnweighted ? 100 : m.score;
+                const idfTooltip = isIdfUnweighted
+                  ? "Inter-Department Feedback tidak dinilai"
+                  : undefined;
+
+                return (
+                  <div
+                    key={m.id}
+                    title={idfTooltip}
+                    className="relative group flex items-center gap-4"
+                  >
+                    <div className="flex items-center gap-2 w-52 shrink-0">
+                      <m.icon className={`w-4 h-4 shrink-0 ${m.color}`} />
+                      <span className="text-xs text-gray-700 font-medium truncate">{m.module}</span>
+                    </div>
+                    <div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                      <div
+                        className={`${barClass} h-2.5 rounded-full transition-all`}
+                        style={{ width: `${barWidth}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-bold text-gray-800 w-8 text-right">
+                      {isIdfUnweighted ? "—" : m.score}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold w-10 text-center ${gradeColor(m.grade)}`}>
+                      {m.grade}
+                    </span>
+                    <span className="text-[10px] text-gray-400 w-16 text-right">
+                      ×{m.weight}% = <span className="font-semibold text-gray-600">{m.weightedScore.toFixed(1)}</span>
+                    </span>
+                    {idfTooltip && (
+                      <div
+                        role="tooltip"
+                        className="pointer-events-none invisible opacity-0 group-hover:visible group-hover:opacity-100 transition-opacity duration-150 absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-gray-800 px-3 py-1.5 text-[11px] font-medium text-white shadow-lg z-20"
+                      >
+                        {idfTooltip}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                    <div className={`${gradeBar(m.grade)} h-2.5 rounded-full transition-all`} style={{ width: `${m.score}%` }} />
-                  </div>
-                  <span className="text-xs font-bold text-gray-800 w-8 text-right">{m.score}</span>
-                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold w-10 text-center ${gradeColor(m.grade)}`}>{m.grade}</span>
-                  <span className="text-[10px] text-gray-400 w-16 text-right">×{m.weight}% = <span className="font-semibold text-gray-600">{m.weightedScore.toFixed(1)}</span></span>
-                </div>
-              ))}
+                );
+              })}
             </div>
             {/* Total */}
             <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-between">

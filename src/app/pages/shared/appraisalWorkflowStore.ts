@@ -693,6 +693,9 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
   }
   if (allowed.includes("KPI (Setting/Measurement)")) {
     list.push(buildFourStep("KPI (Tracking)", "KPI", "measurement"));
+    if (records.some((r) => r.module === "RCA" && r.phase === "measurement")) {
+      list.push(buildFourStep("RCA", "RCA", "measurement"));
+    }
   }
   if (allowed.includes("SMART Goals (Setting/Measurement)")) {
     list.push(buildFourStep("SMART Goals (Tracking)", "SMART Goals", "measurement"));
@@ -705,6 +708,80 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
   }
   if (includeManagerial && allowed.includes("Managerial Skill")) {
     list.push(buildTwoStep("Managerial Skill", "Managerial Skill"));
+  }
+  if (allowed.includes("Inter-Departement Feedback")) {
+    const wfRec = records.find(
+      (r) => r.module === "Inter-Department Feedback" && r.phase === "measurement",
+    );
+    let idfRec: {
+      summarySubmittedAt?: string;
+      nominations?: unknown[];
+      feedbacks?: unknown[];
+      followUps?: { approver1?: unknown[]; approver2?: unknown[] };
+    } | undefined;
+    try {
+      const idfList = JSON.parse(
+        localStorage.getItem("inter_department_feedback_workflows_v2") ?? "[]",
+      ) as Array<{
+        row?: { employeeId?: string };
+        summarySubmittedAt?: string;
+        nominations?: unknown[];
+        feedbacks?: unknown[];
+        followUps?: { approver1?: unknown[]; approver2?: unknown[] };
+      }>;
+      idfRec = idfList.find(
+        (entry) =>
+          entry.row?.employeeId &&
+          (normalizeEmployeeId(entry.row.employeeId) === normId ||
+            entry.row.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
+      );
+    } catch {
+      idfRec = undefined;
+    }
+    const hasSecondApprover = Boolean((activeUser.regNoAp2 ?? "").trim());
+    const summarySubmitted = Boolean(wfRec || idfRec?.summarySubmittedAt);
+    const hasStartedNomination = Boolean(
+      (idfRec?.nominations?.length ?? 0) > 0 || (idfRec?.feedbacks?.length ?? 0) > 0,
+    );
+    const a1Done = Boolean(
+      (idfRec?.followUps?.approver1?.length ?? 0) > 0 ||
+        (wfRec?.decisions.approver1 &&
+          (wfRec.decisions.approver1.status === "Approved" ||
+            wfRec.decisions.approver1.status.startsWith("Assessed"))),
+    );
+    const a2Done = !hasSecondApprover
+      ? a1Done
+      : Boolean(
+          (idfRec?.followUps?.approver2?.length ?? 0) > 0 ||
+            (wfRec?.decisions.approver2 &&
+              (wfRec.decisions.approver2.status === "Approved" ||
+                wfRec.decisions.approver2.status.startsWith("Assessed"))),
+        );
+    const steps: LiveApprovalStep[] = [
+      {
+        label: "Approver 1",
+        description: `Tindak lanjut Approver 1 (${activeUser.regNoAp1 || "AP1"})`,
+        status: a1Done ? "completed" : summarySubmitted ? "in_progress" : "pending",
+      },
+      ...(hasSecondApprover
+        ? [
+            {
+              label: "Approver 2",
+              description: `Tindak lanjut Approver 2 (${activeUser.regNoAp2 || "AP2"})`,
+              status: (a2Done ? "completed" : a1Done ? "in_progress" : "pending") as LiveApprovalStepStatus,
+            },
+          ]
+        : []),
+    ];
+    list.push({
+      module: "Inter-Department Feedback",
+      overallStatus: a2Done
+        ? "Approved"
+        : summarySubmitted || hasStartedNomination
+        ? "In Progress"
+        : "Pending",
+      steps,
+    });
   }
   return list;
 }

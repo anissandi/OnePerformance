@@ -617,6 +617,84 @@ export function saveAllNotifications(list: AppNotificationItem[]): void {
   queueMicrotask(() => window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT)));
 }
 
+/**
+ * Mengirim notifikasi otomatis saat karyawan mengirim nominasi 3 pemberi Inter-Department Feedback:
+ * 1) 1 notifikasi ke pengaju sendiri yang menyebut ketiga nama pemberi feedback terpilih.
+ * 2) Masing-masing 1 notifikasi ke setiap pemberi feedback terpilih (hanya menyebut dirinya & pengaju,
+ *    tanpa menyebut kandidat lain) lengkap dengan tombol navigasi ke `/measurement/inter-department-feedback/tasks`.
+ */
+export function triggerInterDeptNominationNotifications(params: {
+  recipient: {
+    id: string;
+    name: string;
+    position: string;
+    department: string;
+    division: string;
+    companyUnit: string;
+  };
+  givers: Array<{
+    id: string;
+    name: string;
+    position: string;
+    department: string;
+    division: string;
+    companyUnit: string;
+  }>;
+}): void {
+  const { recipient, givers } = params;
+  const createdAt = new Date().toISOString();
+  const allNames = givers.map((g) => g.name).join(", ");
+
+  const selfNotif: AppNotificationItem = {
+    id: `notif-idf-self-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    title: "Nominasi Pemberi Feedback Berhasil Dikirim",
+    summary: `Anda telah memilih 3 pemberi Inter-Department Feedback: ${allNames}.`,
+    body: [
+      `Nominasi pemberi Inter-Department Feedback Anda telah tercatat untuk 3 rekan kerja berikut: ${allNames}.`,
+      ...givers.map(
+        (g, idx) => `${idx + 1}. ${g.name} (${g.position || "—"} · ${g.department || g.division} · ${g.companyUnit})`,
+      ),
+    ],
+    category: "Info",
+    createdAt,
+    senderName: "PA System",
+    senderRole: "System",
+    moduleName: "Inter-Departement Feedback",
+    ctaLabel: "Lihat Status Feedback",
+    ctaRoute: "/measurement/inter-department-feedback",
+    targetAll: false,
+    targetEmployeeIds: [recipient.id],
+    channels: ["Notifikasi Sistem"],
+    readByEmployeeIds: [],
+    clearedByEmployeeIds: [],
+  };
+
+  const giverNotifs: AppNotificationItem[] = givers.map((giver, idx) => ({
+    id: `notif-idf-giver-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+    title: "Tugas Pengisian Inter-Department Feedback",
+    summary: `${recipient.name} memilih Anda sebagai pemberi Inter-Department Feedback.`,
+    body: [
+      `Halo ${giver.name}, Anda telah dipilih oleh ${recipient.name} (${recipient.position || "—"} · ${recipient.department || recipient.division} · ${recipient.companyUnit}) sebagai pemberi Inter-Department Feedback periode 2026.`,
+      "Identitas Anda bersifat anonim bagi penerima dan approver. Silakan klik tombol di bawah untuk mengisi form feedback.",
+    ],
+    category: "Reminder",
+    createdAt,
+    senderName: recipient.name,
+    senderRole: recipient.position || "Employee",
+    moduleName: "Inter-Departement Feedback",
+    ctaLabel: "Isi Tugas Feedback",
+    ctaRoute: "/measurement/inter-department-feedback/tasks",
+    targetAll: false,
+    targetEmployeeIds: [giver.id],
+    channels: ["Notifikasi Sistem"],
+    readByEmployeeIds: [],
+    clearedByEmployeeIds: [],
+  }));
+
+  const existing = loadAllNotifications();
+  saveAllNotifications([selfNotif, ...giverNotifs, ...existing]);
+}
+
 export function isNotificationTargetedToUser(item: AppNotificationItem, user: ManagedUser): boolean {
   const empId = user.employeeId.trim().toUpperCase();
   if ((item.clearedByEmployeeIds ?? []).includes(empId)) {

@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
-  CheckCircle2, Clock, X, Target, ArrowRight, ChevronDown, ChevronUp, Sparkles, ClipboardCheck,
+  CheckCircle2, Clock, X, Target, ArrowRight, ChevronDown, ChevronUp, Sparkles, ClipboardCheck, Users,
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { getLiveUserModuleApprovals } from "../shared/appraisalWorkflowStore";
@@ -88,18 +88,22 @@ const MODULE_MILESTONE_ICONS: Record<string, React.ElementType> = {
   "KPI (Setting)":          TrendingUp,
   "SMART Goals (Setting)":  Lightbulb,
   "KPI (Tracking)":         TrendingUp,
+  "RCA":                    ClipboardCheck,
   "SMART Goals (Tracking)": Lightbulb,
   "Appraisal Form":         ClipboardList,
   "Project OJS":            FolderKanban,
+  "Inter-Department Feedback": Users,
 };
 
 const MODULE_ROUTES: Record<string, string> = {
   "KPI (Setting)":          "/employee/setting/kpi",
   "SMART Goals (Setting)":  "/employee/setting/smart-goals",
   "KPI (Tracking)":         "/employee/measurement/kpi-tracking",
+  "RCA":                    "/employee/measurement/rca",
   "SMART Goals (Tracking)": "/employee/measurement/smart-goals",
   "Appraisal Form":         "/employee/measurement/appraisal-form",
   "Project OJS":            "/employee/measurement/project-outside",
+  "Inter-Department Feedback": "/employee/measurement/inter-department-feedback",
 };
 
 function approvalToMilestoneStatus(mod: ModuleApprovalData): ApprovalStatus {
@@ -348,6 +352,7 @@ function AppraisalSummaryCards() {
   useEffect(() => {
     const onRefresh = () => setTick((v) => v + 1);
     window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("feedback-updated", onRefresh);
     window.addEventListener("pa-auth-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
     window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
@@ -355,6 +360,7 @@ function AppraisalSummaryCards() {
     window.addEventListener("storage", onRefresh);
     return () => {
       window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("feedback-updated", onRefresh);
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("pa-db-hydrated", onRefresh);
       window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);

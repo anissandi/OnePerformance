@@ -39,6 +39,7 @@ export interface UserPasswordSecurityRecord {
 }
 
 export const LOGIN_CONFIG_BY_UNIT_KEY = "pa_unit_login_configs_v1";
+const LOGIN_DEFAULT_PWD_MIGRATED_KEY = "pa_login_default_pwd_migrated_v2";
 export const USER_SECURITY_MAP_KEY = "pa_user_password_security_v1";
 export const LOGIN_CONFIG_UPDATED_EVENT = "pa-login-config-updated";
 
@@ -93,7 +94,7 @@ function buildDefaultUnitLoginConfigs(): Record<string, UnitLoginConfig> {
   for (const loc of COMPANY_UNIT_LOCATIONS) {
     map[loc.company] = {
       company: loc.company,
-      enabledMethods: ["otp_telegram", "otp_email"],
+      enabledMethods: ["password"],
       gateway: {
         telegramApiUrl: "https://api.telegram.org",
         whatsappApiUrl: "https://api.whatsapp.com/send",
@@ -106,6 +107,27 @@ function buildDefaultUnitLoginConfigs(): Record<string, UnitLoginConfig> {
 
 export function loadAllUnitLoginConfigs(): Record<string, UnitLoginConfig> {
   const defaults = buildDefaultUnitLoginConfigs();
+  // Migrasi satu kali agar seluruh Company Unit default menggunakan metode Password
+  try {
+    if (typeof localStorage !== "undefined" && !localStorage.getItem(LOGIN_DEFAULT_PWD_MIGRATED_KEY)) {
+      const prev = loadPersistedState<Record<string, UnitLoginConfig>>(LOGIN_CONFIG_BY_UNIT_KEY, {});
+      const migrated: Record<string, UnitLoginConfig> = { ...defaults };
+      for (const loc of COMPANY_UNIT_LOCATIONS) {
+        const existing = prev?.[loc.company];
+        migrated[loc.company] = {
+          ...defaults[loc.company],
+          ...(existing ?? {}),
+          company: loc.company,
+          enabledMethods: ["password"],
+        };
+      }
+      localStorage.setItem(LOGIN_DEFAULT_PWD_MIGRATED_KEY, "1");
+      localStorage.setItem(LOGIN_CONFIG_BY_UNIT_KEY, JSON.stringify(migrated));
+      return migrated;
+    }
+  } catch {
+    // ignore storage errors
+  }
   const saved = loadPersistedState<Record<string, UnitLoginConfig>>(LOGIN_CONFIG_BY_UNIT_KEY, {});
   const result: Record<string, UnitLoginConfig> = { ...defaults };
   if (saved && typeof saved === "object") {
@@ -127,7 +149,7 @@ export function getUnitLoginConfig(company: string): UnitLoginConfig {
   return (
     map[company] ?? {
       company,
-      enabledMethods: ["otp_telegram", "otp_email"],
+      enabledMethods: ["password"],
     }
   );
 }

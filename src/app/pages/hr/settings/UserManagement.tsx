@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { archiveUsers } from "../../../store/archiveStore";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT } from "../../shared/scoringWeightStore";
+import { loadLocalAuditLogs } from "../../../services/supabaseClient";
 import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw } from "lucide-react";
 import {
   defaultAllowedModulesForGrouping,
@@ -1188,9 +1189,9 @@ function LoginManagementTab({
       emailWebhookUrl: cfg.gateway?.emailWebhookUrl ?? "https://api.sambugroup.com/pa/email-otp",
       emailSenderName: cfg.gateway?.emailSenderName ?? "PA Sambu Group",
     });
-  }, [activeCompany]);
+  }, [activeCompany, unitConfigs]);
 
-  const unitUsers = users.filter((u) => u.company === activeCompany);
+  const unitUsers = users.filter((u) => u.company === activeCompany && u.status === "Active");
   const isPwdActive = currentCfg.enabledMethods.includes("password");
 
   const blockedUsersInUnit = unitUsers.filter(
@@ -1202,7 +1203,67 @@ function LoginManagementTab({
   }).length;
   const customPwdUsersCount = unitUsers.length - defaultPwdUsersCount;
 
+  // Data log aktual keamanan & aktivitas login khusus untuk unit usaha yang sedang dipilih
+  const unitSecurityLogs = useMemo(() => {
+    const unitEmpMap = new Map(
+      unitUsers.map((u) => [u.employeeId.trim().toUpperCase(), u]),
+    );
+    const items: Array<{ id: string; time: string; actor: string; detail: string; tone: "ok" | "warn" | "danger" }> = [];
+
+    for (const u of unitUsers) {
+      const sec = securityMap[u.employeeId.trim().toUpperCase()];
+      if (sec?.updatedAt) {
+        items.push({
+          id: `sec-${u.employeeId}`,
+          time: sec.updatedAt.slice(0, 16).replace("T", " "),
+          actor: `${u.name} (${u.employeeId})`,
+          detail: sec.isBlocked
+            ? "Akun diblokir (5x gagal password)"
+            : sec.mustChangePassword
+            ? "Password di-reset ke default"
+            : "Password berhasil diperbaharui",
+          tone: sec.isBlocked ? "danger" : sec.mustChangePassword ? "warn" : "ok",
+        });
+      }
+      if (u.lastLogin) {
+        items.push({
+          id: `login-${u.employeeId}`,
+          time: u.lastLogin,
+          actor: `${u.name} (${u.employeeId})`,
+          detail: `Login ke ${activeCompany}`,
+          tone: "ok",
+        });
+      }
+    }
+
+    for (const log of loadLocalAuditLogs()) {
+      const uid = String(log.userId ?? "").trim().toUpperCase();
+      const desc = String(log.description ?? "");
+      const belongsToUnit =
+        unitEmpMap.has(uid) || desc.toLowerCase().includes(activeCompany.toLowerCase());
+      if (
+        belongsToUnit &&
+        (log.action === "Login" ||
+          log.subModule === "Login Management" ||
+          desc.toLowerCase().includes("password"))
+      ) {
+        items.push({
+          id: `aud-${log.id}`,
+          time: log.timestamp,
+          actor: `${log.userName} (${log.userId})`,
+          detail: desc,
+          tone: "ok",
+        });
+      }
+    }
+
+    return items
+      .sort((a, b) => b.time.localeCompare(a.time))
+      .slice(0, 8);
+  }, [unitUsers, securityMap, activeCompany]);
+
   const handleToggleMethod = (company: string, method: LoginMethodOption) => {
+    onSwitchCompany(company);
     toggleUnitLoginMethod(company, method);
     setSavedNotice(`Metode login untuk ${company} berhasil diperbarui.`);
     setTimeout(() => setSavedNotice(""), 3000);
@@ -1259,14 +1320,18 @@ function LoginManagementTab({
                 return (
                   <tr
                     key={comp}
-                    className={`border-b border-gray-50 transition-colors ${
+                    onClick={() => onSwitchCompany(comp)}
+                    className={`border-b border-gray-50 transition-colors cursor-pointer ${
                       isSelected ? "bg-indigo-50/40" : "hover:bg-gray-50/50"
                     }`}
                   >
                     <td className="px-5 py-3">
                       <button
                         type="button"
-                        onClick={() => onSwitchCompany(comp)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSwitchCompany(comp);
+                        }}
                         className="text-left font-semibold text-gray-800 hover:text-[#1A284F] flex items-center gap-2"
                       >
                         <Building2 size={14} className={isSelected ? "text-[#1A284F]" : "text-gray-400"} />
@@ -1284,7 +1349,10 @@ function LoginManagementTab({
                         <td key={m} className="px-4 py-3 text-center">
                           <button
                             type="button"
-                            onClick={() => handleToggleMethod(comp, m)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleMethod(comp, m);
+                            }}
                             className={`inline-flex items-center justify-center w-6 h-6 rounded-lg border transition-colors ${
                               checked
                                 ? "bg-[#1A284F] border-[#1A284F] text-white"
@@ -1300,7 +1368,10 @@ function LoginManagementTab({
                     <td className="px-4 py-3 text-center">
                       <button
                         type="button"
-                        onClick={() => handleToggleMethod(comp, "password")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleToggleMethod(comp, "password");
+                        }}
                         className={`inline-flex items-center justify-center w-6 h-6 rounded-lg border transition-colors ${
                           hasPwd
                             ? "bg-amber-600 border-amber-600 text-white"
@@ -1396,10 +1467,10 @@ function LoginManagementTab({
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                  Koneksi Backend Gateway OTP ({activeCompany})
+                  Koneksi Backend Gateway — {activeCompany}
                 </h4>
                 <p className="text-[11px] text-gray-400">
-                  Endpoint & kredensial integrasi pengiriman OTP ke Telegram, WhatsApp, dan Corporate Email.
+                  Endpoint & kredensial integrasi autentikasi untuk unit <strong>{activeCompany}</strong> ({isPwdActive ? "Mode aktif: Password · konfigurasi OTP disiapkan sebagai cadangan" : "Mode aktif: OTP"}).
                 </p>
               </div>
               <button
@@ -1455,9 +1526,16 @@ function LoginManagementTab({
         {/* Panel Ringkasan Keamanan Password & Akun Terblokir */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
           <div>
-            <h3 className="text-sm font-bold text-gray-800">Status Keamanan Password Unit</h3>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h3 className="text-sm font-bold text-gray-800">
+                Status Keamanan Password Unit — {activeCompany}
+              </h3>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#1A284F]/10 text-[#1A284F]">
+                {unitUsers.length} User Aktif
+              </span>
+            </div>
             <p className="text-xs text-gray-500 mt-0.5">
-              Kebijakan Password: wajib ganti password default saat pertama login, minimal 8 karakter (huruf, angka, simbol), dan blokir otomatis setelah 5x salah password.
+              Data aktual unit <strong>{activeCompany}</strong>: wajib ganti password default saat pertama login, minimal 8 karakter (huruf, angka, simbol), dan blokir otomatis setelah 5x salah password.
             </p>
           </div>
 
@@ -1477,7 +1555,9 @@ function LoginManagementTab({
           </div>
 
           <div className="rounded-xl bg-gray-50 border border-gray-200 p-3.5 text-xs text-gray-600 space-y-1.5">
-            <div className="font-semibold text-gray-800">Status Tombol Reset Password di Tabel User:</div>
+            <div className="font-semibold text-gray-800">
+              Status Tombol Reset Password di Tabel User ({activeCompany}):
+            </div>
             <p>
               {isPwdActive ? (
                 <span className="text-emerald-700 font-medium">
@@ -1489,6 +1569,38 @@ function LoginManagementTab({
                 </span>
               )}
             </p>
+          </div>
+
+          <div className="space-y-2 pt-1 border-t border-gray-100">
+            <div className="text-xs font-bold text-gray-700">
+              Log Aktivitas &amp; Keamanan Aktual — {activeCompany}
+            </div>
+            {unitSecurityLogs.length === 0 ? (
+              <p className="text-[11px] text-gray-400 italic py-2">
+                Belum ada aktivitas login atau perubahan password tercatat pada {activeCompany}.
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                {unitSecurityLogs.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${
+                      item.tone === "danger"
+                        ? "bg-rose-50/70 border-rose-200 text-rose-800"
+                        : item.tone === "warn"
+                        ? "bg-amber-50/70 border-amber-200 text-amber-800"
+                        : "bg-slate-50 border-gray-100 text-gray-700"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold truncate">{item.actor}</span>
+                      <span className="text-[10px] text-gray-400 shrink-0">{item.time}</span>
+                    </div>
+                    <p className="text-[10.5px] opacity-90 truncate">{item.detail}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {blockedUsersInUnit.length > 0 && (

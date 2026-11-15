@@ -7,7 +7,8 @@ import {
   saveWorkflowDecision,
   submitWorkflowModule,
 } from "./appraisalWorkflowStore"
-import { formatTodayDDMMYYYY } from "../../utils/dateFormat"
+import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat"
+import { triggerInterDeptNominationNotifications } from "../../store/notificationStore"
 
 export const FOLLOW_UP_COLUMNS = [
   "Aspek Perbaikan",
@@ -276,6 +277,24 @@ export function nominateFeedbackGivers(
     nominations: givers.map((giver) => ({ giver, status: "Pending" })),
   }
   saveFeedbackSubmission(submission)
+  triggerInterDeptNominationNotifications({
+    recipient: {
+      id: recipient.id,
+      name: recipient.name,
+      position: recipient.position,
+      department: recipient.department,
+      division: recipient.division,
+      companyUnit: recipient.companyUnit,
+    },
+    givers: givers.map((g) => ({
+      id: g.id,
+      name: g.name,
+      position: g.position,
+      department: g.department,
+      division: g.division,
+      companyUnit: g.companyUnit,
+    })),
+  })
   return submission
 }
 
@@ -371,12 +390,18 @@ export function submitFeedbackSummary(
 export function feedbackApprovalRows(role: ReviewerRole): ApprovalRow[] {
   return loadFeedbackSubmissions()
     .filter((entry) => !!entry.summarySubmittedAt)
-    .map(({ row, followUps }) => ({
-      ...row,
-      status: followUps[role]?.length
-        ? `Assessed-Approver ${role === "approver1" ? "1" : "2"}`
-        : "Pending",
-    }))
+    .map(({ row, followUps, summarySubmittedAt }) => {
+      const normSub = normalizeDateDDMMYYYY(row.submittedDate)
+      const fallbackSub = normalizeDateDDMMYYYY(summarySubmittedAt)
+      return {
+        ...row,
+        submittedDate:
+          normSub !== "—" ? normSub : fallbackSub !== "—" ? fallbackSub : formatTodayDDMMYYYY(),
+        status: followUps[role]?.length
+          ? `Assessed-Approver ${role === "approver1" ? "1" : "2"}`
+          : "Pending",
+      }
+    })
 }
 
 export function saveFeedbackFollowUp(

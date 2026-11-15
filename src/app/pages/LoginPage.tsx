@@ -13,11 +13,9 @@ import {
   CheckCircle2,
   ShieldAlert,
   HelpCircle,
-  Users,
   Clock,
 } from "lucide-react";
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
-import { TrialUserPicker } from "../components/TrialUserPicker";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import worldMap from "@/imports/image-3.png";
 import {
@@ -63,8 +61,6 @@ export function LoginPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const otpRef = useRef<HTMLInputElement>(null);
-  const [userPickerOpen, setUserPickerOpen] = useState(false);
-  const userPickerRef = useRef<HTMLDivElement>(null);
   const [, setUsersTick] = useState(0);
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
 
@@ -98,7 +94,6 @@ export function LoginPage() {
     setPasswordInput("");
     setMustChangeStep(false);
     setError("");
-    setUserPickerOpen(false);
   }, [selectedLoc.company, unitLoginCfg.enabledMethods.join(",")]);
 
   useEffect(() => {
@@ -118,18 +113,11 @@ export function LoginPage() {
     }
 
     const onUsersRefresh = () => setUsersTick((t) => t + 1);
-    const onDocClick = (e: MouseEvent) => {
-      if (userPickerRef.current && !userPickerRef.current.contains(e.target as Node)) {
-        setUserPickerOpen(false);
-      }
-    };
     window.addEventListener("pa-db-hydrated", onUsersRefresh);
     window.addEventListener("pa-auth-updated", onUsersRefresh);
-    document.addEventListener("mousedown", onDocClick);
     return () => {
       window.removeEventListener("pa-db-hydrated", onUsersRefresh);
       window.removeEventListener("pa-auth-updated", onUsersRefresh);
-      document.removeEventListener("mousedown", onDocClick);
     };
   }, []);
 
@@ -144,12 +132,6 @@ export function LoginPage() {
     return defaultPortalPath;
   }
 
-  const unitUsers = loadManagedUsers().filter(
-    (u) => u.company === selectedLoc.company && u.status === "Active",
-  );
-  const selectedUnitUser = unitUsers.find(
-    (u) => u.employeeId.toLowerCase() === employeeId.trim().toLowerCase(),
-  );
   const matchedEmployee = loadManagedUsers().find(
     (u) =>
       u.employeeId.toLowerCase() === employeeId.trim().toLowerCase() ||
@@ -442,51 +424,6 @@ export function LoginPage() {
               placeholder="Enter Employee ID"
               className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]/40 transition-colors disabled:bg-gray-50 disabled:text-gray-500"
             />
-            {unitUsers.length > 0 && !otpSent && (
-              <div className="mt-2 relative" ref={userPickerRef}>
-                <button
-                  type="button"
-                  onClick={() => setUserPickerOpen((o) => !o)}
-                  className="w-full flex items-center justify-between gap-2 border border-gray-200 rounded-xl px-3 py-2 text-xs bg-gray-50/90 hover:bg-gray-100/80 text-gray-700 transition-colors focus:outline-none focus:border-[#1A284F]/40"
-                >
-                  <span className="flex items-center gap-2 min-w-0 truncate">
-                    <Users className="w-3.5 h-3.5 text-[#1A284F] shrink-0" />
-                    {selectedUnitUser ? (
-                      <span className="truncate">
-                        <span className="font-mono font-semibold text-[#1A284F]">{selectedUnitUser.employeeId}</span>
-                        {" · "}
-                        <span className="font-semibold text-gray-800">{selectedUnitUser.name}</span>
-                        {" ("}
-                        <span className="text-gray-600">{selectedUnitUser.position || "—"}</span>
-                        {")"}
-                      </span>
-                    ) : (
-                      <span className="text-gray-500 truncate">
-                        Pilih Akun {selectedLoc.company} ({unitUsers.length} user)
-                      </span>
-                    )}
-                  </span>
-                  <ChevronDown className={`w-3.5 h-3.5 text-gray-400 shrink-0 transition-transform ${userPickerOpen ? "rotate-180" : ""}`} />
-                </button>
-
-                {userPickerOpen && (
-                  <div className="absolute left-0 right-0 z-30 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl p-2.5">
-                    <TrialUserPicker
-                      users={unitUsers}
-                      selectedEmployeeId={employeeId.trim()}
-                      placeholder={`Cari ID, nama, atau jabatan di ${selectedLoc.company}...`}
-                      maxHeightClass="max-h-60"
-                      autoFocusSearch
-                      onSelect={(u) => {
-                        setEmployeeId(u.employeeId);
-                        setError("");
-                        setUserPickerOpen(false);
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
           {error && (

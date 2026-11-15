@@ -1,13 +1,18 @@
+// @refresh reset
 import { useEffect, useMemo, useState } from "react"
 import { useRouteTab } from "../../utils/useRouteTab"
 import {
   Building2,
   Check,
   CheckCircle2,
-  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardCheck,
   Eye,
   FileText,
+  Info,
   Lock,
+  Search,
   Send,
   Users,
   X,
@@ -22,15 +27,19 @@ import {
 } from "../shared/feedbackActivationStore"
 import {
   FEEDBACK_INDICATORS,
+  FOLLOW_UP_COLUMNS,
   feedbackTasksFor,
   getFeedbackSubmission,
   nominateFeedbackGivers,
   submitFeedbackSummary,
   submitNominatedFeedback,
+  type FeedbackFollowUp,
   type FeedbackPerson,
   type FeedbackTask,
 } from "../shared/interDepartmentFeedbackStore"
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar"
+
+const CANDIDATES_PER_PAGE = 10
 
 const personFromManagedUser = (user: ManagedUser): FeedbackPerson => ({
   id: user.employeeId,
@@ -85,13 +94,14 @@ function EmployeeBadge({ person }: { person: FeedbackPerson }) {
 
 export function InterDepartmentFeedback() {
   const { activeUser, allUsers } = useAuthStore()
-  const [activeTab, setActiveTab] = useRouteTab<"nominate" | "tasks" | "received">(
-    ["nominate", "tasks", "received"],
+  const [activeTab, setActiveTab] = useRouteTab<"nominate" | "tasks" | "received" | "followup">(
+    ["nominate", "tasks", "received", "followup"],
     "nominate",
   )
   const [unit, setUnit] = useState("")
   const [division, setDivision] = useState("")
   const [department, setDepartment] = useState("")
+  const [candidateSearch, setCandidateSearch] = useState("")
   const [selected, setSelected] = useState<FeedbackPerson[]>([])
   const [confirmNomination, setConfirmNomination] = useState(false)
   const [notice, setNotice] = useState("")
@@ -145,6 +155,7 @@ export function InterDepartmentFeedback() {
     setUnit("")
     setDivision("")
     setDepartment("")
+    setCandidateSearch("")
     setError("")
     setNotice("")
   }, [activeUser.employeeId])
@@ -177,18 +188,62 @@ export function InterDepartmentFeedback() {
     ],
     [people, unit, division],
   )
-  const candidates = people.filter(
-    (person) =>
-      !!actor && !feedbackEligibilityError(actor, person) &&
-      (!unit || person.companyUnit === unit) &&
-      (!division || person.division === division) &&
-      (!department || person.department === department),
-  )
-  const pendingTasks = actor
-    ? feedbackTasksFor(actor.id).filter(
-        (task) => task.nomination.status === "Pending",
+  const candidates = useMemo(() => {
+    const q = candidateSearch.trim().toLowerCase()
+    return people
+      .filter(
+        (person) =>
+          !!actor &&
+          !feedbackEligibilityError(actor, person) &&
+          (!unit || person.companyUnit === unit) &&
+          (!division || person.division === division) &&
+          (!department || person.department === department) &&
+          (!q ||
+            [
+              person.name,
+              person.id,
+              person.position,
+              person.department,
+              person.division,
+              person.companyUnit,
+            ].some((v) => String(v ?? "").toLowerCase().includes(q))),
       )
-    : []
+      .sort((a, b) => a.name.localeCompare(b.name, "id", { sensitivity: "base" }))
+  }, [people, actor, unit, division, department, candidateSearch])
+
+  const allTasks = actor ? feedbackTasksFor(actor.id) : []
+  const pendingTasks = allTasks.filter(
+    (task) => task.nomination.status === "Pending",
+  )
+  const tasksDotTone: "yellow" | "green" | null =
+    allTasks.length === 0
+      ? null
+      : pendingTasks.length > 0
+      ? "yellow"
+      : "green"
+  const receivedDotTone: "yellow" | "green" | null = !workflow
+    ? null
+    : workflow.feedbacks.length >= 3
+    ? "green"
+    : "yellow"
+  const hasAp1FollowUp = Boolean(workflow?.followUps.approver1?.length)
+  const hasAp2FollowUp = Boolean(workflow?.followUps.approver2?.length)
+  const followUpDotTone: "yellow" | "green" | null = !workflow?.summarySubmittedAt
+    ? null
+    : hasAp1FollowUp && (hasAp2FollowUp || !activeUser.regNoAp2)
+    ? "green"
+    : "yellow"
+
+  const ap1User = allUsers.find(
+    (u) =>
+      (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase()) ||
+      u.employeeId.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase(),
+  )
+  const ap2User = allUsers.find(
+    (u) =>
+      (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase()) ||
+      u.employeeId.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase(),
+  )
 
   function nominate() {
     if (!actor || !status.receiving) {
@@ -257,21 +312,21 @@ export function InterDepartmentFeedback() {
         className="mb-8 flex overflow-x-auto border-b border-gray-200"
         aria-label="Inter-Department Feedback"
       >
-        {[
-          ["nominate", "Pilih Pemberi Feedback", Users],
-          [
-            "tasks",
-            `Tugas Feedback Saya${
-              pendingTasks.length ? ` (${pendingTasks.length})` : ""
-            }`,
-            FileText,
-          ],
-          ["received", "Feedback Diterima", Eye],
-        ].map(([id, label, Icon]) => (
+        {([
+          { id: "nominate", label: "Pilih Pemberi Feedback", Icon: Users, dot: null as "yellow" | "green" | null },
+          {
+            id: "tasks",
+            label: `Tugas Feedback Saya${pendingTasks.length ? ` (${pendingTasks.length})` : ""}`,
+            Icon: FileText,
+            dot: tasksDotTone,
+          },
+          { id: "received", label: "Feedback Diterima", Icon: Eye, dot: receivedDotTone },
+          { id: "followup", label: "Tindak Lanjut", Icon: ClipboardCheck, dot: followUpDotTone },
+        ] as const).map(({ id, label, Icon, dot }) => (
           <button
-            key={id as string}
+            key={id}
             onClick={() => {
-              setActiveTab(id as typeof activeTab)
+              setActiveTab(id)
               setError("")
               setNotice("")
             }}
@@ -282,7 +337,21 @@ export function InterDepartmentFeedback() {
             }`}
           >
             <Icon className="h-4 w-4" />
-            {label as string}
+            <span>{label}</span>
+            {dot && (
+              <span
+                title={
+                  dot === "green"
+                    ? "Sudah lengkap / selesai"
+                    : "Menunggu / belum lengkap"
+                }
+                className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                  dot === "green"
+                    ? "bg-emerald-400 ring-2 ring-emerald-100"
+                    : "bg-amber-300 ring-2 ring-amber-100"
+                }`}
+              />
+            )}
           </button>
         ))}
       </nav>
@@ -296,6 +365,7 @@ export function InterDepartmentFeedback() {
           unit={unit}
           division={division}
           department={department}
+          search={candidateSearch}
           units={units}
           divisions={divisions}
           departments={departments}
@@ -310,6 +380,7 @@ export function InterDepartmentFeedback() {
             setDepartment("")
           }}
           onDepartment={setDepartment}
+          onSearch={setCandidateSearch}
           onAdd={(person) =>
             setSelected((current) =>
               current.length < 3 &&
@@ -332,7 +403,7 @@ export function InterDepartmentFeedback() {
       {activeTab === "tasks" && actor && (
         <TaskInbox
           actor={actor}
-          tasks={feedbackTasksFor(actor.id)}
+          tasks={allTasks}
           enabled={status.receiving}
           onDone={() => {
             setNotice("Feedback anonim berhasil dikirim kepada penerima.")
@@ -353,6 +424,14 @@ export function InterDepartmentFeedback() {
             refresh()
           }}
           onError={setError}
+        />
+      )}
+      {activeTab === "followup" && (
+        <FollowUpResultPanel
+          workflow={workflow}
+          ap1Name={ap1User?.name || activeUser.regNoAp1 || "Approver 1"}
+          ap2Name={ap2User?.name || activeUser.regNoAp2 || "Approver 2"}
+          hasSecondApprover={Boolean(activeUser.regNoAp2)}
         />
       )}
 
@@ -406,6 +485,7 @@ function NominationPanel({
   unit,
   division,
   department,
+  search,
   units,
   divisions,
   departments,
@@ -413,6 +493,7 @@ function NominationPanel({
   onUnit,
   onDivision,
   onDepartment,
+  onSearch,
   onAdd,
   onRemove,
   onConfirm,
@@ -424,6 +505,7 @@ function NominationPanel({
   unit: string
   division: string
   department: string
+  search: string
   units: string[]
   divisions: string[]
   departments: string[]
@@ -431,10 +513,29 @@ function NominationPanel({
   onUnit: (value: string) => void
   onDivision: (value: string) => void
   onDepartment: (value: string) => void
+  onSearch: (value: string) => void
   onAdd: (person: FeedbackPerson) => void
   onRemove: (id: string) => void
   onConfirm: () => void
 }) {
+  const [page, setPage] = useState(1)
+  useEffect(() => {
+    setPage(1)
+  }, [unit, division, department, search])
+
+  const totalPages = Math.max(1, Math.ceil(candidates.length / CANDIDATES_PER_PAGE))
+  const safePage = Math.min(page, totalPages)
+  const pagedCandidates = candidates.slice(
+    (safePage - 1) * CANDIDATES_PER_PAGE,
+    safePage * CANDIDATES_PER_PAGE,
+  )
+  const canSubmitNomination = enabled && selected.length === 3
+  const submitTooltipText = !enabled
+    ? "Nominasi hanya tersedia selama periode penerimaan feedback aktif."
+    : selected.length < 3
+    ? `Pilih tepat 3 pemberi feedback (${selected.length}/3 terpilih) untuk mengaktifkan tombol Kirim Nominasi.`
+    : "Klik untuk mengirim nominasi ke 3 pemberi feedback terpilih."
+
   if (workflow)
     return (
       <section className="space-y-5">
@@ -484,7 +585,7 @@ function NominationPanel({
       </section>
     )
   return (
-    <section className="grid gap-6 xl:grid-cols-[1fr_380px]">
+    <section className="grid gap-6 xl:grid-cols-[1fr_380px] items-start">
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
         <div className="mb-5 flex gap-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#1A284F]/10">
@@ -502,7 +603,27 @@ function NominationPanel({
           </div>
         </div>
         <AnonymityBanner />
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
+        <div className="mt-5 relative">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+            placeholder="Cari nama karyawan, ID, jabatan, departemen, atau unit usaha (urut A–Z)..."
+            className={inputClass + " pl-10 pr-9"}
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => onSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              aria-label="Bersihkan pencarian"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
           <Select
             label="Company Unit"
             value={unit}
@@ -524,8 +645,20 @@ function NominationPanel({
             onChange={onDepartment}
           />
         </div>
-        <div className="mt-5 space-y-2">
-          {candidates.map((person) => {
+        <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+          <span>
+            Diurutkan abjad <strong>A–Z</strong> ·{" "}
+            {candidates.length === 0
+              ? "0 karyawan"
+              : `Menampilkan ${(safePage - 1) * CANDIDATES_PER_PAGE + 1}–${Math.min(
+                  safePage * CANDIDATES_PER_PAGE,
+                  candidates.length,
+                )} dari ${candidates.length} karyawan`}
+          </span>
+          <span>Maks. {CANDIDATES_PER_PAGE} nama / halaman</span>
+        </div>
+        <div className="mt-3 space-y-2">
+          {pagedCandidates.map((person) => {
             const added = selected.some((entry) => entry.id === person.id)
             return (
               <div
@@ -557,8 +690,33 @@ function NominationPanel({
             </p>
           )}
         </div>
+        {candidates.length > CANDIDATES_PER_PAGE && (
+          <div className="mt-5 flex items-center justify-between border-t border-gray-100 pt-4">
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3.5 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Prev Page
+            </button>
+            <span className="text-xs font-semibold text-gray-600">
+              Halaman {safePage} dari {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3.5 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next Page
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
-      <aside className="flex flex-col rounded-2xl border bg-white p-6 shadow-sm">
+      <aside className="flex flex-col rounded-2xl border bg-white p-6 shadow-sm xl:sticky xl:top-6">
         <div className="flex items-center justify-between">
           <h2 className="font-bold text-gray-900">Pemberi Feedback Terpilih</h2>
           <span
@@ -574,7 +732,7 @@ function NominationPanel({
         <p className="mt-2 text-xs text-gray-500">
           Tepat tiga karyawan wajib dipilih.
         </p>
-        <div className="mt-4 flex-1 space-y-2">
+        <div className="mt-4 space-y-2">
           {selected.length ? (
             selected.map((person, index) => (
               <div
@@ -596,19 +754,31 @@ function NominationPanel({
               </div>
             ))
           ) : (
-            <p className="py-12 text-center text-sm text-gray-400">
+            <p className="py-6 text-center text-sm text-gray-400">
               Belum ada pemberi feedback dipilih.
             </p>
           )}
         </div>
-        <button
-          disabled={!enabled || selected.length !== 3}
-          onClick={onConfirm}
-          className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-[#1A284F] px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Send className="h-4 w-4" />
-          Kirim Nominasi
-        </button>
+        {/* Tombol Kirim Nominasi tepat di bawah daftar nama terpilih + info tooltip saat disorot */}
+        <div className="relative group mt-4">
+          <button
+            type="button"
+            disabled={!canSubmitNomination}
+            onClick={onConfirm}
+            title={submitTooltipText}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#1A284F] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#131d3b] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Send className="h-4 w-4" />
+            Kirim Nominasi
+            <Info className="h-3.5 w-3.5 opacity-75" />
+          </button>
+          <div
+            role="tooltip"
+            className="pointer-events-none invisible opacity-0 group-hover:visible group-hover:opacity-100 transition-opacity duration-150 absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 rounded-xl bg-[#1A284F] px-3 py-2 text-[11px] font-medium leading-relaxed text-white shadow-xl z-20 text-center"
+          >
+            {submitTooltipText}
+          </div>
+        </div>
         {!enabled && (
           <p className="mt-3 text-center text-xs text-amber-700">
             Nominasi dibuka hanya selama periode penerimaan feedback.
@@ -667,10 +837,12 @@ function TaskInbox({
 }) {
   const [selectedTask, setSelectedTask] = useState<FeedbackTask | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [confirmSend, setConfirmSend] = useState(false)
   const pending = tasks.filter((task) => task.nomination.status === "Pending")
   function open(task: FeedbackTask) {
     setSelectedTask(task)
     setAnswers({})
+    setConfirmSend(false)
   }
   function submit() {
     if (!selectedTask) return
@@ -680,9 +852,11 @@ function TaskInbox({
         selectedTask.submission.row.employeeId,
         answers,
       )
+      setConfirmSend(false)
       setSelectedTask(null)
       onDone()
     } catch (failure) {
+      setConfirmSend(false)
       onError(
         failure instanceof Error ? failure.message : "Feedback gagal dikirim.",
       )
@@ -700,8 +874,23 @@ function TaskInbox({
               kinerjanya.
             </p>
           </div>
-          <span className="rounded-full bg-[#1A284F]/10 px-3 py-1 text-sm font-bold text-[#1A284F]">
-            {pending.length} pending
+          <span
+            className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold border ${
+              pending.length > 0
+                ? "bg-amber-50 border-amber-200 text-amber-800"
+                : tasks.length > 0
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                : "bg-[#1A284F]/10 border-transparent text-[#1A284F]"
+            }`}
+          >
+            {tasks.length > 0 && (
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${
+                  pending.length > 0 ? "bg-amber-300" : "bg-emerald-400"
+                }`}
+              />
+            )}
+            {pending.length > 0 ? `${pending.length} pending` : tasks.length > 0 ? "Semua selesai" : "0 tugas"}
           </span>
         </div>
         {!tasks.length ? (
@@ -713,20 +902,34 @@ function TaskInbox({
             {tasks.map((task) => (
               <div
                 key={task.submission.row.no}
-                className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-100 p-4"
+                className={`flex flex-wrap items-center justify-between gap-4 rounded-xl border p-4 ${
+                  task.nomination.status === "Submitted"
+                    ? "border-emerald-200/80 bg-emerald-50/40"
+                    : "border-amber-200/80 bg-amber-50/40"
+                }`}
               >
-                <div>
-                  <p className="font-semibold text-gray-900">
-                    {task.submission.row.name}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {task.submission.row.position} ·{" "}
-                    {task.submission.row.department} ·{" "}
-                    {task.submission.row.companyUnit}
-                  </p>
+                <div className="flex items-start gap-3">
+                  <span
+                    className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${
+                      task.nomination.status === "Submitted"
+                        ? "bg-emerald-400 ring-2 ring-emerald-100"
+                        : "bg-amber-300 ring-2 ring-amber-100"
+                    }`}
+                  />
+                  <div>
+                    <p className="font-semibold text-gray-900">
+                      {task.submission.row.name}
+                    </p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {task.submission.row.position} ·{" "}
+                      {task.submission.row.department} ·{" "}
+                      {task.submission.row.companyUnit}
+                    </p>
+                  </div>
                 </div>
                 {task.nomination.status === "Submitted" ? (
-                  <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-800">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
                     Sudah dikirim
                   </span>
                 ) : (
@@ -804,13 +1007,49 @@ function TaskInbox({
                   (indicator) => !answers[indicator.key]?.trim(),
                 )
               }
-              onClick={submit}
+              onClick={() => setConfirmSend(true)}
               className="rounded-lg bg-[#1A284F] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
             >
               Kirim Feedback Anonim
             </button>
           </div>
         </section>
+      )}
+      {confirmSend && selectedTask && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+          onClick={() => setConfirmSend(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4"
+          >
+            <h3 className="text-lg font-bold text-[#1A284F]">
+              Konfirmasi Kirim Feedback
+            </h3>
+            <p className="text-sm leading-relaxed text-gray-600">
+              Kirim feedback anonim untuk <strong>{selectedTask.submission.row.name}</strong>? Setelah dikirim, jawaban feedback tidak dapat diubah kembali.
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmSend(false)}
+                className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                className="rounded-xl bg-[#1A284F] px-5 py-2 text-sm font-semibold text-white hover:bg-[#131d3b]"
+              >
+                Ya, Kirim Feedback
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </section>
   )
@@ -881,16 +1120,19 @@ function ReceivedPanel({
             </p>
           </div>
           <span
-            className={`rounded-full px-3 py-1 text-sm font-bold ${
-              submitted
-                ? "bg-green-100 text-green-800"
-                : complete
-                  ? "bg-blue-100 text-blue-800"
-                  : "bg-amber-100 text-amber-800"
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-bold ${
+              complete
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-amber-200 bg-amber-50 text-amber-800"
             }`}
           >
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                complete ? "bg-emerald-400" : "bg-amber-300"
+              }`}
+            />
             {submitted
-              ? "Summary disubmit"
+              ? "Summary disubmit (Feedback lengkap)"
               : `${workflow.feedbacks.length}/3 feedback diterima`}
           </span>
         </div>
@@ -996,6 +1238,127 @@ function ReceivedPanel({
             </section>
           )}
         </>
+      )}
+    </section>
+  )
+}
+
+function FollowUpSectionCard({
+  title,
+  approverName,
+  items,
+  accent,
+}: {
+  title: string
+  approverName: string
+  items?: FeedbackFollowUp[]
+  accent: "indigo" | "teal"
+}) {
+  const done = Boolean(items && items.length > 0)
+  return (
+    <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <header
+        className={`flex flex-wrap items-center justify-between gap-3 px-6 py-4 ${
+          accent === "indigo" ? "bg-[#1A284F] text-white" : "bg-teal-800 text-white"
+        }`}
+      >
+        <div>
+          <h3 className="text-sm font-bold">{title}</h3>
+          <p className="text-xs text-white/75">{approverName}</p>
+        </div>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+            done
+              ? "bg-emerald-100 text-emerald-900"
+              : "bg-amber-100 text-amber-900"
+          }`}
+        >
+          <span
+            className={`h-2 w-2 rounded-full ${
+              done ? "bg-emerald-500" : "bg-amber-500"
+            }`}
+          />
+          {done ? "Sudah Ditindaklanjuti" : "Menunggu Tindak Lanjut"}
+        </span>
+      </header>
+      <div className="p-6">
+        {!done ? (
+          <p className="rounded-xl bg-gray-50 p-6 text-center text-sm text-gray-500">
+            Belum ada hasil tindak lanjut dari {title}.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {items!.map((item, idx) => (
+              <div
+                key={idx}
+                className="rounded-xl border border-gray-100 bg-slate-50/60 p-4 space-y-3"
+              >
+                <p className="text-xs font-bold uppercase tracking-wider text-[#1A284F]">
+                  Rencana Tindak Lanjut #{idx + 1}
+                </p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {FOLLOW_UP_COLUMNS.map((col) => (
+                    <div
+                      key={col}
+                      className="rounded-lg border border-gray-200/80 bg-white p-3"
+                    >
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">
+                        {col}
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
+                        {item[col] || "—"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function FollowUpResultPanel({
+  workflow,
+  ap1Name,
+  ap2Name,
+  hasSecondApprover,
+}: {
+  workflow: ReturnType<typeof getFeedbackSubmission>
+  ap1Name: string
+  ap2Name: string
+  hasSecondApprover: boolean
+}) {
+  if (!workflow || !workflow.summarySubmittedAt) {
+    return (
+      <section className="rounded-2xl border border-dashed bg-white p-10 text-center">
+        <ClipboardCheck className="mx-auto h-8 w-8 text-gray-300" />
+        <h2 className="mt-3 font-bold text-gray-700">
+          Tindak Lanjut Belum Tersedia
+        </h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Hasil tindak lanjut dari Approver 1 dan Approver 2 akan muncul setelah Anda melengkapi dan men-submit Summary pada tab Feedback Diterima.
+        </p>
+      </section>
+    )
+  }
+  return (
+    <section className="space-y-5">
+      <FollowUpSectionCard
+        title="Tindak Lanjut Approver 1"
+        approverName={ap1Name}
+        items={workflow.followUps.approver1}
+        accent="indigo"
+      />
+      {hasSecondApprover && (
+        <FollowUpSectionCard
+          title="Tindak Lanjut Approver 2"
+          approverName={ap2Name}
+          items={workflow.followUps.approver2}
+          accent="teal"
+        />
       )}
     </section>
   )

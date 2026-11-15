@@ -97,11 +97,13 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
     window.addEventListener("feedback-updated", refresh);
     window.addEventListener("appraisal-updated", refresh);
     window.addEventListener("pa-auth-updated", refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
     window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener("feedback-updated", refresh);
       window.removeEventListener("appraisal-updated", refresh);
       window.removeEventListener("pa-auth-updated", refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
       window.removeEventListener("storage", refresh);
     };
   }, [location.pathname, effectiveLockedUnits?.join(",") ?? "", activeUser.employeeId]);
@@ -337,7 +339,8 @@ function ApprovalsTable({
     const matchDept   = !selectedDepartments.length   || selectedDepartments.includes(row.department);
     const matchType   = !selectedApprovalTypes.length || selectedApprovalTypes.includes(row.type);
     const parts       = getDateParts(row.submittedDate);
-    const matchYear   = !selectedYears.length   || (parts ? selectedYears.includes(parts[2]) : false);
+    const inferredYear = parts ? parts[2] : row.no.match(/20\d{2}/)?.[0];
+    const matchYear   = !selectedYears.length   || (inferredYear ? selectedYears.includes(inferredYear) : false);
     const matchMonth  = !selectedMonths.length  || (parts ? selectedMonths.some(m => MONTH_NUM[m] === parts[1]) : false);
     return matchTab && matchSearch && matchUnit && matchDiv && matchDept && matchType && matchYear && matchMonth;
   });

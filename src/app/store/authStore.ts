@@ -839,6 +839,7 @@ export function startOrRefreshAuthSession(employeeId: string): AuthSessionState 
   try {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
     sessionStorage.removeItem(SESSION_EXPIRED_NOTICE_KEY);
+    sessionStorage.removeItem("pa_manual_logout_v1");
   } catch {
     // ignore storage errors
   }
@@ -853,6 +854,7 @@ export function logoutCurrentUser(reason: "manual" | "expired" = "manual"): void
       sessionStorage.setItem(SESSION_EXPIRED_NOTICE_KEY, "1");
     } else {
       sessionStorage.removeItem(SESSION_EXPIRED_NOTICE_KEY);
+      sessionStorage.setItem("pa_manual_logout_v1", "1");
     }
   } catch {
     // ignore storage errors
@@ -959,7 +961,7 @@ export function loadManagedUsers(): ManagedUser[] {
 
 export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser, deletedId?: string): void {
   try {
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    savePersistedState(USERS_KEY, users);
     window.dispatchEvent(new Event("pa-auth-updated"));
     if (changedUser) {
       void syncToSupabase({
@@ -1127,30 +1129,17 @@ export function getAllowedApprovalTypesForUser(
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
   if (user.role === "HR Unit") {
     if (effectiveGrouping === "Operasional") {
-      return mode === "setting" ? ["KPI", "SMART Goals"] : ["KPI", "SMART Goals", "RCA"];
+      return mode === "setting"
+        ? ["KPI", "SMART Goals"]
+        : ["KPI", "SMART Goals", "RCA", "Inter-Department Feedback"];
     }
-    const allowed = resolveUserAllowedModules(user);
-    return baseList.filter((type) => {
-      if (type === "KPI" || type === "SMART Goals" || type === "RCA") return true;
-      if (type === "Appraisal Form") return allowed.includes("Appraisals Form");
-      if (type === "Managerial Skill") return allowed.includes("Managerial Skill");
-      if (type === "Project") return allowed.includes("Project Outside Job Scope");
-      if (type === "Inter-Department Feedback") return allowed.includes("Inter-Departement Feedback");
-      return false;
-    });
+    return baseList;
   }
 
-  // Untuk setiap Approver (Supervisor, GM, Director, dll.), sesuaikan modul yang muncul dengan setup Groupings masing-masing approver
-  const allowed = resolveUserAllowedModules(user);
-  return baseList.filter((type) => {
-    if (type === "KPI" || type === "RCA") return allowed.includes("KPI (Setting/Measurement)");
-    if (type === "SMART Goals") return allowed.includes("SMART Goals (Setting/Measurement)");
-    if (type === "Appraisal Form") return allowed.includes("Appraisals Form");
-    if (type === "Managerial Skill") return allowed.includes("Managerial Skill");
-    if (type === "Project") return allowed.includes("Project Outside Job Scope");
-    if (type === "Inter-Department Feedback") return allowed.includes("Inter-Departement Feedback");
-    return false;
-  });
+  // Setiap Approver (Supervisor, GM, Director, dll.) dapat memiliki bawahan lintas grouping
+  // (termasuk pengajuan Inter-Department Feedback, Project, RCA, Appraisal Form, dll.);
+  // filter kewenangan per karyawan sudah dijaga ketat di resolveDynamicApprovalRowsForUser.
+  return baseList;
 }
 
 /**

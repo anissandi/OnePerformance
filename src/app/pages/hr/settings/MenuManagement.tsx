@@ -71,7 +71,6 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "pa_setting_kpi",       label: "KPI",                       path: "/setting/kpi",                  icon: "TrendingUp",    isVisible: true, order: 1, roles: ALL_ROLES },
       { id: "pa_setting_smart",     label: "SMART Goals",               path: "/setting/smart-goals",          icon: "Lightbulb",     isVisible: true, order: 2, roles: ALL_ROLES },
       { id: "pa_setting_project",   label: "Project Outside Job Scope", path: "/setting/project",              icon: "FolderKanban",  isVisible: true, order: 3, roles: ["Supervisor"] as Role[] },
-      { id: "pa_setting_interview", label: "Management Interview",      path: "/setting/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: ["Supervisor"] as Role[] },
     ],
   },
   {
@@ -85,7 +84,6 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "pa_measurement_project",    label: "Project Outside Job Scope",     path: "/measurement/project-outside",         icon: "FolderKanban",  isVisible: true, order: 5, roles: ALL_ROLES },
       { id: "pa_measurement_managerial", label: "Managerial Skill",              path: "/measurement/managerial-skill",        icon: "Briefcase",     isVisible: true, order: 6, roles: ["Administrator", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
       { id: "pa_measurement_feedback",   label: "Inter-Department Feedback",     path: "/measurement/inter-department-feedback", icon: "Users",       isVisible: true, order: 7, roles: ["Administrator", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
-      { id: "pa_measurement_interview",  label: "Management Interview",          path: "/measurement/management-interview",    icon: "MessageSquare", isVisible: true, order: 8, roles: ["Administrator", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
     ],
   },
   {
@@ -159,13 +157,6 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "evidence_rca",       label: "RCA",                  path: "/evidence/rca",                  icon: "RefreshCw",     isVisible: true, order: 2, roles: HR_ADMIN },
       { id: "evidence_smart",     label: "SMART Goals",          path: "/evidence/smart-goals",          icon: "Lightbulb",     isVisible: true, order: 3, roles: HR_ADMIN },
       { id: "evidence_interview", label: "Management Interview", path: "/evidence/management-interview", icon: "MessageSquare", isVisible: true, order: 4, roles: HR_ADMIN },
-    ],
-  },
-  {
-    id: "management_interview", label: "Management Interview", path: "", icon: "UserSquare",
-    isVisible: true, order: 13, roles: HR_ADMIN,
-    children: [
-      { id: "mgmt_interview_invitation", label: "Invitation", path: "/management-interview/invitation", icon: "MessageSquare", isVisible: true, order: 1, roles: HR_ADMIN },
     ],
   },
   {

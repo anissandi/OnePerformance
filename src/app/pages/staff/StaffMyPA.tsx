@@ -6,7 +6,7 @@ import {
   TrendingUp, Lightbulb, ClipboardList, SearchCode, ChevronDown, ChevronUp,
   FolderKanban, CheckCircle2, AlertTriangle, Clock, XCircle, Activity, Lock,
   Target, ListChecks, ShieldCheck, ShieldX,
-  Paperclip, Eye, Download, FileText, X, MessageSquare,
+  Paperclip, Eye, Download, FileText, X, MessageSquare, Users,
 } from "lucide-react";
 import {
   KPI_ITEMS, computeTotal2026, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
@@ -14,6 +14,8 @@ import {
 import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
 import { SmartGoalsScoreHistory } from "../../components/SmartGoalsScoreHistory";
+import { InterDeptFeedbackAppraisalSummary } from "../../components/InterDeptFeedbackAppraisalSummary";
+import { AppraisalRCASection } from "../employee/RCAPage";
 import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
 import { loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
@@ -35,7 +37,7 @@ import { loadUnitScoreWeights, type ScoreWeightColumn } from "../shared/scoringW
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
-type Tab = "KPI" | "SMART Goals" | "Appraisal Form" | "RCA" | "Project Outside Job Scope";
+type Tab = "KPI" | "SMART Goals" | "Appraisal Form" | "RCA" | "Project Outside Job Scope" | "Inter-Dept Feedback";
 
 const TABS: { id: Tab; icon: React.ElementType; color: string }[] = [
   { id: "KPI",                       icon: TrendingUp,   color: "text-blue-600"   },
@@ -43,6 +45,7 @@ const TABS: { id: Tab; icon: React.ElementType; color: string }[] = [
   { id: "Appraisal Form",            icon: ClipboardList,color: "text-green-600"  },
   { id: "RCA",                       icon: SearchCode,   color: "text-purple-600" },
   { id: "Project Outside Job Scope", icon: FolderKanban, color: "text-teal-600"   },
+  { id: "Inter-Dept Feedback",       icon: Users,        color: "text-indigo-600" },
 ];
 
 // ─── Evidence helpers ─────────────────────────────────────────────────────────
@@ -1324,6 +1327,10 @@ function RCAApprovalHistorySection() {
 }
 
 function RCATab() {
+  return <AppraisalRCASection />;
+}
+
+function _LegacyStaffRCATabUnused() {
   const submissions = React.useMemo(() => loadRCASubmissions(), []);
   const submitted   = submissions.filter((s) => s.submittedDate && s.submittedDate !== "—");
 
@@ -1771,6 +1778,7 @@ export function StaffMyPA() {
       {activeTab === "Appraisal Form"            && <AppraisalFormTab key={revision} />}
       {activeTab === "RCA"                       && <RCATab key={revision} />}
       {activeTab === "Project Outside Job Scope" && <ProjectOutsideTab key={revision} />}
+      {activeTab === "Inter-Dept Feedback"       && <InterDeptFeedbackAppraisalSummary key={revision} />}
     </div>
   );
 }

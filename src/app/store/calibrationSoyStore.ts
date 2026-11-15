@@ -104,3 +104,18 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
   };
   save(map);
 }
+
+/** Reset status pengajuan HC Awal Tahun (SOY) agar unit dapat diedit dan di-submit ulang. */
+export function resetSoyApproval(unitId?: string): void {
+  if (!unitId) {
+    save({});
+    return;
+  }
+  const map = loadSoyApprovals();
+  if (map[unitId]) {
+    delete map[unitId];
+    save(map);
+  } else {
+    window.dispatchEvent(new Event(SOY_EVENT));
+  }
+}

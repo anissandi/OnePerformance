@@ -295,7 +295,6 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "pa_setting_kpi",       label: "KPI" },
       { id: "pa_setting_smart",     label: "SMART Goals" },
       { id: "pa_setting_project",   label: "Project Outside Job Scope" },
-      { id: "pa_setting_interview", label: "Management Interview" },
     ]
   },
   {
@@ -308,7 +307,6 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "pa_measurement_project",    label: "Project Outside Job Scope" },
       { id: "pa_measurement_managerial", label: "Managerial Skill" },
       { id: "pa_measurement_feedback",   label: "Inter-Department Feedback" },
-      { id: "pa_measurement_interview",  label: "Management Interview" },
     ]
   },
   {
@@ -374,12 +372,6 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "evidence_rca",       label: "RCA" },
       { id: "evidence_smart",     label: "SMART Goals" },
       { id: "evidence_interview", label: "Management Interview" },
-    ]
-  },
-  {
-    id: "management_interview", label: "Management Interview",
-    children: [
-      { id: "mgmt_interview_invitation", label: "Invitation" },
     ]
   },
   { id: "override",  label: "Management Override" },

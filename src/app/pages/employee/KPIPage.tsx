@@ -1282,8 +1282,8 @@ function RCAModal({
   onSave: (key: string, entry: RCAEntry, blocks: MasalahFormBlock[]) => void;
   onClose: () => void;
 }) {
-  // KPI metadata (read-only display)
-  const [form] = useState<RCAEntry>(() => {
+  // KPI metadata (Periode, KPI, Satuan, Baseline, Monthly Target auto-filled; Actual dapat diedit)
+  const [form, setForm] = useState<RCAEntry>(() => {
     const base = existing ?? {
       periode: pending.monthLabel,
       kpi: pending.kpiName,
@@ -1369,6 +1369,7 @@ function RCAModal({
 
   const key = `${pending.kpiNo}__${pending.monthId}`;
   const canSave = blocks.length > 0 && blocks.every(isBlockComplete);
+  const [confirmSubmitRca, setConfirmSubmitRca] = useState(false);
 
   const buildEntry = (): RCAEntry => ({
     ...form,
@@ -1392,7 +1393,7 @@ function RCAModal({
             <AlertTriangle className="w-4 h-4 text-red-500" />
           </div>
           <div>
-            <span className="text-sm font-bold text-gray-800">Root Cause Analysis (RCA)</span>
+            <span className="text-sm font-bold text-gray-800">Create New RCA</span>
             <span className="text-xs text-gray-400 ml-2">— {pending.kpiName}</span>
           </div>
         </div>
@@ -1401,7 +1402,7 @@ function RCAModal({
             Close
           </button>
           <button
-            onClick={() => { if (canSave) { onSave(key, buildEntry(), blocks); onClose(); } }}
+            onClick={() => { if (canSave) setConfirmSubmitRca(true); }}
             disabled={!canSave}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
@@ -1459,16 +1460,24 @@ function RCAModal({
                   <p className="text-xs text-gray-500 italic px-3 py-2 bg-blue-50 rounded-lg border border-blue-100 min-h-[32px] flex items-center">{form.baseline || "—"}</p>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-[10px] font-bold uppercase tracking-wide text-blue-600">Target (Monthly) <span className="text-blue-400 font-normal normal-case tracking-normal">(auto)</span></label>
+                  <label className="text-[10px] font-bold uppercase tracking-wide text-blue-600">Monthly Target <span className="text-blue-400 font-normal normal-case tracking-normal">(auto)</span></label>
                   <p className="text-xs font-bold text-[#1A284F] px-3 py-2 bg-blue-50 rounded-lg border border-blue-100 min-h-[32px] flex items-center">{form.target || "—"}</p>
                 </div>
               </div>
               <div className="mt-3 max-w-xs">
-                <label className="text-[10px] font-bold uppercase tracking-wide text-blue-600">Actual <span className="text-blue-400 font-normal normal-case tracking-normal">(auto)</span></label>
-                <p className="mt-1 text-xs font-bold text-gray-800 px-3 py-2 bg-blue-50 rounded-lg border border-blue-100 min-h-[32px] flex items-center">{form.actual || "—"}</p>
+                <label className="text-[10px] font-bold uppercase tracking-wide text-[#1A284F]">
+                  Actual <span className="text-emerald-600 font-semibold normal-case tracking-normal">(dapat diedit)</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.actual}
+                  onChange={(e) => setForm((prev) => ({ ...prev, actual: e.target.value }))}
+                  placeholder="Masukkan nilai actual..."
+                  className="mt-1 w-full text-xs font-bold text-gray-800 px-3 py-2 bg-white rounded-lg border border-gray-300 focus:border-[#1A284F] outline-none min-h-[34px]"
+                />
               </div>
               <p className="mt-2 text-[10px] text-blue-500 flex items-center gap-1">
-                <Info className="w-3 h-3 shrink-0" /> Satuan, Baseline, Target, dan Actual diisi otomatis dari KPI Tracking.
+                <Info className="w-3 h-3 shrink-0" /> Periode, KPI, Satuan, Baseline, dan Monthly Target terisi otomatis sesuai tag RCA; field Actual dapat disesuaikan.
               </p>
             </div>
           </div>
@@ -1654,7 +1663,7 @@ function RCAModal({
           Close
         </button>
         <button
-          onClick={() => { if (canSave) { onSave(key, buildEntry(), blocks); onClose(); } }}
+          onClick={() => { if (canSave) setConfirmSubmitRca(true); }}
           disabled={!canSave}
           className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
@@ -1662,6 +1671,36 @@ function RCAModal({
           Submit RCA
         </button>
       </div>
+      {confirmSubmitRca && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" onClick={() => setConfirmSubmitRca(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-[#1A284F]">Submit Root Cause Analysis (RCA)?</h3>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              RCA untuk <strong>{pending.kpiName}</strong> ({pending.monthLabel}) akan disimpan ke menu RCA Measurement dan masuk ke alur approval (Check → Approval 1 → Approval 2 → Validate).
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmSubmitRca(false)}
+                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmSubmitRca(false);
+                  onSave(key, buildEntry(), blocks);
+                  onClose();
+                }}
+                className="px-5 py-2 rounded-xl bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b]"
+              >
+                Ya, Submit RCA
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2140,9 +2179,10 @@ function KPITable({
                           // Derive status: inline rcaMap entry (proper status check), then stored, then none
                           const inlineEntry = rcaMap?.[rcaKey];
                           const secondaryKey = `${kpi.kpi.split("\n")[0]}__${displayMonth(m.label)}`;
+                          const secondaryKeyId = `${kpi.kpi.split("\n")[0]}__${toIdShortPeriode(m.label)}`;
                           const status: RCAStatus = inlineEntry
                             ? inlineEntryToStatus(inlineEntry)
-                            : (storedRCAStatus?.[rcaKey] ?? storedRCAStatus?.[secondaryKey] ?? "none");
+                            : (storedRCAStatus?.[rcaKey] ?? storedRCAStatus?.[secondaryKey] ?? storedRCAStatus?.[secondaryKeyId] ?? "none");
 
                           // Tag only shows color change when RCA has been filled (status ≠ "none")
                           const isFilled = status !== "none";
@@ -3136,6 +3176,8 @@ export function KPIPage() {
 
   const openRCA = (kpi: KPIItem, monthId: string, subIdx?: number) => {
     const month = months.find((m) => m.id === monthId);
+    const mCells = { ...(month?.cells ?? {}), ...(cellsMap[monthId] ?? {}) };
+    const getRaw = (idx: number) => mCells[ck(kpi.no, idx)] ?? "";
 
     let target: string;
     let actual: string;
@@ -3145,24 +3187,29 @@ export function KPIPage() {
       // Clicked from a specific % Pencapaian row — use that sub-row's actual/target
       const computeSub = kpi.subRows[subIdx];
       const spec = computeSub?.compute;
-      if (spec?.type === "ratio") {
-        target = cellsMap[monthId]?.[ck(kpi.no, spec.targetIdx)] ?? kpi.target2026;
-        actual = cellsMap[monthId]?.[ck(kpi.no, spec.actualIdx)] ?? "";
-        const getRaw = (idx: number) => cellsMap[monthId]?.[ck(kpi.no, idx)] ?? "";
-        const val = computeCell(kpi.subRows, getRaw, subIdx);
-        const n = parseNum(val);
-        achievementPct = n !== null ? Math.min(n, 100) : 0;
-      } else {
-        // avg or other computed type — fallback to lowest achievement + first actual/target
-        const lowest = getLowestAchievement(kpi, monthId, cellsMap);
-        if (lowest === null || lowest >= 100) return;
-        achievementPct = lowest;
-        const tIdx = kpi.subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));
-        target = tIdx >= 0 ? (cellsMap[monthId]?.[ck(kpi.no, tIdx)] ?? kpi.target2026) : kpi.target2026;
-        const aIdx = kpi.subRows.findIndex((s) => !s.compute);
-        actual = aIdx >= 0 ? (cellsMap[monthId]?.[ck(kpi.no, aIdx)] ?? "") : "";
-      }
+      const val = computeCell(kpi.subRows, getRaw, subIdx);
+      const n = parseNum(val);
+      achievementPct = n !== null ? Math.min(n, 100) : 0;
       if (achievementPct >= 100) return;
+
+      if (spec?.type === "ratio") {
+        target = getRaw(spec.targetIdx) || kpi.monthlyTargets?.[month?.label ?? ""] || kpi.target2026;
+        actual = getRaw(spec.actualIdx);
+      } else if (spec?.type === "inverse_ratio") {
+        target = getRaw(spec.denomIdx) || kpi.monthlyTargets?.[month?.label ?? ""] || kpi.target2026;
+        actual = getRaw(spec.numIdx);
+      } else if (spec?.type === "threshold") {
+        target = `${spec.target}`;
+        actual = getRaw(spec.actualIdx);
+      } else if (spec?.type === "ratio_score") {
+        target = getRaw(spec.negIdx) || kpi.monthlyTargets?.[month?.label ?? ""] || kpi.target2026;
+        actual = getRaw(spec.posIdx);
+      } else {
+        const tIdx = kpi.subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));
+        target = (tIdx >= 0 ? getRaw(tIdx) : "") || kpi.monthlyTargets?.[month?.label ?? ""] || kpi.target2026;
+        const aIdx = kpi.subRows.findIndex((s) => !s.compute && !s.label.toLowerCase().startsWith("target"));
+        actual = aIdx >= 0 ? getRaw(aIdx) : "";
+      }
     } else {
       // Called from cell blur — use lowest achievement across all computed sub-rows
       const lowest = getLowestAchievement(kpi, monthId, cellsMap);
@@ -3808,7 +3855,7 @@ export function KPIPage() {
         cells={cellsMap}
         onCellChange={updateCell}
         onCellBlur={handleCellBlur}
-        onOpenRCA={view === "input" && !submitted ? openRCA : undefined}
+        onOpenRCA={openRCA}
         onViewRCA={(rcaKey, secondaryKey, kpiName, monthLabel) =>
           setViewingRCA({ rcaKey, secondaryKey, kpiName, monthLabel })
         }
@@ -3857,12 +3904,13 @@ export function KPIPage() {
               key,
               id: key,
               submittedDate: iso,
-              periode: ml.split("-")[0],
+              periode: toIdShortPeriode(ml),
               monthLabel: ml,
               year: "20" + (ml.split("-")[1] ?? "26"),
               kpiIndicator: pendingRCA!.kpiName,
+              approvalStatus: "Pending-Check",
               targetMonthly: pendingRCA!.target,
-              actual: pendingRCA!.actual,
+              actual: entry.actual || pendingRCA!.actual,
               achievementPct: pendingRCA!.achievementPct,
               satuan: pendingRCA!.satuan,
               baseline: pendingRCA!.baseline,
@@ -3920,4 +3968,97 @@ export function KPIPage() {
       )}
     </div>
   );
+}
+export interface KPITrackingRCACandidate {
+  key: string;
+  kpiNo: string;
+  monthId: string;
+  monthLabel: string;
+  periode: string;
+  kpi: string;
+  satuan: string;
+  baseline: string;
+  target: string;
+  actual: string;
+  score: number;
+}
+
+const EN_TO_ID_SHORT_MONTH: Record<string, string> = {
+  Jan: "Jan", Feb: "Feb", Mar: "Mar", Apr: "Apr", May: "Mei", Jun: "Jun",
+  Jul: "Jul", Aug: "Agu", Sep: "Sep", Oct: "Okt", Nov: "Nov", Dec: "Des",
+};
+
+export function toIdShortPeriode(monthLabel: string): string {
+  const code = monthLabel.replace(/-\d{2}$/, "").trim();
+  return EN_TO_ID_SHORT_MONTH[code] ?? code;
+}
+
+/**
+ * Mengambil daftar aktual indikator KPI dari `/measurement/kpi-tracking` milik karyawan
+ * yang memiliki tag RCA (nilai pencapaian < 100%).
+ */
+export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCACandidate[] {
+  const snap = loadKPITracking(employeeId);
+  const monthsList = Array.isArray(snap.months) ? snap.months : [];
+  const map = snap.cellsMap ?? {};
+  const results: KPITrackingRCACandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const m of monthsList) {
+    const mCells = { ...(m.cells ?? {}), ...(map[m.id] ?? {}) };
+    for (const kpi of KPI_ITEMS) {
+      for (let si = 0; si < kpi.subRows.length; si++) {
+        const sub = kpi.subRows[si];
+        if (!sub.compute || sub.compute.type === "avg") continue;
+        const getRaw = (idx: number) => mCells[ck(kpi.no, idx)] ?? "";
+        const val = computeCell(kpi.subRows, getRaw, si);
+        const n = parseNum(val);
+        if (n === null || n >= 100) continue;
+
+        const rcaKey = `${kpi.no}__${m.id}`;
+        if (seen.has(rcaKey)) continue;
+        seen.add(rcaKey);
+
+        const spec = sub.compute;
+        let targetVal = "";
+        let actualVal = "";
+        if (spec.type === "ratio") {
+          targetVal = getRaw(spec.targetIdx) || kpi.monthlyTargets?.[m.label] || kpi.target2026;
+          actualVal = getRaw(spec.actualIdx);
+        } else if (spec.type === "inverse_ratio") {
+          targetVal = getRaw(spec.denomIdx) || kpi.monthlyTargets?.[m.label] || kpi.target2026;
+          actualVal = getRaw(spec.numIdx);
+        } else if (spec.type === "threshold") {
+          targetVal = `${spec.target}`;
+          actualVal = getRaw(spec.actualIdx);
+        } else if (spec.type === "ratio_score") {
+          targetVal = getRaw(spec.negIdx) || kpi.monthlyTargets?.[m.label] || kpi.target2026;
+          actualVal = getRaw(spec.posIdx);
+        }
+        if (!targetVal) {
+          const tIdx = kpi.subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));
+          targetVal = (tIdx >= 0 ? getRaw(tIdx) : "") || kpi.monthlyTargets?.[m.label] || kpi.target2026;
+        }
+        if (!actualVal) {
+          const aIdx = kpi.subRows.findIndex((s) => !s.compute && !s.label.toLowerCase().startsWith("target"));
+          actualVal = aIdx >= 0 ? getRaw(aIdx) : "";
+        }
+
+        results.push({
+          key: rcaKey,
+          kpiNo: kpi.no,
+          monthId: m.id,
+          monthLabel: m.label,
+          periode: toIdShortPeriode(m.label),
+          kpi: kpi.kpi.split("\n")[0],
+          satuan: kpi.satuan,
+          baseline: kpi.baseline2025,
+          target: targetVal,
+          actual: actualVal,
+          score: Math.round(n * 10) / 10,
+        });
+      }
+    }
+  }
+  return results;
 }

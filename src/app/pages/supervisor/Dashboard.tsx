@@ -564,20 +564,24 @@ const MODULE_MILESTONE_ICONS: Record<string, React.ElementType> = {
   "KPI (Setting)":          TrendingUp,
   "SMART Goals (Setting)":  Lightbulb,
   "KPI (Tracking)":         TrendingUp,
+  "RCA":                    ClipboardCheck,
   "SMART Goals (Tracking)": Lightbulb,
   "Appraisal Form":         ClipboardList,
   "Project OJS":            FolderKanban,
   "Managerial Skill":       Star,
+  "Inter-Department Feedback": Users,
 };
 
 const MODULE_ROUTES: Record<string, string> = {
   "KPI (Setting)":          "/supervisor/setting/kpi",
   "SMART Goals (Setting)":  "/supervisor/setting/smart-goals",
   "KPI (Tracking)":         "/supervisor/measurement/kpi-tracking",
+  "RCA":                    "/supervisor/measurement/rca",
   "SMART Goals (Tracking)": "/supervisor/measurement/smart-goals",
   "Appraisal Form":         "/supervisor/measurement/appraisal-form",
   "Project OJS":            "/supervisor/measurement/project-outside",
   "Managerial Skill":       "/supervisor/measurement/managerial-skill",
+  "Inter-Department Feedback": "/supervisor/measurement/inter-department-feedback",
 };
 
 function approvalToMilestoneStatus(mod: ModuleApprovalData): ApprovalStatus {

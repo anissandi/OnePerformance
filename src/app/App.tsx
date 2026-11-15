@@ -7,6 +7,7 @@ import { hydrateAllStoresFromSupabase } from "./services/supabaseClient";
 
 export default function App() {
   useEffect(() => {
+    document.title = "Performance Appraisal System";
     void hydrateAllStoresFromSupabase();
   }, []);
 

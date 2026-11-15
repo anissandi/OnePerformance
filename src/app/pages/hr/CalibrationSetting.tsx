@@ -9,6 +9,7 @@ import { archiveUsers, EOY_ARCHIVE_REASON, loadArchivedUsers } from "../../store
 import {
   getSoyApproval,
   loadSoyEmployeeSnapshot,
+  resetSoyApproval,
   SOY_EVENT,
   submitSoyForApproval,
   type SoyApprovalRecord,
@@ -587,11 +588,11 @@ function YearEndCalibrationSettings({ unit, onUpdate }: { unit: CompanyUnit; onU
   </>;
 }
 
-function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfirm, embedded = false, onSave, onCancelEdit, submitLabel = "Submit", soyApproval }: {
+function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfirm, embedded = false, onSave, onCancelEdit, submitLabel = "Submit", soyApproval, onResetSoy }: {
   unit: CompanyUnit; onBack: () => void; onUpdate: (u: CompanyUnit) => void;
   pageMode: PageMode; setPageMode: (m: PageMode) => void; onShowConfirm: () => void;
   embedded?: boolean; onSave?: () => boolean; onCancelEdit?: () => void;
-  submitLabel?: "Submit" | "Confirm Data"; soyApproval?: SoyApprovalRecord;
+  submitLabel?: "Submit" | "Confirm Data"; soyApproval?: SoyApprovalRecord; onResetSoy?: () => void;
 }) {
   const [editMode, setEditMode] = useState(false);
   const [hcTab, setHcTab] = useState("start");
@@ -655,6 +656,16 @@ function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfi
         </Tabs.List>}
         <Tabs.Content value="start" className="space-y-6">
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {!embedded && (Boolean(unit.beginningHC) || pageMode === "submitted") && onResetSoy && (
+            <button
+              type="button"
+              onClick={onResetSoy}
+              className="flex items-center gap-2 px-4 py-2.5 border border-amber-300 bg-amber-50 text-amber-800 rounded-xl text-xs font-semibold hover:bg-amber-100 transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reset Status HC Awal Tahun
+            </button>
+          )}
           {!unit.beginningHC && pageMode === "edit" && (
             <>
               <button
@@ -850,7 +861,22 @@ export function CalibrationSetting() {
     try {
       const saved = localStorage.getItem("calibration_hc_settings_2026") ?? localStorage.getItem("calibration_submitted_units");
       const base: CompanyUnit[] = saved ? JSON.parse(saved) : defaultCompanyUnits;
-      return base.map((u) => applyImportedEmployeesDistribution(u));
+      // Reset satu kali status HC Awal Tahun agar seluruh unit bisa di-submit ulang
+      const needsInitialSoyReset = !localStorage.getItem("pa_cal_soy_reset_2026_v1");
+      const normalized = base.map((u) => {
+        const clean = needsInitialSoyReset
+          ? { ...u, beginningHC: undefined, beginningGrades: undefined, yearEndStatus: undefined, yearEndUpdatedAt: undefined }
+          : u;
+        return applyImportedEmployeesDistribution(clean);
+      });
+      if (needsInitialSoyReset) {
+        localStorage.setItem("pa_cal_soy_reset_2026_v1", "1");
+        localStorage.removeItem("calibration_submitted_units");
+        localStorage.removeItem("calibration_submitted_at");
+        resetSoyApproval();
+        savePersistedState("calibration_hc_settings_2026", normalized);
+      }
+      return normalized;
     } catch {
       return defaultCompanyUnits.map((u) => applyImportedEmployeesDistribution(u));
     }
@@ -976,6 +1002,19 @@ export function CalibrationSetting() {
             setPageMode={setPageMode}
             onShowConfirm={() => setShowConfirm(true)}
             soyApproval={soyApproval}
+            onResetSoy={() => {
+              resetSoyApproval(liveUnit.id);
+              const resetUnit: CompanyUnit = {
+                ...liveUnit,
+                beginningHC: undefined,
+                beginningGrades: undefined,
+                yearEndStatus: undefined,
+                yearEndUpdatedAt: undefined,
+              };
+              updateUnit(resetUnit);
+              setPageMode("edit");
+              toast.success(`Status HC Awal Tahun ${liveUnit.name} berhasil di-reset dan siap di-submit ulang.`);
+            }}
           />
         </div>
       </>

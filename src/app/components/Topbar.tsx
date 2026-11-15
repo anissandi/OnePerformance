@@ -54,7 +54,6 @@ const SUPERVISOR_ITEMS: SearchItem[] = [
   { label: "PA Cycle History", path: "/supervisor/history", category: "Main" },
   { label: "KPI Setting", path: "/supervisor/setting/kpi", category: "Settings" },
   { label: "Project Setting", path: "/supervisor/setting/project", category: "Settings" },
-  { label: "Management Interview Setting", path: "/supervisor/setting/management-interview", category: "Settings" },
 ];
 
 const HR_ITEMS: SearchItem[] = [

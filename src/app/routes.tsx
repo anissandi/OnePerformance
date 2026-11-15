@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { Navigate, createBrowserRouter, useRouteError } from "react-router"
 import { LoginPage } from "./pages/LoginPage"
 import { AppLayout } from "./components/Layout"
@@ -36,7 +36,6 @@ import { SupervisorMonitoringProject } from "./pages/supervisor/monitoring/Proje
 import { SupervisorMonitoringManagerialSkill } from "./pages/supervisor/monitoring/ManagerialSkillMonitoring"
 import { SupervisorMonitoringManagementInterview } from "./pages/supervisor/monitoring/ManagementInterviewMonitoring"
 import { SupervisorMonitoringInterDeptFeedback } from "./pages/supervisor/monitoring/InterDepartmentFeedbackMonitoring"
-import { SupervisorSettingManagementInterview } from "./pages/supervisor/setting/ManagementInterviewSetting"
 import { LoginManagementPage, UserManagementPage } from "./pages/hr/settings/UserManagement"
 import { AccessManagementPage } from "./pages/hr/settings/AccessManagement"
 import { MenuManagementPage } from "./pages/hr/settings/MenuManagement"
@@ -63,7 +62,6 @@ import { StaffViewProfile } from "./pages/staff/StaffViewProfile"
 import { EmployeeSettingKPIPage } from "./pages/staff/EmployeeSettingKPIPage"
 import { InterDepartmentFeedback } from "./pages/supervisor/InterDepartmentFeedback"
 import { FeedbackApprovalsPage } from "./pages/shared/FeedbackApprovalsPage"
-import { ManagementInterviewInvitation } from "./pages/hr/ManagementInterviewInvitation"
 import { BODCalibrationApproval } from "./pages/bod/CalibrationApproval"
 import { SupervisorCalibration } from "./pages/supervisor/Calibration"
 import { YearEndVerification } from "./pages/hr/YearEndVerification"
@@ -185,6 +183,17 @@ function RouteErrorFallback() {
 }
 
 function RootEntryPage() {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const onSync = () => setTick((t) => t + 1)
+    window.addEventListener("pa-db-hydrated", onSync)
+    window.addEventListener("pa-auth-updated", onSync)
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onSync)
+      window.removeEventListener("pa-auth-updated", onSync)
+    }
+  }, [])
+
   const { valid } = peekSessionValidity()
   if (valid) {
     const user = getActiveUser()
@@ -226,10 +235,6 @@ export const router = createBrowserRouter([
       { path: "setting/kpi/:tab", Component: SupervisorSettingKPIPage },
       { path: "setting/smart-goals", Component: SMARTGoalsPage },
       { path: "setting/project", Component: ProjectOutsidePage },
-      {
-        path: "setting/management-interview",
-        Component: SupervisorSettingManagementInterview,
-      },
       { path: "measurement", Component: StaffMeasurementPage },
       { path: "measurement/kpi-tracking", Component: KPIPage },
       { path: "measurement/smart-goals", Component: SmartGoalsCheckInPage },
@@ -258,10 +263,6 @@ export const router = createBrowserRouter([
       {
         path: "measurement/inter-department-feedback/:tab",
         Component: InterDepartmentFeedback,
-      },
-      {
-        path: "measurement/management-interview",
-        Component: SupervisorSettingManagementInterview,
       },
       { path: "approvals", Component: HRApprovals },
       { path: "approvals/measurement", Component: HRApprovals },
@@ -332,10 +333,6 @@ export const router = createBrowserRouter([
       {
         path: "management-interview/assessment",
         Component: SupervisorMonitoringManagementInterview,
-      },
-      {
-        path: "management-interview/invitation",
-        Component: ManagementInterviewInvitation,
       },
       { path: "calibration/verification", Component: YearEndVerification },
       { path: "settings/cycle", Component: CycleManagement },
@@ -429,10 +426,6 @@ export const router = createBrowserRouter([
       },
       { path: "measurement/inter-department-feedback/:tab", Component: InterDepartmentFeedback },
       {
-        path: "measurement/management-interview",
-        Component: SupervisorSettingManagementInterview,
-      },
-      {
         path: "calibration/team-performance",
         Component: SupervisorCalibration,
       },
@@ -446,10 +439,6 @@ export const router = createBrowserRouter([
       { path: "setting/kpi/:tab", Component: SupervisorSettingKPIPage },
       { path: "setting/smart-goals", Component: SMARTGoalsPage },
       { path: "setting/project", Component: ProjectOutsidePage },
-      {
-        path: "setting/management-interview",
-        Component: SupervisorSettingManagementInterview,
-      },
       { path: "approvals", Component: SupervisorApprovals },
       { path: "appraisals", Component: SupervisorApprovals },
       { path: "approvals/measurement", Component: SupervisorApprovals },
@@ -490,10 +479,6 @@ export const router = createBrowserRouter([
       {
         path: "management-interview/assessment",
         Component: SupervisorMonitoringManagementInterview,
-      },
-      {
-        path: "management-interview/invitation",
-        Component: ManagementInterviewInvitation,
       },
       { path: "modules", Component: HRModuleActivation },
       { path: "override", Component: HRManagementOverride },
@@ -544,10 +529,6 @@ export const router = createBrowserRouter([
       { path: "setting/kpi/:tab", Component: EmployeeSettingKPIPage },
       { path: "setting/smart-goals", Component: SMARTGoalsPage },
       { path: "setting/project", Component: ProjectOutsidePage },
-      {
-        path: "setting/management-interview",
-        Component: SupervisorSettingManagementInterview,
-      },
       { path: "measurement", Component: StaffMeasurementPage },
       { path: "measurement/kpi-tracking", Component: KPIPage },
       { path: "measurement/rca", Component: RCAPage },
@@ -574,10 +555,6 @@ export const router = createBrowserRouter([
         Component: InterDepartmentFeedback,
       },
       { path: "measurement/inter-department-feedback/:tab", Component: InterDepartmentFeedback },
-      {
-        path: "measurement/management-interview",
-        Component: SupervisorSettingManagementInterview,
-      },
       { path: "approvals", Component: SupervisorApprovals },
       { path: "approvals/measurement", Component: SupervisorApprovals },
       { path: "approvals/measurement/:tab", Component: SupervisorApprovals },
@@ -626,7 +603,6 @@ export const router = createBrowserRouter([
       { path: "evidence/smart-goals", Component: HREvidenceSmart },
       { path: "evidence/management-interview", Component: HREvidenceInterview },
       { path: "management-interview/assessment", Component: SupervisorMonitoringManagementInterview },
-      { path: "management-interview/invitation", Component: ManagementInterviewInvitation },
       { path: "modules", Component: HRModuleActivation },
       { path: "override", Component: HRManagementOverride },
       { path: "override/:tab", Component: HRManagementOverride },
@@ -674,7 +650,6 @@ export const router = createBrowserRouter([
       { path: "setting/kpi/:tab", Component: SupervisorSettingKPIPage },
       { path: "setting/smart-goals", Component: SMARTGoalsPage },
       { path: "setting/project", Component: ProjectOutsidePage },
-      { path: "setting/management-interview", Component: SupervisorSettingManagementInterview },
       { path: "measurement", Component: StaffMeasurementPage },
       { path: "measurement/kpi-tracking", Component: KPIPage },
       { path: "measurement/smart-goals", Component: SmartGoalsCheckInPage },
@@ -686,7 +661,6 @@ export const router = createBrowserRouter([
       { path: "measurement/managerial-skill", Component: SupervisorManagerialSkillCheckIn },
       { path: "measurement/inter-department-feedback", Component: InterDepartmentFeedback },
       { path: "measurement/inter-department-feedback/:tab", Component: InterDepartmentFeedback },
-      { path: "measurement/management-interview", Component: SupervisorSettingManagementInterview },
       { path: "approvals", Component: BODHRApprovals },
       { path: "approvals/measurement", Component: BODHRApprovals },
       { path: "approvals/measurement/:tab", Component: BODHRApprovals },
@@ -735,10 +709,6 @@ export const router = createBrowserRouter([
       {
         path: "management-interview/assessment",
         Component: SupervisorMonitoringManagementInterview,
-      },
-      {
-        path: "management-interview/invitation",
-        Component: ManagementInterviewInvitation,
       },
       { path: "evidence/kpi-tracking", Component: HREvidenceKPI },
       { path: "evidence/rca", Component: HREvidenceRCA },

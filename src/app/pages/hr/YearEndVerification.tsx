@@ -855,7 +855,7 @@ export function YearEndVerification() {
         confirmLabel="Ya, Lanjutkan"
         confirmCls="bg-[#1A284F] hover:bg-[#243869]"
         icon={<CheckCircle2 className="w-6 h-6 text-[#1A284F]" />}
-        onConfirm={() => { if (!canProceed) return; saveYearEndState({ ...loadYearEndState(), phase: "management-interview" }); navigate("/hr/management-interview/invitation"); }}
+        onConfirm={() => { if (!canProceed) return; saveYearEndState({ ...loadYearEndState(), phase: "management-interview" }); navigate("/hr/calibration/management-interview"); }}
         onCancel={() => setModal(null)}
       />
     </div>

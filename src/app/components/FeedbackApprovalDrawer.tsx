@@ -398,39 +398,62 @@ export function FeedbackApprovalDrawer({
                   </div>
                 )}
                 {confirm && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                    <p className="mb-3 text-sm">
-                      Submit tindak lanjut? Setelah disubmit, data tidak dapat
-                      diubah dan akan tampil di Received Feedback karyawan.
-                    </p>
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => setConfirm(false)}
-                        className="rounded-lg border px-4 py-2 text-sm"
-                      >
-                        Batal
-                      </button>
-                      <button
-                        onClick={() => {
-                          try {
-                            saveFeedbackFollowUp(row.no, reviewerRole, rows)
-                            onAssessed()
-                            toast.success(
-                              "Tindak lanjut feedback berhasil disubmit",
-                            )
-                            onClose()
-                          } catch (error) {
-                            toast.error(
-                              error instanceof Error
-                                ? error.message
-                                : "Gagal menyimpan feedback",
-                            )
-                          }
-                        }}
-                        className="rounded-lg bg-[#1A284F] px-4 py-2 text-sm text-white"
-                      >
-                        Ya, Submit
-                      </button>
+                  <div
+                    className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+                    onClick={() => setConfirm(false)}
+                  >
+                    <div
+                      role="dialog"
+                      aria-modal="true"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full max-w-md rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl space-y-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <h4 className="text-base font-bold text-[#1A284F]">
+                          Konfirmasi Submit Tindak Lanjut
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setConfirm(false)}
+                          className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <p className="text-sm leading-relaxed text-gray-700">
+                        Submit tindak lanjut? pastikan Anda telah membaca semua feedback yang diberikan pada <strong>{row.name}</strong>. Setelah submit tindak lanjut, data tidak dapat diubah dan akan tampil di Received Feedback <strong>{row.name}</strong>.
+                      </p>
+                      <div className="flex justify-end gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setConfirm(false)}
+                          className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              saveFeedbackFollowUp(row.no, reviewerRole, rows)
+                              onAssessed()
+                              toast.success(
+                                "Tindak lanjut feedback berhasil disubmit",
+                              )
+                              onClose()
+                            } catch (error) {
+                              toast.error(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Gagal menyimpan feedback",
+                              )
+                            }
+                          }}
+                          className="rounded-xl bg-[#1A284F] px-5 py-2 text-sm font-semibold text-white hover:bg-[#131d3b]"
+                        >
+                          Ya, Submit
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}

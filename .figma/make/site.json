@@ -1,11 +1,11 @@
 {
-  "title": "One Performance Sambu Group",
+  "title": "Performance Appraisal System",
   "description": "Creates interactive prototype flows based on user scenarios and design guides to streamline UX design and improve user experience planning.",
   "robots": {
     "index": false
   },
   "icons": {
-    "icon": "/.figma/make/favicon.png"
+    "icon": "/favicon.png"
   },
   "accessibility": {
     "addBypassLinks": false,

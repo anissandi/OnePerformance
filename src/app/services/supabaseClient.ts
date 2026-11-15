@@ -1022,41 +1022,120 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
 
     // 2. Hydrate users if available in DB
     const users = data.users as Array<Record<string, unknown>> | undefined;
-    if (Array.isArray(users) && users.length > 0) {
-      const mapped = users.map((u, idx) => ({
-        id: String(idx + 1),
-        no: String(u.no ?? idx + 1),
-        regNo: String(u.reg_no ?? `REG-${String(idx + 1).padStart(3, "0")}`),
-        name: String(u.name ?? ""),
-        employeeId: String(u.employee_id ?? ""),
-        position: String(u.position ?? ""),
-        company: String(u.company ?? ""),
-        division: String(u.division ?? ""),
-        department: String(u.department ?? ""),
-        bagian: String(u.bagian ?? ""),
-        joinDate: String(u.join_date ?? ""),
-        telegramNo: String(u.telegram_no ?? ""),
-        grade: String(u.grade || "Grade 5"),
-        role: String(u.role ?? "Employee"),
-        groupings: String(u.groupings ?? "Operasional"),
-        status: String(u.status || "Active"),
-        lastLogin: String(u.last_login || ""),
-        email: String(u.email ?? ""),
-        regNoAp1: String(u.reg_no_ap1 ?? ""),
-        regNoAp2: String(u.reg_no_ap2 ?? ""),
-        isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
-        isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
-      }));
-      // Karyawan yang sedang diarsipkan tidak boleh kembali aktif melalui hydrate
-      let archivedIds = new Set<string>();
-      try {
-        const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
-        archivedIds = new Set(archived.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
-      } catch {
-        archivedIds = new Set();
+    let kvUsersList: Array<Record<string, unknown>> = [];
+    try {
+      const kvParsed = JSON.parse(localStorage.getItem("pa_managed_users_v1") ?? "[]");
+      if (Array.isArray(kvParsed)) {
+        kvUsersList = kvParsed.filter(
+          (item): item is Record<string, unknown> => Boolean(item && typeof item === "object"),
+        );
       }
-      const activeMapped = mapped.filter((u) => !archivedIds.has(u.employeeId.toLowerCase()));
-      localStorage.setItem("pa_managed_users_v1", JSON.stringify(activeMapped));
+    } catch {
+      kvUsersList = [];
+    }
+
+    let archivedIds = new Set<string>();
+    try {
+      const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
+      archivedIds = new Set(archived.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
+    } catch {
+      archivedIds = new Set();
+    }
+
+    let syncedActiveUsers: Array<Record<string, unknown>> = [];
+    if (Array.isArray(users) && users.length > 0) {
+      const kvUserExtras = new Map(
+        kvUsersList.map((item) => [String(item.employeeId ?? "").toLowerCase(), item]),
+      );
+      const mapped = users.map((u, idx) => {
+        const empKey = String(u.employee_id ?? "").toLowerCase();
+        const extra = kvUserExtras.get(empKey) ?? {};
+        return {
+          ...extra,
+          id: String(idx + 1),
+          no: String(u.no ?? idx + 1),
+          regNo: String(u.reg_no ?? extra.regNo ?? `REG-${String(idx + 1).padStart(3, "0")}`),
+          name: String(u.name ?? ""),
+          employeeId: String(u.employee_id ?? ""),
+          position: String(u.position ?? ""),
+          company: String(u.company ?? ""),
+          division: String(u.division ?? ""),
+          department: String(u.department ?? ""),
+          bagian: String(u.bagian ?? extra.bagian ?? ""),
+          joinDate: String(u.join_date ?? extra.joinDate ?? ""),
+          telegramNo: String(u.telegram_no ?? extra.telegramNo ?? ""),
+          grade: String(u.grade || "Grade 5"),
+          role: String(u.role ?? "Employee"),
+          groupings: String(u.groupings ?? "Operasional"),
+          status: String(u.status || "Active"),
+          lastLogin: String(u.last_login || ""),
+          email: String(u.email ?? ""),
+          regNoAp1: String(u.reg_no_ap1 ?? extra.regNoAp1 ?? ""),
+          regNoAp2: String(u.reg_no_ap2 ?? extra.regNoAp2 ?? ""),
+          isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? extra.isHrUnitChecker ?? u.role === "HR Unit"),
+          isHrIcfValidator: Boolean(
+            u.is_hr_icf_validator ?? extra.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator"),
+          ),
+        };
+      });
+      const seenDbIds = new Set(mapped.map((u) => u.employeeId.toLowerCase()));
+      const kvOnlyUsers = kvUsersList.filter(
+        (item) =>
+          Boolean(item.employeeId) &&
+          !seenDbIds.has(String(item.employeeId).toLowerCase()),
+      );
+      syncedActiveUsers = [...mapped, ...kvOnlyUsers].filter(
+        (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
+      );
+      localStorage.setItem("pa_managed_users_v1", JSON.stringify(syncedActiveUsers));
+    } else if (kvUsersList.length > 0) {
+      syncedActiveUsers = kvUsersList.filter(
+        (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
+      );
+      localStorage.setItem("pa_managed_users_v1", JSON.stringify(syncedActiveUsers));
+    }
+
+    // Khusus lingkungan Figma Make (bukan web produksi Vercel):
+    // sinkronkan user aktif preview ke akun Administrator / HR ICF dari database web (Vercel)
+    // apabila belum melakukan manual Logout atau user aktif sebelumnya bukan user database.
+    if (syncedActiveUsers.length > 0) {
+      const host = typeof window !== "undefined" ? window.location.hostname : "";
+      const isFigmaMakeHost =
+        host.includes("figma.site") ||
+        host.includes("figma.com") ||
+        host === "localhost" ||
+        host === "127.0.0.1";
+      if (isFigmaMakeHost && sessionStorage.getItem("pa_manual_logout_v1") !== "1") {
+        const dbAdminOrHrIcf =
+          syncedActiveUsers.find((u) => u.status === "Active" && u.role === "Administrator") ??
+          syncedActiveUsers.find((u) => u.status === "Active" && u.role === "HR ICF");
+        const existingSessionRaw = localStorage.getItem("pa_auth_session_v1");
+        let currentEmpId = "";
+        try {
+          currentEmpId = String(
+            JSON.parse(localStorage.getItem("pa_active_user_v1") ?? "{}")?.employeeId ?? "",
+          ).toLowerCase();
+        } catch {
+          currentEmpId = "";
+        }
+        const currentExistsInDb = syncedActiveUsers.some(
+          (u) => String(u.employeeId ?? "").toLowerCase() === currentEmpId,
+        );
+        if (dbAdminOrHrIcf && (!existingSessionRaw || !currentExistsInDb)) {
+          const nowTs = Date.now();
+          localStorage.setItem("pa_active_user_v1", JSON.stringify(dbAdminOrHrIcf));
+          localStorage.setItem(
+            "pa_auth_session_v1",
+            JSON.stringify({
+              isAuthenticated: true,
+              employeeId: String(dbAdminOrHrIcf.employeeId ?? ""),
+              loginAt: nowTs,
+              awayStartedAt: null,
+              lastActiveAt: nowTs,
+            }),
+          );
+        }
+      }
     }
 
     // 3. Hydrate master catalogs
