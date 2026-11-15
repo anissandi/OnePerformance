@@ -325,7 +325,13 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "approvals_pa_measurement",  label: "Performance Appraisal Measurement" },
       { id: "approvals_feedback",        label: "Inter-Department Feedback Approvals" },
       { id: "approvals_mgmt_interview",  label: "Management Interview" },
-      { id: "approvals_calibration",     label: "Calibration" },
+      {
+        id: "approvals_calibration", label: "Calibration",
+        children: [
+          { id: "approvals_calibration_soy", label: "Setting (SOY)" },
+          { id: "approvals_calibration_eoy", label: "Adjustment (EOY)" },
+        ],
+      },
       { id: "approvals_open_lock",       label: "Open Lock" },
     ]
   },
@@ -354,6 +360,13 @@ export const MENU_STRUCTURE: MenuItem[] = [
   },
   { id: "history",   label: "PA Cycle History" },
   { id: "documents", label: "Documents" },
+  {
+    id: "feedback", label: "Feedback",
+    children: [
+      { id: "feedback_form",     label: "Form Feedback" },
+      { id: "feedback_followup", label: "Follow-Up Feedback" },
+    ]
+  },
   {
     id: "evidence", label: "Evidence",
     children: [
@@ -405,6 +418,7 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "setting_login_mgmt",    label: "Login Management" },
       { id: "setting_notification",  label: "Notification Management" },
       { id: "setting_data_sync",     label: "Data Sync" },
+      { id: "setting_archive",       label: "Archive" },
       { id: "setting_audit",         label: "Audit Trail" },
     ]
   },
@@ -1081,15 +1095,33 @@ const DEFAULT_GM: RolePermissions = {
   pa_setting_interview: N,
 };
 
+// Default untuk menu baru (Feedback, Archive, Calibration Approval SOY/EOY):
+// - Form Feedback: semua role
+// - Follow-Up Feedback & Archive: Administrator & HR ICF (role lain via Access Management)
+// - Calibration Approval SOY/EOY: mengikuti hak akses Calibration Approval masing-masing role
+function applyNewMenuDefaults(role: BuiltinRole, perms: RolePermissions): RolePermissions {
+  const isHrAdmin = role === "Administrator" || role === "HR ICF";
+  const calib = perms.approvals_calibration ?? N;
+  return {
+    ...perms,
+    feedback: perms.feedback ?? V,
+    feedback_form: perms.feedback_form ?? VCE,
+    feedback_followup: perms.feedback_followup ?? (isHrAdmin ? T : N),
+    setting_archive: perms.setting_archive ?? (isHrAdmin ? T : N),
+    approvals_calibration_soy: perms.approvals_calibration_soy ?? calib,
+    approvals_calibration_eoy: perms.approvals_calibration_eoy ?? calib,
+  };
+}
+
 export const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
-  "Administrator": DEFAULT_ADMIN,
-  "BOD":           DEFAULT_BOD,
-  "Director":      DEFAULT_DIRECTOR,
-  "GM":            DEFAULT_GM,
-  "HR Unit":       DEFAULT_HR_UNIT,
-  "HR ICF":        DEFAULT_HR_ICF,
-  "Supervisor":    DEFAULT_SUPERVISOR,
-  "Employee":      DEFAULT_EMPLOYEE,
+  "Administrator": applyNewMenuDefaults("Administrator", DEFAULT_ADMIN),
+  "BOD":           applyNewMenuDefaults("BOD", DEFAULT_BOD),
+  "Director":      applyNewMenuDefaults("Director", DEFAULT_DIRECTOR),
+  "GM":            applyNewMenuDefaults("GM", DEFAULT_GM),
+  "HR Unit":       applyNewMenuDefaults("HR Unit", DEFAULT_HR_UNIT),
+  "HR ICF":        applyNewMenuDefaults("HR ICF", DEFAULT_HR_ICF),
+  "Supervisor":    applyNewMenuDefaults("Supervisor", DEFAULT_SUPERVISOR),
+  "Employee":      applyNewMenuDefaults("Employee", DEFAULT_EMPLOYEE),
 };
 
 export const BUILTIN_ROLES: BuiltinRole[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor", "Employee"];
@@ -1593,6 +1625,9 @@ export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
     } else {
       result[role] = base;
     }
+    // Form Feedback tersedia untuk semua role (termasuk role custom) kecuali dimatikan eksplisit
+    if (!savedRole?.feedback) result[role].feedback = result[role].feedback?.view ? result[role].feedback : { ...V };
+    if (!savedRole?.feedback_form) result[role].feedback_form = result[role].feedback_form?.view ? result[role].feedback_form : { ...VCE };
   }
   return result;
 }

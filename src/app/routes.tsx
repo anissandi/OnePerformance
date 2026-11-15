@@ -43,6 +43,9 @@ import { MenuManagementPage } from "./pages/hr/settings/MenuManagement"
 import { NotificationManagementPage } from "./pages/hr/settings/NotificationManagement"
 import { AuditTrailPage } from "./pages/hr/settings/AuditTrail"
 import { DataSyncPage } from "./pages/hr/settings/DataSync"
+import { ArchivePage } from "./pages/hr/settings/ArchivePage"
+import { FeedbackFormPage, FeedbackFollowUpPage } from "./pages/shared/FeedbackPage"
+import { CalibrationSettingApproval } from "./pages/bod/CalibrationSettingApproval"
 import { MasterAppraisalForm } from "./pages/hr/settings/MasterAppraisalForm"
 import { MasterManagerialSkill } from "./pages/hr/settings/MasterManagerialSkill"
 import { MasterKPIPage } from "./pages/hr/settings/MasterKPI"
@@ -257,6 +260,8 @@ export const router = createBrowserRouter([
         Component: SupervisorMonitoringManagementInterview,
       },
       { path: "approvals/calibration", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/adjustment", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/setting", Component: CalibrationSettingApproval },
       { path: "modules", Component: HRModuleActivation },
       { path: "override", Component: HRManagementOverride },
       { path: "override/:tab", Component: HRManagementOverride },
@@ -281,6 +286,9 @@ export const router = createBrowserRouter([
       },
       { path: "summary", Component: HRAppraisalSummary },
       { path: "documents", Component: DocumentsPage },
+      { path: "feedback", Component: FeedbackFormPage },
+      { path: "feedback/form", Component: FeedbackFormPage },
+      { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
       { path: "documents/:tab", Component: DocumentsPage },
       { path: "profile", Component: ViewProfile },
       { path: "profile/:tab", Component: ViewProfile },
@@ -329,6 +337,7 @@ export const router = createBrowserRouter([
       { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
+      { path: "settings/archive", Component: ArchivePage },
       {
         path: "settings/master/appraisal-form",
         Component: MasterAppraisalForm,
@@ -439,6 +448,8 @@ export const router = createBrowserRouter([
         Component: SupervisorMonitoringManagementInterview,
       },
       { path: "approvals/calibration", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/adjustment", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/setting", Component: CalibrationSettingApproval },
       { path: "appraisals/setting", Component: SupervisorApprovals },
       { path: "appraisals/setting/:tab", Component: SupervisorApprovals },
       {
@@ -449,6 +460,9 @@ export const router = createBrowserRouter([
       { path: "appraisal", Component: SupervisorMyPerformanceAppraisal },
       { path: "appraisal/:tab", Component: SupervisorMyPerformanceAppraisal },
       { path: "documents", Component: DocumentsPage },
+      { path: "feedback", Component: FeedbackFormPage },
+      { path: "feedback/form", Component: FeedbackFormPage },
+      { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
       { path: "documents/:tab", Component: DocumentsPage },
       { path: "profile", Component: ViewProfile },
       { path: "profile/:tab", Component: ViewProfile },
@@ -487,6 +501,7 @@ export const router = createBrowserRouter([
       { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
+      { path: "settings/archive", Component: ArchivePage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
       { path: "settings/master/managerial-skill", Component: MasterManagerialSkill },
       { path: "settings/master/kpi", Component: MasterKPIPage },
@@ -560,6 +575,8 @@ export const router = createBrowserRouter([
         Component: SupervisorMonitoringManagementInterview,
       },
       { path: "approvals/calibration", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/adjustment", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/setting", Component: CalibrationSettingApproval },
       { path: "appraisals", Component: SupervisorApprovals },
       { path: "appraisals/setting", Component: SupervisorApprovals },
       { path: "appraisals/setting/:tab", Component: SupervisorApprovals },
@@ -583,6 +600,9 @@ export const router = createBrowserRouter([
       { path: "calibration/management-interview", Component: SupervisorMonitoringManagementInterviewNoAssess },
       { path: "history", Component: SupervisorCycleHistory },
       { path: "documents", Component: DocumentsPage },
+      { path: "feedback", Component: FeedbackFormPage },
+      { path: "feedback/form", Component: FeedbackFormPage },
+      { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
       { path: "documents/:tab", Component: DocumentsPage },
       { path: "evidence/kpi-tracking", Component: HREvidenceKPI },
       { path: "evidence/rca", Component: HREvidenceRCA },
@@ -613,6 +633,7 @@ export const router = createBrowserRouter([
       { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
+      { path: "settings/archive", Component: ArchivePage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
       { path: "settings/master/managerial-skill", Component: MasterManagerialSkill },
       { path: "settings/master/kpi", Component: MasterKPIPage },
@@ -663,6 +684,8 @@ export const router = createBrowserRouter([
         Component: SupervisorMonitoringManagementInterview,
       },
       { path: "approvals/calibration", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/adjustment", Component: BODCalibrationApproval },
+      { path: "approvals/calibration/setting", Component: CalibrationSettingApproval },
       { path: "monitoring/kpi", Component: BODMonitoringKPI },
       { path: "monitoring/smart-goals", Component: BODMonitoringSmartGoals },
       {
@@ -727,10 +750,14 @@ export const router = createBrowserRouter([
       { path: "settings/notifications/:tab", Component: NotificationManagementPage },
       { path: "settings/audit-trail", Component: AuditTrailPage },
       { path: "settings/data-sync", Component: DataSyncPage },
+      { path: "settings/archive", Component: ArchivePage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
       { path: "settings/master/managerial-skill", Component: MasterManagerialSkill },
       { path: "settings/master/kpi", Component: MasterKPIPage },
       { path: "documents", Component: DocumentsPage },
+      { path: "feedback", Component: FeedbackFormPage },
+      { path: "feedback/form", Component: FeedbackFormPage },
+      { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
       { path: "documents/:tab", Component: DocumentsPage },
       { path: "profile", Component: ViewProfile },
       { path: "profile/:tab", Component: ViewProfile },

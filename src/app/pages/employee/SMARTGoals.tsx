@@ -1,10 +1,11 @@
 // @refresh reset
 import React, { useEffect, useState } from "react";
-import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, Info, AlertTriangle, Clock, RotateCcw, Lock, MessageSquare } from "lucide-react";
+import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, Info, AlertTriangle, Clock, RotateCcw, Lock } from "lucide-react";
 import { loadSubmittedGoals, saveSubmittedGoals } from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { getActiveUser } from "../../store/authStore";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
+import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
 
@@ -520,14 +521,7 @@ function ResultsView({
   statusTone: "validated" | "in_progress" | "revision" | "submitted";
   wfRecord?: WorkflowRecord;
 }) {
-  const revisionList = wfRecord?.revisionHistory ?? [];
-  const latestNote =
-    wfRecord?.decisions.approver2?.note ||
-    wfRecord?.decisions.approver1?.note ||
-    wfRecord?.decisions.checker?.note ||
-    revisionList[revisionList.length - 1]?.note ||
-    "";
-
+  void wfRecord;
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
@@ -537,33 +531,6 @@ function ResultsView({
       <SmartTable goals={goals} editable={false} />
       <ActionPlansSection goals={goals} editable={false} />
 
-      <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-5 space-y-3">
-        <h4 className="text-sm font-bold text-[#1A284F] flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 text-[#1A284F]" />
-          Feedback &amp; Riwayat Revisi dari Approver
-        </h4>
-        {revisionList.length > 0 ? (
-          <div className="space-y-2.5">
-            {revisionList.map((rev, idx) => (
-              <div key={idx} className="rounded-xl border border-orange-200 bg-orange-50/60 px-4 py-3 text-xs space-y-1">
-                <div className="flex items-center justify-between font-bold text-orange-800">
-                  <span>{rev.role} — {rev.approverName}</span>
-                  <span className="text-[11px] font-normal text-orange-600">{rev.date}</span>
-                </div>
-                <p className="text-gray-700 leading-relaxed">{rev.note}</p>
-              </div>
-            ))}
-          </div>
-        ) : latestNote ? (
-          <div className="bg-blue-50/50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-gray-700">
-            {latestNote}
-          </div>
-        ) : (
-          <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-400 italic">
-            Belum ada catatan/revisi dari Approver.
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -823,6 +790,13 @@ export function SMARTGoalsPage() {
           wfRecord={wfRecState}
         />
       )}
+
+      <ApproverNotesHistory
+        employeeId={getActiveUser().employeeId}
+        module="SMART Goals"
+        phase="setting"
+        title="Catatan dari Approver"
+      />
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} />}

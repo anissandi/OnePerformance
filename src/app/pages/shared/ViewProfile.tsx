@@ -23,12 +23,11 @@ import {
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadUnitScoreWeights, SCORE_WEIGHT_EVENT, type ScoreWeightColumn } from "./scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
-import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
+import { getApproverNotesHistory, getRecordDecisionLog, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { loadAllAppraisalApprovers } from "./appraisalFormStore";
 import { loadApprovalDecisions } from "./smartGoalsStore";
 import { loadAllMSApprovers } from "./msStore";
 import { loadKPICommentsForEmployee } from "./kpiCommentsStore";
-import { loadMonthlyNotes } from "./kpiMonthlyNotesStore";
 import { loadFeedbackSubmissions } from "./interDepartmentFeedbackStore";
 import { loadRCAApprovalDecisions } from "./rcaApprovalStore";
 import type { StoredAssessment } from "./approvalsStore";
@@ -310,19 +309,6 @@ function getModuleResults(year: number) {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
-function ProgressRing({ pct, size = 80, stroke = 7 }: { pct: number; size?: number; stroke?: number }) {
-  const r = (size - stroke) / 2;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (pct / 100) * circ;
-  return (
-    <svg width={size} height={size} className="-rotate-90">
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#f0f4ff" strokeWidth={stroke} />
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1A284F" strokeWidth={stroke}
-        strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
-        style={{ transition: "stroke-dashoffset 0.6s ease" }} />
-    </svg>
-  );
-}
 
 type Tab = "overview" | "results";
 
@@ -335,6 +321,7 @@ export function ViewProfile() {
   const [selectedYear, setSelectedYear] = useState<number>(CURRENT_YEAR);
   const [yearOpen, setYearOpen] = useState(false);
   const [tick, setTick] = useState(0);
+  const [summaryNoteOpen, setSummaryNoteOpen] = useState(true);
 
   useEffect(() => {
     const onRefresh = () => setTick((v) => v + 1);
@@ -628,28 +615,18 @@ export function ViewProfile() {
         note: kpiComments.approver2.text,
       });
     }
-    const monthlyNotes = loadMonthlyNotes();
-    for (const [mId, mEntry] of Object.entries(monthlyNotes)) {
-      if (mEntry?.approver1?.text?.trim()) {
-        pushNote({
-          approver: mEntry.approver1.approverName || ap1User?.name || "Approver 1",
-          role: "Approver 1",
-          positionLabel: ap1User?.position || "Atasan Langsung (AP1)",
-          module: `KPI Tracking (${mId.toUpperCase()})`,
-          date: mEntry.approver1.date || "-",
-          note: mEntry.approver1.text,
-        });
-      }
-      if (mEntry?.approver2?.text?.trim()) {
-        pushNote({
-          approver: mEntry.approver2.approverName || ap2User?.name || "Approver 2",
-          role: "Approver 2",
-          positionLabel: ap2User?.position || "Atasan Langsung (AP2)",
-          module: `KPI Tracking (${mId.toUpperCase()})`,
-          date: mEntry.approver2.date || "-",
-          note: mEntry.approver2.text,
-        });
-      }
+    // Catatan bulanan KPI Tracking dari log keputusan milik karyawan ini sendiri
+    for (const entry of getApproverNotesHistory(activeUser.employeeId, "KPI", "measurement")) {
+      if (!entry.note?.trim() || (entry.stage !== "approver1" && entry.stage !== "approver2")) continue;
+      const isA1 = entry.stage === "approver1";
+      pushNote({
+        approver: entry.approverName || entry.stageLabel,
+        role: isA1 ? "Approver 1" : "Approver 2",
+        positionLabel: isA1 ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+        module: `KPI Tracking${entry.months?.length ? ` (${entry.months.join(", ")})` : ""}`,
+        date: entry.date || "-",
+        note: entry.note,
+      });
     }
 
     // 4. Appraisal Form
@@ -755,6 +732,31 @@ export function ViewProfile() {
     return notes;
   }, [activeUser, selectedYear, isCurrent, yearData.summaryNotes, tick]);
 
+  // Tanggal transaksi terakhir milik user yang login (submit/approval pada workflow miliknya)
+  const ownerLastUpdated = (() => {
+    if (!isCurrent) return yearData.lastUpdated;
+    const own = normalizeEmployeeId(activeUser.employeeId);
+    const toTs = (d?: string) => {
+      const m = String(d ?? "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getTime() : 0;
+    };
+    let best = 0;
+    let bestLabel = "";
+    const consider = (d?: string) => {
+      const t = toTs(d);
+      if (t > best) { best = t; bestLabel = String(d); }
+    };
+    void tick;
+    for (const rec of loadWorkflowRecords()) {
+      if (normalizeEmployeeId(rec.employeeId) !== own || rec.year !== String(selectedYear)) continue;
+      consider(rec.submittedDate);
+      Object.values(rec.decisions).forEach((d) => consider(d?.date));
+      getRecordDecisionLog(rec).forEach((e) => consider(e.date));
+    }
+    if (!best) return "—";
+    return new Date(best).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" }) || bestLabel;
+  })();
+
   const softModuleTagClass = (moduleName: string) => {
     const m = moduleName.toLowerCase();
     if (m.includes("kpi")) return "bg-sky-50 text-sky-700 border-sky-200";
@@ -828,21 +830,6 @@ export function ViewProfile() {
                     ) : (
                       <span className="text-xs text-green-600 font-medium flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Finalized</span>
                     )}
-                  </div>
-                </div>
-                {/* Score ring + Grade */}
-                <div className="flex items-center gap-3 shrink-0 pt-1">
-                  <div className="relative">
-                    <ProgressRing pct={displayScore} size={72} stroke={6} />
-                    <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-sm font-bold text-[#1A284F] leading-none">{displayScore}%</span>
-                      <span className={`text-[8px] leading-none mt-0.5 ${isCurrent ? "text-amber-500" : "text-green-500"}`}>
-                        {isCurrent ? "Current" : "Final"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-extrabold text-lg shadow-sm ${gradeColor(displayGrade)}`}>
-                    {displayGrade}
                   </div>
                 </div>
               </div>
@@ -943,7 +930,7 @@ export function ViewProfile() {
           <div className="flex items-start justify-between gap-2 relative z-10">
             <div>
               <p className="text-xs font-medium text-gray-500">Last Updated</p>
-              <p className="text-xl font-extrabold text-[#111827] leading-tight mt-0.5">{yearData.lastUpdated}</p>
+              <p className="text-xl font-extrabold text-[#111827] leading-tight mt-0.5">{ownerLastUpdated}</p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-[#A85D43] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
               <Sparkles className="w-5 h-5" />
@@ -1047,14 +1034,23 @@ export function ViewProfile() {
 
           {/* Summary Note */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5">
-            <div className="flex items-center gap-2 mb-4">
+            <button
+              type="button"
+              onClick={() => setSummaryNoteOpen((v) => !v)}
+              className={`w-full flex items-center gap-2 text-left ${summaryNoteOpen ? "mb-4" : ""}`}
+              aria-expanded={summaryNoteOpen}
+            >
               <StickyNote className="w-4 h-4 text-[#1A284F]" />
               <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Summary Note</p>
+              <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                {liveSummaryNotes.length}
+              </span>
               <span className="ml-auto text-[10px] font-semibold text-gray-400 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded-full">
                 Appraisal {selectedYear}
               </span>
-            </div>
-            {liveSummaryNotes.length === 0 ? (
+              <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${summaryNoteOpen ? "rotate-180" : ""}`} />
+            </button>
+            {!summaryNoteOpen ? null : liveSummaryNotes.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-8 text-gray-300">
                 <StickyNote className="w-8 h-8" />
                 <p className="text-xs text-gray-400">Belum ada rekap catatan/komentar dari Approver 1 &amp; Approver 2 untuk periode {selectedYear}.</p>

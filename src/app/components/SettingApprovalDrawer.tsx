@@ -204,6 +204,10 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
     setConfirmRevisionOpen(true);
   };
 
+  // SMART Goals (Setting): komentar Approver 1/2 wajib diisi
+  const commentRequired = /smart/i.test(row.type) && !isCheckerStage && !isValidatorStage;
+  const commentMissing = commentRequired && !approverComment.trim();
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white">
       {/* ── Top bar ─────────────────────────────────────────────────────────── */}
@@ -328,6 +332,7 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
                     <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
                     <span className="text-xs font-bold text-indigo-700">
                       Komentar &amp; Catatan {workflowStage === "approver1" ? `Approver 1 (${ap1DisplayName})` : `Approver 2 (${ap2DisplayName})`}
+                      {commentRequired && <span className="text-rose-500"> * (Wajib Diisi)</span>}
                     </span>
                   </div>
                   <div className="p-4">
@@ -341,8 +346,11 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
                         value={approverComment}
                         onChange={(e) => setApproverComment(e.target.value)}
                         placeholder="Tambahkan komentar atau catatan untuk pengajuan ini..."
-                        className="w-full text-xs border-2 border-indigo-100 focus:border-indigo-400 rounded-xl px-3.5 py-2.5 outline-none resize-none text-gray-700"
+                        className={`w-full text-xs border-2 rounded-xl px-3.5 py-2.5 outline-none resize-none text-gray-700 ${commentMissing ? "border-rose-200 focus:border-rose-400" : "border-indigo-100 focus:border-indigo-400"}`}
                       />
+                    )}
+                    {commentMissing && !readOnly && !isAlreadyProcessed && (
+                      <p className="mt-1.5 text-[11px] text-rose-500">Komentar &amp; Catatan Approver wajib diisi sebelum menyetujui.</p>
                     )}
                   </div>
                 </div>
@@ -367,7 +375,9 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
                 </button>
                 <button
                   onClick={() => setConfirmApproveOpen(true)}
-                  className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#1A284F] text-white rounded-xl font-semibold text-sm hover:bg-[#131d3b] transition-colors"
+                  disabled={commentMissing}
+                  title={commentMissing ? "Komentar & Catatan Approver wajib diisi" : undefined}
+                  className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#1A284F] text-white rounded-xl font-semibold text-sm hover:bg-[#131d3b] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   {primaryActionLabel}

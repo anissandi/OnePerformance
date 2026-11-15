@@ -31,6 +31,22 @@ export interface WorkflowRecord {
     note: string;
     date: string;
   }>;
+  /** Riwayat seluruh keputusan reviewer (Checker/AP1/AP2/Validator), tidak di-reset saat submit ulang. */
+  decisionLog?: WorkflowDecisionLogEntry[];
+  /** KPI Measurement: bulan yang diajukan pada siklus submit aktif (mis. ["Mar-26"]). */
+  submittedMonths?: string[];
+  /** KPI Measurement: bulan yang sudah Validated oleh HR ICF. */
+  validatedMonths?: string[];
+}
+export type WorkflowLogStage = "checker" | "approver1" | "approver2" | "validator";
+export interface WorkflowDecisionLogEntry {
+  stage: WorkflowLogStage;
+  approverName: string;
+  status: string;
+  note?: string;
+  date: string;
+  months?: string[];
+  ts?: number;
 }
 export interface WorkflowAlias {
   key: string;
@@ -133,6 +149,13 @@ export function submitWorkflowModule(
     (module === "KPI" || module === "SMART Goals" || module === "RCA") &&
     shouldBypassCheckerForSubmission(employeeId);
   const existing = loadWorkflowRecords().find((item) => item.key === key);
+  const validatedMonths = existing?.validatedMonths ?? [];
+  let submittedMonths: string[] | undefined;
+  if (module === "KPI" && phase === "measurement") {
+    const tracked = readTrackedKpiMonthLabels(employeeId);
+    const fresh = tracked.filter((m) => !validatedMonths.includes(m));
+    submittedMonths = fresh.length > 0 ? fresh : tracked.slice(-1);
+  }
   const initialDecisions: WorkflowRecord["decisions"] = bypassChecker
     ? {
         checker: { status: "Bypassed", date: effectiveDate },
@@ -148,6 +171,9 @@ export function submitWorkflowModule(
     decisions: initialDecisions,
     assessments: {},
     revisionHistory: existing?.revisionHistory ?? [],
+    decisionLog: existing ? getRecordDecisionLog(existing) : [],
+    submittedMonths,
+    validatedMonths,
   });
   triggerApprovalTransactionNotification({
     employeeId: normalizeEmployeeId(employeeId),
@@ -215,7 +241,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     decisions.checker = {
       status: chkStatus,
       date: effectiveDate,
-      note: status === "Revision" ? note : undefined,
+      note: note?.trim() ? note : undefined,
       approverName: resolvedCheckerName,
     };
     delete decisions.approver1;
@@ -271,7 +297,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     decisions.validator = {
       status: valStatus,
       date: effectiveDate,
-      note: status === "Revision" ? note : undefined,
+      note: note?.trim() ? note : undefined,
       approverName: resolvedValidatorName,
     };
     notifStatus = valStatus;
@@ -317,7 +343,28 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
     });
   }
-  write({ ...record, decisions, assessments, revisionHistory });
+  const logStage: WorkflowLogStage =
+    effectiveStage === "checker" || effectiveStage === "validator" || effectiveStage === "approver1"
+      ? effectiveStage
+      : "approver2";
+  const storedDecision = decisions[logStage];
+  const decisionLog = [
+    ...getRecordDecisionLog(record),
+    {
+      stage: logStage,
+      approverName: storedDecision?.approverName || activeUser.name,
+      status: storedDecision?.status || status,
+      note: note?.trim() || undefined,
+      date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
+      months: record.submittedMonths && record.submittedMonths.length > 0 ? [...record.submittedMonths] : undefined,
+      ts: Date.now(),
+    },
+  ];
+  let validatedMonths = record.validatedMonths ?? [];
+  if (logStage === "validator" && storedDecision?.status === "Validated" && record.submittedMonths?.length) {
+    validatedMonths = Array.from(new Set([...validatedMonths, ...record.submittedMonths]));
+  }
+  write({ ...record, decisions, assessments, revisionHistory, decisionLog, validatedMonths });
   triggerApprovalTransactionNotification({
     employeeId: alias.employeeId,
     moduleName: `${alias.module} (${alias.phase === "setting" ? "Setting" : "Measurement"})`,
@@ -326,6 +373,94 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     approverName: activeUser.name,
   });
 }
+const MONTH_ORDER = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export const KPI_MONTH_LABELS_2026 = MONTH_ORDER.map((m) => `${m}-26`);
+
+/** Label bulan yang sudah tercatat pada KPI Tracking milik karyawan (scoped per karyawan). */
+export function readTrackedKpiMonthLabels(employeeId: string): string[] {
+  try {
+    const raw = localStorage.getItem(`kpi_tracking_v1_${normalizeEmployeeId(employeeId)}`);
+    const snap = raw ? (JSON.parse(raw) as { months?: Array<{ label?: string }> }) : null;
+    const labels = (snap?.months ?? []).map((m) => String(m.label ?? "")).filter(Boolean);
+    return labels.sort((a, b) => MONTH_ORDER.indexOf(a.slice(0, 3)) - MONTH_ORDER.indexOf(b.slice(0, 3)));
+  } catch {
+    return [];
+  }
+}
+
+/** Log keputusan; record lama tanpa decisionLog disintesis dari decisions + revisionHistory. */
+export function getRecordDecisionLog(record: WorkflowRecord): WorkflowDecisionLogEntry[] {
+  if (Array.isArray(record.decisionLog)) return record.decisionLog;
+  const out: WorkflowDecisionLogEntry[] = [];
+  const stageFromLabel = (label: string): WorkflowLogStage =>
+    /checker/i.test(label) ? "checker" : /validator/i.test(label) ? "validator" : /2/.test(label) ? "approver2" : "approver1";
+  for (const rev of record.revisionHistory ?? []) {
+    out.push({ stage: stageFromLabel(rev.role), approverName: rev.approverName, status: "Revision", note: rev.note, date: rev.date });
+  }
+  (["checker", "approver1", "approver2", "validator"] as WorkflowLogStage[]).forEach((stage) => {
+    const d = record.decisions[stage];
+    if (!d || d.status === "Bypassed") return;
+    if (d.status === "Revision" && out.some((e) => e.stage === stage && e.note === d.note)) return;
+    out.push({ stage, approverName: d.approverName || "", status: d.status, note: d.note, date: d.date, months: record.submittedMonths });
+  });
+  return out;
+}
+
+export interface ApproverNoteHistoryItem extends WorkflowDecisionLogEntry {
+  stageLabel: string;
+}
+export const WORKFLOW_STAGE_LABEL: Record<WorkflowLogStage, string> = {
+  checker: "Checker",
+  approver1: "Approver 1",
+  approver2: "Approver 2",
+  validator: "Validator",
+};
+
+/** Riwayat catatan approver milik satu karyawan untuk modul + fase tertentu (tidak bocor lintas karyawan). */
+export function getApproverNotesHistory(
+  employeeId: string,
+  module: string,
+  phase: WorkflowRecord["phase"],
+): ApproverNoteHistoryItem[] {
+  const normId = normalizeEmployeeId(employeeId);
+  const rec = loadWorkflowRecords().find(
+    (r) => r.module === module && r.phase === phase && normalizeEmployeeId(r.employeeId) === normId,
+  );
+  if (!rec) return [];
+  return getRecordDecisionLog(rec)
+    .map((e) => ({ ...e, stageLabel: WORKFLOW_STAGE_LABEL[e.stage] ?? e.stage }))
+    .reverse();
+}
+
+export type KpiMonthState = "validated" | "pending" | "revision" | "not_submitted";
+/** Status per bulan (Jan–Dec) KPI Tracking milik karyawan. */
+export function getKpiMonthStatuses(employeeId: string): Array<{ label: string; state: KpiMonthState }> {
+  const normId = normalizeEmployeeId(employeeId);
+  const rec = loadWorkflowRecords().find(
+    (r) => r.module === "KPI" && r.phase === "measurement" && normalizeEmployeeId(r.employeeId) === normId,
+  );
+  const validated = new Set(rec?.validatedMonths ?? []);
+  const isValidatedRecord = rec?.decisions.validator?.status === "Validated";
+  // Record lama yang sudah Validated tanpa validatedMonths: anggap semua bulan tercatat tervalidasi
+  if (rec && isValidatedRecord && !rec.validatedMonths) {
+    readTrackedKpiMonthLabels(employeeId).forEach((m) => validated.add(m));
+  }
+  const submitted = new Set(rec && !isValidatedRecord ? rec.submittedMonths ?? [] : []);
+  const isRevision = Boolean(
+    rec && Object.values(rec.decisions).some((d) => d?.status === "Revision"),
+  );
+  return KPI_MONTH_LABELS_2026.map((label) => ({
+    label,
+    state: validated.has(label)
+      ? "validated"
+      : submitted.has(label)
+      ? isRevision
+        ? "revision"
+        : "pending"
+      : "not_submitted",
+  }));
+}
+
 export function saveWorkflowAssessment(no: string, role: ReviewerRole, ratings: Record<string, number>, comments: Record<string, string>, date: string) {
   const alias = workflowAlias(no);
   if (!alias) return;
@@ -572,4 +707,20 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
     list.push(buildTwoStep("Managerial Skill", "Managerial Skill"));
   }
   return list;
+}
+
+/** Status approval Project Outside Job Scope (Approval 1 -> Approval 2) dari workflow aktual karyawan. */
+export function getProjectApprovalStatus(employeeId: string): "" | "Pending-Approver 1" | "Pending-Approver 2" | "Approved" | "Revision" | "Rejected" {
+  const norm = normalizeEmployeeId(employeeId);
+  const rec = loadWorkflowRecords().find(
+    (r) => r.module === "Project" && normalizeEmployeeId(r.employeeId) === norm,
+  );
+  if (!rec) return "";
+  const a1 = rec.decisions.approver1?.status ?? "";
+  const a2 = rec.decisions.approver2?.status ?? "";
+  if (/reject/i.test(a1) || /reject/i.test(a2)) return "Rejected";
+  if (a1 === "Revision" || a2 === "Revision") return "Revision";
+  if (a2 && a2 !== "Pending") return "Approved";
+  if (a1 && a1 !== "Pending") return "Pending-Approver 2";
+  return "Pending-Approver 1";
 }

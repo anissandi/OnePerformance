@@ -551,35 +551,12 @@ export function BODCalibrationApproval() {
         {/* ── Header ── */}
         <div className="flex items-start justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-3xl font-bold text-[#1A284F]">Calibration Approval</h1>
+            <h1 className="text-3xl font-bold text-[#1A284F]">Calibration Approval — Adjustment (EOY)</h1>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <p className="text-sm text-gray-500">Performance Year 2026 · Director / BOD Review</p>
-              {isDirector && (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                  Cakupan Calibration Approval: {getGroupNameForUnit(activeUser.company)} ({visibleUnits.length} Unit Usaha)
-                </span>
-              )}
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                effectiveCalRole === "mengetahui"
-                  ? "bg-sky-50 text-sky-700 border-sky-200"
-                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
-              }`}>
-                Peran pada {baseUnit.name}: {effectiveCalRole === "mengetahui" ? "Mengetahui (Acknowledge)" : "Approver (Approve / Revision)"}
-              </span>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm">
-              <span className="text-[11px] font-semibold text-gray-500">Peran Unit Ini:</span>
-              <select
-                value={effectiveCalRole}
-                onChange={(e) => handleUpdateDirectorCalRole(e.target.value as "approver" | "mengetahui")}
-                className="text-xs font-bold text-[#1A284F] bg-transparent outline-none cursor-pointer"
-              >
-                <option value="approver">Approver</option>
-                <option value="mengetahui">Mengetahui</option>
-              </select>
-            </div>
           {status === "approved" && (
             <span className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold px-4 py-2 rounded-xl">
               <CheckCircle2 className="w-4 h-4" /> Approved on {approvedAtMap[selectedUnitId]}
@@ -898,10 +875,6 @@ export function BODCalibrationApproval() {
             <div>
               <h2 className="text-sm font-semibold text-[#1A284F]">Director Approval — {unit.name}</h2>
               <p className="text-xs text-gray-400 mt-0.5">Review the calibration results above and take action</p>
-            </div>
-            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex gap-2 text-sm text-blue-800">
-              <Info className="w-4 h-4 shrink-0 mt-0.5 text-blue-500" />
-              Approving will finalize all calibration grades for {unit.name} and notify HR, supervisors, and employees.
             </div>
             <div className="flex gap-3 justify-end">
               <button onClick={() => setModal("revision")}

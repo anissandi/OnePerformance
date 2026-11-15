@@ -1098,6 +1098,22 @@ export function loginWithCompanyAndEmployeeId(
     );
 
   if (!matched) {
+    // Karyawan yang diarsipkan (dihapus di User Management / Eliminasi HC EOY) tidak dapat login sampai di-restore
+    try {
+      const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: ManagedUser }>;
+      if (
+        Array.isArray(archived) &&
+        archived.some(
+          (a) =>
+            a.user &&
+            (a.user.employeeId.toLowerCase() === q || (a.user.email ?? "").toLowerCase() === q || (a.user.name ?? "").toLowerCase() === q),
+        )
+      ) {
+        return { ok: false, error: "Karyawan tidak ditemukan." };
+      }
+    } catch {
+      // ignore
+    }
     return {
       ok: false,
       error: `Employee ID "${employeeIdInput}" tidak ditemukan pada User Management.`,

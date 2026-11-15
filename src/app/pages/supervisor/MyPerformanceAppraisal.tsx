@@ -12,10 +12,11 @@ import type { SmartGoal } from "../employee/SMARTGoals";
 import { FORMS } from "../employee/AppraisalForm";
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../shared/appraisalFormStore";
 import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
+import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
+import { SmartGoalsScoreHistory } from "../../components/SmartGoalsScoreHistory";
 import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
 import { loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
-import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
-import type { MonthlyNoteEntry } from "../shared/kpiMonthlyNotesStore";
+import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import { loadRCASubmissions } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCAActionPlan } from "../shared/rcaStore";
 import { loadRCAApprovalDecisions } from "../shared/rcaApprovalStore";
@@ -87,54 +88,8 @@ function supvCanPreview(name: string, type: string): boolean {
     || type === "application/pdf";
 }
 
-function SupvFileViewerModal({ name, url, mimeType, onClose }: {
-  name: string; url: string; mimeType: string; onClose: () => void;
-}) {
-  const isImg = /image\/(jpeg|png|gif|webp)/.test(mimeType) || /\.(jpg|jpeg|png|gif|webp)$/i.test(name);
-  const isPdf = mimeType === "application/pdf" || /\.pdf$/i.test(name);
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col max-h-[92vh]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 shrink-0">
-          <Paperclip className="w-4 h-4 text-gray-400 shrink-0" />
-          <span className="text-sm font-semibold text-[#1A284F] flex-1 truncate">{name}</span>
-          {url && (
-            <a href={url} download={name} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors shrink-0">
-              <Download className="w-3 h-3" /> Download
-            </a>
-          )}
-          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-500" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-auto flex items-center justify-center p-6 bg-gray-50 min-h-[360px]">
-          {url && isImg ? (
-            <img src={url} alt={name} className="max-w-full max-h-[75vh] object-contain rounded-xl shadow" />
-          ) : url && isPdf ? (
-            <iframe src={url} title={name} className="w-full rounded-lg border border-gray-200" style={{ height: "75vh" }} />
-          ) : (
-            <div className="flex flex-col items-center gap-3 text-gray-400">
-              <FileText className="w-12 h-12 opacity-30" />
-              <p className="text-sm font-semibold text-gray-700">{name}</p>
-              <p className="text-xs text-gray-500">
-                {url ? "Pratinjau langsung tidak tersedia untuk format ini, silakan unduh dokumen." : "Dokumen evidence tercatat di sistem."}
-              </p>
-              {url && (
-                <a href={url} download={name} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                  <Download className="w-3.5 h-3.5" /> Download
-                </a>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function SupvEvidenceChip({ file }: { file: StoredEvidenceFile }) {
   const [viewing, setViewing] = useState<StoredEvidenceFile | null>(null);
-  const fileUrl = file.url || file.dataUrl || "";
   return (
     <>
       <button
@@ -150,7 +105,7 @@ function SupvEvidenceChip({ file }: { file: StoredEvidenceFile }) {
         <span className="text-[10px] text-gray-400 shrink-0 ml-0.5">{fmtFileSize(file.size)}</span>
         <Eye className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
       </button>
-      {viewing && <SupvFileViewerModal name={viewing.name} url={fileUrl} mimeType={viewing.type} onClose={() => setViewing(null)} />}
+      {viewing && <EvidenceViewerModal name={viewing.name} url={viewing.url} dataUrl={viewing.dataUrl} mimeType={viewing.type} subtitle={viewing.month} onClose={() => setViewing(null)} />}
     </>
   );
 }
@@ -170,7 +125,6 @@ function KPITab() {
     };
   }, []);
   const { months, cellsMap } = React.useMemo(() => loadKPITracking(activeUser.employeeId), [activeUser.employeeId, tick]);
-  const monthlyNotes = React.useMemo(() => loadMonthlyNotes(), [tick]);
   const evidenceFiles = React.useMemo(() => loadEvidenceFiles(activeUser.employeeId), [activeUser.employeeId, tick]);
   const kpiComments = React.useMemo(() => loadKPICommentsForEmployee(activeUser.employeeId), [activeUser.employeeId, tick]);
   const wfKpiMeas = React.useMemo(() => {
@@ -201,7 +155,6 @@ function KPITab() {
       : kpiComments.approver2
       ? `${kpiComments.approver2.approverLabel} · ${kpiComments.approver2.date}`
       : "";
-  const [notesOpen, setNotesOpen] = useState(true);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
 
   const evidenceByMonth = React.useMemo(() => {
@@ -477,106 +430,13 @@ function KPITab() {
         </table>
       </div>
 
-      {/* ── History Catatan Approver (collapsible) ── */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <button
-          className="w-full flex items-center gap-2 px-5 py-3 bg-[#1A284F] hover:bg-[#1e3159] transition-colors text-left"
-          onClick={() => setNotesOpen((v) => !v)}
-        >
-          <FileText className="w-4 h-4 text-amber-300 shrink-0" />
-          <span className="text-white text-sm font-bold flex-1">History Catatan Approver</span>
-          {notesOpen
-            ? <ChevronUp className="w-4 h-4 text-white/60 shrink-0" />
-            : <ChevronDown className="w-4 h-4 text-white/60 shrink-0" />}
-        </button>
-        {notesOpen && (
-          months.length === 0 && !generalA1Note && !generalA2Note && !(wfKpiMeas?.revisionHistory?.length) ? (
-            <p className="text-xs text-gray-400 italic p-5">Belum ada data bulan.</p>
-          ) : (
-            <div className="flex flex-col">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-slate-50/70 border-b border-gray-200 text-xs">
-                <div className="bg-white rounded-xl border border-blue-100 p-3.5">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 mb-1">Catatan Approver 1</p>
-                  {generalA1Note ? (
-                    <>
-                      <p className="text-gray-800 leading-relaxed">{generalA1Note}</p>
-                      {generalA1Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA1Meta}</p>}
-                    </>
-                  ) : (
-                    <span className="text-gray-400 italic">Belum ada catatan dari Approver 1.</span>
-                  )}
-                </div>
-                <div className="bg-white rounded-xl border border-purple-100 p-3.5">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-purple-700 mb-1">Catatan Approver 2</p>
-                  {generalA2Note ? (
-                    <>
-                      <p className="text-gray-800 leading-relaxed">{generalA2Note}</p>
-                      {generalA2Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA2Meta}</p>}
-                    </>
-                  ) : (
-                    <span className="text-gray-400 italic">Belum ada catatan dari Approver 2.</span>
-                  )}
-                </div>
-              </div>
-              {(wfKpiMeas?.revisionHistory?.length ?? 0) > 0 && (
-                <div className="p-4 bg-orange-50/50 border-b border-orange-100 space-y-1.5 text-xs">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-orange-700">Riwayat Catatan Revisi</p>
-                  {wfKpiMeas!.revisionHistory!.map((rev, ri) => (
-                    <div key={ri} className="bg-white border border-orange-100 rounded-lg px-3 py-2 flex items-start justify-between gap-2">
-                      <div>
-                        <span className="font-semibold text-gray-800">{rev.role} ({rev.approverName}): </span>
-                        <span className="text-gray-700">{rev.note}</span>
-                      </div>
-                      <span className="text-[10px] text-gray-400 shrink-0">{rev.date}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {months.length > 0 && Object.keys(monthlyNotes).length > 0 && (
-              <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-xs" style={{ minWidth: 480 }}>
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-200">
-                    <th className="py-2.5 px-4 text-left font-semibold text-gray-600 text-[11px]" style={{ minWidth: 80 }}>Bulan</th>
-                    <th className="py-2.5 px-4 text-left font-semibold text-gray-600 text-[11px]" style={{ minWidth: 220 }}>Approver 1</th>
-                    <th className="py-2.5 px-4 text-left font-semibold text-gray-600 text-[11px]" style={{ minWidth: 220 }}>Approver 2</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {months.map((m, idx) => {
-                    const entry = monthlyNotes[m.id];
-                    const ap1 = entry?.approver1;
-                    const ap2 = entry?.approver2;
-                    return (
-                      <tr key={m.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/40"}>
-                        <td className="py-3 px-4 font-semibold text-[#1A284F] whitespace-nowrap">{displayMonthLabel(m.label)}</td>
-                        <td className="py-3 px-4">
-                          {ap1?.text ? (
-                            <div className="flex flex-col gap-0.5">
-                              <p className="text-xs text-gray-700 leading-relaxed">{ap1.text}</p>
-                              <p className="text-[10px] text-gray-400">{ap1.approverName} · {ap1.date}</p>
-                            </div>
-                          ) : <span className="text-gray-300 text-[11px] italic">—</span>}
-                        </td>
-                        <td className="py-3 px-4">
-                          {ap2?.text ? (
-                            <div className="flex flex-col gap-0.5">
-                              <p className="text-xs text-gray-700 leading-relaxed">{ap2.text}</p>
-                              <p className="text-[10px] text-gray-400">{ap2.approverName} · {ap2.date}</p>
-                            </div>
-                          ) : <span className="text-gray-300 text-[11px] italic">—</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              </div>
-              )}
-            </div>
-          )
-        )}
-      </div>
+      <ApproverNotesHistory
+        employeeId={activeUser.employeeId}
+        module="KPI"
+        phase="measurement"
+        title="History Catatan Approver (per Bulan)"
+        monthly
+      />
 
       {/* ── History Evidence per Bulan (sesuai KPI tracking months) ── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -633,124 +493,8 @@ const APPROVAL_STATUS_CONFIG = {
 };
 
 function ApprovalHistorySection() {
-  const { activeUser, allUsers } = useAuthStore();
-  const decisions = React.useMemo(() => loadApprovalDecisions(), []);
-  const myDecisions = decisions.filter(
-    (d) => d.employeeId.replace(/-/g, "").toLowerCase() === activeUser.employeeId.replace(/-/g, "").toLowerCase(),
-  );
-  const ap1User = allUsers.find((u) => (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase()) || u.employeeId.toLowerCase() === (activeUser.regNoAp1 ?? "").toLowerCase());
-  const ap2User = allUsers.find((u) => (u.regNo && u.regNo.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase()) || u.employeeId.toLowerCase() === (activeUser.regNoAp2 ?? "").toLowerCase());
-  const approverSlots = [
-    { level: 1, name: ap1User?.name ?? (activeUser.regNoAp1 || "—"), role: "Approver 1" },
-    { level: 2, name: ap2User?.name ?? (activeUser.regNoAp2 || "—"), role: "Approver 2" },
-  ];
-
-  return (
-    <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-      <div className="flex items-center px-5 py-3 bg-[#1A284F] gap-3">
-        <CheckCircle2 className="w-4 h-4 text-amber-300" />
-        <span className="text-white text-sm font-bold flex-1">History Penilaian Approver</span>
-        <span className="text-[10px] text-white/50 font-medium">SMART Goals 2026</span>
-      </div>
-
-      <div className="bg-white p-5">
-        <div className="relative">
-          <div className="absolute left-[18px] top-5 bottom-5 w-px bg-gray-200" />
-          <div className="flex flex-col gap-0">
-            {approverSlots.map((slot, idx) => {
-              const decision = myDecisions.find((d) => d.approverLevel === slot.level);
-              const cfg = APPROVAL_STATUS_CONFIG[decision?.status ?? "Pending Review"];
-              const isLast = idx === approverSlots.length - 1;
-
-              return (
-                <div key={slot.level} className={`relative flex gap-4 ${isLast ? "" : "pb-5"}`}>
-                  <div className={`relative z-10 w-9 h-9 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                    decision ? `${cfg.bg} ${cfg.border}` : "bg-gray-50 border-gray-200"
-                  }`}>
-                    {decision?.status === "Approved" ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-600" />
-                    ) : decision?.status === "Needs Revision" ? (
-                      <XCircle className="w-4 h-4 text-rose-500" />
-                    ) : (
-                      <Clock className="w-4 h-4 text-amber-400" />
-                    )}
-                  </div>
-
-                  <div className="flex-1 min-w-0 pt-1.5">
-                    <div className="flex items-start justify-between gap-2 flex-wrap">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-800 leading-tight">
-                          {decision?.approverName ?? slot.name}
-                        </p>
-                        <p className="text-[11px] text-gray-500 mt-0.5">
-                          {decision?.approverRole ?? slot.role} · Approver {slot.level}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full border ${cfg.bg} ${cfg.text} ${cfg.border}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
-                          {cfg.label}
-                        </span>
-                        {decision?.reviewedDate && (
-                          <span className="text-[10px] text-gray-400">{decision.reviewedDate}</span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Score */}
-                    {decision && (
-                      <div className="mt-2 flex items-center gap-3 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-                        <div className="flex flex-col shrink-0">
-                          <span className="text-[9px] font-bold uppercase tracking-wide text-gray-400">Nilai / Score</span>
-                          {decision.score ? (
-                            <span className={`text-2xl font-black leading-none ${
-                              parseFloat(decision.score) >= 90 ? "text-emerald-700"
-                              : parseFloat(decision.score) >= 75 ? "text-blue-700"
-                              : parseFloat(decision.score) >= 60 ? "text-amber-700"
-                              : "text-rose-600"
-                            }`}>
-                              {decision.score}
-                              <span className="text-xs font-semibold text-gray-400 ml-0.5">/100</span>
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-400 italic">Belum ada nilai</span>
-                          )}
-                        </div>
-                        {decision.score && (
-                          <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: `${Math.min(parseFloat(decision.score) || 0, 100)}%`,
-                                background: `hsl(${Math.round((parseFloat(decision.score) || 0) * 1.2)}, 65%, 42%)`,
-                              }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {decision?.feedback ? (
-                      <div className="mt-2 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Catatan / Feedback</p>
-                        <p className="text-xs text-gray-700 leading-relaxed">{decision.feedback}</p>
-                      </div>
-                    ) : (
-                      <div className="mt-2 bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2 min-h-[36px] flex items-center">
-                        <span className="text-xs text-gray-400 italic">
-                          {decision ? "Tidak ada catatan." : "Menunggu review dari approver."}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const { activeUser } = useAuthStore();
+  return <SmartGoalsScoreHistory employeeId={activeUser.employeeId} />;
 }
 
 // ─── SMART Goals Tab — live data from store ──────────────────────────────────
@@ -2205,11 +1949,6 @@ function ScoreSummaryBanner({ year }: { year: string }) {
           {isCurrent ? <Activity className="w-4 h-4 text-white" /> : <Lock className="w-4 h-4 text-white" />}
           <span className="text-white font-bold text-sm tracking-wide uppercase">{scoreLabel}</span>
           <span className="text-white/70 text-xs">— Performance Year {year}</span>
-          {isPartial && (
-            <span className="text-white/60 text-[10px] border border-white/30 px-2 py-0.5 rounded-full">
-              {evaluatedWeight}% weight evaluated
-            </span>
-          )}
         </div>
         {overallScore !== null && grade ? (
           <div className="flex items-center gap-3">

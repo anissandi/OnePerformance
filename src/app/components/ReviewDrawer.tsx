@@ -1,5 +1,6 @@
 // @refresh reset
 import { loadAppraisalSelf } from "../pages/shared/appraisalFormStore";
+import { SmartGoalsProgressCard } from "./SmartGoalsProgressCard";
 import { loadMSSelfRatings } from "../pages/shared/msStore";
 import { normalizeEmployeeId, workflowAlias, loadWorkflowRecords } from "../pages/shared/appraisalWorkflowStore";
 import React, { useState } from "react";
@@ -759,65 +760,6 @@ function EvidenceRow({ file, formatSize }: { file: { name: string; size: number;
   );
 }
 
-// ── Status Overview Card ──────────────────────────────────────────────────────
-
-function SG_StatusOverview({ goals, apStatuses }: { goals: typeof SAMPLE_GOALS; apStatuses: Record<number, SG_LocalStatus> }) {
-  let selesai = 0, sedang = 0, belum = 0, batal = 0, dash = 0;
-  goals.forEach((g) => g.actionPlans.forEach((ap) => {
-    const s = apStatuses[ap.id] ?? "-";
-    if (s === "Selesai") selesai++; else if (s === "Sedang dilaksanakan") sedang++;
-    else if (s === "Belum dilaksanakan") belum++; else if (s === "Batal") batal++; else dash++;
-  }));
-  const totalAPs = goals.reduce((s, g) => s + g.actionPlans.length, 0);
-  const closedGoals = goals.filter((g) => g.actionPlans.length > 0 && g.actionPlans.every((ap) => (apStatuses[ap.id] ?? "-") === "Selesai")).length;
-  const totalGoals = goals.length;
-  const goalsPct = totalGoals > 0 ? Math.round((closedGoals / totalGoals) * 100) : 0;
-  const apPct = totalAPs > 0 ? Math.round((selesai / totalAPs) * 100) : 0;
-  const openAPs = sedang + belum + dash;
-
-  return (
-    <div className="border border-[#1A284F]/20 rounded-2xl overflow-hidden bg-gradient-to-br from-[#1A284F] to-[#253660] shadow-sm">
-      <div className="px-5 py-2.5 flex items-center gap-2 border-b border-white/10">
-        <TrendingUp className="w-3.5 h-3.5 text-white/60" />
-        <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Status Progress Keseluruhan</span>
-      </div>
-      <div className="px-5 py-4 grid grid-cols-3 gap-4 divide-x divide-white/10">
-        <div className="flex flex-col gap-2 pr-4">
-          <div className="flex items-center gap-1.5"><Target className="w-3 h-3 text-blue-300" /><span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Goals</span></div>
-          <div className="flex items-end gap-1"><span className="text-2xl font-bold text-white leading-none">{totalGoals}</span><span className="text-xs text-white/50 mb-0.5 ml-1">Total</span></div>
-          <div className="flex flex-col gap-0.5 text-[11px]">
-            <div className="flex justify-between"><span className="text-white/50">Open</span><span className="font-semibold text-white">{totalGoals - closedGoals}</span></div>
-            <div className="flex justify-between"><span className="text-white/50">Closed</span><span className="font-semibold text-green-400">{closedGoals}</span></div>
-          </div>
-          <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mt-1"><div className="h-full bg-green-500 rounded-full" style={{ width: `${goalsPct}%` }} /></div>
-          <span className="text-[10px] text-white/40">{goalsPct}%</span>
-        </div>
-        <div className="flex flex-col gap-2 px-4">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Action Plans</span>
-          <div className="flex items-end gap-1"><span className="text-2xl font-bold text-white leading-none">{totalAPs}</span><span className="text-xs text-white/50 mb-0.5 ml-1">Total</span></div>
-          <div className="flex flex-col gap-0.5 text-[11px]">
-            <div className="flex justify-between"><span className="text-white/50">Open</span><span className="font-semibold text-white">{openAPs}</span></div>
-            <div className="flex justify-between"><span className="text-white/50">Closed</span><span className="font-semibold text-green-400">{selesai}</span></div>
-          </div>
-          <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mt-1"><div className="h-full bg-green-500 rounded-full" style={{ width: `${apPct}%` }} /></div>
-          <span className="text-[10px] text-white/40">{apPct}%</span>
-        </div>
-        <div className="flex flex-col gap-2 pl-4">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Breakdown Status</span>
-          <div className="flex flex-col gap-1.5 mt-1">
-            {([ ["Selesai", selesai, "bg-green-500", "text-green-400"], ["Sedang", sedang, "bg-amber-400", "text-amber-400"], ["Belum", belum, "bg-gray-400", "text-gray-400"], ["Batal", batal, "bg-red-500", "text-red-400"] ] as const).map(([label, count, dot, text]) => (
-              <div key={label} className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full ${dot}`} /><span className="text-[11px] text-white/60">{label}</span></div>
-                <span className={`text-xs font-bold ${text}`}>{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Goal Review Card ──────────────────────────────────────────────────────────
 
 function SG_GoalCard({
@@ -1327,9 +1269,6 @@ function SmartGoalsApproverReview({
         )}
       </div>
 
-      {/* 1 — Status Progress Overview */}
-      <SG_StatusOverview goals={goals} apStatuses={ownerApStatuses} />
-
       {/* 2 — Per-goal collapsible cards */}
       <div className="flex flex-col gap-3">
         {goals.map((goal, idx) => (
@@ -1346,6 +1285,14 @@ function SmartGoalsApproverReview({
           />
         ))}
       </div>
+
+      {/* Status Progress Keseluruhan — di atas Target vs Actual */}
+      <SmartGoalsProgressCard
+        variant="light"
+        goals={goals.map((g) => ({ id: g.id, actionPlanIds: g.actionPlans.map((ap) => ap.id) }))}
+        getActionPlanStatus={(_goalId, apId) => ownerApStatuses[apId as number] ?? "-"}
+        getGoalStatus={(goalId) => ownerTargetActuals[goalId as number]?.status ?? ""}
+      />
 
       {/* 3 — Target vs Actual */}
       <SG_TargetVsActual
@@ -1512,6 +1459,18 @@ function SmartGoalsApproverReview({
                 );
               })}
             </tbody>
+            <tfoot>
+              <tr className={assessorColor === "indigo" ? "bg-indigo-50/60" : "bg-teal-50/60"}>
+                <td colSpan={3} className={`border-t-2 px-4 py-3 text-right text-sm font-bold ${assessorColor === "indigo" ? "border-indigo-100 text-indigo-700" : "border-teal-100 text-teal-700"}`}>
+                  Rata-Rata ({filledScores.length}/{goals.length} goals dinilai)
+                </td>
+                <td className={`border-t-2 border-l px-4 py-3 text-right ${assessorColor === "indigo" ? "border-indigo-100" : "border-teal-100"}`}>
+                  <span className={`text-xl font-black ${totalAvg != null ? PCT_TEXT_COLOR(totalAvg) : "text-gray-300"}`}>
+                    {totalAvg != null ? `${totalAvg}%` : "—"}
+                  </span>
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>
@@ -1538,37 +1497,6 @@ function SmartGoalsApproverReview({
         </div>
       </div>
 
-      {/* 6 — Total score summary */}
-      <div className={`rounded-2xl border-2 px-6 py-5 flex flex-col gap-3 ${assessorColor === "indigo" ? "border-indigo-200 bg-indigo-50/40" : "border-teal-200 bg-teal-50/40"}`}>
-        <p className={`text-[11px] font-bold uppercase tracking-widest ${assessorColor === "indigo" ? "text-indigo-600" : "text-teal-600"}`}>
-          {reviewerRole === "approver2" ? "Penilaian Approver 2 — Ringkasan" : "Total Nilai"}
-        </p>
-        <div className="flex flex-col gap-2 mb-2">
-          {goals.map((goal, idx) => {
-            const v = assessorRatings[`sg-${goal.id}`];
-            const achieveStatus = ownerTargetActuals[goal.id]?.status ?? "";
-            return (
-              <div key={goal.id} className="flex items-center gap-3 text-xs">
-                <span className="text-gray-500 w-5 shrink-0 font-semibold">{idx + 1}.</span>
-                <span className="text-gray-700 flex-1 truncate">{goal.label}</span>
-                {achieveStatus === "Tercapai" && <span className="shrink-0 text-[9px] rounded-full px-2 py-0.5 font-bold bg-green-100 text-green-700">Tercapai</span>}
-                {achieveStatus === "Tidak Tercapai" && <span className="shrink-0 text-[9px] rounded-full px-2 py-0.5 font-bold bg-red-100 text-red-600">Tidak Tercapai</span>}
-                {v != null ? (
-                  <><div className="w-20 bg-gray-200 rounded-full h-1.5 overflow-hidden shrink-0"><div className={`h-1.5 rounded-full ${PCT_BAR_COLOR(v)}`} style={{ width: `${v}%` }} /></div><span className={`font-bold w-10 text-right shrink-0 ${PCT_TEXT_COLOR(v)}`}>{v}%</span></>
-                ) : <span className="text-gray-300 w-10 text-right shrink-0">—</span>}
-              </div>
-            );
-          })}
-        </div>
-        <div className={`border-t pt-3 flex items-center justify-between ${assessorColor === "indigo" ? "border-indigo-200" : "border-teal-200"}`}>
-          <span className={`text-sm font-bold ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`}>
-            Rata-Rata ({filledScores.length}/{goals.length} goals dinilai)
-          </span>
-          <span className={`text-2xl font-black ${totalAvg != null ? PCT_TEXT_COLOR(totalAvg) : "text-gray-300"}`}>
-            {totalAvg != null ? `${totalAvg}%` : "—"}
-          </span>
-        </div>
-      </div>
             </>
           )}
 

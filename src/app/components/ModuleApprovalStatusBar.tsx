@@ -305,24 +305,23 @@ export function ModuleApprovalStatusBar({
         },
       ];
 
-  // Warna kartu:
-  // - Abu-abu soft jika belum disubmit
-  // - Kuning soft jika pending approval (sudah disubmit tapi belum full approved)
-  // - Hijau soft jika full approved / validated
-  const cardToneClass = isFullApproved
-    ? "border-emerald-200 bg-emerald-50/40"
-    : isRev
-    ? "border-orange-200 bg-orange-50/50"
-    : isSubmitted
-    ? "border-amber-200 bg-amber-50/50"
-    : "border-gray-200 bg-gray-50/80";
+  // Warna kartu per tahap:
+  // - Hijau soft: tahap sebelumnya/terkini yang sudah selesai (completed)
+  // - Kuning soft: tahap berikutnya yang masih pending / menunggu
+  // - Oranye soft: tahap yang meminta revisi
+  // - Abu-abu soft: modul belum disubmit
+  const getCardToneClass = (stepDone: boolean, stepRevision: boolean) => {
+    if (stepRevision) return "border-orange-200 bg-orange-50/60";
+    if (!isSubmitted && !isRev) return "border-gray-200 bg-gray-50/80";
+    if (stepDone || isFullApproved) return "border-emerald-200 bg-emerald-50/60";
+    return "border-amber-200 bg-amber-50/60";
+  };
 
   const getBadgeClass = (stepDone: boolean, stepRevision: boolean) => {
     if (stepRevision) return "bg-orange-100 text-orange-800";
-    if (isFullApproved) return "bg-emerald-100 text-emerald-800";
     if (!isSubmitted && !isRev) return "bg-gray-200/80 text-gray-600";
-    if (stepDone) return "bg-amber-100 text-amber-800";
-    return "bg-amber-100/70 text-amber-700";
+    if (stepDone || isFullApproved) return "bg-emerald-100 text-emerald-800";
+    return "bg-amber-100 text-amber-800";
   };
 
   const revHistory = wfRec?.revisionHistory ?? [];
@@ -341,7 +340,7 @@ export function ModuleApprovalStatusBar({
         {steps.map((st) => (
           <div
             key={st.title}
-            className={`rounded-lg border px-3 py-1.5 flex flex-col justify-between gap-1 ${cardToneClass}`}
+            className={`rounded-lg border px-3 py-1.5 flex flex-col justify-between gap-1 transition-colors ${getCardToneClass(st.stepDone, st.stepRevision)}`}
           >
             <div className="flex items-center justify-between gap-1.5">
               <span className="text-[11px] font-bold text-[#1A284F] leading-tight">

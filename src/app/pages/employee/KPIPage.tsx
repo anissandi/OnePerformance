@@ -6,8 +6,7 @@ import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, A
 import { loadAllKPIComments, loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { saveEvidenceFiles, loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
-import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
-import type { MonthlyNoteEntry } from "../shared/kpiMonthlyNotesStore";
+import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import { saveRCASubmission, loadRCASubmissions } from "../shared/rcaStore";
@@ -21,7 +20,7 @@ import {
   getGroupNameForUnit,
   isDirectorRoleOrGrouping,
 } from "../../store/authStore";
-import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../shared/appraisalWorkflowStore";
+import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type KpiMonthState } from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 
@@ -452,12 +451,17 @@ function loadSubmitState(): { submitted: boolean; submittedDate: string } {
         (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
     );
     if (wfRec) {
-      const a1 = wfRec.decisions.approver1?.status ?? "";
-      const a2 = wfRec.decisions.approver2?.status ?? "";
-      const isRev = a1 === "Revision" || a2 === "Revision";
-      if (!isRev) {
-        return { submitted: true, submittedDate: wfRec.submittedDate || "" };
+      const isRev = Object.values(wfRec.decisions).some((d) => d?.status === "Revision");
+      const isValidated = wfRec.decisions.validator?.status === "Validated";
+      // Setelah Validated, bulan baru yang belum tervalidasi dapat diajukan kembali (siklus bulanan)
+      const hasUnvalidatedMonth =
+        isValidated &&
+        Array.isArray(wfRec.validatedMonths) &&
+        readTrackedKpiMonthLabels(user.employeeId).some((m) => !wfRec.validatedMonths!.includes(m));
+      if (isRev || hasUnvalidatedMonth) {
+        return { submitted: false, submittedDate: wfRec.submittedDate || "" };
       }
+      return { submitted: true, submittedDate: wfRec.submittedDate || "" };
     }
     const raw = localStorage.getItem(`${KPI_SUBMIT_KEY}_${normId}`);
     if (raw) return JSON.parse(raw);
@@ -492,7 +496,6 @@ export function saveKPITracking(data: KPITrackingSnapshot): void {
       period: "2026",
       months: data.months,
       cellsMap: data.cellsMap,
-      monthlyNotes: loadMonthlyNotes(),
       comments: loadAllKPIComments(),
       audit: {
         action: "Update",
@@ -2865,206 +2868,49 @@ function EvidenceUploadSection({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-// ─── Approver Comments Panel ──────────────────────────────────────────────────
+const MONTH_STATE_STYLE: Record<KpiMonthState, { cls: string; label: string }> = {
+  validated: { cls: "bg-emerald-50 text-emerald-700 border-emerald-200", label: "Approved & Validated" },
+  pending: { cls: "bg-amber-50 text-amber-700 border-amber-200", label: "Menunggu Approval" },
+  revision: { cls: "bg-orange-50 text-orange-700 border-orange-200", label: "Revisi" },
+  not_submitted: { cls: "bg-gray-50 text-gray-400 border-gray-200", label: "Belum Submit" },
+};
 
-function ApproverCommentsPanel() {
-  const [open, setOpen] = useState(true);
-  const allComments = loadAllKPIComments();
-
-  const entries = Object.entries(allComments).filter(([, c]) => c.approver1?.text || c.approver2?.text);
-
-  if (entries.length === 0) return null;
-
+function KpiMonthStatusStrip({ statuses }: { statuses: Array<{ label: string; state: KpiMonthState }> }) {
   return (
-    <div className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-3 px-6 py-4 bg-[#1A284F] text-white text-left"
-      >
-        <MessageSquare className="w-4 h-4 shrink-0" />
-        <span className="font-bold text-sm flex-1">Catatan dari Approver</span>
-        <span className="text-xs text-white/60 mr-2">{entries.length} KPI dengan catatan</span>
-        {open ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
-      </button>
-
-      {open && (
-        <div className="flex flex-col divide-y divide-gray-100">
-          {entries.map(([rowNo, comments]) => (
-            <div key={rowNo} className="px-6 py-5 flex flex-col gap-3 bg-white">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">KPI Measurement</span>
-                <span className="text-xs font-bold text-[#1A284F] bg-[#1A284F]/8 px-2 py-0.5 rounded">{rowNo}</span>
-              </div>
-
-              {comments.approver1?.text && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
-                    <span className="text-[11px] font-bold text-blue-700">{comments.approver1.approverLabel}</span>
-                    <span className="text-[10px] text-gray-400 ml-auto">{comments.approver1.date}</span>
-                  </div>
-                  <div className="bg-blue-50/60 border border-blue-100 rounded-xl px-4 py-3">
-                    <p className="text-sm text-blue-800 leading-relaxed">{comments.approver1.text}</p>
-                  </div>
-                </div>
-              )}
-
-              {comments.approver2?.text && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-purple-500 shrink-0" />
-                    <span className="text-[11px] font-bold text-purple-700">{comments.approver2.approverLabel}</span>
-                    <span className="text-[10px] text-gray-400 ml-auto">{comments.approver2.date}</span>
-                  </div>
-                  <div className="bg-purple-50/60 border border-purple-100 rounded-xl px-4 py-3">
-                    <p className="text-sm text-purple-800 leading-relaxed">{comments.approver2.text}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+    <div className="-mt-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5">
+      <div className="flex items-center gap-1.5 overflow-x-auto">
+        {statuses.map((m) => (
+          <span
+            key={m.label}
+            title={`${displayMonth(m.label)} — ${MONTH_STATE_STYLE[m.state].label}`}
+            className={`flex-1 min-w-[48px] text-center rounded-md border px-1.5 py-1 text-[10px] font-semibold ${MONTH_STATE_STYLE[m.state].cls}`}
+          >
+            {m.label.slice(0, 3)}
+          </span>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-gray-500">
+        {(["validated", "pending", "not_submitted"] as KpiMonthState[]).map((k) => (
+          <span key={k} className="flex items-center gap-1">
+            <span className={`h-2 w-2 rounded-sm border ${MONTH_STATE_STYLE[k].cls}`} />
+            {MONTH_STATE_STYLE[k].label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
 
-
-function KPIHistorySection({ months }: { months: MonthEntry[] }) {
-  const [notesOpen, setNotesOpen] = useState(true);
+function KPIHistorySection() {
   const activeUser = getActiveUser();
-  const normId = normalizeEmployeeId(activeUser.employeeId);
-  const monthlyNotes = loadMonthlyNotes();
-  const kpiComments = loadKPICommentsForEmployee(activeUser.employeeId);
-  const wfMeas = loadWorkflowRecords().find(
-    (r) => r.year === "2026" && r.module === "KPI" && r.phase === "measurement" && r.employeeId === normId,
-  );
-  const generalA1 =
-    wfMeas?.decisions.approver1?.note ||
-    wfMeas?.assessments.approver1?.comments?.["0"] ||
-    kpiComments.approver1?.text ||
-    "";
-  const generalA1Meta =
-    wfMeas?.decisions.approver1?.approverName
-      ? `${wfMeas.decisions.approver1.approverName} · ${wfMeas.decisions.approver1.date || ""}`
-      : kpiComments.approver1
-      ? `${kpiComments.approver1.approverLabel} · ${kpiComments.approver1.date}`
-      : "";
-  const generalA2 =
-    wfMeas?.decisions.approver2?.note ||
-    wfMeas?.assessments.approver2?.comments?.["0"] ||
-    kpiComments.approver2?.text ||
-    "";
-  const generalA2Meta =
-    wfMeas?.decisions.approver2?.approverName
-      ? `${wfMeas.decisions.approver2.approverName} · ${wfMeas.decisions.approver2.date || ""}`
-      : kpiComments.approver2
-      ? `${kpiComments.approver2.approverLabel} · ${kpiComments.approver2.date}`
-      : "";
-
   return (
-    <div className="flex flex-col gap-4">
-      {/* ── History Catatan Approver ── */}
-      <div className="border border-gray-200 rounded-xl overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setNotesOpen((v) => !v)}
-          className="w-full flex items-center justify-between px-5 py-3.5 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-        >
-          <div className="flex items-center gap-2">
-            <MessageSquare className="w-4 h-4 text-[#1A284F]" />
-            <span className="text-sm font-bold text-[#1A284F]">History Catatan Approver</span>
-            <span className="text-[11px] text-gray-400 font-normal">per bulan</span>
-          </div>
-          {notesOpen ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-        </button>
-        {notesOpen && (
-          months.length === 0 && !generalA1 && !generalA2 ? (
-            <div className="flex flex-col items-center gap-2 py-8 text-center">
-              <MessageSquare className="w-7 h-7 text-gray-200" />
-              <p className="text-xs text-gray-400 italic">Belum ada data bulan di KPI tracking.</p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-0">
-              {(generalA1 || generalA2) && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-slate-50/70 border-b border-gray-200 text-xs">
-                  <div className="bg-white rounded-xl border border-blue-100 p-3">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 mb-1">Catatan Approver 1</p>
-                    {generalA1 ? (
-                      <>
-                        <p className="text-gray-800 leading-relaxed">{generalA1}</p>
-                        {generalA1Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA1Meta}</p>}
-                      </>
-                    ) : (
-                      <span className="text-gray-300 italic">Belum ada catatan</span>
-                    )}
-                  </div>
-                  <div className="bg-white rounded-xl border border-purple-100 p-3">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-purple-700 mb-1">Catatan Approver 2</p>
-                    {generalA2 ? (
-                      <>
-                        <p className="text-gray-800 leading-relaxed">{generalA2}</p>
-                        {generalA2Meta && <p className="text-[10px] text-gray-400 mt-1">{generalA2Meta}</p>}
-                      </>
-                    ) : (
-                      <span className="text-gray-300 italic">Belum ada catatan</span>
-                    )}
-                  </div>
-                </div>
-              )}
-              {months.length > 0 && (
-              <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-[#1A284F]/5 border-b border-gray-200">
-                    <th className="text-left px-4 py-2.5 font-semibold text-[#1A284F] w-24">Bulan</th>
-                    <th className="text-left px-4 py-2.5 font-semibold text-[#1A284F]">Catatan Approver 1</th>
-                    <th className="text-left px-4 py-2.5 font-semibold text-[#1A284F] border-l border-gray-200">Catatan Approver 2</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {months.map((m) => {
-                    const entry: MonthlyNoteEntry = monthlyNotes[m.id] ?? {};
-                    const a1 = entry.approver1;
-                    const a2 = entry.approver2;
-                    return (
-                      <tr key={m.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
-                        <td className="px-4 py-3 font-bold text-[#1A284F] uppercase tracking-widest text-[10px] align-top whitespace-nowrap">
-                          {displayMonth(m.label)}
-                        </td>
-                        <td className="px-4 py-3 align-top">
-                          {a1 ? (
-                            <div className="flex flex-col gap-0.5">
-                              <p className="text-gray-800 leading-relaxed">{a1.text}</p>
-                              <p className="text-[10px] text-gray-400">{a1.approverName} · {a1.date}</p>
-                            </div>
-                          ) : (
-                            <span className="text-gray-300 italic">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 align-top border-l border-gray-100">
-                          {a2 ? (
-                            <div className="flex flex-col gap-0.5">
-                              <p className="text-gray-800 leading-relaxed">{a2.text}</p>
-                              <p className="text-[10px] text-gray-400">{a2.approverName} · {a2.date}</p>
-                            </div>
-                          ) : (
-                            <span className="text-gray-300 italic">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              </div>
-              )}
-            </div>
-          )
-        )}
-      </div>
-
-    </div>
+    <ApproverNotesHistory
+      employeeId={activeUser.employeeId}
+      module="KPI"
+      phase="measurement"
+      title="History Catatan Approver (per Bulan)"
+      monthly
+    />
   );
 }
 
@@ -3433,15 +3279,23 @@ export function KPIPage() {
     });
   };
 
+  const kpiMonthStatuses = getKpiMonthStatuses(getActiveUser().employeeId);
+  const validatedMonthLabels = new Set(
+    kpiMonthStatuses.filter((m) => m.state === "validated").map((m) => m.label),
+  );
+
   // Poin 6 & 7: Validasi wajib sudah ada aksi pengisian bulan KPI DAN upload evidence wajib untuk SEMUA bulan
   const kpiSubmitValidation = (() => {
     const reasons: string[] = [];
+    const pendingMonths = months.filter((m) => !validatedMonthLabels.has(m.label));
     if (months.length === 0) {
       reasons.push("Belum ada bulan KPI Tracking yang ditambahkan (+ Add Month).");
+    } else if (pendingMonths.length === 0) {
+      reasons.push("Semua bulan sudah tervalidasi. Tambahkan bulan berikutnya (+ Add Month) untuk diajukan.");
     } else {
       let hasAnyActualInput = false;
       const incompleteMonths: string[] = [];
-      for (const m of months) {
+      for (const m of pendingMonths) {
         const mCells = cellsMap[m.id] ?? m.cells ?? {};
         let monthHasEmpty = false;
         const targetList = hasDualKpiTabs && directorKpiTab === "business" ? BUSINESS_KPI_ITEMS : KPI_ITEMS;
@@ -3469,7 +3323,7 @@ export function KPIPage() {
         reasons.push(`Nilai aktual belum lengkap pada bulan: ${incompleteMonths.join(", ")}.`);
       }
 
-      const monthsWithoutEvidence = months
+      const monthsWithoutEvidence = pendingMonths
         .map((m) => m.label)
         .filter((mLabel) => !evidenceFiles.some((f) => f.month === mLabel));
       if (monthsWithoutEvidence.length > 0) {
@@ -3673,6 +3527,7 @@ export function KPIPage() {
         submittedOverride={submitted}
         submittedDateOverride={submittedDate}
       />
+      <KpiMonthStatusStrip statuses={kpiMonthStatuses} />
 
       {/* Gate Banner: KPI Setting belum Validated */}
       {!isKpiSettingValidated && (
@@ -3947,7 +3802,7 @@ export function KPIPage() {
       <KPITable
         months={months}
         editable={view === "input" && !submitted && !isLockedByDeadline}
-        editableMonthId={(!submitted && !isLockedByDeadline && months.length > 0) ? months[months.length - 1].id : null}
+        editableMonthId={(!submitted && !isLockedByDeadline && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
         onRemoveMonth={removeMonth}
         onAddMonth={() => setShowAddModal(true)}
         cells={cellsMap}
@@ -3971,9 +3826,8 @@ export function KPIPage() {
         monthLabels={months.map((m) => m.label)}
       />
 
-      <KPIHistorySection months={months} />
+      <KPIHistorySection />
 
-      <ApproverCommentsPanel />
 
       {showAddModal && (
         <AddMonthModal

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { Search, TrendingUp, CheckCircle2, AlertCircle, Clock, Filter } from "lucide-react";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
-import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../../shared/appraisalWorkflowStore";
+import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../../shared/appraisalWorkflowStore";
+
+const countValidatedKpiMonths = (employeeId: string) =>
+  getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;
 import { dateToSortableKey, normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 import { evaluateEmployeeKPITracking } from "../../employee/KPIPage";
 
@@ -250,7 +253,7 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
                 <th className="py-3 px-5">Employee</th>
                 <th className="py-3 px-5">Company Unit</th>
                 <th className="py-3 px-5 text-center">Total KPI</th>
-                <th className="py-3 px-5 text-center">Submitted</th>
+                <th className="py-3 px-5 text-center">Months Submitted</th>
                 <th className="py-3 px-5">Avg. Achievement</th>
                 <th className="py-3 px-5 text-center">RCA Req.</th>
                 <th className="py-3 px-5 text-center">RCA Done</th>
@@ -283,7 +286,7 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
                       <p className="text-xs text-gray-400">{emp.division}</p>
                     </td>
                     <td className="py-3.5 px-5 text-center text-sm font-medium text-gray-700">{kpi.totalKPI}</td>
-                    <td className="py-3.5 px-5 text-center text-sm font-medium text-gray-700">{kpi.submittedKPI}/{kpi.totalKPI}</td>
+                    <td className="py-3.5 px-5 text-center text-sm font-medium text-gray-700" title="Bulan KPI Tracking yang sudah Validated">{countValidatedKpiMonths(kpi.employeeId)}/12</td>
                     <td className="py-3.5 px-5"><AchievementBar value={kpi.avgAchievement} /></td>
                     <td className="py-3.5 px-5 text-center">
                       <span className={`text-sm font-semibold ${kpi.rcaRequired > 0 ? "text-rose-600" : "text-gray-400"}`}>{kpi.rcaRequired}</span>

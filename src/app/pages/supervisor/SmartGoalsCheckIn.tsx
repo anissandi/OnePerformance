@@ -1,5 +1,7 @@
 // @refresh reset
 import React, { useState, useEffect, useRef } from "react";
+import { SmartGoalsProgressCard } from "../../components/SmartGoalsProgressCard";
+import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import {
   CheckCircle2, Send, Eye, Edit3, AlertCircle, Paperclip, X, Plus,
   ChevronDown, ChevronUp, Star, Info, TrendingUp, Target, Activity, Upload, Clock, RotateCcw, Lock,
@@ -171,116 +173,23 @@ function ProgressBar({ pct, color }: { pct: number; color: string }) {
   );
 }
 
-function AccumulationCard({ goals, entries }: { goals: SmartGoal[]; entries: CheckInEntry[] }) {
-  const totalGoals = goals.length;
-  const totalAPs = goals.reduce((sum, g) => sum + g.actionPlans.length, 0);
-
-  let selesaiCount = 0, sedangCount = 0, belumCount = 0, batalCount = 0, dashCount = 0;
-
-  goals.forEach((g) => {
-    const entry = entries.find((e) => e.goalId === g.id);
-    if (!entry) return;
-    g.actionPlans.forEach((ap) => {
-      const s: LocalStatus = entry.actionPlanStatuses[ap.id] ?? "-";
-      if (s === "Selesai") selesaiCount++;
-      else if (s === "Sedang dilaksanakan") sedangCount++;
-      else if (s === "Belum dilaksanakan") belumCount++;
-      else if (s === "Batal") batalCount++;
-      else dashCount++;
-    });
-  });
-
-  // Goals: closed = all APs are Selesai (or goal has no APs); open = remaining
-  const closedGoals = goals.filter((g) => {
-    if (g.actionPlans.length === 0) return false;
-    const entry = entries.find((e) => e.goalId === g.id);
-    if (!entry) return false;
-    return g.actionPlans.every((ap) => (entry.actionPlanStatuses[ap.id] ?? "-") === "Selesai");
-  }).length;
-  const openGoals = totalGoals - closedGoals;
-  const goalsPct = totalGoals > 0 ? Math.round((closedGoals / totalGoals) * 100) : 0;
-
-  // Action Plans: closed = Selesai; open = everything else (including unselected "-")
-  const closedAPs = selesaiCount;
-  const openAPs = sedangCount + belumCount + dashCount;
-  const apPct = totalAPs > 0 ? Math.round((closedAPs / totalAPs) * 100) : 0;
-
+function AccumulationCard({
+  goals,
+  entries,
+  targetActuals,
+}: {
+  goals: SmartGoal[];
+  entries: CheckInEntry[];
+  targetActuals: TargetActualEntry[];
+}) {
   return (
-    <div className="border border-[#1A284F]/20 rounded-2xl overflow-hidden bg-gradient-to-br from-[#1A284F] to-[#253660] shadow-sm">
-      <div className="px-5 py-3 flex items-center gap-2 border-b border-white/10">
-        <Activity className="w-4 h-4 text-white/70" />
-        <span className="text-xs font-bold uppercase tracking-widest text-white/70">Status Progress Keseluruhan</span>
-      </div>
-
-      <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-3 gap-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10">
-        {/* Goals panel */}
-        <div className="flex flex-col gap-2.5 pb-4 sm:pb-0 sm:pr-4">
-          <div className="flex items-center gap-2">
-            <Target className="w-3.5 h-3.5 text-blue-300 shrink-0" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Goals</span>
-          </div>
-          <div className="flex items-end gap-1.5">
-            <span className="text-3xl font-bold text-white leading-none">{totalGoals}</span>
-            <span className="text-sm text-white/50 mb-0.5">Total Goals</span>
-          </div>
-          <div className="flex flex-col gap-0.5 text-[11px]">
-            <div className="flex items-center justify-between">
-              <span className="text-white/50">Open</span>
-              <span className="font-semibold text-white">{openGoals}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-white/50">Closed</span>
-              <span className="font-semibold text-green-400">{closedGoals}</span>
-            </div>
-          </div>
-          <ProgressBar pct={goalsPct} color="#22c55e" />
-        </div>
-
-        {/* Action Plans panel */}
-        <div className="flex flex-col gap-2.5 pt-4 sm:pt-0 sm:px-4">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-3.5 h-3.5 text-green-300 shrink-0" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Action Plans</span>
-          </div>
-          <div className="flex items-end gap-1.5">
-            <span className="text-3xl font-bold text-white leading-none">{totalAPs}</span>
-            <span className="text-sm text-white/50 mb-0.5">Total Action Plans</span>
-          </div>
-          <div className="flex flex-col gap-0.5 text-[11px]">
-            <div className="flex items-center justify-between">
-              <span className="text-white/50">Open</span>
-              <span className="font-semibold text-white">{openAPs}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-white/50">Closed</span>
-              <span className="font-semibold text-green-400">{closedAPs}</span>
-            </div>
-          </div>
-          <ProgressBar pct={apPct} color="#22c55e" />
-        </div>
-
-        {/* Breakdown Status panel */}
-        <div className="flex flex-col gap-2 pt-4 sm:pt-0 sm:pl-4">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Breakdown Status</span>
-          <div className="flex flex-col gap-1.5 mt-0.5">
-            {[
-              { label: "Selesai", count: selesaiCount, dot: "bg-green-500", text: "text-green-400" },
-              { label: "Sedang dilaksanakan", count: sedangCount, dot: "bg-amber-400", text: "text-amber-400" },
-              { label: "Belum dilaksanakan", count: belumCount, dot: "bg-gray-400", text: "text-gray-400" },
-              { label: "Batal", count: batalCount, dot: "bg-red-500", text: "text-red-400" },
-            ].map(({ label, count, dot, text }) => (
-              <div key={label} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
-                  <span className="text-xs text-white/70">{label}</span>
-                </div>
-                <span className={`text-sm font-bold ${text}`}>{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
+    <SmartGoalsProgressCard
+      goals={goals.map((g) => ({ id: g.id, actionPlanIds: g.actionPlans.map((ap) => ap.id) }))}
+      getActionPlanStatus={(goalId, apId) =>
+        entries.find((e) => e.goalId === goalId)?.actionPlanStatuses[apId as number] ?? "-"
+      }
+      getGoalStatus={(goalId) => targetActuals.find((t) => t.goalId === goalId)?.status ?? ""}
+    />
   );
 }
 
@@ -1341,7 +1250,7 @@ export function SmartGoalsCheckInPage() {
       )}
 
       {/* Accumulation card */}
-      <AccumulationCard goals={goals} entries={entries} />
+      <AccumulationCard goals={goals} entries={entries} targetActuals={targetActuals} />
 
       {/* Goal sections */}
       <div className="flex flex-col gap-5">
@@ -1475,6 +1384,13 @@ export function SmartGoalsCheckInPage() {
         approver2Note={a2NoteStr}
         approver1Score={a1AvgStr}
         approver2Score={a2AvgStr}
+      />
+
+      <ApproverNotesHistory
+        employeeId={getActiveUser().employeeId}
+        module="SMART Goals"
+        phase="measurement"
+        title="History Catatan Approver"
       />
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}

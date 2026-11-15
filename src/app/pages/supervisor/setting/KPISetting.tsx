@@ -11,6 +11,7 @@ import {
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
 import { savePersistedState } from "../../../services/supabaseClient";
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
+import { ApproverNotesHistory } from "../../../components/ApproverNotesHistory";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
 import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock } from "lucide-react";
 import ExportImportButton from "../../../components/ExportImportButton";
@@ -4468,6 +4469,15 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           hideCascading={hideCascading}
         />
       )}
+      {!isCorporate && (
+        <ApproverNotesHistory
+          employeeId={getActiveUser().employeeId}
+          module="KPI"
+          phase="setting"
+          title="Catatan dari Approver"
+        />
+      )}
+
       {showAddModal && isCorporate && (
         <AddCorporateKPIModal existingItems={items} onAdd={(item) => setItems((p) => [...p, item])} onClose={() => setShowAddModal(false)} />
       )}

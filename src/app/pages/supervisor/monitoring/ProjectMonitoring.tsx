@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 import { FolderKanban, CheckCircle2, AlertCircle, Clock, Search, Filter, Download, ShieldCheck, ShieldX, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { loadAllIcfProjectsByEmployee } from "../../../store/projectStore";
-import { normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { getProjectApprovalStatus, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
@@ -56,14 +56,17 @@ const PROGRESS_META: Record<ProgressStatus, { bg: string; icon: React.ElementTyp
 };
 const PROJECT_BOBOT: Record<ProjectScope, number> = { SS: 25, QCC: 35, QCP: 40 };
 
-function approvalLabel(ps: ProgressStatus | null): string {
-  if (!ps) return "";
-  return ps === "Submitted" ? "Rejected" : "Approved";
+function approvalLabel(employeeId: string, hasProject: boolean): string {
+  if (!hasProject) return "";
+  return getProjectApprovalStatus(employeeId) || "Pending-Approver 1";
 }
-function approvalBadge(ps: ProgressStatus | null): { label: string; bg: string; Icon: React.ElementType } | null {
-  if (!ps) return null;
-  if (ps === "Submitted") return { label: "Rejected", bg: "bg-rose-100 text-rose-700",   Icon: ShieldX     };
-  return                         { label: "Approved", bg: "bg-green-100 text-green-700", Icon: ShieldCheck };
+function approvalBadge(employeeId: string, hasProject: boolean): { label: string; bg: string; Icon: React.ElementType } | null {
+  const label = approvalLabel(employeeId, hasProject);
+  if (!label) return null;
+  if (label === "Approved") return { label, bg: "bg-green-100 text-green-700", Icon: ShieldCheck };
+  if (label === "Rejected") return { label, bg: "bg-rose-100 text-rose-700", Icon: ShieldX };
+  if (label === "Revision") return { label, bg: "bg-orange-100 text-orange-700", Icon: ShieldX };
+  return { label, bg: "bg-amber-100 text-amber-700", Icon: Clock };
 }
 function getProjectScore(rec: ProjRecord): number | null {
   if (!rec.scope || !rec.progressStatus) return null;
@@ -263,7 +266,7 @@ export function SupervisorMonitoringProject() {
         case "startDate":      return x.rec.startDate ?? "";
         case "finishDate":     return x.rec.finishDate ?? "";
         case "progressStatus": return x.rec.progressStatus ?? "";
-        case "approvalStatus": return approvalLabel(x.rec.progressStatus);
+        case "approvalStatus": return approvalLabel(x.rec.employeeId, Boolean(x.rec.progressStatus));
         case "finalScore":     return (x.rec.projectScore ?? computeFinalScore(x.rec)) ?? -1;
         default:               return "";
       }
@@ -281,7 +284,7 @@ export function SupervisorMonitoringProject() {
       no, emp.id, emp.name, emp.unit, emp.division, emp.position,
       rec.scope ?? "", rec.role ?? "", rec.title ?? "", rec.detail ?? "",
       rec.startDate ?? "", rec.finishDate ?? "", rec.progressStatus ?? "",
-      approvalLabel(rec.progressStatus),
+      approvalLabel(rec.employeeId, Boolean(rec.progressStatus)),
       (rec.projectScore ?? computeFinalScore(rec)) ?? "",
     ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(","));
     const csv = [header.join(","), ...csvRows].join("\n");
@@ -391,7 +394,7 @@ export function SupervisorMonitoringProject() {
             <tbody className="divide-y divide-gray-100">
               {rows.map(({ no, emp, rec }) => {
                 const pm         = rec.progressStatus ? PROGRESS_META[rec.progressStatus] : null;
-                const appr       = approvalBadge(rec.progressStatus);
+                const appr       = approvalBadge(rec.employeeId, Boolean(rec.progressStatus));
                 const finalScore = rec.projectScore ?? computeFinalScore(rec);
                 return (
                   <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>

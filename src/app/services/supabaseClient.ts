@@ -564,6 +564,31 @@ export function loadPersistedState<T>(key: string, fallback: T): T {
   }
 }
 
+// Serialisasi sinkronisasi KV per key (latest-wins) agar request lama yang tiba belakangan
+// tidak menimpa nilai terbaru di backend (mencegah data hilang setelah refresh/hydrate).
+const kvInFlight = new Set<string>();
+const kvPending = new Map<string, unknown>();
+const localWriteTs = new Map<string, number>();
+function queueKvSync(key: string, value: unknown): void {
+  kvPending.set(key, value);
+  if (kvInFlight.has(key)) return;
+  const run = async () => {
+    while (kvPending.has(key)) {
+      const latest = kvPending.get(key);
+      kvPending.delete(key);
+      kvInFlight.add(key);
+      try {
+        await syncToSupabase({ kind: "kv-state", stateKey: key, stateValue: latest });
+      } catch {
+        // ignore
+      } finally {
+        kvInFlight.delete(key);
+      }
+    }
+  };
+  void run();
+}
+
 export function savePersistedState<T>(
   key: string,
   value: T,
@@ -571,13 +596,10 @@ export function savePersistedState<T>(
 ): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    localWriteTs.set(key, Date.now());
     // Ditunda agar listener (mis. Sidebar) tidak melakukan setState saat komponen lain sedang render
     queueMicrotask(() => window.dispatchEvent(new Event("pa-db-hydrated")));
-    void syncToSupabase({
-      kind: "kv-state",
-      stateKey: key,
-      stateValue: value,
-    });
+    queueKvSync(key, value);
     if (normalizedPayload) {
       void syncToSupabase(normalizedPayload);
     }
@@ -587,7 +609,62 @@ export function savePersistedState<T>(
 }
 
 export function loadUploadedEvidenceList(): UploadedEvidenceRecord[] {
-  return loadPersistedState<UploadedEvidenceRecord[]>(EVIDENCE_LIST_KEY, []);
+  const list = loadPersistedState<UploadedEvidenceRecord[]>(EVIDENCE_LIST_KEY, []);
+  if (!Array.isArray(list)) return [];
+  // Bersihkan data sample / lampiran tidak valid (blob URL sesi lama yang tidak bisa dibuka lagi,
+  // atau record default contoh tanpa pemilik karyawan yang terdaftar)
+  let knownIds: Set<string> | null = null;
+  try {
+    const users = JSON.parse(localStorage.getItem("pa_managed_users_v1") ?? "[]") as Array<{ employeeId?: string }>;
+    if (Array.isArray(users) && users.length > 0) {
+      knownIds = new Set(users.map((u) => String(u.employeeId ?? "").toLowerCase()));
+      // Evidence milik karyawan yang diarsipkan tetap disimpan agar bisa dipulihkan (restore)
+      const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
+      if (Array.isArray(archived)) {
+        archived.forEach((a) => knownIds!.add(String(a.user?.employeeId ?? "").toLowerCase()));
+      }
+    }
+  } catch {
+    knownIds = null;
+  }
+  const cleaned = list.filter((r) => {
+    if (!r || !r.url || r.url.startsWith("blob:")) return false;
+    if (knownIds && !knownIds.has(String(r.employeeId ?? "").toLowerCase())) return false;
+    return true;
+  });
+  if (cleaned.length !== list.length) {
+    localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(cleaned));
+  }
+  return cleaned;
+}
+
+function readActiveUserSnapshot(): Record<string, string> {
+  try {
+    const active = JSON.parse(localStorage.getItem("pa_active_user_v1") ?? "{}") as Record<string, string>;
+    return active ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(file);
+    } catch {
+      resolve("");
+    }
+  });
+}
+
+function persistEvidenceRecord(record: UploadedEvidenceRecord): void {
+  const current = loadUploadedEvidenceList().filter((r) => r.id !== record.id);
+  // Disimpan ke backend (pa_kv_state) agar tersedia lintas sesi/perangkat & terlihat di menu /evidence
+  savePersistedState(EVIDENCE_LIST_KEY, [record, ...current]);
+  window.dispatchEvent(new Event("pa-evidence-updated"));
 }
 
 export async function uploadEvidenceFileToSupabase(
@@ -605,22 +682,23 @@ export async function uploadEvidenceFileToSupabase(
     kpiName?: string;
   },
 ): Promise<UploadedEvidenceRecord> {
+  const active = readActiveUserSnapshot();
   const fallbackRecord: UploadedEvidenceRecord = {
     id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    employeeId: meta.employeeId ?? "E002",
-    fullName: meta.employeeName ?? "Siti Rahayu",
-    companyUnit: meta.companyUnit ?? "PT RSUP (Industry)",
-    division: meta.division ?? "Divisi Sumber Daya Manusia",
-    department: meta.department ?? "SDM",
-    position: meta.position ?? "Staff Pengembangan SDM",
+    employeeId: meta.employeeId ?? active.employeeId ?? "",
+    fullName: meta.employeeName ?? active.name ?? "",
+    companyUnit: meta.companyUnit ?? active.company ?? "",
+    division: meta.division ?? active.division ?? "",
+    department: meta.department ?? active.department ?? "",
+    position: meta.position ?? active.position ?? "",
     moduleType: meta.moduleType,
     period: meta.period ?? "2026",
-    month: meta.month ?? "June",
+    month: meta.month ?? new Date().toLocaleString("en-US", { month: "long" }),
     kpi: meta.kpiName ?? "",
     fileName: file.name,
     fileSize: file.size,
     mimeType: file.type || "application/octet-stream",
-    url: URL.createObjectURL(file),
+    url: "",
     approvalStatus: "Pending",
     submittedDate: new Date().toISOString().slice(0, 10),
   };
@@ -677,9 +755,7 @@ export async function uploadEvidenceFileToSupabase(
         description: `Uploaded evidence file "${file.name}" (${directRecord.moduleType} · ${directRecord.month} ${directRecord.period})`,
         status: "Success",
       });
-      const saved = [directRecord, ...loadUploadedEvidenceList()];
-      localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(saved));
-      window.dispatchEvent(new Event("pa-evidence-updated"));
+      persistEvidenceRecord(directRecord);
       return directRecord;
     }
 
@@ -708,20 +784,22 @@ export async function uploadEvidenceFileToSupabase(
     if (response.ok) {
       const data = await response.json();
       if (data?.ok && data.evidence) {
-        const saved = [data.evidence as UploadedEvidenceRecord, ...loadUploadedEvidenceList()];
-        localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(saved));
-        window.dispatchEvent(new Event("pa-evidence-updated"));
-        return data.evidence as UploadedEvidenceRecord;
+        const ev = data.evidence as UploadedEvidenceRecord;
+        if (ev.url) {
+          persistEvidenceRecord(ev);
+          return ev;
+        }
       }
     }
   } catch {
     // Fall through to local persistence
   }
 
-  const saved = [fallbackRecord, ...loadUploadedEvidenceList()];
-  localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(saved));
-  window.dispatchEvent(new Event("pa-evidence-updated"));
-  return fallbackRecord;
+  // Fallback: simpan konten file (data URL) ke backend KV agar tetap bisa dibuka (bukan blob sementara)
+  const dataUrl = await readFileAsDataUrl(file);
+  const persisted: UploadedEvidenceRecord = { ...fallbackRecord, url: dataUrl };
+  if (dataUrl) persistEvidenceRecord(persisted);
+  return persisted;
 }
 
 export interface StoredAuditLogEntry {
@@ -905,6 +983,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
 }
 
 export async function hydrateAllStoresFromSupabase(): Promise<void> {
+  const hydrateStartedAt = Date.now();
   const data = await fetchBootstrapFromSupabase();
   if (!data) {
     // If backend tables exist but are still empty on first connection, seed current users to backend
@@ -933,6 +1012,8 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     const kvStates = data.kvStates as Array<{ state_key: string; state_value: unknown }> | undefined;
     if (Array.isArray(kvStates)) {
       for (const row of kvStates) {
+        // Jangan timpa data yang baru saja disimpan pengguna selama proses hydrate berlangsung
+        if ((localWriteTs.get(row.state_key) ?? 0) >= hydrateStartedAt) continue;
         if (row.state_key && row.state_value !== undefined) {
           localStorage.setItem(row.state_key, JSON.stringify(row.state_value));
         }
@@ -966,7 +1047,16 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
         isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
       }));
-      localStorage.setItem("pa_managed_users_v1", JSON.stringify(mapped));
+      // Karyawan yang sedang diarsipkan tidak boleh kembali aktif melalui hydrate
+      let archivedIds = new Set<string>();
+      try {
+        const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
+        archivedIds = new Set(archived.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
+      } catch {
+        archivedIds = new Set();
+      }
+      const activeMapped = mapped.filter((u) => !archivedIds.has(u.employeeId.toLowerCase()));
+      localStorage.setItem("pa_managed_users_v1", JSON.stringify(activeMapped));
     }
 
     // 3. Hydrate master catalogs
@@ -1001,7 +1091,15 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         approvalStatus: (e.approval_status as "Approved" | "Pending" | "Revision") ?? "Pending",
         submittedDate: String(e.submitted_date ?? "2026-06-10"),
       }));
-      localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(mappedEv));
+      let existingEv: UploadedEvidenceRecord[] = [];
+      try {
+        existingEv = JSON.parse(localStorage.getItem(EVIDENCE_LIST_KEY) ?? "[]");
+      } catch {
+        existingEv = [];
+      }
+      const backendIds = new Set(mappedEv.map((e) => e.id));
+      const mergedEv = [...mappedEv, ...(Array.isArray(existingEv) ? existingEv.filter((e) => !backendIds.has(e.id)) : [])];
+      localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(mergedEv));
     }
 
     // 5. Hydrate audit trail

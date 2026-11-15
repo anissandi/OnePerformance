@@ -6,6 +6,8 @@ import {
 import { loadUploadedEvidenceList, UploadedEvidenceRecord } from "../../../services/supabaseClient";
 import { toast } from "sonner";
 import { useAuthStore } from "../../../store/authStore";
+import { EvidenceViewerModal } from "../../../components/EvidenceViewerModal";
+import { buildZip, fetchFileBytes, safePathSegment, type ZipEntry } from "../../../utils/zipFolder";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +17,7 @@ type ApprovalStatus = "Approved" | "Pending" | "Revision";
 
 interface EvidenceRow {
   no: string;
+  mimeType?: string;
   employeeId: string;
   fullName: string;
   position: string;
@@ -75,128 +78,9 @@ const MONTHS = [
 
 // ─── Sample data ──────────────────────────────────────────────────────────────
 
-const BASE_ROWS: Omit<EvidenceRow, "no">[] = [
-  {
-    employeeId: "E001", fullName: "Anis Sandi",
-    position: "HR Strategic Specialist",
-    department: "SDM", division: "Divisi Sumber Daya Manusia", companyUnit: "PT RSUP (Industry)",
-    approvalStatus: "Approved", submittedDate: "2026-05-20", year: "2026", month: "May",
-  },
-  {
-    employeeId: "E002", fullName: "Budi Santoso",
-    position: "HR Manager",
-    department: "HRD", division: "Divisi Sumber Daya Manusia", companyUnit: "PT RSUP (Industry)",
-    approvalStatus: "Approved", submittedDate: "2026-05-21", year: "2026", month: "May",
-  },
-  {
-    employeeId: "E003", fullName: "Siti Rahayu",
-    position: "Recruitment Specialist",
-    department: "SDM", division: "Divisi Sumber Daya Manusia", companyUnit: "PT Pulau Sambu (Guntung)",
-    approvalStatus: "Pending", submittedDate: "2026-05-22", year: "2026", month: "May",
-  },
-  {
-    employeeId: "E004", fullName: "Ahmad Fauzi",
-    position: "Finance Analyst",
-    department: "Keuangan", division: "Divisi Keuangan & Akuntansi", companyUnit: "PT Pulau Sambu (Jakarta)",
-    approvalStatus: "Revision", submittedDate: "2026-06-01", year: "2026", month: "June",
-  },
-  {
-    employeeId: "E005", fullName: "Kartika Wijaya",
-    position: "Marketing Lead",
-    department: "Pemasaran", division: "Divisi Pemasaran & Penjualan", companyUnit: "PT RSUP (Industry)",
-    approvalStatus: "Approved", submittedDate: "2026-06-03", year: "2026", month: "June",
-  },
-  {
-    employeeId: "E006", fullName: "Rizal Pratama",
-    position: "Operations Supervisor",
-    department: "Operasional", division: "Divisi Produksi & Operasional", companyUnit: "PT RSUP (Perkebunan)",
-    approvalStatus: "Revision", submittedDate: "2026-06-05", year: "2026", month: "June",
-  },
-  {
-    employeeId: "E007", fullName: "Dewi Lestari",
-    position: "IT Support Engineer",
-    department: "TI", division: "Divisi Teknologi Informasi", companyUnit: "PT GHS",
-    approvalStatus: "Pending", submittedDate: "2026-06-08", year: "2026", month: "June",
-  },
-  {
-    employeeId: "E008", fullName: "Hendra Gunawan",
-    position: "Production Supervisor",
-    department: "Produksi", division: "Divisi Produksi & Operasional", companyUnit: "PT RSTM",
-    approvalStatus: "Approved", submittedDate: "2026-04-15", year: "2026", month: "April",
-  },
-  {
-    employeeId: "E009", fullName: "Rina Marlina",
-    position: "Procurement Officer",
-    department: "Operasional", division: "Divisi Operasional", companyUnit: "PT Pulau Sambu (Kuala Enok)",
-    approvalStatus: "Pending", submittedDate: "2026-04-18", year: "2026", month: "April",
-  },
-  {
-    employeeId: "E010", fullName: "Dian Permatasari",
-    position: "Quality Assurance Lead",
-    department: "Produksi", division: "Divisi Produksi & Operasional", companyUnit: "ASD",
-    approvalStatus: "Approved", submittedDate: "2026-03-12", year: "2026", month: "March",
-  },
-  {
-    employeeId: "E011", fullName: "Yusuf Hakim",
-    position: "Accountant",
-    department: "Akuntansi", division: "Divisi Keuangan & Akuntansi", companyUnit: "PT Pulau Sambu (Guntung)",
-    approvalStatus: "Pending", submittedDate: "2026-03-14", year: "2026", month: "March",
-  },
-  {
-    employeeId: "E012", fullName: "Mega Putri",
-    position: "Plantation Coordinator",
-    department: "Operasional", division: "Divisi Perkebunan", companyUnit: "PT RSUP (Perkebunan)",
-    approvalStatus: "Approved", submittedDate: "2025-12-10", year: "2025", month: "December",
-  },
-  {
-    employeeId: "E013", fullName: "Fajar Nugroho",
-    position: "IT Systems Analyst",
-    department: "TI", division: "Divisi Teknologi Informasi", companyUnit: "PT GHS",
-    approvalStatus: "Approved", submittedDate: "2025-12-15", year: "2025", month: "December",
-  },
-  {
-    employeeId: "E014", fullName: "Laila Sari",
-    position: "HR Generalist",
-    department: "HRD", division: "Divisi Sumber Daya Manusia", companyUnit: "PT Pulau Sambu (Jakarta)",
-    approvalStatus: "Approved", submittedDate: "2025-11-20", year: "2025", month: "November",
-  },
-  {
-    employeeId: "E015", fullName: "Indra Kusuma",
-    position: "Senior Finance Officer",
-    department: "Keuangan", division: "Divisi Keuangan & Akuntansi", companyUnit: "ASD",
-    approvalStatus: "Revision", submittedDate: "2025-10-05", year: "2025", month: "October",
-  },
-];
+// Data sampel statis dihapus: seluruh baris evidence berasal dari upload karyawan (backend).
 
-const ALL_ROWS: EvidenceRow[] = BASE_ROWS.map((r, i) => ({
-  no: String(i + 1).padStart(2, "0"),
-  ...r,
-}));
-
-type RCAApprovalStatus = "Pending" | "Closed";
-
-interface RCAEvidenceRow extends Omit<EvidenceRow, "approvalStatus"> {
-  approvalStatus: RCAApprovalStatus;
-  progressAPs: number;
-}
-
-const RCA_ROWS: RCAEvidenceRow[] = [
-  { no: "01", employeeId: "E001", fullName: "Anis Sandi",       position: "HR Strategic Specialist", department: "SDM",        division: "Divisi Sumber Daya Manusia",    companyUnit: "PT RSUP (Industry)",           approvalStatus: "Pending", submittedDate: "2026-01-20", year: "2026", month: "January",   period: "Jan", kpi: "Implementasi ERP System",       progressAPs: 25  },
-  { no: "02", employeeId: "E002", fullName: "Budi Santoso",      position: "HR Manager",              department: "HRD",        division: "Divisi Sumber Daya Manusia",    companyUnit: "PT RSUP (Industry)",           approvalStatus: "Closed",  submittedDate: "2026-02-22", year: "2026", month: "February",  period: "Feb", kpi: "Training Completion Rate",      progressAPs: 100 },
-  { no: "03", employeeId: "E003", fullName: "Siti Rahayu",       position: "Recruitment Specialist",  department: "SDM",        division: "Divisi Sumber Daya Manusia",    companyUnit: "PT Pulau Sambu (Guntung)",     approvalStatus: "Pending", submittedDate: "2026-03-15", year: "2026", month: "March",     period: "Mar", kpi: "Recruitment Cycle Time",        progressAPs: 50  },
-  { no: "04", employeeId: "E004", fullName: "Ahmad Fauzi",       position: "Finance Analyst",          department: "Keuangan",   division: "Divisi Keuangan & Akuntansi",   companyUnit: "PT Pulau Sambu (Jakarta)",     approvalStatus: "Pending", submittedDate: "2026-04-10", year: "2026", month: "April",     period: "Apr", kpi: "Cost Per Hire",                 progressAPs: 0   },
-  { no: "05", employeeId: "E005", fullName: "Kartika Wijaya",    position: "Marketing Lead",           department: "Pemasaran",  division: "Divisi Pemasaran & Penjualan",  companyUnit: "PT RSUP (Industry)",           approvalStatus: "Closed",  submittedDate: "2026-05-05", year: "2026", month: "May",       period: "Mei", kpi: "Turnover Rate",                 progressAPs: 100 },
-  { no: "06", employeeId: "E006", fullName: "Rizal Pratama",     position: "Operations Supervisor",   department: "Operasional", division: "Divisi Produksi & Operasional", companyUnit: "PT RSUP (Perkebunan)",         approvalStatus: "Pending", submittedDate: "2026-06-08", year: "2026", month: "June",      period: "Jun", kpi: "Employee Engagement Score",     progressAPs: 75  },
-  { no: "07", employeeId: "E007", fullName: "Dewi Lestari",      position: "IT Support Engineer",      department: "TI",         division: "Divisi Teknologi Informasi",    companyUnit: "PT GHS",                       approvalStatus: "Closed",  submittedDate: "2026-01-18", year: "2026", month: "January",   period: "Jan", kpi: "Headcount Fulfilment",          progressAPs: 100 },
-  { no: "08", employeeId: "E008", fullName: "Hendra Gunawan",    position: "Production Supervisor",   department: "Produksi",   division: "Divisi Produksi & Operasional", companyUnit: "PT RSTM",                      approvalStatus: "Pending", submittedDate: "2026-02-24", year: "2026", month: "February",  period: "Feb", kpi: "Training Completion Rate",      progressAPs: 25  },
-  { no: "09", employeeId: "E009", fullName: "Rina Marlina",      position: "Procurement Officer",     department: "Operasional", division: "Divisi Operasional",            companyUnit: "PT Pulau Sambu (Kuala Enok)", approvalStatus: "Pending", submittedDate: "2026-03-20", year: "2026", month: "March",     period: "Mar", kpi: "Recruitment Cycle Time",        progressAPs: 0   },
-  { no: "10", employeeId: "E010", fullName: "Dian Permatasari",  position: "Quality Assurance Lead",  department: "Produksi",   division: "Divisi Produksi & Operasional", companyUnit: "ASD",                       approvalStatus: "Closed",  submittedDate: "2025-12-12", year: "2025", month: "December",  period: "Des", kpi: "Employee Retention Rate",       progressAPs: 100 },
-  { no: "11", employeeId: "E011", fullName: "Yusuf Hakim",       position: "Accountant",              department: "Akuntansi",  division: "Divisi Keuangan & Akuntansi",   companyUnit: "PT Pulau Sambu (Guntung)",     approvalStatus: "Pending", submittedDate: "2025-12-20", year: "2025", month: "December",  period: "Des", kpi: "Employee Retention Rate",       progressAPs: 50  },
-  { no: "12", employeeId: "E012", fullName: "Mega Putri",        position: "Plantation Coordinator",  department: "Operasional", division: "Divisi Perkebunan",             companyUnit: "PT RSUP (Perkebunan)",         approvalStatus: "Closed",  submittedDate: "2025-11-18", year: "2025", month: "November",  period: "Nov", kpi: "Performance Review Completion", progressAPs: 100 },
-  { no: "13", employeeId: "E013", fullName: "Fajar Nugroho",     position: "IT Systems Analyst",      department: "TI",         division: "Divisi Teknologi Informasi",    companyUnit: "PT GHS",                       approvalStatus: "Pending", submittedDate: "2025-10-10", year: "2025", month: "October",   period: "Okt", kpi: "Learning Hours Per Employee",   progressAPs: 75  },
-  { no: "14", employeeId: "E014", fullName: "Laila Sari",        position: "HR Generalist",           department: "HRD",        division: "Divisi Sumber Daya Manusia",    companyUnit: "PT Pulau Sambu (Jakarta)",     approvalStatus: "Closed",  submittedDate: "2025-09-22", year: "2025", month: "September", period: "Sep", kpi: "Turnover Rate",                 progressAPs: 100 },
-  { no: "15", employeeId: "E015", fullName: "Indra Kusuma",      position: "Senior Finance Officer",  department: "Keuangan",   division: "Divisi Keuangan & Akuntansi",   companyUnit: "ASD",                       approvalStatus: "Pending", submittedDate: "2025-08-05", year: "2025", month: "August",    period: "Agu", kpi: "Cost Per Hire",                 progressAPs: 25  },
-];
+const RCA_ROWS: RCAEvidenceRow[] = [];
 
 // ─── Status meta ──────────────────────────────────────────────────────────────
 
@@ -292,6 +176,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
   const showMonthFilter = type === "KPI Tracking";
   const [uploadedList, setUploadedList] = useState<UploadedEvidenceRecord[]>(() => loadUploadedEvidenceList());
   const [previewRow, setPreviewRow] = useState<EvidenceRow | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     const refresh = () => setUploadedList(loadUploadedEvidenceList());
@@ -307,7 +192,8 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
     return uploadedList
       .filter((u) => u.moduleType === type)
       .map((u, idx) => ({
-        no: `DB-${idx + 1}`,
+        no: String(idx + 1),
+        mimeType: u.mimeType,
         employeeId: u.employeeId,
         fullName: u.fullName,
         position: u.position,
@@ -445,18 +331,41 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
           {/* Export .rar button */}
           <button
             disabled={!hasSelected}
-            onClick={() => {
-              if (!hasSelected) return;
+            onClick={async () => {
+              if (!hasSelected || exporting) return;
               const chosen = filtered.filter((r) => selected.has(r.no));
-              const content = chosen
-                .map((r) => `${r.employeeId}\t${r.fullName}\t${r.companyUnit}\t${r.month} ${r.year}\t${r.fileName ?? `${type}_Evidence.pdf`}\t${r.fileUrl ?? "Supabase Storage"}`)
-                .join("\n");
-              const blob = new Blob([content], { type: "application/octet-stream" });
-              const a = document.createElement("a");
-              a.href = URL.createObjectURL(blob);
-              a.download = `Evidence_${type.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.rar`;
-              a.click();
-              toast.success(`Exported ${chosen.length} evidence archive record(s).`);
+              setExporting(true);
+              try {
+                // Struktur folder: Unit / Divisi / ID - Nama / Bulan Tahun / file
+                const entries: ZipEntry[] = [];
+                const manifest: string[] = ["Unit\tDivisi\tEmployee ID\tNama\tPeriode\tFile\tStatus"];
+                const used = new Set<string>();
+                for (const r of chosen) {
+                  const folder = [
+                    safePathSegment(r.companyUnit),
+                    safePathSegment(r.division),
+                    safePathSegment(`${r.employeeId} - ${r.fullName}`),
+                    safePathSegment(`${r.month} ${r.year}`),
+                  ].join("/");
+                  const fileName = safePathSegment(r.fileName || `${r.employeeId}_${type}_Evidence`);
+                  let path = `${folder}/${fileName}`;
+                  for (let n = 2; used.has(path); n++) path = `${folder}/${n}_${fileName}`;
+                  used.add(path);
+                  const bytes = r.fileUrl ? await fetchFileBytes(r.fileUrl) : null;
+                  if (bytes) entries.push({ path, data: bytes });
+                  manifest.push([r.companyUnit, r.division, r.employeeId, r.fullName, `${r.month} ${r.year}`, path, bytes ? "OK" : "Gagal diunduh"].join("\t"));
+                }
+                entries.push({ path: "manifest.tsv", data: new TextEncoder().encode(manifest.join("\n")) });
+                const blob = buildZip(entries);
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `Evidence_${type.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.zip`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+                toast.success(`Exported ${entries.length - 1} file evidence ke folder per karyawan.`);
+              } finally {
+                setExporting(false);
+              }
             }}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold border transition-all ${
               hasSelected
@@ -465,7 +374,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
             }`}
           >
             <FileArchive className="w-3.5 h-3.5" />
-            Export .rar
+            {exporting ? "Menyiapkan…" : "Export Folder (.zip)"}
             {hasSelected && (
               <span className="bg-white/25 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">
                 {selected.size}
@@ -564,13 +473,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
                         <div className="flex items-center gap-1">
                           <button
                             title="View evidence"
-                            onClick={() => {
-                              if (row.fileUrl && row.fileUrl.startsWith("http")) {
-                                window.open(row.fileUrl, "_blank", "noopener,noreferrer");
-                              } else {
-                                setPreviewRow(row);
-                              }
-                            }}
+                            onClick={() => setPreviewRow(row)}
                             className="p-1.5 rounded-lg text-gray-500 hover:bg-blue-50 hover:text-blue-600 transition-colors"
                           >
                             <Eye className="w-4 h-4" />
@@ -582,7 +485,8 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
                                 const a = document.createElement("a");
                                 a.href = row.fileUrl;
                                 a.download = row.fileName || `${row.employeeId}_${type}_Evidence.pdf`;
-                                a.target = "_blank";
+                                if (!row.fileUrl.startsWith("data:")) a.target = "_blank";
+                                a.rel = "noopener";
                                 a.click();
                               } else {
                                 const blob = new Blob([`Evidence Record: ${row.employeeId} - ${row.fullName} (${type} ${row.month} ${row.year})`], { type: "text/plain" });
@@ -639,36 +543,13 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
       </div>
 
       {previewRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPreviewRow(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-lg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-              <div>
-                <h3 className="font-bold text-[#1A284F] text-base">Evidence Preview — {type}</h3>
-                <p className="text-xs text-gray-400">{previewRow.employeeId} · {previewRow.fullName}</p>
-              </div>
-              <button onClick={() => setPreviewRow(null)} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-3 text-xs bg-gray-50 rounded-xl p-4">
-              <div><span className="text-gray-400 block">Company Unit</span><span className="font-semibold text-gray-800">{previewRow.companyUnit}</span></div>
-              <div><span className="text-gray-400 block">Division / Dept</span><span className="font-semibold text-gray-800">{previewRow.division} / {previewRow.department}</span></div>
-              <div><span className="text-gray-400 block">Period</span><span className="font-semibold text-gray-800">{previewRow.month} {previewRow.year}</span></div>
-              <div><span className="text-gray-400 block">Submitted Date</span><span className="font-semibold text-gray-800">{previewRow.submittedDate}</span></div>
-              <div className="col-span-2"><span className="text-gray-400 block">File Name</span><span className="font-semibold text-[#1A284F]">{previewRow.fileName || `${previewRow.employeeId}_${type.replace(/\s+/g, "_")}_${previewRow.month}.pdf`}</span></div>
-            </div>
-            {previewRow.fileUrl && (
-              <div className="pt-2">
-                <a href={previewRow.fileUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-xs font-semibold text-blue-600 hover:underline">
-                  Open Stored File in New Tab
-                </a>
-              </div>
-            )}
-            <div className="flex justify-end">
-              <button onClick={() => setPreviewRow(null)} className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#1A284F] text-white">Close</button>
-            </div>
-          </div>
-        </div>
+        <EvidenceViewerModal
+          name={previewRow.fileName || `${previewRow.employeeId}_${type.replace(/\s+/g, "_")}_${previewRow.month}`}
+          url={previewRow.fileUrl ?? ""}
+          mimeType={previewRow.mimeType}
+          subtitle={`${previewRow.employeeId} · ${previewRow.fullName} · ${previewRow.companyUnit} · ${previewRow.month} ${previewRow.year}`}
+          onClose={() => setPreviewRow(null)}
+        />
       )}
     </div>
   );

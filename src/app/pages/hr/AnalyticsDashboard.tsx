@@ -1,5 +1,6 @@
 // @refresh reset
 import { useState, useMemo, useEffect } from "react";
+import { motion } from "motion/react";
 import {
   Users,
   CheckCircle,
@@ -496,6 +497,40 @@ function ModuleCompletionOverview({
   );
 }
 
+function ExpandHint({ expanded }: { expanded: boolean }) {
+  return (
+    <span
+      className={`ml-auto shrink-0 inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold transition-colors ${
+        expanded ? "border-[#1A284F]/20 bg-[#1A284F]/5 text-[#1A284F]" : "border-gray-200 bg-gray-50 text-gray-500"
+      }`}
+    >
+      {expanded ? "Perkecil" : "Perluas"}
+    </span>
+  );
+}
+
+const DIVISION_MODULES: Array<{ key: string; label: string; scoreKey?: keyof Employee }> = [
+  { key: "KPI (Setting)", label: "KPI Setting", scoreKey: "kpi" },
+  { key: "KPI (Tracking)", label: "KPI Tracking", scoreKey: "kpi" },
+  { key: "SMART Goals (Setting)", label: "SMART Goals Setting", scoreKey: "smartGoals" },
+  { key: "SMART Goals (Tracking)", label: "SMART Goals Measurement", scoreKey: "smartGoals" },
+  { key: "RCA", label: "RCA" },
+  { key: "Appraisal Form", label: "Appraisal Form", scoreKey: "formA" },
+  { key: "Managerial Skill", label: "Managerial Skill", scoreKey: "managerialSkill" },
+  { key: "Project OJS", label: "Project Outside Job Scope", scoreKey: "project" },
+  { key: "Inter-Department Feedback", label: "Inter-Department Feedback" },
+];
+
+function employeeModuleScore(emp: Employee, scoreKey?: keyof Employee): number | null {
+  if (!scoreKey) return null;
+  if (scoreKey === "formA") {
+    const vals = [emp.formA?.score, emp.formB?.score, emp.formC?.score].filter((v): v is number => typeof v === "number" && v > 0);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  }
+  const v = emp[scoreKey] as { score?: number } | null | undefined;
+  return typeof v?.score === "number" ? v.score : 0;
+}
+
 // ── Multi-Module Breakdown & Division Scores (Gambar 1 Left) ───────────────────
 function MultiModuleDivisionSection({
   scopedUsers,
@@ -503,27 +538,25 @@ function MultiModuleDivisionSection({
   workflows,
   year,
   motionKey,
+  expanded,
+  onToggleExpand,
 }: {
   scopedUsers: ManagedUser[];
   employees: Employee[];
   workflows: WorkflowRecord[];
   year: string;
   motionKey: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
+  const [selectedModule, setSelectedModule] = useState<string | null>(null);
   const radarData = useMemo(() => {
-    const radarModules: Array<{ key: string; label: string }> = [
-      { key: "KPI (Setting)", label: "KPI Setting" },
-      { key: "SMART Goals (Setting)", label: "SMART Goals" },
-      { key: "Appraisal Form", label: "Appraisals" },
-      { key: "KPI (Tracking)", label: "KPI Tracking" },
-      { key: "SMART Goals (Tracking)", label: "SMART Track." },
-      { key: "Project OJS", label: "Project OJS" },
-    ];
-    return radarModules.map(({ key, label }) => {
+    return DIVISION_MODULES.map(({ key, label }) => {
       const st = computeModuleStatsForUsers(scopedUsers, workflows, key, year);
       const pct = st.total > 0 ? Math.round((st.completed / st.total) * 1000) / 10 : 0;
       return {
         subject: label,
+        key,
         fullLabel: MODULE_SHORT[key] ?? label,
         pct,
         completed: st.completed,
@@ -532,20 +565,25 @@ function MultiModuleDivisionSection({
     });
   }, [scopedUsers, workflows, year]);
 
+  const selectedMeta = DIVISION_MODULES.find((m) => m.key === selectedModule) ?? null;
   const divisionScoreData = useMemo(() => {
-    const divMap = new Map<string, { totalSum: number; kpiSum: number; count: number }>();
+    const divMap = new Map<string, { totalSum: number; kpiSum: number; count: number; users: ManagedUser[] }>();
     // Seed divisions from scopedUsers so divisions appear even when scores are 0
     for (const u of scopedUsers) {
       const div = (u.division || "Unassigned").trim();
-      if (!divMap.has(div)) {
-        divMap.set(div, { totalSum: 0, kpiSum: 0, count: 0 });
-      }
+      const cur = divMap.get(div) ?? { totalSum: 0, kpiSum: 0, count: 0, users: [] };
+      cur.users.push(u);
+      divMap.set(div, cur);
     }
     for (const emp of employees) {
       const div = (emp.division || "Unassigned").trim();
-      const cur = divMap.get(div) ?? { totalSum: 0, kpiSum: 0, count: 0 };
-      cur.totalSum += emp.totalScore || 0;
-      cur.kpiSum += emp.kpi?.score || 0;
+      const cur = divMap.get(div) ?? { totalSum: 0, kpiSum: 0, count: 0, users: [] };
+      if (selectedMeta) {
+        cur.kpiSum += employeeModuleScore(emp, selectedMeta.scoreKey) ?? 0;
+      } else {
+        cur.totalSum += emp.totalScore || 0;
+        cur.kpiSum += emp.kpi?.score || 0;
+      }
       cur.count += 1;
       divMap.set(div, cur);
     }
@@ -553,20 +591,33 @@ function MultiModuleDivisionSection({
       .map(([divName, agg]) => {
         const cleanLabel = divName.replace(/^Divisi\s+/i, "");
         const shortDiv = cleanLabel.length > 14 ? `${cleanLabel.slice(0, 13)}…` : cleanLabel;
+        let overall = agg.count > 0 ? Math.round((agg.totalSum / agg.count) * 10) / 10 : 0;
+        if (selectedMeta) {
+          // Mode filter module: batang hijau = % completion module per divisi
+          const st = computeModuleStatsForUsers(agg.users, workflows, selectedMeta.key, year);
+          overall = st.total > 0 ? Math.round((st.completed / st.total) * 1000) / 10 : 0;
+        }
         return {
           division: divName,
           shortDiv,
-          overall: agg.count > 0 ? Math.round((agg.totalSum / agg.count) * 10) / 10 : 0,
+          overall,
           kpi: agg.count > 0 ? Math.round((agg.kpiSum / agg.count) * 10) / 10 : 0,
-          headcount: agg.count,
+          headcount: agg.count || agg.users.length,
         };
       })
       .slice(0, 8);
-  }, [scopedUsers, employees]);
+  }, [scopedUsers, employees, workflows, year, selectedMeta]);
+  const primaryLabel = selectedMeta ? "Completion" : "Overall";
+  const secondaryLabel = selectedMeta ? (selectedMeta.scoreKey ? "Avg Score" : "Score n/a") : "KPI";
 
   return (
     <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex flex-col h-full pa-infographic-surface">
-      <div className="flex items-start gap-3 pb-3.5 border-b border-gray-100 mb-4">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        aria-expanded={expanded}
+        className="w-full text-left flex items-start gap-3 pb-3.5 border-b border-gray-100 mb-4"
+      >
         <div className="w-9 h-9 rounded-xl bg-cyan-50 text-teal-600 flex items-center justify-center shrink-0">
           <BarChart3 className="w-4 h-4" />
         </div>
@@ -578,57 +629,53 @@ function MultiModuleDivisionSection({
             Completion health and average performance by division
           </p>
         </div>
-      </div>
+        <ExpandHint expanded={expanded} />
+      </button>
 
       <div key={`mm-${motionKey}`} className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1 items-stretch pa-card-motion">
-        {/* Left: Hexagonal Module Completion Radar */}
+        {/* Left: Module Completion lines (klik untuk filter divisi) */}
         <div className="flex flex-col">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">
-            MODULE COMPLETION
-          </p>
-          <div className="flex-1 min-h-[215px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadarChart cx="50%" cy="52%" outerRadius="68%" data={radarData}>
-                <PolarGrid stroke="#CBD5E1" strokeOpacity={0.7} />
-                <PolarAngleAxis
-                  dataKey="subject"
-                  tick={{ fontSize: 9.5, fill: "#475569", fontWeight: 500 }}
-                />
-                <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar
-                  name="Completion"
-                  dataKey="pct"
-                  stroke="#0284C7"
-                  strokeWidth={2}
-                  fill="#0EA5E9"
-                  fillOpacity={0.22}
-                  dot={{ r: 3, fill: "#0284C7", strokeWidth: 0 }}
-                  activeDot={{ r: 5, fill: "#0369A1" }}
-                  isAnimationActive={true}
-                  animationDuration={900}
-                  animationEasing="ease-out"
-                />
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const d = payload[0].payload as {
-                      fullLabel: string;
-                      pct: number;
-                      completed: number;
-                      total: number;
-                    };
-                    return (
-                      <div className="bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-lg text-xs">
-                        <p className="font-bold text-[#1A284F] mb-0.5">{d.fullLabel}</p>
-                        <p className="text-gray-600">
-                          Completed: <span className="font-bold text-sky-700">{d.pct}%</span> ({d.completed}/{d.total})
-                        </p>
-                      </div>
-                    );
-                  }}
-                />
-              </RadarChart>
-            </ResponsiveContainer>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">MODULE COMPLETION</p>
+            {selectedModule && (
+              <button
+                type="button"
+                onClick={() => setSelectedModule(null)}
+                className="text-[10px] font-semibold text-sky-700 hover:underline"
+              >
+                Semua Module
+              </button>
+            )}
+          </div>
+          <div className="flex flex-col gap-1">
+            {radarData.map((d) => {
+              const active = selectedModule === d.key;
+              const dimmed = selectedModule !== null && !active;
+              return (
+                <button
+                  key={d.key}
+                  type="button"
+                  onClick={() => setSelectedModule(active ? null : d.key)}
+                  title={`${d.fullLabel}: ${d.completed}/${d.total} completed — klik untuk filter Average Score by Division`}
+                  className={`group w-full rounded-lg px-2 py-1.5 text-left transition-all duration-300 ${
+                    active ? "bg-sky-50 ring-1 ring-sky-300" : "hover:bg-slate-50"
+                  } ${dimmed ? "opacity-50" : ""}`}
+                >
+                  <div className="flex items-center justify-between gap-2 text-[10.5px]">
+                    <span className={`truncate font-medium ${active ? "text-sky-800" : "text-slate-600"}`}>{d.subject}</span>
+                    <span className="shrink-0 font-bold text-slate-700">
+                      {d.pct}% <span className="font-normal text-slate-400">({d.completed}/{d.total})</span>
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ${active ? "bg-sky-600" : "bg-sky-400 group-hover:bg-sky-500"}`}
+                      style={{ width: `${Math.min(100, d.pct)}%` }}
+                    />
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -637,15 +684,16 @@ function MultiModuleDivisionSection({
           <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
               AVERAGE SCORE BY DIVISION
+              {selectedMeta && <span className="ml-1 normal-case tracking-normal text-sky-700">· {selectedMeta.label}</span>}
             </p>
             <div className="flex items-center gap-2.5 text-[10px] text-gray-600 font-medium">
               <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-                Overall
+                {primaryLabel}
               </span>
               <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-sky-500 inline-block" />
-                KPI
+                {secondaryLabel}
               </span>
             </div>
           </div>
@@ -691,8 +739,8 @@ function MultiModuleDivisionSection({
                     return (
                       <div className="bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-lg text-xs">
                         <p className="font-bold text-gray-900 mb-1">{d.division}</p>
-                        <p className="text-emerald-700 font-semibold">Overall Avg: {d.overall}%</p>
-                        <p className="text-sky-700 font-semibold">KPI Avg: {d.kpi}%</p>
+                        <p className="text-emerald-700 font-semibold">{primaryLabel}: {d.overall}%</p>
+                        <p className="text-sky-700 font-semibold">{secondaryLabel}: {d.kpi}%</p>
                         <p className="text-gray-400 text-[10px] mt-0.5">{d.headcount} employee(s)</p>
                       </div>
                     );
@@ -700,7 +748,7 @@ function MultiModuleDivisionSection({
                 />
                 <Bar
                   dataKey="overall"
-                  name="Overall"
+                  name={primaryLabel}
                   fill="#10B981"
                   radius={[0, 4, 4, 0]}
                   isAnimationActive={true}
@@ -709,7 +757,7 @@ function MultiModuleDivisionSection({
                 />
                 <Bar
                   dataKey="kpi"
-                  name="KPI"
+                  name={secondaryLabel}
                   fill="#0EA5E9"
                   radius={[0, 4, 4, 0]}
                   isAnimationActive={true}
@@ -733,6 +781,8 @@ function ApprovalTrackingBottleneckSection({
   year,
   month,
   motionKey,
+  expanded,
+  onToggleExpand,
 }: {
   scopedUsers: ManagedUser[];
   workflows: WorkflowRecord[];
@@ -740,6 +790,8 @@ function ApprovalTrackingBottleneckSection({
   year: string;
   month: string;
   motionKey: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   const chainStats = useMemo(() => {
     const scopedIds = new Set(scopedUsers.map((u) => normalizeEmployeeId(u.employeeId)));
@@ -848,7 +900,12 @@ function ApprovalTrackingBottleneckSection({
 
   return (
     <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex flex-col h-full pa-infographic-surface">
-      <div className="flex items-start justify-between gap-2 pb-3.5 border-b border-gray-100 mb-4">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        aria-expanded={expanded}
+        className="w-full text-left flex items-start justify-between gap-2 pb-3.5 border-b border-gray-100 mb-4"
+      >
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
             <GitPullRequest className="w-4 h-4" />
@@ -865,7 +922,8 @@ function ApprovalTrackingBottleneckSection({
         <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 text-[11px] font-bold whitespace-nowrap shrink-0">
           {chainStats.totalSubmissions} {chainStats.totalSubmissions === 1 ? "submission" : "submissions"}
         </span>
-      </div>
+        <ExpandHint expanded={expanded} />
+      </button>
 
       <div key={`ab-${motionKey}`} className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1 items-stretch pa-card-motion">
         {/* Left: 5-tier tapering Approval Funnel */}
@@ -1267,7 +1325,9 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     }
     return ["All Units", ...effectiveLockedUnits];
   }, [effectiveLockedUnits]);
-  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
+  const [expandedCard, setExpandedCard] = useState<"timeline" | "multi" | "approval" | null>(null);
+  const toggleCard = (id: "timeline" | "multi" | "approval") => setExpandedCard((cur) => (cur === id ? null : id));
+  const cardSpan = (id: "timeline" | "multi" | "approval") => (expandedCard === id ? "xl:col-span-3 xl:order-first" : "");
   const [companyUnit, setCompanyUnit] = useState(() => defaultCompanyUnit);
   const [division, setDivision] = useState("All Divisions");
   const [department, setDepartment] = useState("All Departments");
@@ -1613,11 +1673,13 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       {/* ── 3. One-Line Row: PA Cycle Timeline | Multi-Module & Division | Approval Tracking & Bottleneck ── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 items-stretch">
         {/* 3A. PA Cycle Timeline */}
+        <motion.div layout transition={{ layout: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } }} className={cardSpan("timeline")}>
         <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex flex-col h-full pa-infographic-surface">
           <button
             type="button"
-            onClick={() => setTimelineCollapsed((c) => !c)}
-            className={`w-full flex items-start gap-3 text-left transition-all ${timelineCollapsed ? "" : "pb-3.5 border-b border-gray-100 mb-4"}`}
+            onClick={() => toggleCard("timeline")}
+            aria-expanded={expandedCard === "timeline"}
+            className="w-full flex items-start gap-3 text-left pb-3.5 border-b border-gray-100 mb-4"
           >
             <div className="w-9 h-9 rounded-xl bg-[#1A284F]/8 flex items-center justify-center text-[#1A284F] shrink-0">
               <Clock className="w-4 h-4" />
@@ -1630,12 +1692,10 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                   : "Jadwal appraisal mengikuti SK Penilaian Kinerja yang sudah di tetapkan di masing-masing Unit Usaha."}
               </p>
             </div>
-            <div className="w-7 h-7 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors shrink-0">
-              <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${timelineCollapsed ? "-rotate-90" : "rotate-0"}`} />
-            </div>
+            <ExpandHint expanded={expandedCard === "timeline"} />
           </button>
 
-          {!timelineCollapsed && (
+          {(
             <div key={`tl-${refreshMotionKey}`} className="overflow-x-auto flex-1 flex flex-col justify-between pa-card-motion">
               <div className="min-w-[460px]">
                 {/* Year band */}
@@ -1761,24 +1821,34 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
           )}
         </div>
 
+        </motion.div>
+
         {/* 3B. Multi-Module Breakdown & Division Scores */}
-        <MultiModuleDivisionSection
-          scopedUsers={scopedUsers}
-          employees={filteredEmployees}
-          workflows={workflows}
-          year={year}
-          motionKey={refreshMotionKey}
-        />
+        <motion.div layout transition={{ layout: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } }} className={cardSpan("multi")}>
+          <MultiModuleDivisionSection
+            scopedUsers={scopedUsers}
+            employees={filteredEmployees}
+            workflows={workflows}
+            year={year}
+            motionKey={refreshMotionKey}
+            expanded={expandedCard === "multi"}
+            onToggleExpand={() => toggleCard("multi")}
+          />
+        </motion.div>
 
         {/* 3C. Approval Tracking & Bottleneck */}
-        <ApprovalTrackingBottleneckSection
-          scopedUsers={scopedUsers}
-          workflows={workflows}
-          module={module}
-          year={year}
-          month={month}
-          motionKey={refreshMotionKey}
-        />
+        <motion.div layout transition={{ layout: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } }} className={cardSpan("approval")}>
+          <ApprovalTrackingBottleneckSection
+            scopedUsers={scopedUsers}
+            workflows={workflows}
+            module={module}
+            year={year}
+            month={month}
+            motionKey={refreshMotionKey}
+            expanded={expandedCard === "approval"}
+            onToggleExpand={() => toggleCard("approval")}
+          />
+        </motion.div>
       </div>
 
 

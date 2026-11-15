@@ -2,9 +2,17 @@
 import { useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { toast } from "sonner";
-import { Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send, CheckCircle2, Clock, X, RefreshCw, Users } from "lucide-react";
+import { Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send, CheckCircle2, Clock, X, RefreshCw, Users, Archive, RotateCcw } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import { isExcludedFromAppraisalCalibration, loadManagedUsers } from "../../store/authStore";
+import { archiveUsers, EOY_ARCHIVE_REASON, loadArchivedUsers } from "../../store/archiveStore";
+import {
+  getSoyApproval,
+  loadSoyEmployeeSnapshot,
+  SOY_EVENT,
+  submitSoyForApproval,
+  type SoyApprovalRecord,
+} from "../../store/calibrationSoyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -530,29 +538,60 @@ function YearEndCalibrationSettings({ unit, onUpdate }: { unit: CompanyUnit; onU
   const [confirm, setConfirm] = useState(false);
   const [savedDraft, setSavedDraft] = useState<CompanyUnit>(makeDraft);
   const baselineTotal = unit.divisionProportions.reduce((total, item) => total + (unit.beginningHC?.[item.id] ?? item.hc), 0);
-  function persist(status: PageMode) {
-    const entries = [...draft.divisionProportions, ...draft.departemenenProportions, ...draft.bagianProportions];
+  function persist(status: PageMode, override?: CompanyUnit) {
+    const source = override ?? draft;
+    const entries = [...source.divisionProportions, ...source.departemenenProportions, ...source.bagianProportions];
     if (entries.some((item) => !Number.isSafeInteger(item.hc) || item.hc < 0)) {
       toast.error("HC wajib berupa bilangan bulat minimal 0.");
       return false;
     }
-    onUpdate({ ...draft, beginningGrades: unit.beginningGrades ?? (unit.beginningHC ? undefined : unit.calibrationGrades.map((grade) => ({ ...grade }))), beginningHC: unit.beginningHC ?? Object.fromEntries([...unit.divisionProportions, ...unit.departemenenProportions, ...unit.bagianProportions].map((item) => [item.id, item.hc])), yearEndUpdatedAt: new Date().toISOString(), yearEndStatus: status });
-    setSavedDraft(draft);
-    toast.success(status === "submitted" ? "HC akhir tahun disubmit untuk Approval Management." : "HC akhir tahun tersimpan; HC awal tetap dipertahankan.");
+    onUpdate({ ...source, beginningGrades: unit.beginningGrades ?? (unit.beginningHC ? undefined : unit.calibrationGrades.map((grade) => ({ ...grade }))), beginningHC: unit.beginningHC ?? Object.fromEntries([...unit.divisionProportions, ...unit.departemenenProportions, ...unit.bagianProportions].map((item) => [item.id, item.hc])), yearEndUpdatedAt: new Date().toISOString(), yearEndStatus: status });
+    setSavedDraft(source);
+    if (status !== "submitted") toast.success("HC akhir tahun tersimpan; HC awal tetap dipertahankan.");
+    return true;
+  }
+
+  /** Confirm Data EOY: arsipkan karyawan yang tidak ada lagi, perbarui HC aktual & Bell Curve. */
+  function confirmYearEndData() {
+    const snapshot = loadSoyEmployeeSnapshot()[unit.name] ?? [];
+    const activeIds = new Set(
+      loadManagedUsers()
+        .filter((u) => u.company === unit.name && u.status === "Active" && !isExcludedFromAppraisalCalibration(u))
+        .map((u) => u.employeeId.toLowerCase()),
+    );
+    const archivedIds = new Set(loadArchivedUsers().map((a) => a.user.employeeId.toLowerCase()));
+    const inactiveInUnit = loadManagedUsers().filter((u) => u.company === unit.name && u.status !== "Active");
+    const eliminated = [
+      ...snapshot.filter((u) => !activeIds.has(u.employeeId.toLowerCase())),
+      ...inactiveInUnit,
+    ].filter((u, i, arr) => !archivedIds.has(u.employeeId.toLowerCase()) && arr.findIndex((x) => x.employeeId === u.employeeId) === i);
+    const archivedCount = archiveUsers(eliminated, EOY_ARCHIVE_REASON, "eoy");
+    // HC Aktual = karyawan aktif setelah eliminasi
+    const refreshed = applyImportedEmployeesDistribution(draft);
+    setDraft(refreshed);
+    if (!persist("submitted", refreshed)) return false;
+    window.dispatchEvent(new Event("pa-employees-imported"));
+    window.dispatchEvent(new Event("appraisal-updated"));
+    toast.success(
+      archivedCount > 0
+        ? `Data HC Akhir Tahun dikonfirmasi. ${archivedCount} karyawan diarsipkan (${EOY_ARCHIVE_REASON}); Bell Curve & HC Aktual diperbarui.`
+        : "Data HC Akhir Tahun dikonfirmasi. Bell Curve & HC Aktual diperbarui.",
+    );
     return true;
   }
   if (!unit.beginningHC && baselineTotal === 0) return <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Lengkapi dan simpan HC Awal Tahun terlebih dahulu sebelum mengatur HC Akhir Tahun.</p>;
   return <>
     <p className="text-sm font-medium text-gray-500">HC Akhir Tahun · 2026 — format tabel dan alur sama dengan HC Awal Tahun. Baseline awal tidak berubah.</p>
-    <UnitDetail unit={draft} onBack={() => {}} onUpdate={setDraft} pageMode={mode} setPageMode={setMode} onShowConfirm={() => setConfirm(true)} embedded onSave={() => persist("edit")} onCancelEdit={() => setDraft(savedDraft)} />
-    {confirm && <SubmitConfirmModal onCancel={() => setConfirm(false)} onConfirm={() => { if (persist("submitted")) { setConfirm(false); setMode("submitted"); } }} />}
+    <UnitDetail unit={draft} onBack={() => {}} onUpdate={setDraft} pageMode={mode} setPageMode={setMode} onShowConfirm={() => setConfirm(true)} embedded submitLabel="Confirm Data" onSave={() => persist("edit")} onCancelEdit={() => setDraft(savedDraft)} />
+    {confirm && <ConfirmYearEndModal unitName={unit.name} onCancel={() => setConfirm(false)} onConfirm={() => { if (confirmYearEndData()) { setConfirm(false); setMode("submitted"); } }} />}
   </>;
 }
 
-function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfirm, embedded = false, onSave, onCancelEdit }: {
+function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfirm, embedded = false, onSave, onCancelEdit, submitLabel = "Submit", soyApproval }: {
   unit: CompanyUnit; onBack: () => void; onUpdate: (u: CompanyUnit) => void;
   pageMode: PageMode; setPageMode: (m: PageMode) => void; onShowConfirm: () => void;
   embedded?: boolean; onSave?: () => boolean; onCancelEdit?: () => void;
+  submitLabel?: "Submit" | "Confirm Data"; soyApproval?: SoyApprovalRecord;
 }) {
   const [editMode, setEditMode] = useState(false);
   const [hcTab, setHcTab] = useState("start");
@@ -563,25 +602,73 @@ function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfi
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        {!embedded && <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-[#1A284F] transition-colors">
-          <ArrowLeft className="w-4 h-4" />Back to Company Units
-        </button>}
-        <div className="flex items-center gap-2">
-          {hcTab === "start" && !unit.beginningHC && pageMode === "edit" && (
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-[#1A284F] transition-colors">
+            <ArrowLeft className="w-4 h-4" />Back to Company Units
+          </button>
+        </div>
+      )}
+
+      {!embedded && <div className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl px-6 py-4 shadow-sm">
+        <div className="w-12 h-12 rounded-xl bg-[#1A284F]/10 flex items-center justify-center shrink-0">
+          <Building2 className="w-6 h-6 text-[#1A284F]" />
+        </div>
+        <div>
+          <p className="font-bold text-gray-900">{unit.name}</p>
+          <p className="text-sm text-gray-500">
+            {unit.industry}{unit.industry ? " · " : ""}
+            <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{unit.code}</span>
+          </p>
+        </div>
+      </div>}
+
+      {!embedded && soyApproval?.status === "Approved" ? (
+        <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-3">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <p className="text-sm text-emerald-800 font-medium">
+            HC Awal Tahun & Distribusi Proporsi Grade sudah <strong>Approved</strong> oleh {soyApproval.decidedBy}
+            {soyApproval.note ? <> — “{soyApproval.note}”</> : null}.
+          </p>
+        </div>
+      ) : !embedded && soyApproval?.status === "Revision" ? (
+        <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-xl px-5 py-3">
+          <RotateCcw className="w-4 h-4 text-orange-600 shrink-0 mt-0.5" />
+          <p className="text-sm text-orange-800">
+            <strong>Revisi diminta</strong> oleh {soyApproval.decidedBy}: {soyApproval.note || "-"}. Perbaiki setting lalu submit ulang.
+          </p>
+        </div>
+      ) : pageMode === "submitted" ? (
+        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
+          <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800 font-medium">
+            {embedded
+              ? <>Data HC Akhir Tahun sudah <strong>dikonfirmasi</strong>. Karyawan yang tereliminasi telah diarsipkan dan Bell Curve diperbarui.</>
+              : <>Calibration Setting (SOY) sudah disubmit dan <strong>menunggu Approval Calibration — Setting (SOY)</strong>. Editing dinonaktifkan sampai approval selesai.</>}
+          </p>
+        </div>
+      ) : null}
+
+      <Tabs.Root value={hcTab} onValueChange={setHcTab} className="space-y-6">
+        {!embedded && <Tabs.List aria-label="Pengaturan Headcount" className="flex flex-wrap gap-1 border-b border-gray-200">
+          {[["start", "HC Awal Tahun"], ["end", "HC Akhir Tahun"], ["summary", "Summary HC"]].map(([value, label]) => <Tabs.Trigger key={value} value={value} className="border-b-2 border-transparent px-5 py-3 text-sm font-medium text-gray-500 transition-colors hover:text-[#1A284F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 data-[state=active]:border-[#1A284F] data-[state=active]:text-[#1A284F]">{label}</Tabs.Trigger>)}
+        </Tabs.List>}
+        <Tabs.Content value="start" className="space-y-6">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {!unit.beginningHC && pageMode === "edit" && (
             <>
               <button
                 type="button"
                 onClick={() => {
                   const synced = applyImportedEmployeesDistribution(unit);
                   onUpdate(synced);
-                  toast.success(`Data karyawan terimpor pada ${unit.name} berhasil didistribusikan ke Divisi, Departement, dan Bagian.`);
+                  toast.success(`Data karyawan ${unit.name} berhasil di-refresh dan didistribusikan ke Divisi, Departement, dan Bagian.`);
                 }}
                 className="flex items-center gap-2 px-3.5 py-2.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-xl text-xs font-semibold hover:bg-blue-100 transition-colors"
                 title="Hitung otomatis HC & distribusi kuota Grade per Divisi, Departement, dan Bagian dari data karyawan yang diimpor"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                Sync dari Data Karyawan
+                Refresh Data Karyawan
               </button>
               {editMode && (
                 <button onClick={() => { onCancelEdit?.(); setEditMode(false); }}
@@ -607,11 +694,11 @@ function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfi
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm ${
                   canSubmit ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer" : "bg-gray-100 text-gray-400 cursor-not-allowed"
                 }`}>
-                <Send className="w-4 h-4" />Submit
+                {submitLabel === "Confirm Data" ? <CheckCircle2 className="w-4 h-4" /> : <Send className="w-4 h-4" />}{submitLabel}
               </button>
             </>
           )}
-          {hcTab === "start" && !unit.beginningHC && pageMode === "preview" && (
+          {!unit.beginningHC && pageMode === "preview" && (
             <>
               <button onClick={() => setPageMode("edit")}
                 className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">
@@ -619,40 +706,11 @@ function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfi
               </button>
               <button onClick={onShowConfirm}
                 className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm">
-                <Send className="w-4 h-4" />Submit
+                {submitLabel === "Confirm Data" ? <CheckCircle2 className="w-4 h-4" /> : <Send className="w-4 h-4" />}{submitLabel}
               </button>
             </>
           )}
         </div>
-      </div>
-
-      {!embedded && <div className="flex items-center gap-4 bg-white border border-gray-100 rounded-2xl px-6 py-4 shadow-sm">
-        <div className="w-12 h-12 rounded-xl bg-[#1A284F]/10 flex items-center justify-center shrink-0">
-          <Building2 className="w-6 h-6 text-[#1A284F]" />
-        </div>
-        <div>
-          <p className="font-bold text-gray-900">{unit.name}</p>
-          <p className="text-sm text-gray-500">
-            {unit.industry}{unit.industry ? " · " : ""}
-            <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{unit.code}</span>
-          </p>
-        </div>
-      </div>}
-
-      {pageMode === "submitted" && (
-        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
-          <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-          <p className="text-sm text-amber-800 font-medium">
-            Calibration setting has been submitted and is <strong>Pending Approval Management</strong>. Editing is disabled until the approval is completed.
-          </p>
-        </div>
-      )}
-
-      <Tabs.Root value={hcTab} onValueChange={setHcTab} className="space-y-6">
-        {!embedded && <Tabs.List aria-label="Pengaturan Headcount" className="flex flex-wrap gap-1 border-b border-gray-200">
-          {[["start", "HC Awal Tahun"], ["end", "HC Akhir Tahun"], ["summary", "Summary HC"]].map(([value, label]) => <Tabs.Trigger key={value} value={value} className="border-b-2 border-transparent px-5 py-3 text-sm font-medium text-gray-500 transition-colors hover:text-[#1A284F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 data-[state=active]:border-[#1A284F] data-[state=active]:text-[#1A284F]">{label}</Tabs.Trigger>)}
-        </Tabs.List>}
-        <Tabs.Content value="start" className="space-y-6">
       {!embedded && <p className="text-sm font-medium text-gray-500">{unit.beginningHC ? "HC Awal Tahun — baseline tersimpan dan read-only; perubahan HC akhir tidak menimpa data ini." : "Setting HC Awal Tahun — klik Edit Settings untuk mengisi HC baseline."}</p>}
       <CalibrationPanel
         calibrationGrades={unit.beginningHC ? unit.beginningGrades ?? unit.calibrationGrades : unit.calibrationGrades}
@@ -710,6 +768,40 @@ function UnitDetail({ unit, onBack, onUpdate, pageMode, setPageMode, onShowConfi
   );
 }
 
+// ─── Confirm Data (HC Akhir Tahun) Modal ─────────────────────────────────────
+
+function ConfirmYearEndModal({ unitName, onConfirm, onCancel }: { unitName: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-md mx-4 p-6 flex flex-col gap-5">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900">Confirm Data HC Akhir Tahun</h3>
+              <p className="text-xs text-gray-500 mt-0.5">{unitName}</p>
+            </div>
+          </div>
+          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition-colors"><X className="w-5 h-5" /></button>
+        </div>
+        <ul className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <li className="flex gap-2"><Archive className="mt-0.5 h-4 w-4 shrink-0" />Karyawan HC Awal Tahun yang tidak ada lagi akan diarsipkan dengan keterangan “{EOY_ARCHIVE_REASON}”.</li>
+          <li className="flex gap-2"><Users className="mt-0.5 h-4 w-4 shrink-0" />HC Aktual pada tabel proporsi diperbarui sesuai data karyawan terkini.</li>
+          <li className="flex gap-2"><RefreshCw className="mt-0.5 h-4 w-4 shrink-0" />Jumlah aktual grade pada Bell Curve di Calibration Adjustment ikut diperbarui.</li>
+        </ul>
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">Batal</button>
+          <button onClick={onConfirm} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm">
+            <CheckCircle2 className="w-4 h-4" />Confirm Data
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Submit Confirmation Modal ────────────────────────────────────────────────
 
 function SubmitConfirmModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void; }) {
@@ -722,8 +814,8 @@ function SubmitConfirmModal({ onConfirm, onCancel }: { onConfirm: () => void; on
               <Send className="w-5 h-5 text-emerald-600" />
             </div>
             <div>
-              <h3 className="font-bold text-gray-900">Submit Calibration Setting</h3>
-              <p className="text-xs text-gray-500 mt-0.5">This will send for Approval Management review</p>
+              <h3 className="font-bold text-gray-900">Submit Calibration Setting (SOY)</h3>
+              <p className="text-xs text-gray-500 mt-0.5">HC Awal Tahun & Distribusi Proporsi Grade dikirim ke Approval Calibration — Setting (SOY)</p>
             </div>
           </div>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -814,8 +906,25 @@ export function CalibrationSetting() {
     } catch { toast.error("Pengaturan HC gagal disimpan. Periksa penyimpanan browser."); }
   };
 
+  const [soyTick, setSoyTick] = useState(0);
+  useEffect(() => {
+    const refresh = () => setSoyTick((t) => t + 1);
+    window.addEventListener(SOY_EVENT, refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
+    return () => {
+      window.removeEventListener(SOY_EVENT, refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
+    };
+  }, []);
+  void soyTick;
+
   const handleSubmitConfirm = () => {
     setShowConfirm(false);
+    const unitToSubmit = selectedUnit ? companyUnits.find((u) => u.id === selectedUnit.id) ?? selectedUnit : null;
+    if (unitToSubmit) {
+      submitSoyForApproval(unitToSubmit);
+      toast.success(`Calibration Setting (SOY) ${unitToSubmit.name} dikirim ke Approval Calibration — Setting (SOY).`);
+    }
     setPageMode("submitted");
     setSelectedUnit(null);
     try {
@@ -838,6 +947,11 @@ export function CalibrationSetting() {
 
   if (selectedUnit) {
     const liveUnit = companyUnits.find(u => u.id === selectedUnit.id) ?? selectedUnit;
+    const soyApproval = getSoyApproval(liveUnit.id);
+    // Pending/Approved → terkunci; Revision → dapat diedit kembali
+    const effectiveMode: PageMode = soyApproval
+      ? soyApproval.status === "Revision" ? (pageMode === "submitted" ? "edit" : pageMode) : "submitted"
+      : pageMode === "submitted" ? "edit" : pageMode;
     return (
       <>
         {showConfirm && <SubmitConfirmModal onConfirm={handleSubmitConfirm} onCancel={() => setShowConfirm(false)} />}
@@ -858,9 +972,10 @@ export function CalibrationSetting() {
             unit={liveUnit}
             onBack={() => setSelectedUnit(null)}
             onUpdate={updateUnit}
-            pageMode={pageMode}
+            pageMode={effectiveMode}
             setPageMode={setPageMode}
             onShowConfirm={() => setShowConfirm(true)}
+            soyApproval={soyApproval}
           />
         </div>
       </>

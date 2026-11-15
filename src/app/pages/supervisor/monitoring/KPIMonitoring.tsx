@@ -2,7 +2,10 @@
 import React, { useEffect, useState } from "react";
 import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
-import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+
+const countValidatedKpiMonths = (employeeId: string) =>
+  getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;
 import { evaluateEmployeeKPITracking } from "../../employee/KPIPage";
 
 const TEAM_IDS   = ["E002", "E011"];
@@ -637,7 +640,7 @@ function KPIModal({ rec, empName, onClose }: { rec: KPIRecord; empName: string; 
       <div className="flex gap-4 px-8 pt-4 pb-2 flex-shrink-0 flex-wrap">
         {[
           { label:"Total KPI",        value: rec.totalKPI,                        color:"text-[#1A284F]", bg:"bg-[#1A284F]/5" },
-          { label:"Submitted",        value:`${rec.submittedKPI}/${rec.totalKPI}`, color:"text-green-700", bg:"bg-green-50" },
+          { label:"Months Submitted", value:`${countValidatedKpiMonths(rec.employeeId)}/12`, color:"text-green-700", bg:"bg-green-50" },
           { label:"Avg. Achievement", value:`${rec.avgAchievement}%`,             color:"text-blue-700",  bg:"bg-blue-50" },
           { label:"RCA Required",     value: rec.rcaRequired,                     color:"text-rose-700",  bg:"bg-rose-50" },
         ].map((s) => (
@@ -1168,7 +1171,7 @@ export function SupervisorMonitoringKPI() {
                 <th className="py-3 px-5">Department</th>
                 <th className="py-3 px-5">Position</th>
                 <th className="py-3 px-5 text-center">Total KPI</th>
-                <th className="py-3 px-5 text-center">Submitted</th>
+                <th className="py-3 px-5 text-center">Months Submitted</th>
                 <th className="py-3 px-5">Avg. Achievement</th>
                 <th className="py-3 px-5 text-center">RCA Req.</th>
                 <th className="py-3 px-5 text-center">RCA Done</th>
@@ -1215,7 +1218,7 @@ export function SupervisorMonitoringKPI() {
                   <td className="py-3.5 px-5"><p className="text-sm text-gray-700 whitespace-nowrap">{emp.department ?? DEPARTMENT_MAP[emp.id] ?? "—"}</p></td>
                   <td className="py-3.5 px-5"><p className="text-sm text-gray-700 whitespace-nowrap">{emp.position}</p></td>
                   <td className="py-3.5 px-5 text-center text-sm font-medium text-gray-700">{kpi.totalKPI}</td>
-                  <td className="py-3.5 px-5 text-center text-sm font-medium text-gray-700">{kpi.submittedKPI}/{kpi.totalKPI}</td>
+                  <td className="py-3.5 px-5 text-center text-sm font-medium text-gray-700" title="Bulan KPI Tracking yang sudah Validated">{countValidatedKpiMonths(kpi.employeeId)}/12</td>
                   <td className="py-3.5 px-5"><AchievementBar value={kpi.avgAchievement} /></td>
                   <td className="py-3.5 px-5 text-center">
                     <span className={`text-sm font-semibold ${kpi.rcaRequired > 0 ? "text-rose-600" : "text-gray-400"}`}>{kpi.rcaRequired}</span>

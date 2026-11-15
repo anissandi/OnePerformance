@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   BarChart2,
   Settings,
+  Archive,
   Users,
   Target,
   UserCog,
@@ -297,6 +298,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("setting_login_mgmt") ? [{ to: `${p}/settings/login-management`, label: "Login Management", icon: Shield }] : []),
       ...(canView("setting_notification") ? [{ to: `${p}/settings/notification-management`, label: "Notification Management", icon: Bell }] : []),
       ...(canView("setting_data_sync") ? [{ to: `${p}/settings/data-sync`, label: "Data Sync", icon: RefreshCw }] : []),
+      ...(canView("setting_archive") ? [{ to: `${p}/settings/archive`, label: "Archive", icon: Archive }] : []),
       ...(canView("setting_audit") ? [{ to: `${p}/settings/audit-trail`, label: "Audit Trail", icon: FileSearch }] : []),
     ];
     if (!canView("setting") || settingSubs.length === 0) return null;
@@ -375,7 +377,12 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/hr/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-        ...(canView("approvals_calibration") ? [{ to: "/hr/approvals/calibration", label: "Calibration", icon: Target }] : []),
+        ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
+          ? [{ label: "Calibration", icon: Target, children: [
+              ...(canView("approvals_calibration_soy") ? [{ to: "/hr/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
+              ...(canView("approvals_calibration_eoy") ? [{ to: "/hr/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
+            ] }]
+          : []),
         ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
       if (canView("approvals") && approvalSubs.length > 0) {
@@ -425,6 +432,13 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       }
       if (canView("documents")) {
         list.push({ to: "/hr/documents", icon: BookOpen, label: "Documents" });
+      }
+      {
+        const fbSubs: NavSubLink[] = [
+          ...(canView("feedback_form") ? [{ to: "/hr/feedback/form", label: "Form Feedback", icon: MessageSquare }] : []),
+          ...(canView("feedback_followup") ? [{ to: "/hr/feedback/follow-up", label: "Follow-Up Feedback", icon: CheckSquare }] : []),
+        ];
+        if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Feedback", icon: MessageSquare, subLinks: fbSubs });
       }
       if (canView("override")) {
         list.push({ to: "/hr/override", icon: Shield, label: "Management Override" });
@@ -486,7 +500,12 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
-        ...(canView("approvals_calibration") ? [{ to: "/bod/approvals/calibration", label: "Calibration", icon: Target }] : []),
+        ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
+          ? [{ label: "Calibration", icon: Target, children: [
+              ...(canView("approvals_calibration_soy") ? [{ to: "/bod/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
+              ...(canView("approvals_calibration_eoy") ? [{ to: "/bod/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
+            ] }]
+          : []),
         ...(canView("approvals_open_lock") ? [{ to: "/bod/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
       if (canView("approvals") && approvalSubs.length > 0) {
@@ -529,6 +548,13 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       }
       if (canView("documents")) {
         list.push({ to: "/bod/documents", icon: BookOpen, label: "Documents" });
+      }
+      {
+        const fbSubs: NavSubLink[] = [
+          ...(canView("feedback_form") ? [{ to: "/bod/feedback/form", label: "Form Feedback", icon: MessageSquare }] : []),
+          ...(canView("feedback_followup") ? [{ to: "/bod/feedback/follow-up", label: "Follow-Up Feedback", icon: CheckSquare }] : []),
+        ];
+        if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Feedback", icon: MessageSquare, subLinks: fbSubs });
       }
 
       const settingLink = buildSettingLink("/bod");
@@ -616,7 +642,12 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("approvals_pa_setting") ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: Target }] : []),
       ...(canView("approvals_pa_measurement") ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }] : []),
       ...(canView("approvals_mgmt_interview") ? [{ to: `${prefix}/approvals/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
-      ...(canView("approvals_calibration") ? [{ to: `${prefix}/approvals/calibration`, label: "Calibration", icon: Target }] : []),
+      ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
+          ? [{ label: "Calibration", icon: Target, children: [
+              ...(canView("approvals_calibration_soy") ? [{ to: `${prefix}/approvals/calibration/setting`, label: "Setting (SOY)", icon: Settings }] : []),
+              ...(canView("approvals_calibration_eoy") ? [{ to: `${prefix}/approvals/calibration/adjustment`, label: "Adjustment (EOY)", icon: RefreshCw }] : []),
+            ] }]
+          : []),
       ...(canView("approvals_open_lock") ? [{ to: `${prefix}/settings/open-lock`, label: "Open Lock", icon: LockOpen }] : []),
     ];
     if (canView("approvals") && approvalSubs.length > 0) {
@@ -662,6 +693,13 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     // 10. Documents
     if (canView("documents")) {
       list.push({ to: `${prefix}/documents`, icon: BookOpen, label: "Documents" });
+    }
+    {
+      const fbSubs: NavSubLink[] = [
+        ...(canView("feedback_form") ? [{ to: `${prefix}/feedback/form`, label: "Form Feedback", icon: MessageSquare }] : []),
+        ...(canView("feedback_followup") ? [{ to: `${prefix}/feedback/follow-up`, label: "Follow-Up Feedback", icon: CheckSquare }] : []),
+      ];
+      if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Feedback", icon: MessageSquare, subLinks: fbSubs });
     }
 
     const evLink = buildEvidenceLink(prefix);

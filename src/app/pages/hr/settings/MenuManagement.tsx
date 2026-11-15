@@ -97,7 +97,13 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "approvals_pa_measurement", label: "Performance Appraisal Measurement",   path: "/approvals/measurement",                           icon: "Clock",         isVisible: true, order: 3, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
       { id: "approvals_feedback",       label: "Inter-Department Feedback Approvals", path: "/approvals/measurement/inter-department-feedback", icon: "Users",         isVisible: true, order: 4, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[] },
       { id: "approvals_mgmt_interview", label: "Management Interview",                path: "/approvals/management-interview",                  icon: "MessageSquare", isVisible: true, order: 5, roles: ["BOD", "Director"] as Role[] },
-      { id: "approvals_calibration",    label: "Calibration",                         path: "/approvals/calibration",                           icon: "BarChart2",     isVisible: true, order: 6, roles: ["BOD"] as Role[] },
+      {
+        id: "approvals_calibration", label: "Calibration", path: "", icon: "BarChart2", isVisible: true, order: 6, roles: ["BOD", "Director", "GM", "Administrator", "HR ICF"] as Role[],
+        children: [
+          { id: "approvals_calibration_soy", label: "Setting (SOY)",    path: "/approvals/calibration/setting",    icon: "Settings",  isVisible: true, order: 1, roles: ["BOD", "Director", "GM", "Administrator", "HR ICF"] as Role[] },
+          { id: "approvals_calibration_eoy", label: "Adjustment (EOY)", path: "/approvals/calibration/adjustment", icon: "RefreshCw", isVisible: true, order: 2, roles: ["BOD", "Director", "GM", "Administrator", "HR ICF"] as Role[] },
+        ],
+      },
       { id: "approvals_open_lock",      label: "Open Lock",                           path: "/settings/open-lock",                              icon: "LockOpen",      isVisible: true, order: 7, roles: HR_ADMIN },
     ],
   },
@@ -136,6 +142,14 @@ const INITIAL_MENUS: MenuItem[] = [
   {
     id: "documents", label: "Documents", path: "/documents", icon: "BookOpen",
     isVisible: true, order: 11, roles: ALL_ROLES,
+  },
+  {
+    id: "feedback", label: "Feedback", path: "", icon: "MessageSquare",
+    isVisible: true, order: 11.5, roles: ALL_ROLES,
+    children: [
+      { id: "feedback_form",     label: "Form Feedback",      path: "/feedback/form",      icon: "MessageSquare", isVisible: true, order: 1, roles: ALL_ROLES },
+      { id: "feedback_followup", label: "Follow-Up Feedback", path: "/feedback/follow-up", icon: "CheckSquare",   isVisible: true, order: 2, roles: ["Administrator", "HR ICF"] as Role[] },
+    ],
   },
   {
     id: "evidence", label: "Evidence", path: "", icon: "FolderOpen",
@@ -181,6 +195,7 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "setting_login_mgmt",    label: "Login Management",     path: "/settings/login-management",     icon: "Shield",      isVisible: true,  order: 9, roles: ["Administrator", "HR ICF"] as Role[] },
       { id: "setting_notification",  label: "Notification Management", path: "/settings/notification-management", icon: "Bell",   isVisible: true,  order: 10, roles: ["Administrator", "HR ICF"] as Role[] },
       { id: "setting_data_sync",     label: "Data Sync",            path: "/settings/data-sync",            icon: "RefreshCw",   isVisible: true,  order: 11, roles: HR_ADMIN },
+      { id: "setting_archive",       label: "Archive",              path: "/settings/archive",              icon: "Archive",     isVisible: true,  order: 11.5, roles: HR_ADMIN },
       { id: "setting_audit",         label: "Audit Trail",          path: "/settings/audit-trail",          icon: "FileSearch",  isVisible: false, order: 12, roles: HR_ROLES },
     ],
   },

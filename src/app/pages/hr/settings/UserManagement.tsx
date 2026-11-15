@@ -1,5 +1,6 @@
 // @refresh reset
 import { useEffect, useMemo, useRef, useState } from "react";
+import { archiveUsers } from "../../../store/archiveStore";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT } from "../../shared/scoringWeightStore";
 import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw } from "lucide-react";
@@ -530,23 +531,38 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
 }
 
 // ─── Delete Confirm Modal ──────────────────────────────────────────────────────
-function DeleteModal({ user, onClose, onConfirm }: { user: User; onClose: () => void; onConfirm: () => void }) {
+function DeleteModal({ user, onClose, onConfirm }: { user: User; onClose: () => void; onConfirm: (reason: string) => void }) {
+  const [reason, setReason] = useState("");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
             <Trash2 size={18} className="text-red-500" />
           </div>
           <div>
             <h2 className="font-semibold text-gray-800">Delete User</h2>
-            <p className="text-sm text-gray-500">This action cannot be undone</p>
+            <p className="text-sm text-gray-500">User akan dipindahkan ke menu Archive dan dapat di-restore.</p>
           </div>
         </div>
-        <p className="text-sm text-gray-600 mb-5">Are you sure you want to remove <strong>{user.name}</strong> (ID: {user.employeeId}) from the system?</p>
+        <p className="text-sm text-gray-600 mb-3">Hapus <strong>{user.name}</strong> (ID: {user.employeeId}) dari User Management? Karyawan tidak dapat login sampai di-restore dari Archive.</p>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">Keterangan Delete <span className="text-red-500">*</span></label>
+        <textarea
+          rows={3}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Contoh: Resign per 30 Juni 2026"
+          className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-red-300 resize-none mb-5"
+        />
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
-          <button onClick={() => { onConfirm(); onClose(); }} className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Delete</button>
+          <button
+            disabled={!reason.trim()}
+            onClick={() => { onConfirm(reason.trim()); onClose(); }}
+            className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Delete &amp; Archive
+          </button>
         </div>
       </div>
     </div>
@@ -1632,13 +1648,12 @@ export function UserManagementPage() {
     });
   }
 
-  function handleDelete(id: string) {
-    setUsers(prev => {
-      const deleted = prev.find(u => u.id === id);
-      const next = prev.filter(u => u.id !== id);
-      saveManagedUsers(next, undefined, deleted?.employeeId);
-      return next;
-    });
+  function handleDelete(id: string, reason: string) {
+    const deleted = users.find(u => u.id === id);
+    if (!deleted) return;
+    // Delete = arsipkan (dapat di-restore dari Setting → Archive)
+    archiveUsers([deleted], reason, "manual");
+    setUsers(prev => prev.filter(u => u.id !== id));
   }
 
   const employeeCount = companyUsers.filter(u => u.role === "Employee").length;
@@ -1914,7 +1929,7 @@ export function UserManagementPage() {
           onSave={handleSave}
         />
       )}
-      {deleteUser && <DeleteModal user={deleteUser} onClose={() => setDeleteUser(null)} onConfirm={() => handleDelete(deleteUser.id)} />}
+      {deleteUser && <DeleteModal user={deleteUser} onClose={() => setDeleteUser(null)} onConfirm={(reason) => handleDelete(deleteUser.id, reason)} />}
       {resetPwdUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">

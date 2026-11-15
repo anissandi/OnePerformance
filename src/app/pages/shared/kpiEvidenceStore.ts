@@ -46,7 +46,6 @@ export function saveEvidenceFiles(files: StoredEvidenceFile[], employeeId?: stri
     const byEmp = loadByEmpMap();
     byEmp[targetId] = serializable;
     savePersistedState(BY_EMP_KEY, byEmp);
-    savePersistedState(KEY, serializable);
     window.dispatchEvent(new Event("appraisal-updated"));
   } catch {
     // ignore
@@ -60,8 +59,9 @@ export function loadEvidenceFiles(employeeId?: string): StoredEvidenceFile[] {
   if (Array.isArray(byEmp[targetNorm])) {
     return byEmp[targetNorm];
   }
-  if (!employeeId || targetNorm === activeNorm) {
-    return loadLegacyAll();
+  // Key global lama tidak memiliki pemilik sehingga bisa berisi evidence karyawan lain → dibersihkan.
+  if (loadLegacyAll().length > 0) {
+    try { localStorage.removeItem(KEY); } catch { /* ignore */ }
   }
   return [];
 }
@@ -72,9 +72,6 @@ export function clearEvidenceFiles(employeeId?: string): void {
     const byEmp = loadByEmpMap();
     delete byEmp[targetNorm];
     savePersistedState(BY_EMP_KEY, byEmp);
-    if (!employeeId || targetNorm === normalizeEmployeeId(getActiveUser().employeeId)) {
-      savePersistedState(KEY, []);
-    }
   } catch {
     // ignore
   }
