@@ -1,4 +1,3 @@
-// @refresh reset
 import { useEffect, useState } from "react";
 import { RouterProvider } from "react-router";
 import { Toaster } from "sonner";

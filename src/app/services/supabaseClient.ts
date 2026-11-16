@@ -2,14 +2,27 @@ import { projectId as fallbackProjectId, publicAnonKey as fallbackAnonKey } from
 
 const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
 
+const configuredSupabaseUrl =
+  env.VITE_SUPABASE_URL?.trim() ||
+  env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
+  "";
+
+const inferredProjectId =
+  configuredSupabaseUrl.match(/^https?:\/\/([^./]+)\.supabase\.co/i)?.[1] || "";
+
 export const SUPABASE_PROJECT_ID =
-  env.VITE_SUPABASE_PROJECT_ID?.trim() || fallbackProjectId;
+  env.VITE_SUPABASE_PROJECT_ID?.trim() ||
+  env.NEXT_PUBLIC_SUPABASE_PROJECT_ID?.trim() ||
+  inferredProjectId ||
+  fallbackProjectId;
 
 export const SUPABASE_URL =
-  env.VITE_SUPABASE_URL?.trim() || `https://${SUPABASE_PROJECT_ID}.supabase.co`;
+  configuredSupabaseUrl.replace(/\/+$/, "") || `https://${SUPABASE_PROJECT_ID}.supabase.co`;
 
 export const SUPABASE_ANON_KEY =
-  env.VITE_SUPABASE_ANON_KEY?.trim() || fallbackAnonKey;
+  env.VITE_SUPABASE_ANON_KEY?.trim() ||
+  env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
+  fallbackAnonKey;
 
 export const PA_APP_API_BASE = `${SUPABASE_URL}/functions/v1/make-server-74dadec6/pa-app`;
 export const SUPABASE_REST_BASE = `${SUPABASE_URL}/rest/v1`;
