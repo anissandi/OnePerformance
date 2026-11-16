@@ -89,13 +89,20 @@ export function SupervisorApprovals() {
       allowedTypeSet,
     );
 
-  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => buildCheckinRows());
-  const [settingData, setSettingData] = useState<ApprovalRow[]>(() => buildSettingRows());
+  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() =>
+    mainTab === "checkin" ? buildCheckinRows() : [],
+  );
+  const [settingData, setSettingData] = useState<ApprovalRow[]>(() =>
+    mainTab === "setting" ? buildSettingRows() : [],
+  );
 
   useEffect(() => {
     const refresh = () => {
-      setCheckinData(buildCheckinRows());
-      setSettingData(buildSettingRows());
+      if (mainTab === "checkin") {
+        setCheckinData(buildCheckinRows());
+      } else {
+        setSettingData(buildSettingRows());
+      }
     };
     refresh();
     window.addEventListener("feedback-updated", refresh);
@@ -110,7 +117,7 @@ export function SupervisorApprovals() {
       window.removeEventListener("pa-db-hydrated", refresh);
       window.removeEventListener("storage", refresh);
     };
-  }, [location.pathname, activeUser.employeeId]);
+  }, [location.pathname, mainTab, activeUser.employeeId]);
 
   useEffect(() => {
     const live = loadSubmittedGoals();

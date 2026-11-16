@@ -13,7 +13,7 @@ import { saveRCASubmission, loadRCASubmissions, submitRCAsForMonths } from "../s
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
-import { mergeKvMapRecord, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
 import {
@@ -2864,53 +2864,56 @@ function EvidenceUploadSection({
     const rawArr = Array.from(raw);
     Promise.all(
       rawArr.map(
-        (f) =>
-          new Promise<EvidenceFile>((resolve) => {
-            const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const reader = new FileReader();
-            reader.onload = async () => {
-              const dataUrl = typeof reader.result === "string" ? reader.result : "";
-              let remoteUrl = "";
-              try {
-                const up = await uploadEvidenceFileToSupabase(f, {
-                  employeeId: ownerUser?.employeeId,
-                  employeeName: ownerUser?.name,
-                  companyUnit: ownerUser?.company,
-                  division: ownerUser?.division,
-                  department: ownerUser?.department,
-                  position: ownerUser?.position,
-                  moduleType: "KPI Tracking",
-                  period: "2026",
-                  month: selectedMonth,
-                });
-                if (up && typeof up === "object" && "url" in up && typeof (up as { url?: string }).url === "string") {
-                  remoteUrl = (up as { url: string }).url;
-                }
-              } catch {
-                // fallback to dataUrl
-              }
-              resolve({
-                id,
-                name: f.name,
-                size: f.size,
-                type: f.type,
-                url: remoteUrl || dataUrl || URL.createObjectURL(f),
-                dataUrl: dataUrl || undefined,
-                month: selectedMonth,
-              });
+        async (f): Promise<EvidenceFile> => {
+          const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          let remoteUrl = "";
+          try {
+            const up = await uploadEvidenceFileToSupabase(f, {
+              employeeId: ownerUser?.employeeId,
+              employeeName: ownerUser?.name,
+              companyUnit: ownerUser?.company,
+              division: ownerUser?.division,
+              department: ownerUser?.department,
+              position: ownerUser?.position,
+              moduleType: "KPI Tracking",
+              period: "2026",
+              month: selectedMonth,
+            });
+            if (up && typeof up === "object" && "url" in up && typeof (up as { url?: string }).url === "string") {
+              remoteUrl = (up as { url: string }).url;
+            }
+          } catch {
+            remoteUrl = "";
+          }
+          // Jika berhasil terunggah ke Supabase Storage (https://), jangan simpan Base64 ke localStorage
+          if (remoteUrl.startsWith("https://") || remoteUrl.startsWith("http://")) {
+            return {
+              id,
+              name: f.name,
+              size: f.size,
+              type: f.type,
+              url: remoteUrl,
+              month: selectedMonth,
             };
-            reader.onerror = () => {
-              resolve({
-                id,
-                name: f.name,
-                size: f.size,
-                type: f.type,
-                url: URL.createObjectURL(f),
-                month: selectedMonth,
+          }
+          const dataUrl = remoteUrl.startsWith("data:")
+            ? remoteUrl
+            : await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+                reader.onerror = () => resolve("");
+                reader.readAsDataURL(f);
               });
-            };
-            reader.readAsDataURL(f);
-          }),
+          return {
+            id,
+            name: f.name,
+            size: f.size,
+            type: f.type,
+            url: dataUrl || URL.createObjectURL(f),
+            dataUrl: dataUrl || undefined,
+            month: selectedMonth,
+          };
+        },
       ),
     ).then((newFiles) => {
       setStaged({ files: newFiles, month: selectedMonth });
@@ -3542,9 +3545,9 @@ function KPIWorkspace({
   });
   const persistBusinessCells = (next: Record<string, Record<CellKey, string>>) => {
     try {
-      const byScope = JSON.parse(localStorage.getItem("kpi_business_tracking_cells_v2") ?? "{}") ?? {};
+      const byScope = JSON.parse(safeGetLocalRaw("kpi_business_tracking_cells_v2") ?? "{}") ?? {};
       byScope[businessScopeKey] = next;
-      localStorage.setItem("kpi_business_tracking_cells_v2", JSON.stringify(byScope));
+      safeSetLocalJson("kpi_business_tracking_cells_v2", byScope);
     } catch {
       // ignore
     }

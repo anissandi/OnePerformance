@@ -7,7 +7,7 @@ import {
   ClipboardList, Briefcase, FolderKanban, MessageSquare, X, Check, ShieldCheck, Layers,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "../../components/ui/dialog";
-import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { loadPersistedState, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
 
 export interface KpiHierarchyValidationChecklist {
   kpiGroupValidated: boolean;
@@ -769,7 +769,7 @@ export function HRModuleActivation() {
         dateLockPerMonth: value.dateLockPerMonth,
         backlogMonths: value.backlogMonths, backlogEndDate: value.backlogEndDate }];
     }));
-    localStorage.setItem(`pa_module_activation_${year}`, JSON.stringify(settings));
+    safeSetLocalJson(`pa_module_activation_${year}`, settings);
     savePersistedState(`pa_module_activation_${year}`, settings, {
       kind: "module-window",
       window: {

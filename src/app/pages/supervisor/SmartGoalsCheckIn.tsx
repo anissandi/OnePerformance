@@ -24,6 +24,7 @@ interface EvidenceFile {
   name: string;
   size: number;
   type: string;
+  url?: string;
   dataUrl?: string;
 }
 
@@ -233,24 +234,43 @@ function ActionPlansSection({
         "application/vnd.ms-excel"].includes(f.type)
     );
     valid.forEach((rawFile) => {
-      void uploadEvidenceFileToSupabase(rawFile, {
-        moduleType: "SMART Goals",
-        period: "2026",
-        month: "June",
-        kpiName: goal.label,
-      });
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = typeof reader.result === "string" ? reader.result : undefined;
+      void (async () => {
+        let remoteUrl = "";
+        try {
+          const up = await uploadEvidenceFileToSupabase(rawFile, {
+            moduleType: "SMART Goals",
+            period: "2026",
+            month: "June",
+            kpiName: goal.label,
+          });
+          if (up?.url) remoteUrl = up.url;
+        } catch {
+          remoteUrl = "";
+        }
+        const hasHttp = remoteUrl.startsWith("https://") || remoteUrl.startsWith("http://");
+        const fallbackDataUrl = hasHttp
+          ? undefined
+          : remoteUrl ||
+            (await new Promise<string | undefined>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
+              reader.onerror = () => resolve(undefined);
+              reader.readAsDataURL(rawFile);
+            }));
         const curr = getExtra(planId);
         setExtra(planId, {
           evidence: [
             ...curr.evidence,
-            { name: rawFile.name, size: rawFile.size, type: rawFile.type, dataUrl },
+            {
+              name: rawFile.name,
+              size: rawFile.size,
+              type: rawFile.type,
+              url: hasHttp ? remoteUrl : undefined,
+              dataUrl: hasHttp ? remoteUrl : fallbackDataUrl,
+            },
           ],
         });
-      };
-      reader.readAsDataURL(rawFile);
+      })();
     });
   };
 
@@ -608,23 +628,42 @@ function TargetVsActualSection({
         "application/vnd.ms-excel"].includes(f.type)
     );
     valid.forEach((rawFile) => {
-      void uploadEvidenceFileToSupabase(rawFile, {
-        moduleType: "SMART Goals",
-        period: "2026",
-        month: "June",
-      });
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = typeof reader.result === "string" ? reader.result : undefined;
+      void (async () => {
+        let remoteUrl = "";
+        try {
+          const up = await uploadEvidenceFileToSupabase(rawFile, {
+            moduleType: "SMART Goals",
+            period: "2026",
+            month: "June",
+          });
+          if (up?.url) remoteUrl = up.url;
+        } catch {
+          remoteUrl = "";
+        }
+        const hasHttp = remoteUrl.startsWith("https://") || remoteUrl.startsWith("http://");
+        const fallbackDataUrl = hasHttp
+          ? undefined
+          : remoteUrl ||
+            (await new Promise<string | undefined>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
+              reader.onerror = () => resolve(undefined);
+              reader.readAsDataURL(rawFile);
+            }));
         const curr = getEntry(goalId);
         updateEntry(goalId, {
           evidenceFiles: [
             ...curr.evidenceFiles,
-            { name: rawFile.name, size: rawFile.size, type: rawFile.type, dataUrl },
+            {
+              name: rawFile.name,
+              size: rawFile.size,
+              type: rawFile.type,
+              url: hasHttp ? remoteUrl : undefined,
+              dataUrl: hasHttp ? remoteUrl : fallbackDataUrl,
+            },
           ],
         });
-      };
-      reader.readAsDataURL(rawFile);
+      })();
     });
   };
 
@@ -988,7 +1027,8 @@ export function SmartGoalsCheckInPage() {
               name: f.name,
               size: f.size,
               type: f.type || "application/octet-stream",
-              dataUrl: f.dataUrl,
+              url: f.url,
+              dataUrl: f.url || f.dataUrl,
             })),
             alasanBatal: st.actionPlanAlasanBatal?.[ap.id] ?? "",
           };
@@ -1016,7 +1056,8 @@ export function SmartGoalsCheckInPage() {
             name: f.name,
             size: f.size,
             type: f.type || "application/octet-stream",
-            dataUrl: f.dataUrl,
+            url: f.url,
+            dataUrl: f.url || f.dataUrl,
           })),
         };
       }),

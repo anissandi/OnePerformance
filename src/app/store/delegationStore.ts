@@ -1,4 +1,4 @@
-import { loadPersistedState, mergeKvMapRecord, syncToSupabase } from "../services/supabaseClient";
+import { loadPersistedState, mergeKvMapRecord, safeSetLocalJson, syncToSupabase } from "../services/supabaseClient";
 import type { ManagedUser } from "./authStore";
 
 /**
@@ -76,11 +76,7 @@ export function saveDelegation(record: DelegationRecord, actor: { employeeId: st
     history: [...(record.history ?? []), { at: new Date().toISOString(), by: actor.name || actor.employeeId, action }].slice(-30),
   };
   const local = { ...loadDelegations(), [key]: next };
-  try {
-    localStorage.setItem(DELEGATION_KEY, JSON.stringify(local));
-  } catch {
-    // ignore
-  }
+  safeSetLocalJson(DELEGATION_KEY, local);
   void mergeKvMapRecord(DELEGATION_KEY, key, next);
   void syncToSupabase({
     audit: {

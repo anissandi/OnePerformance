@@ -1,4 +1,4 @@
-import { mergeKvMapRecord, savePersistedState } from "../../services/supabaseClient";
+import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { normalizeEmployeeId } from "./appraisalWorkflowStore";
 
@@ -17,7 +17,7 @@ export interface StoredEvidenceFile {
 
 function loadByEmpMap(): Record<string, StoredEvidenceFile[]> {
   try {
-    return JSON.parse(localStorage.getItem(BY_EMP_KEY) ?? "{}") ?? {};
+    return JSON.parse(safeGetLocalRaw(BY_EMP_KEY) ?? "{}") ?? {};
   } catch {
     return {};
   }
@@ -37,19 +37,19 @@ export function saveEvidenceFiles(files: StoredEvidenceFile[], employeeId?: stri
     const targetId = normalizeEmployeeId(employeeId ?? getActiveUser().employeeId);
     const serializable = files.map((f) => {
       const cleanUrl = f.url && !f.url.startsWith("blob:") ? f.url : f.dataUrl ?? "";
+      const hasRemoteHttpUrl = cleanUrl.startsWith("https://") || cleanUrl.startsWith("http://");
       return {
         ...f,
         url: cleanUrl,
-        dataUrl: f.dataUrl || (cleanUrl.startsWith("data:") ? cleanUrl : undefined),
+        // Hindari menduplikasi payload Base64 beberapa MB ke localStorage & pa_kv_state jika URL Storage sudah ada
+        dataUrl: hasRemoteHttpUrl
+          ? undefined
+          : f.dataUrl || (cleanUrl.startsWith("data:") ? cleanUrl : undefined),
       };
     });
     const byEmp = loadByEmpMap();
     byEmp[targetId] = serializable;
-    try {
-      localStorage.setItem(BY_EMP_KEY, JSON.stringify(byEmp));
-    } catch {
-      // ignore
-    }
+    safeSetLocalJson(BY_EMP_KEY, byEmp);
     void mergeKvMapRecord(BY_EMP_KEY, targetId, serializable);
     window.dispatchEvent(new Event("appraisal-updated"));
   } catch {

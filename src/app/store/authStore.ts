@@ -1,6 +1,6 @@
 import { DELEGATION_EVENT, getDelegatedModuleFlagsForUser, resolveApproverIdentities } from "./delegationStore";
 import { useEffect, useState } from "react";
-import { notifyLoginToSupabase, savePersistedState, syncToSupabase } from "../services/supabaseClient";
+import { notifyLoginToSupabase, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../services/supabaseClient";
 import {
   ACCESS_UPDATED_EVENT,
   getGroupAllowedModules,
@@ -824,7 +824,7 @@ export interface AuthSessionState {
 
 function readAuthSessionRaw(): AuthSessionState | null {
   try {
-    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    const raw = safeGetLocalRaw(AUTH_SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as AuthSessionState;
     if (!parsed || typeof parsed !== "object") return null;
@@ -843,8 +843,8 @@ export function startOrRefreshAuthSession(employeeId: string): AuthSessionState 
     awayStartedAt: null,
     lastActiveAt: now,
   };
+  safeSetLocalJson(AUTH_SESSION_KEY, next);
   try {
-    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
     sessionStorage.removeItem(SESSION_EXPIRED_NOTICE_KEY);
     sessionStorage.removeItem("pa_manual_logout_v1");
   } catch {
@@ -877,7 +877,7 @@ export function peekSessionValidity(now = Date.now()): { valid: boolean; expired
   }
   let hasActiveUser = false;
   try {
-    hasActiveUser = Boolean(localStorage.getItem(ACTIVE_USER_KEY));
+    hasActiveUser = Boolean(safeGetLocalRaw(ACTIVE_USER_KEY));
   } catch {
     hasActiveUser = false;
   }
@@ -925,14 +925,14 @@ export function evaluateAndSyncSession(
           awayStartedAt: null,
           lastActiveAt: now,
         };
-        localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(updated));
+        safeSetLocalJson(AUTH_SESSION_KEY, updated);
       }
     } else if (session.awayStartedAt === null) {
       const updated: AuthSessionState = {
         ...session,
         awayStartedAt: now,
       };
-      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(updated));
+      safeSetLocalJson(AUTH_SESSION_KEY, updated);
     }
   } catch {
     // ignore storage errors
@@ -945,19 +945,12 @@ export function markSessionAwayFromPaPage(now = Date.now()): void {
   const session = readAuthSessionRaw();
   if (!session || !session.isAuthenticated) return;
   if (session.awayStartedAt !== null) return;
-  try {
-    localStorage.setItem(
-      AUTH_SESSION_KEY,
-      JSON.stringify({ ...session, awayStartedAt: now }),
-    );
-  } catch {
-    // ignore storage errors
-  }
+  safeSetLocalJson(AUTH_SESSION_KEY, { ...session, awayStartedAt: now });
 }
 
 export function loadManagedUsers(): ManagedUser[] {
   try {
-    const raw = localStorage.getItem(USERS_KEY);
+    const raw = safeGetLocalRaw(USERS_KEY);
     if (!raw) return DEFAULT_MANAGED_USERS;
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_MANAGED_USERS;
@@ -997,7 +990,7 @@ export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser
 
 export function loadUnitGroupRules(company: string, fallback: ManagedGroupRule[]): ManagedGroupRule[] {
   try {
-    const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
+    const raw = safeGetLocalRaw(GROUP_RULES_BY_UNIT_KEY);
     if (!raw) return fallback;
     const map = JSON.parse(raw) as Record<string, ManagedGroupRule[]>;
     return map[company] ?? fallback;
@@ -1008,7 +1001,7 @@ export function loadUnitGroupRules(company: string, fallback: ManagedGroupRule[]
 
 export function saveUnitGroupRules(company: string, rules: ManagedGroupRule[]): void {
   try {
-    const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
+    const raw = safeGetLocalRaw(GROUP_RULES_BY_UNIT_KEY);
     const map = raw ? (JSON.parse(raw) as Record<string, ManagedGroupRule[]>) : {};
     map[company] = rules;
     window.dispatchEvent(new Event("pa-auth-updated"));
@@ -1025,7 +1018,7 @@ export function saveUnitGroupRules(company: string, rules: ManagedGroupRule[]): 
 export function getActiveUser(): ManagedUser {
   const users = loadManagedUsers();
   try {
-    const raw = localStorage.getItem(ACTIVE_USER_KEY);
+    const raw = safeGetLocalRaw(ACTIVE_USER_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as ManagedUser;
       const latest = users.find((u) => u.employeeId.toUpperCase() === parsed.employeeId.toUpperCase());
@@ -1306,7 +1299,7 @@ export function loginWithCompanyAndEmployeeId(
   if (!matched) {
     // Karyawan yang diarsipkan (dihapus di User Management / Eliminasi HC EOY) tidak dapat login sampai di-restore
     try {
-      const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: ManagedUser }>;
+      const archived = JSON.parse(safeGetLocalRaw("pa_archived_users_v1") ?? "[]") as Array<{ user?: ManagedUser }>;
       if (
         Array.isArray(archived) &&
         archived.some(
@@ -1341,8 +1334,8 @@ export function loginWithCompanyAndEmployeeId(
   const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
   const updatedUser: ManagedUser = { ...matched, lastLogin: nowStr };
   const updatedList = users.map((u) => (u.id === matched.id ? updatedUser : u));
-  localStorage.setItem(USERS_KEY, JSON.stringify(updatedList));
-  localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(updatedUser));
+  safeSetLocalJson(USERS_KEY, updatedList);
+  safeSetLocalJson(ACTIVE_USER_KEY, updatedUser);
   startOrRefreshAuthSession(updatedUser.employeeId);
   window.dispatchEvent(new Event("pa-auth-updated"));
   void notifyLoginToSupabase({
@@ -1360,7 +1353,7 @@ export function switchActiveUserByEmployeeId(employeeId: string): ManagedUser | 
   const users = loadManagedUsers();
   const found = users.find((u) => u.employeeId.toUpperCase() === employeeId.toUpperCase());
   if (!found) return null;
-  localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(found));
+  safeSetLocalJson(ACTIVE_USER_KEY, found);
   startOrRefreshAuthSession(found.employeeId);
   window.dispatchEvent(new Event("pa-auth-updated"));
   return found;

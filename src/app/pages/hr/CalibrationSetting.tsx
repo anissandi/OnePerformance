@@ -11,7 +11,7 @@ import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, Dot,
 } from "recharts";
-import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { loadPersistedState, safeSetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 import { isExcludedFromAppraisalCalibration, loadManagedUsers, useAuthStore } from "../../store/authStore";
 import { archiveUsers, EOY_ARCHIVE_REASON, loadArchivedUsers } from "../../store/archiveStore";
 import {
@@ -2626,7 +2626,7 @@ export function CalibrationSetting() {
         return applyImportedEmployeesDistribution(clean);
       });
       if (needsInitialSoyReset) {
-        localStorage.setItem("pa_cal_soy_reset_2026_v1", "1");
+        safeSetLocalRaw("pa_cal_soy_reset_2026_v1", "1");
         localStorage.removeItem("calibration_submitted_units");
         localStorage.removeItem("calibration_submitted_at");
         resetSoyApproval();

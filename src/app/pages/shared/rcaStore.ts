@@ -1,4 +1,4 @@
-import { deleteBackendRecordFromSupabase, savePersistedState } from "../../services/supabaseClient";
+import { deleteBackendRecordFromSupabase, safeGetLocalRaw, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
@@ -66,13 +66,13 @@ export interface StoredRCASubmission {
 
 function loadAll(): StoredRCASubmission[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? "[]");
+    const raw = JSON.parse(safeGetLocalRaw(KEY) ?? "[]");
     if (!Array.isArray(raw)) return [];
     const cleaned = (raw as StoredRCASubmission[]).filter(
       (r) => !DEMO_RCA_IDS.has(r.id) && !DEMO_RCA_KPIS.has(r.key),
     );
     if (cleaned.length !== raw.length) {
-      localStorage.setItem(KEY, JSON.stringify(cleaned));
+      safeSetLocalJson(KEY, cleaned);
     }
     return cleaned;
   } catch {

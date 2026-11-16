@@ -1,24 +1,23 @@
 import type { SmartGoal } from "../employee/SMARTGoals";
 import { normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
-import { mergeKvMapRecord, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
+import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 
-const STORAGE_KEY = "sg_submitted_smart_goals";
 const GOALS_BY_EMP_KEY = "sg_goals_by_emp_v2";
-const CHECKIN_KEY = "sg_checkin_entries_v1";
 const CHECKIN_BY_EMP_KEY = "sg_checkin_by_emp_v2";
 
 export interface StoredSmartGoalEvidenceFile {
   name: string;
   size: number;
   type?: string;
+  url?: string;
   dataUrl?: string;
 }
 
 function readGoalsByEmpMap(): Record<string, SmartGoal[]> {
   try {
-    const raw = localStorage.getItem(GOALS_BY_EMP_KEY);
+    const raw = safeGetLocalRaw(GOALS_BY_EMP_KEY);
     return raw ? (JSON.parse(raw) as Record<string, SmartGoal[]>) ?? {} : {};
   } catch {
     return {};
@@ -27,7 +26,7 @@ function readGoalsByEmpMap(): Record<string, SmartGoal[]> {
 
 function readCheckinByEmpMap(): Record<string, StoredCheckInEntry[]> {
   try {
-    const raw = localStorage.getItem(CHECKIN_BY_EMP_KEY);
+    const raw = safeGetLocalRaw(CHECKIN_BY_EMP_KEY);
     return raw ? (JSON.parse(raw) as Record<string, StoredCheckInEntry[]>) ?? {} : {};
   } catch {
     return {};
@@ -49,11 +48,7 @@ export function saveSubmittedGoals(
     const isFinalSubmit = options?.submitWorkflow ?? true;
     const map = readGoalsByEmpMap();
     map[normId] = goals;
-    try {
-      localStorage.setItem(GOALS_BY_EMP_KEY, JSON.stringify(map));
-    } catch {
-      // ignore
-    }
+    safeSetLocalJson(GOALS_BY_EMP_KEY, map);
     void mergeKvMapRecord(GOALS_BY_EMP_KEY, normId, goals);
     void syncToSupabase({
       kind: "smart-goals",
@@ -74,9 +69,6 @@ export function saveSubmittedGoals(
           : `Saved SMART Goals draft (${goals.length} goals) for ${empId} by ${actorLabel}`,
       },
     });
-    if (!isDelegated) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(goals));
-    }
     if (isFinalSubmit) {
       submitWorkflowModule("SMART Goals", "setting", formatTodayDDMMYYYY(), empId);
     }
@@ -142,8 +134,7 @@ export function saveCheckInEntries(
     const isFinalSubmit = Boolean(options?.submitWorkflow);
     const map = readCheckinByEmpMap();
     map[normId] = entries;
-    savePersistedState(CHECKIN_BY_EMP_KEY, map);
-    savePersistedState(CHECKIN_KEY, entries, {
+    savePersistedState(CHECKIN_BY_EMP_KEY, map, {
       kind: "smart-goals",
       employeeId: empId,
       period: "2026",
@@ -217,7 +208,7 @@ export function saveApprovalDecisions(decisions: StoredApprovalDecision[]): void
 
 export function loadApprovalDecisions(employeeId?: string): StoredApprovalDecision[] {
   try {
-    const raw = localStorage.getItem(APPROVAL_KEY);
+    const raw = safeGetLocalRaw(APPROVAL_KEY);
     if (!raw) return [];
     const all = JSON.parse(raw) as StoredApprovalDecision[];
     if (!employeeId) return all;

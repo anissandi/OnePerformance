@@ -85,13 +85,20 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
       effectiveLockedUnits,
     );
 
-  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() => buildCheckinRows());
-  const [settingData, setSettingData] = useState<ApprovalRow[]>(() => buildSettingRows());
+  const [checkinData, setCheckinData] = useState<ApprovalRow[]>(() =>
+    mainTab === "checkin" ? buildCheckinRows() : [],
+  );
+  const [settingData, setSettingData] = useState<ApprovalRow[]>(() =>
+    mainTab === "setting" ? buildSettingRows() : [],
+  );
 
   useEffect(() => {
     const refresh = () => {
-      setCheckinData(buildCheckinRows());
-      setSettingData(buildSettingRows());
+      if (mainTab === "checkin") {
+        setCheckinData(buildCheckinRows());
+      } else {
+        setSettingData(buildSettingRows());
+      }
     };
     refresh();
     window.addEventListener("feedback-updated", refresh);
@@ -106,7 +113,7 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
       window.removeEventListener("pa-db-hydrated", refresh);
       window.removeEventListener("storage", refresh);
     };
-  }, [location.pathname, effectiveLockedUnits?.join(",") ?? "", activeUser.employeeId]);
+  }, [location.pathname, mainTab, effectiveLockedUnits?.join(",") ?? "", activeUser.employeeId]);
 
   const checkinFilterOpts = {
     ...filterOptionsCheckin,

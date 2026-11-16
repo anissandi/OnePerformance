@@ -1,5 +1,5 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
-import { savePersistedState } from "../../services/supabaseClient";
+import { safeGetLocalRaw, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
 import {
   findHrIcfValidatorUser,
   findHrUnitCheckerUserForCompany,
@@ -60,7 +60,7 @@ export interface WorkflowAlias {
   stage?: WorkflowStageRole;
 }
 function read<T>(key: string, fallback: T): T {
-  try { return JSON.parse(localStorage.getItem(key) ?? "null") ?? fallback; } catch { return fallback; }
+  try { return JSON.parse(safeGetLocalRaw(key) ?? "null") ?? fallback; } catch { return fallback; }
 }
 export function normalizeEmployeeId(id: string) {
   const number = id.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
@@ -69,11 +69,83 @@ export function normalizeEmployeeId(id: string) {
 function keyFor(employeeId: string, module: string, phase: WorkflowRecord["phase"], year = "2026") {
   return `${normalizeEmployeeId(employeeId)}:${phase}:${module}:${year}`;
 }
+
+// Simpan alias baris approval di memori (0 byte pemakaian localStorage, bebas QuotaExceededError)
+// dengan migrasi otomatis & penghapusan key lama appraisal_row_aliases_v1 dari localStorage.
+const workflowAliasesMemory = new Map<string, WorkflowAlias>();
+let legacyAliasesMigrated = false;
+
+function ensureLegacyAliasesMigrated(): void {
+  if (legacyAliasesMigrated) return;
+  legacyAliasesMigrated = true;
+  try {
+    if (typeof localStorage === "undefined") return;
+    const raw = localStorage.getItem(ALIASES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, WorkflowAlias> | null;
+      if (parsed && typeof parsed === "object") {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (k && v && typeof v === "object" && !workflowAliasesMemory.has(k)) {
+            workflowAliasesMemory.set(k, v);
+          }
+        }
+      }
+      localStorage.removeItem(ALIASES_KEY);
+    }
+  } catch {
+    try { localStorage.removeItem(ALIASES_KEY); } catch { /* ignore */ }
+  }
+}
+
+function deriveCanonicalAlias(no: string): WorkflowAlias | undefined {
+  const liveMatch = no.match(
+    /^(H?)(ST|CI)-LIVE-(.+)-(KPI|SMART Goals|Appraisal Form|Managerial Skill|Project|RCA|Inter-Department Feedback)$/,
+  );
+  if (liveMatch) {
+    const [, hPrefix, phaseCode, rawEmpId, module] = liveMatch;
+    const phase: WorkflowRecord["phase"] = phaseCode === "ST" ? "setting" : "measurement";
+    const normEmpId = normalizeEmployeeId(rawEmpId);
+    const key = keyFor(normEmpId, module, phase, "2026");
+    const existing = loadWorkflowRecords().find((r) => r.key === key);
+    const role: ReviewerRole = hPrefix === "H" ? "approver2" : "approver1";
+    return {
+      key,
+      employeeId: normEmpId,
+      module,
+      phase,
+      year: "2026",
+      submittedDate: existing?.submittedDate ?? "-",
+      role,
+      stage: role,
+    };
+  }
+  const idfMatch = no.match(/^IDF-(.+)-(20\d{2})$/);
+  if (idfMatch) {
+    const [, rawEmpId, year] = idfMatch;
+    const normEmpId = normalizeEmployeeId(rawEmpId);
+    const key = keyFor(normEmpId, "Inter-Department Feedback", "measurement", year);
+    const existing = loadWorkflowRecords().find((r) => r.key === key);
+    return {
+      key,
+      employeeId: normEmpId,
+      module: "Inter-Department Feedback",
+      phase: "measurement",
+      year,
+      submittedDate: existing?.submittedDate ?? "-",
+      role: "approver1",
+      stage: "approver1",
+    };
+  }
+  return undefined;
+}
+
 export function loadWorkflowRecords(): WorkflowRecord[] { return read(KEY, []); }
-export function workflowAlias(no: string): WorkflowAlias | undefined { return read<Record<string, WorkflowAlias>>(ALIASES_KEY, {})[no]; }
+export function workflowAlias(no: string): WorkflowAlias | undefined {
+  ensureLegacyAliasesMigrated();
+  return workflowAliasesMemory.get(no) ?? deriveCanonicalAlias(no);
+}
 export function registerWorkflowRows(rows: ApprovalRow[], role: ReviewerRole) {
-  const aliases = read<Record<string, WorkflowAlias>>(ALIASES_KEY, {});
-  let changed = false;
+  ensureLegacyAliasesMigrated();
   for (const row of rows) {
     const phase = /^(?:H?ST)-/.test(row.no) ? "setting" : "measurement";
     const year = row.period?.match(/20\d{2}/)?.[0] ?? "2026";
@@ -88,25 +160,12 @@ export function registerWorkflowRows(rows: ApprovalRow[], role: ReviewerRole) {
       role,
       stage,
     };
-    const prev = aliases[row.no];
-    if (
-      !prev ||
-      prev.key !== nextAlias.key ||
-      prev.submittedDate !== nextAlias.submittedDate ||
-      prev.role !== nextAlias.role ||
-      prev.stage !== nextAlias.stage
-    ) {
-      changed = true;
-    }
-    aliases[row.no] = nextAlias;
-  }
-  if (changed) {
-    localStorage.setItem(ALIASES_KEY, JSON.stringify(aliases));
+    workflowAliasesMemory.set(row.no, nextAlias);
   }
 }
 function write(record: WorkflowRecord) {
   const nextRecords = [...loadWorkflowRecords().filter((item) => item.key !== record.key), record];
-  localStorage.setItem(KEY, JSON.stringify(nextRecords));
+  safeSetLocalJson(KEY, nextRecords);
   window.dispatchEvent(new Event("appraisal-updated"));
   const latestStatus =
     record.decisions.validator?.status ??
@@ -419,7 +478,7 @@ export const KPI_MONTH_LABELS_2026 = MONTH_ORDER.map((m) => `${m}-26`);
 /** Label bulan yang sudah tercatat pada KPI Tracking milik karyawan (scoped per karyawan). */
 export function readTrackedKpiMonthLabels(employeeId: string): string[] {
   try {
-    const raw = localStorage.getItem(`kpi_tracking_v1_${normalizeEmployeeId(employeeId)}`);
+    const raw = safeGetLocalRaw(`kpi_tracking_v1_${normalizeEmployeeId(employeeId)}`);
     const snap = raw ? (JSON.parse(raw) as { months?: Array<{ label?: string }> }) : null;
     const labels = (snap?.months ?? []).map((m) => String(m.label ?? "")).filter(Boolean);
     return labels.sort((a, b) => MONTH_ORDER.indexOf(a.slice(0, 3)) - MONTH_ORDER.indexOf(b.slice(0, 3)));
@@ -761,7 +820,7 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
     } | undefined;
     try {
       const idfList = JSON.parse(
-        localStorage.getItem("inter_department_feedback_workflows_v2") ?? "[]",
+        safeGetLocalRaw("inter_department_feedback_workflows_v2") ?? "[]",
       ) as Array<{
         row?: { employeeId?: string };
         summarySubmittedAt?: string;

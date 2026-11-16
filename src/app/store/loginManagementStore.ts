@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import {
   loadPersistedState,
+  safeGetLocalRaw,
+  safeSetLocalJson,
+  safeSetLocalRaw,
   savePersistedState,
   mergeKvMapRecord,
   syncToSupabase,
@@ -118,7 +121,7 @@ export function loadAllUnitLoginConfigs(): Record<string, UnitLoginConfig> {
   const defaults = buildDefaultUnitLoginConfigs();
   // Migrasi satu kali agar seluruh Company Unit default menggunakan metode Password
   try {
-    if (typeof localStorage !== "undefined" && !localStorage.getItem(LOGIN_DEFAULT_PWD_MIGRATED_KEY)) {
+    if (!safeGetLocalRaw(LOGIN_DEFAULT_PWD_MIGRATED_KEY)) {
       const prev = loadPersistedState<Record<string, UnitLoginConfig>>(LOGIN_CONFIG_BY_UNIT_KEY, {});
       const migrated: Record<string, UnitLoginConfig> = { ...defaults };
       for (const loc of COMPANY_UNIT_LOCATIONS) {
@@ -130,8 +133,8 @@ export function loadAllUnitLoginConfigs(): Record<string, UnitLoginConfig> {
           enabledMethods: ["password"],
         };
       }
-      localStorage.setItem(LOGIN_DEFAULT_PWD_MIGRATED_KEY, "1");
-      localStorage.setItem(LOGIN_CONFIG_BY_UNIT_KEY, JSON.stringify(migrated));
+      safeSetLocalRaw(LOGIN_DEFAULT_PWD_MIGRATED_KEY, "1");
+      safeSetLocalJson(LOGIN_CONFIG_BY_UNIT_KEY, migrated);
       return migrated;
     }
   } catch {
@@ -244,11 +247,7 @@ export async function saveUserSecurityRecordAsync(record: UserPasswordSecurityRe
     updatedAt: record.updatedAt || new Date().toISOString(),
   };
   const next = { ...map, [key]: saved };
-  try {
-    localStorage.setItem(USER_SECURITY_MAP_KEY, JSON.stringify(next));
-  } catch {
-    // ignore
-  }
+  safeSetLocalJson(USER_SECURITY_MAP_KEY, next);
   queueMicrotask(() => window.dispatchEvent(new Event(LOGIN_CONFIG_UPDATED_EVENT)));
   await mergeKvMapRecord(USER_SECURITY_MAP_KEY, key, saved);
 }

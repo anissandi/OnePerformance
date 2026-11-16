@@ -613,6 +613,183 @@ const CRITICAL_AUTH_KV_KEYS = new Set([
   "pa_trial_mode_clean_v1",
 ]);
 
+const EPHEMERAL_OR_LEGACY_LOCAL_KEYS = [
+  "appraisal_row_aliases_v1",
+  "kpi_evidence_files",
+  "sg_submitted_smart_goals",
+  "sg_checkin_entries_v1",
+  "pa_project_icf_excel_v1",
+  "inter_department_feedback_workflows_v1",
+];
+
+const ATTACHMENT_HEAVY_LOCAL_KEYS = new Set([
+  EVIDENCE_LIST_KEY,
+  "kpi_evidence_files_by_emp_v1",
+  "sg_checkin_by_emp_v2",
+  "pa_interview_schedules_v1",
+  "pa_app_feedback_v1",
+]);
+
+const MAX_INLINE_DATA_URL_CHARS = 65_536;
+
+/**
+ * In-memory fallback store ketika kuota localStorage browser (~5 MB) terlampaui,
+ * sehingga sesi aktif tidak pernah crash ataupun kehilangan data sebelum tersinkron ke Supabase.
+ */
+const memoryKvFallback = new Map<string, string>();
+
+function compactAttachmentValueForLocalStorage(value: unknown, aggressive: boolean, depth = 0): unknown {
+  if (depth > 8 || value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    if (aggressive && value.startsWith("data:") && value.length > MAX_INLINE_DATA_URL_CHARS) {
+      return "";
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => compactAttachmentValueForLocalStorage(item, aggressive, depth + 1));
+  }
+  if (typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    const hasHttpUrl =
+      typeof rec.url === "string" && (rec.url.startsWith("https://") || rec.url.startsWith("http://"));
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rec)) {
+      if (k === "dataUrl" && typeof v === "string" && v.startsWith("data:")) {
+        if (hasHttpUrl || (aggressive && v.length > MAX_INLINE_DATA_URL_CHARS)) {
+          continue;
+        }
+      }
+      if (k === "url" && aggressive && typeof v === "string" && v.startsWith("data:") && v.length > MAX_INLINE_DATA_URL_CHARS) {
+        out[k] = "";
+        continue;
+      }
+      out[k] = compactAttachmentValueForLocalStorage(v, aggressive, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Membebaskan ruang localStorage secara otomatis ketika browser melempar QuotaExceededError:
+ * 1) Menghapus key alias ephemeral & legacy duplikat yang tidak dipakai.
+ * 2) Memangkas riwayat audit/notifikasi lokal yang terlalu panjang.
+ * 3) Memindahkan payload Base64 besar pada key lampiran ke memoryKvFallback sambil mempertahankan metadata di localStorage.
+ */
+export function reclaimLocalStorageSpace(preserveKey?: string): void {
+  if (typeof localStorage === "undefined") return;
+  for (const deadKey of EPHEMERAL_OR_LEGACY_LOCAL_KEYS) {
+    if (deadKey === preserveKey) continue;
+    try {
+      localStorage.removeItem(deadKey);
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const rawAudit = localStorage.getItem(AUDIT_LIST_KEY);
+    if (rawAudit && rawAudit.length > 30_000 && preserveKey !== AUDIT_LIST_KEY) {
+      const parsed = JSON.parse(rawAudit);
+      if (Array.isArray(parsed) && parsed.length > 40) {
+        localStorage.setItem(AUDIT_LIST_KEY, JSON.stringify(parsed.slice(0, 40)));
+      }
+    }
+  } catch {
+    try { localStorage.removeItem(AUDIT_LIST_KEY); } catch { /* ignore */ }
+  }
+
+  for (const heavyKey of ATTACHMENT_HEAVY_LOCAL_KEYS) {
+    if (heavyKey === preserveKey) continue;
+    try {
+      const raw = localStorage.getItem(heavyKey);
+      if (!raw || raw.length < 32_768) continue;
+      if (!memoryKvFallback.has(heavyKey)) {
+        memoryKvFallback.set(heavyKey, raw);
+      }
+      const parsed = JSON.parse(raw);
+      const compacted = compactAttachmentValueForLocalStorage(parsed, true);
+      const nextRaw = JSON.stringify(compacted);
+      if (nextRaw.length < raw.length) {
+        localStorage.setItem(heavyKey, nextRaw);
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function safeGetLocalRaw(key: string): string | null {
+  if (memoryKvFallback.has(key)) {
+    return memoryKvFallback.get(key) ?? null;
+  }
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function safeSetLocalRaw(key: string, serialized: string): boolean {
+  if (typeof localStorage === "undefined") {
+    memoryKvFallback.set(key, serialized);
+    return false;
+  }
+  try {
+    localStorage.setItem(key, serialized);
+    memoryKvFallback.delete(key);
+    return true;
+  } catch {
+    reclaimLocalStorageSpace(key);
+    try {
+      localStorage.setItem(key, serialized);
+      memoryKvFallback.delete(key);
+      return true;
+    } catch {
+      memoryKvFallback.set(key, serialized);
+      if (!CRITICAL_AUTH_KV_KEYS.has(key) && key !== "pa_active_user_v1" && key !== "pa_auth_session_v1") {
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          // ignore
+        }
+      }
+      return false;
+    }
+  }
+}
+
+export function safeSetLocalJson(key: string, value: unknown): boolean {
+  try {
+    const fullSerialized = JSON.stringify(value);
+    if (ATTACHMENT_HEAVY_LOCAL_KEYS.has(key)) {
+      const cleaned = compactAttachmentValueForLocalStorage(value, false);
+      const cleanedSerialized = JSON.stringify(cleaned);
+      if (safeSetLocalRaw(key, cleanedSerialized)) {
+        return true;
+      }
+      // Jika masih melebihi kuota karena dataUrl offline besar, simpan versi utuh di memori & versi ringkas di localStorage
+      const aggressiveCleaned = JSON.stringify(compactAttachmentValueForLocalStorage(value, true));
+      try {
+        localStorage.setItem(key, aggressiveCleaned);
+      } catch {
+        // ignore
+      }
+      memoryKvFallback.set(key, fullSerialized);
+      return false;
+    }
+    return safeSetLocalJsonRawInternal(key, fullSerialized);
+  } catch {
+    return false;
+  }
+}
+
+function safeSetLocalJsonRawInternal(key: string, serialized: string): boolean {
+  return safeSetLocalRaw(key, serialized);
+}
+
 export function mergePasswordSecurityMapsClient<T extends Record<string, any>>(
   a: Record<string, T> | null | undefined,
   b: Record<string, T> | null | undefined,
@@ -696,7 +873,7 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
 
 export function loadPersistedState<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = safeGetLocalRaw(key);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     return parsed ?? fallback;
@@ -735,17 +912,17 @@ export function savePersistedState<T>(
   value: T,
   normalizedPayload?: Record<string, unknown>,
 ): void {
+  safeSetLocalJson(key, value);
+  localWriteTs.set(key, Date.now());
+  // Ditunda agar listener (mis. Sidebar) tidak melakukan setState saat komponen lain sedang render
+  queueMicrotask(() => window.dispatchEvent(new Event("pa-db-hydrated")));
   try {
-    localStorage.setItem(key, JSON.stringify(value));
-    localWriteTs.set(key, Date.now());
-    // Ditunda agar listener (mis. Sidebar) tidak melakukan setState saat komponen lain sedang render
-    queueMicrotask(() => window.dispatchEvent(new Event("pa-db-hydrated")));
     queueKvSync(key, value);
     if (normalizedPayload) {
       void syncToSupabase(normalizedPayload);
     }
   } catch {
-    // ignore storage errors
+    // ignore sync scheduling errors
   }
 }
 
@@ -774,7 +951,7 @@ export function loadUploadedEvidenceList(): UploadedEvidenceRecord[] {
     return true;
   });
   if (cleaned.length !== list.length) {
-    localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(cleaned));
+    safeSetLocalJson(EVIDENCE_LIST_KEY, cleaned);
   }
   return cleaned;
 }
@@ -965,7 +1142,7 @@ export function appendLocalAuditLog(entry: StoredAuditLogEntry): void {
   try {
     const existing = loadLocalAuditLogs();
     const next = [entry, ...existing].slice(0, 200);
-    localStorage.setItem(AUDIT_LIST_KEY, JSON.stringify(next));
+    safeSetLocalJson(AUDIT_LIST_KEY, next);
     window.dispatchEvent(new Event("pa-audit-updated"));
   } catch {
     // ignore
@@ -1269,11 +1446,7 @@ export async function refreshKvKeysFromBackend(keys: string[]): Promise<Record<s
       );
       const mergedSec = mergePasswordSecurityMapsClient(remoteSec, localSec);
       out[k] = mergedSec;
-      try {
-        localStorage.setItem(k, JSON.stringify(mergedSec));
-      } catch {
-        // ignore
-      }
+      safeSetLocalJson(k, mergedSec);
       // Jika browser ini menyimpan password digest yang belum ada di backend, dorong otomatis ke backend!
       const remoteDigestCount = Object.values(remoteSec).filter((r) => Boolean(r?.passwordDigest)).length;
       const mergedDigestCount = Object.values(mergedSec).filter((r) => Boolean(r?.passwordDigest)).length;
@@ -1284,11 +1457,7 @@ export async function refreshKvKeysFromBackend(keys: string[]): Promise<Record<s
       const chosen = ev !== undefined && ev !== null ? ev : pv;
       if (chosen !== undefined && chosen !== null) {
         out[k] = chosen;
-        try {
-          localStorage.setItem(k, JSON.stringify(chosen));
-        } catch {
-          // ignore
-        }
+        safeSetLocalJson(k, chosen);
       }
     }
   }
@@ -1304,12 +1473,8 @@ export async function mergeKvMapRecord(stateKey: string, recordKey: string, reco
   // 1. Update local cache immediately
   const localBase = loadPersistedState<Record<string, unknown>>(stateKey, {});
   const optimistic = { ...localBase, [recordKey]: record };
-  try {
-    localStorage.setItem(stateKey, JSON.stringify(optimistic));
-    localWriteTs.set(stateKey, Date.now());
-  } catch {
-    // ignore
-  }
+  safeSetLocalJson(stateKey, optimistic);
+  localWriteTs.set(stateKey, Date.now());
 
   // 1b. Atomic server-side merge via Vercel Serverless API (/api/pa-sync with SUPABASE_SERVICE_ROLE_KEY)
   let serverMerged: Record<string, unknown> | null = null;
@@ -1362,12 +1527,8 @@ export async function mergeKvMapRecord(stateKey: string, recordKey: string, reco
     // ignore
   }
   const finalMap = { ...base, [recordKey]: record };
-  try {
-    localStorage.setItem(stateKey, JSON.stringify(finalMap));
-    localWriteTs.set(stateKey, Date.now());
-  } catch {
-    // ignore
-  }
+  safeSetLocalJson(stateKey, finalMap);
+  localWriteTs.set(stateKey, Date.now());
   await syncDirectToPostgrest({ kind: "kv-state", stateKey, stateValue: finalMap });
 }
 
@@ -1539,7 +1700,7 @@ export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
 function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   let kvUsersList: Array<Record<string, unknown>> = [];
   try {
-    const kvParsed = JSON.parse(localStorage.getItem("pa_managed_users_v1") ?? "[]");
+    const kvParsed = JSON.parse(safeGetLocalRaw("pa_managed_users_v1") ?? "[]");
     if (Array.isArray(kvParsed)) {
       kvUsersList = kvParsed.filter(
         (item): item is Record<string, unknown> => Boolean(item && typeof item === "object"),
@@ -1550,18 +1711,19 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
   }
   let archivedIds = new Set<string>();
   try {
-    const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
+    const archived = JSON.parse(safeGetLocalRaw("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
     archivedIds = new Set(archived.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
   } catch {
     archivedIds = new Set();
   }
+  const rawTrialFlag = safeGetLocalRaw("pa_trial_mode_clean_v1");
   const isCleanTrial =
-    localStorage.getItem("pa_trial_mode_clean_v1") === "true" ||
-    localStorage.getItem("pa_trial_mode_clean_v1") === '"true"';
+    rawTrialFlag === "true" ||
+    rawTrialFlag === '"true"';
 
   if (!Array.isArray(users) || users.length === 0) {
     const list = kvUsersList.filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
-    if (list.length > 0) localStorage.setItem("pa_managed_users_v1", JSON.stringify(list));
+    if (list.length > 0) safeSetLocalJson("pa_managed_users_v1", list);
     return list;
   }
 
@@ -1628,7 +1790,7 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     const synced = [...mergedFromKv, ...extraDbUsers].filter(
       (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
     );
-    localStorage.setItem("pa_managed_users_v1", JSON.stringify(synced));
+    safeSetLocalJson("pa_managed_users_v1", synced);
     return synced;
   }
 
@@ -1657,20 +1819,31 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
     isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
   })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
-  localStorage.setItem("pa_managed_users_v1", JSON.stringify(mapped));
+  safeSetLocalJson("pa_managed_users_v1", mapped);
   return mapped;
 }
 
 export async function hydrateAllStoresFromSupabase(): Promise<void> {
   const hydrateStartedAt = Date.now();
+  // Bersihkan key ephemeral alias yang tidak perlu di localStorage sejak awal hidrasi agar kuota lega
+  try {
+    if (typeof localStorage !== "undefined") {
+      for (const deadKey of EPHEMERAL_OR_LEGACY_LOCAL_KEYS) {
+        localStorage.removeItem(deadKey);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   // Snapshot state auth lokal sebelum hidrasi agar akun & password yang sudah tersimpan di browser lama
   // tidak pernah hilang dan otomatis ter-backfill ke backend (kv_store_74dadec6 + pa_kv_state + pa_users)!
   const preLocalSec = loadPersistedState<Record<string, Record<string, unknown>>>("pa_user_password_security_v1", {});
-  const hasPreLocalUsers = typeof localStorage !== "undefined" && localStorage.getItem("pa_managed_users_v1") !== null;
+  const hasPreLocalUsers = safeGetLocalRaw("pa_managed_users_v1") !== null;
   const preLocalUsers = hasPreLocalUsers
     ? loadPersistedState<Array<Record<string, unknown>>>("pa_managed_users_v1", [])
     : [];
-  const hasPreLocalLoginCfg = typeof localStorage !== "undefined" && localStorage.getItem("pa_unit_login_configs_v1") !== null;
+  const hasPreLocalLoginCfg = safeGetLocalRaw("pa_unit_login_configs_v1") !== null;
   const preLocalLoginCfg = hasPreLocalLoginCfg
     ? loadPersistedState<Record<string, unknown>>("pa_unit_login_configs_v1", {})
     : null;
@@ -1686,6 +1859,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         "pa_login_default_pwd_migrated_v2",
         "pa_user_password_security_v1",
         "pa_managed_users_v1",
+        ...EPHEMERAL_OR_LEGACY_LOCAL_KEYS,
       ]);
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
@@ -1729,27 +1903,34 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
   }
 
   try {
-    // 1. Hydrate generic KV states first (dengan proteksi merge untuk password security & auto-backfill!)
+    // 1. Hydrate CRITICAL AUTH KV states terlebih dahulu sebelum state besar lain agar akun & password
+    //    selalu diprioritaskan di localStorage pada perangkat/browser baru maupun incognito!
     const kvStates = data.kvStates as Array<{ state_key: string; state_value: unknown }> | undefined;
     const seenBackendKvKeys = new Set<string>();
     let remoteSec: Record<string, Record<string, unknown>> = {};
+    const deferredNonAuthKvRows: Array<{ state_key: string; state_value: unknown }> = [];
     if (Array.isArray(kvStates)) {
       for (const row of kvStates) {
         if (!row.state_key || row.state_value === undefined) continue;
+        if (EPHEMERAL_OR_LEGACY_LOCAL_KEYS.includes(row.state_key)) continue;
         seenBackendKvKeys.add(row.state_key);
         if (row.state_key === "pa_user_password_security_v1" && typeof row.state_value === "object") {
           remoteSec = row.state_value as Record<string, Record<string, unknown>>;
           continue;
         }
         if ((localWriteTs.get(row.state_key) ?? 0) >= hydrateStartedAt) continue;
-        localStorage.setItem(row.state_key, JSON.stringify(row.state_value));
+        if (CRITICAL_AUTH_KV_KEYS.has(row.state_key)) {
+          safeSetLocalJson(row.state_key, row.state_value);
+        } else {
+          deferredNonAuthKvRows.push(row);
+        }
       }
     }
 
     // Merge password security map (browser lama -> backend auto-backfill)
     const mergedSec = mergePasswordSecurityMapsClient(remoteSec, preLocalSec);
     if (Object.keys(mergedSec).length > 0) {
-      localStorage.setItem("pa_user_password_security_v1", JSON.stringify(mergedSec));
+      safeSetLocalJson("pa_user_password_security_v1", mergedSec);
       const remoteDigests = Object.values(remoteSec).filter((r) => Boolean(r?.passwordDigest)).length;
       const mergedDigests = Object.values(mergedSec).filter((r) => Boolean(r?.passwordDigest)).length;
       if (mergedDigests > remoteDigests || (!seenBackendKvKeys.has("pa_user_password_security_v1") && Object.keys(preLocalSec).length > 0)) {
@@ -1761,14 +1942,14 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     if (preLocalUsers.length > 0) {
       let currentKvUsers: Array<Record<string, unknown>> = [];
       try {
-        const parsed = JSON.parse(localStorage.getItem("pa_managed_users_v1") ?? "[]");
+        const parsed = JSON.parse(safeGetLocalRaw("pa_managed_users_v1") ?? "[]");
         if (Array.isArray(parsed)) currentKvUsers = parsed;
       } catch {
         currentKvUsers = [];
       }
       let archSet = new Set<string>();
       try {
-        const arch = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
+        const arch = JSON.parse(safeGetLocalRaw("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
         if (Array.isArray(arch)) {
           archSet = new Set(arch.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
         }
@@ -1776,7 +1957,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         archSet = new Set();
       }
       if (!seenBackendKvKeys.has("pa_managed_users_v1") || currentKvUsers.length === 0) {
-        localStorage.setItem("pa_managed_users_v1", JSON.stringify(preLocalUsers));
+        safeSetLocalJson("pa_managed_users_v1", preLocalUsers);
         await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
         await syncToSupabase({ kind: "users-batch", users: preLocalUsers });
       } else {
@@ -1787,7 +1968,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         });
         if (missingOnRemote.length > 0) {
           const combined = [...currentKvUsers, ...missingOnRemote];
-          localStorage.setItem("pa_managed_users_v1", JSON.stringify(combined));
+          safeSetLocalJson("pa_managed_users_v1", combined);
           await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: combined });
           await syncToSupabase({ kind: "users-batch", users: combined });
         }
@@ -1802,9 +1983,15 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       }
     }
 
-    // 2. Hydrate users if available in DB
+    // 2. Hydrate users if available in DB (sebelum non-auth KV agar pa_managed_users_v1 selalu terjamin tersimpan)
     const users = data.users as Array<Record<string, unknown>> | undefined;
     const syncedActiveUsers: Array<Record<string, unknown>> = applyDbUsersToLocal(Array.isArray(users) ? users : []);
+
+    // 2b. Hydrate sisa non-auth KV states secara aman (tahan QuotaExceededError)
+    for (const row of deferredNonAuthKvRows) {
+      if ((localWriteTs.get(row.state_key) ?? 0) >= hydrateStartedAt) continue;
+      safeSetLocalJson(row.state_key, row.state_value);
+    }
 
     // Khusus lingkungan Figma Make (bukan web produksi Vercel):
     // sinkronkan user aktif preview ke akun Administrator / HR ICF dari database web (Vercel)
@@ -1820,11 +2007,11 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const dbAdminOrHrIcf =
           syncedActiveUsers.find((u) => u.status === "Active" && u.role === "Administrator") ??
           syncedActiveUsers.find((u) => u.status === "Active" && u.role === "HR ICF");
-        const existingSessionRaw = localStorage.getItem("pa_auth_session_v1");
+        const existingSessionRaw = safeGetLocalRaw("pa_auth_session_v1");
         let currentEmpId = "";
         try {
           currentEmpId = String(
-            JSON.parse(localStorage.getItem("pa_active_user_v1") ?? "{}")?.employeeId ?? "",
+            JSON.parse(safeGetLocalRaw("pa_active_user_v1") ?? "{}")?.employeeId ?? "",
           ).toLowerCase();
         } catch {
           currentEmpId = "";
@@ -1834,17 +2021,14 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         );
         if (dbAdminOrHrIcf && (!existingSessionRaw || !currentExistsInDb)) {
           const nowTs = Date.now();
-          localStorage.setItem("pa_active_user_v1", JSON.stringify(dbAdminOrHrIcf));
-          localStorage.setItem(
-            "pa_auth_session_v1",
-            JSON.stringify({
-              isAuthenticated: true,
-              employeeId: String(dbAdminOrHrIcf.employeeId ?? ""),
-              loginAt: nowTs,
-              awayStartedAt: null,
-              lastActiveAt: nowTs,
-            }),
-          );
+          safeSetLocalJson("pa_active_user_v1", dbAdminOrHrIcf);
+          safeSetLocalJson("pa_auth_session_v1", {
+            isAuthenticated: true,
+            employeeId: String(dbAdminOrHrIcf.employeeId ?? ""),
+            loginAt: nowTs,
+            awayStartedAt: null,
+            lastActiveAt: nowTs,
+          });
         }
       }
     }
@@ -1854,7 +2038,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     if (Array.isArray(catalogs)) {
       for (const c of catalogs) {
         if (c.catalog_key && c.data) {
-          localStorage.setItem(c.catalog_key, JSON.stringify(c.data));
+          safeSetLocalJson(c.catalog_key, c.data);
         }
       }
     }
@@ -1883,13 +2067,13 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       }));
       let existingEv: UploadedEvidenceRecord[] = [];
       try {
-        existingEv = JSON.parse(localStorage.getItem(EVIDENCE_LIST_KEY) ?? "[]");
+        existingEv = JSON.parse(safeGetLocalRaw(EVIDENCE_LIST_KEY) ?? "[]");
       } catch {
         existingEv = [];
       }
       const backendIds = new Set(mappedEv.map((e) => e.id));
       const mergedEv = [...mappedEv, ...(Array.isArray(existingEv) ? existingEv.filter((e) => !backendIds.has(e.id)) : [])];
-      localStorage.setItem(EVIDENCE_LIST_KEY, JSON.stringify(mergedEv));
+      safeSetLocalJson(EVIDENCE_LIST_KEY, mergedEv);
     }
 
     // 5. Hydrate audit trail
@@ -1908,18 +2092,18 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         ipAddress: "10.0.1.15",
         status: (a.status as "Success" | "Failed") ?? "Success",
       }));
-      localStorage.setItem(AUDIT_LIST_KEY, JSON.stringify(mappedAudit));
+      safeSetLocalJson(AUDIT_LIST_KEY, mappedAudit);
     }
 
     // 6. Hydrate year-end verification state
     if (data.yearEndVerification) {
-      localStorage.setItem("year_end_workflow_2026", JSON.stringify(data.yearEndVerification));
+      safeSetLocalJson("year_end_workflow_2026", data.yearEndVerification);
     }
 
     // 7. Hydrate normalized workflow documents if present
     const workflowDocs = data.workflowDocs as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(workflowDocs) && workflowDocs.length > 0) {
-      const existingRaw = localStorage.getItem("appraisal_workflow_v1");
+      const existingRaw = safeGetLocalRaw("appraisal_workflow_v1");
       const existingList: Array<Record<string, unknown>> = existingRaw ? JSON.parse(existingRaw) : [];
       const byKey = new Map<string, Record<string, unknown>>();
       for (const item of existingList) {
@@ -1932,7 +2116,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         }
       }
       if (byKey.size > 0) {
-        localStorage.setItem("appraisal_workflow_v1", JSON.stringify(Array.from(byKey.values())));
+        safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
       }
     }
 
@@ -1956,7 +2140,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       // Gabungkan dengan data KV (lampiran, ID peserta) yang tidak tersimpan di kolom tabel
       let kvSchedules: Array<Record<string, unknown>> = [];
       try {
-        kvSchedules = JSON.parse(localStorage.getItem("pa_interview_schedules_v1") ?? "[]");
+        kvSchedules = JSON.parse(safeGetLocalRaw("pa_interview_schedules_v1") ?? "[]");
       } catch {
         kvSchedules = [];
       }
@@ -1964,13 +2148,13 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       const mergedSchedules = mappedSchedules.map((m) => ({ ...(kvById.get(m.id) ?? {}), ...m }));
       const mergedIds = new Set(mergedSchedules.map((m) => m.id));
       for (const k of kvById.values()) if (!mergedIds.has(String(k.id))) mergedSchedules.push(k as (typeof mergedSchedules)[number]);
-      localStorage.setItem("pa_interview_schedules_v1", JSON.stringify(mergedSchedules));
+      safeSetLocalJson("pa_interview_schedules_v1", mergedSchedules);
     }
 
     // 9. Hydrate normalized group rules by unit if present
     const groupRules = data.groupRules as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(groupRules) && groupRules.length > 0) {
-      const existingRaw = localStorage.getItem("pa_group_rules_by_unit_v1");
+      const existingRaw = safeGetLocalRaw("pa_group_rules_by_unit_v1");
       const map: Record<string, Array<Record<string, unknown>>> = existingRaw ? JSON.parse(existingRaw) : {};
       const grouped: Record<string, Array<Record<string, unknown>>> = {};
       for (const r of groupRules) {
@@ -1985,26 +2169,26 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
           allowedModules: Array.isArray(r.allowed_modules) ? r.allowed_modules : [],
         });
       }
-      localStorage.setItem("pa_group_rules_by_unit_v1", JSON.stringify({ ...map, ...grouped }));
+      safeSetLocalJson("pa_group_rules_by_unit_v1", { ...map, ...grouped });
     }
 
     // 10. Hydrate normalized score weights if present
     const scoreWeights = data.scoreWeights as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(scoreWeights) && scoreWeights.length > 0) {
-      const existingRaw = localStorage.getItem("score_calibration_weights_v1");
+      const existingRaw = safeGetLocalRaw("score_calibration_weights_v1");
       const map: Record<string, unknown> = existingRaw ? JSON.parse(existingRaw) : {};
       for (const sw of scoreWeights) {
         if (sw.company_unit && sw.weights) {
           map[String(sw.company_unit)] = sw.weights;
         }
       }
-      localStorage.setItem("score_calibration_weights_v1", JSON.stringify(map));
+      safeSetLocalJson("score_calibration_weights_v1", map);
     }
 
     // 11. Hydrate normalized project records if present
     const projectRecords = data.projectRecords as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(projectRecords) && projectRecords.length > 0) {
-      const existingRaw = localStorage.getItem("pa_project_icf_by_emp_v1");
+      const existingRaw = safeGetLocalRaw("pa_project_icf_by_emp_v1");
       const byEmp: Record<string, unknown> = existingRaw ? JSON.parse(existingRaw) : {};
       for (const pr of projectRecords) {
         const empId = String(pr.employee_id ?? "");
@@ -2016,13 +2200,13 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
           submittedDate: String(pr.submitted_date ?? ""),
         };
       }
-      localStorage.setItem("pa_project_icf_by_emp_v1", JSON.stringify(byEmp));
+      safeSetLocalJson("pa_project_icf_by_emp_v1", byEmp);
     }
 
     // 12. Hydrate Access Management role permissions if present
     const rolePermissions = data.rolePermissions as Array<{ role?: string; permissions?: Record<string, unknown> }> | undefined;
     if (Array.isArray(rolePermissions) && rolePermissions.length > 0) {
-      const existingRaw = localStorage.getItem("pa_access_permissions_v2");
+      const existingRaw = safeGetLocalRaw("pa_access_permissions_v2");
       const map: Record<string, unknown> = existingRaw ? JSON.parse(existingRaw) : {};
       for (const rp of rolePermissions) {
         // Hanya gunakan data dari tabel pa_role_permissions jika sudah memiliki struktur v2 (ada field dashboard & profile)
@@ -2031,13 +2215,13 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         }
       }
       if (Object.keys(map).length > 0) {
-        localStorage.setItem("pa_access_permissions_v2", JSON.stringify(map));
+        safeSetLocalJson("pa_access_permissions_v2", map);
       }
     }
 
     // 13. Hydrate Menu Management configuration if present
     if (Array.isArray(data.menuConfig) && data.menuConfig.length > 0) {
-      localStorage.setItem("pa_menu_configs_v1", JSON.stringify(data.menuConfig));
+      safeSetLocalJson("pa_menu_configs_v1", data.menuConfig);
     }
 
     // 14. Hydrate Open Lock requests if present
@@ -2063,13 +2247,13 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         approvalNote: r.approval_note ? String(r.approval_note) : undefined,
         rejectedAt: r.rejected_at ? String(r.rejected_at) : undefined,
       }));
-      localStorage.setItem("pa_open_lock_requests_v1", JSON.stringify(mappedLocks));
+      safeSetLocalJson("pa_open_lock_requests_v1", mappedLocks);
     }
 
     // 15. Hydrate Inter-Department Feedback workflows from dedicated backend table pa_inter_dept_feedbacks
     const idfRows = data.interDeptFeedbacks as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(idfRows) && idfRows.length > 0) {
-      const existingRaw = localStorage.getItem("inter_department_feedback_workflows_v2");
+      const existingRaw = safeGetLocalRaw("inter_department_feedback_workflows_v2");
       const existingList: Array<{ row?: { no?: string } }> = existingRaw ? JSON.parse(existingRaw) : [];
       const byNo = new Map<string, unknown>();
       for (const item of existingList) {
@@ -2083,14 +2267,14 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         }
       }
       if (byNo.size > 0) {
-        localStorage.setItem("inter_department_feedback_workflows_v2", JSON.stringify(Array.from(byNo.values())));
+        safeSetLocalJson("inter_department_feedback_workflows_v2", Array.from(byNo.values()));
       }
     }
 
     // 16. Hydrate RCA submissions from dedicated backend table pa_rca_submissions
     const rcaRows = data.rcaSubmissions as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(rcaRows) && rcaRows.length > 0) {
-      const existingRaw = localStorage.getItem("kpi_rca_submissions");
+      const existingRaw = safeGetLocalRaw("kpi_rca_submissions");
       const existingList: Array<{ key?: string; id?: string }> = existingRaw ? JSON.parse(existingRaw) : [];
       const byKey = new Map<string, unknown>();
       for (const item of existingList) {
@@ -2105,7 +2289,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         }
       }
       if (byKey.size > 0) {
-        localStorage.setItem("kpi_rca_submissions", JSON.stringify(Array.from(byKey.values())));
+        safeSetLocalJson("kpi_rca_submissions", Array.from(byKey.values()));
       }
     }
 
@@ -2119,7 +2303,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmpId;
         const months = Array.isArray(kt.months) ? kt.months : [];
         const cellsMap = kt.cells_map && typeof kt.cells_map === "object" ? kt.cells_map : {};
-        localStorage.setItem(`kpi_tracking_v1_${normId}`, JSON.stringify({ months, cellsMap }));
+        safeSetLocalJson(`kpi_tracking_v1_${normId}`, { months, cellsMap });
       }
     }
 
@@ -2128,7 +2312,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     if (Array.isArray(kpiSettingsRows) && kpiSettingsRows.length > 0) {
       let byEmp: Record<string, unknown> = {};
       try {
-        byEmp = JSON.parse(localStorage.getItem("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
+        byEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
       } catch {
         byEmp = {};
       }
@@ -2141,7 +2325,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp;
         if (!byEmp[normId]) byEmp[normId] = items;
       }
-      localStorage.setItem("pa_kpi_setting_by_emp_v2", JSON.stringify(byEmp));
+      safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
     }
 
     // 19. Hydrate KPI Business (Group / Unit) from dedicated backend table pa_kpi_business
@@ -2149,7 +2333,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     if (Array.isArray(kpiBusinessRows) && kpiBusinessRows.length > 0) {
       let byScope: Record<string, unknown> = {};
       try {
-        byScope = JSON.parse(localStorage.getItem("pa_kpi_business_by_scope_v1") ?? "{}") ?? {};
+        byScope = JSON.parse(safeGetLocalRaw("pa_kpi_business_by_scope_v1") ?? "{}") ?? {};
       } catch {
         byScope = {};
       }
@@ -2159,7 +2343,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         if (!scopeId || items.length === 0) continue;
         if (!byScope[scopeId]) byScope[scopeId] = items;
       }
-      localStorage.setItem("pa_kpi_business_by_scope_v1", JSON.stringify(byScope));
+      safeSetLocalJson("pa_kpi_business_by_scope_v1", byScope);
     }
 
     // 20. Hydrate SMART Goals per employee from dedicated backend table pa_smart_goals
@@ -2168,8 +2352,8 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       let goalsByEmp: Record<string, unknown> = {};
       let checkinByEmp: Record<string, unknown> = {};
       try {
-        goalsByEmp = JSON.parse(localStorage.getItem("sg_goals_by_emp_v2") ?? "{}") ?? {};
-        checkinByEmp = JSON.parse(localStorage.getItem("sg_checkin_by_emp_v2") ?? "{}") ?? {};
+        goalsByEmp = JSON.parse(safeGetLocalRaw("sg_goals_by_emp_v2") ?? "{}") ?? {};
+        checkinByEmp = JSON.parse(safeGetLocalRaw("sg_checkin_by_emp_v2") ?? "{}") ?? {};
       } catch {
         goalsByEmp = {};
         checkinByEmp = {};
@@ -2186,8 +2370,8 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
           checkinByEmp[normId] = row.checkin_entries;
         }
       }
-      localStorage.setItem("sg_goals_by_emp_v2", JSON.stringify(goalsByEmp));
-      localStorage.setItem("sg_checkin_by_emp_v2", JSON.stringify(checkinByEmp));
+      safeSetLocalJson("sg_goals_by_emp_v2", goalsByEmp);
+      safeSetLocalJson("sg_checkin_by_emp_v2", checkinByEmp);
     }
 
     _lastBackendStatus = {
@@ -2274,9 +2458,14 @@ export async function replaceAllBackendUsersAndResetForTrial(
 
   if (resetTransactions) {
     for (const key of TRANSACTIONAL_KEYS) {
-      localStorage.removeItem(key);
+      memoryKvFallback.delete(key);
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // ignore
+      }
     }
-    localStorage.setItem("pa_trial_mode_clean_v1", "true");
+    safeSetLocalRaw("pa_trial_mode_clean_v1", "true");
     savePersistedState("pa_trial_mode_clean_v1", true);
   }
 

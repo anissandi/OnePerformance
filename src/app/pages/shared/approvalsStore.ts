@@ -3,7 +3,7 @@ import { registerWorkflowRows, workflowAlias, loadWorkflowRecords, saveWorkflowA
 import { saveAppraisalApprover } from "./appraisalFormStore";
 import { saveMSApproverEntry } from "./msStore";
 import { upsertApprovalDecision } from "./smartGoalsStore";
-import { savePersistedState } from "../../services/supabaseClient";
+import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 import { resolveActingApproverLabel } from "../../store/delegationStore";
 import {
   getActiveUser,
@@ -37,7 +37,7 @@ export function saveAssessment(
   assessedDate: string,
 ): void {
   try {
-    const raw = localStorage.getItem(ASSESSMENT_KEY);
+    const raw = safeGetLocalRaw(ASSESSMENT_KEY);
     const existing: StoredAssessment[] = raw ? JSON.parse(raw) : [];
     const filtered = existing.filter((a) => !(a.rowNo === rowNo && a.approverRole === approverRole));
     const nextList = [...filtered, { rowNo, approverRole, type, ratings, comments, assessedDate }];
@@ -95,7 +95,7 @@ export function loadAssessment(rowNo: string, approverRole: "approver1" | "appro
   if (shared && alias) return { rowNo, approverRole, type: alias.module, ratings: shared.ratings, comments: shared.comments, assessedDate: shared.date };
   if (record) return null;
   try {
-    const raw = localStorage.getItem(ASSESSMENT_KEY);
+    const raw = safeGetLocalRaw(ASSESSMENT_KEY);
     if (!raw) return null;
     const list: StoredAssessment[] = JSON.parse(raw);
     return list.find((a) => a.rowNo === rowNo && a.approverRole === approverRole) ?? null;
@@ -123,7 +123,7 @@ interface Override {
 
 export function loadOverrides(): Override[] {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = safeGetLocalRaw(KEY);
     return raw ? (JSON.parse(raw) as Override[]) : [];
   } catch {
     return [];
@@ -171,7 +171,8 @@ export function applyOverrides(
   explicitPhase?: "setting" | "measurement",
 ): ApprovalRow[] {
   const phase = explicitPhase ?? (/^(?:H?ST)-/.test(rows[0]?.no ?? "") ? "setting" : "measurement");
-  const isCleanTrial = localStorage.getItem("pa_trial_mode_clean_v1") === "true";
+  const rawTrial = safeGetLocalRaw("pa_trial_mode_clean_v1");
+  const isCleanTrial = rawTrial === "true" || rawTrial === '"true"';
   const managedUsers = loadManagedUsers();
   const baseRows = isCleanTrial
     ? rows.filter((row) =>

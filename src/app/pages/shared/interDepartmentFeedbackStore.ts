@@ -2,6 +2,7 @@ import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer"
 import { feedbackEligibilityError } from "./feedbackEligibility.ts"
 import {
   loadPersistedState,
+  safeSetLocalJson,
   savePersistedState,
   selectRowsFromSupabase,
   syncToSupabase,
@@ -201,11 +202,7 @@ function writeLocal(submission: FeedbackSubmission) {
     normalized,
   ]
   _idfBackendCache = next
-  try {
-    localStorage.setItem(KEY, JSON.stringify(next))
-  } catch {
-    // ignore quota
-  }
+  safeSetLocalJson(KEY, next)
   emit()
   return { normalized, next }
 }
@@ -298,7 +295,7 @@ export async function refreshFeedbackSubmissionsFromBackend(): Promise<void> {
     }
     const next = Array.from(byNo.values())
     _idfBackendCache = next
-    localStorage.setItem(KEY, JSON.stringify(next))
+    safeSetLocalJson(KEY, next)
     emit()
   } catch {
     // ignore network errors

@@ -942,7 +942,7 @@ function SG_GoalCard({
                                       <Eye className="w-3 h-3" />
                                     </button>
                                     <a
-                                      href={f.dataUrl || FAKE_BLOB}
+                                      href={f.url || f.dataUrl || FAKE_BLOB}
                                       download={f.name}
                                       title="Download Evidence"
                                       className="p-1 rounded hover:bg-gray-100 text-gray-500 hover:text-[#1A284F]"
@@ -1032,7 +1032,7 @@ function SG_TargetVsActual({
                                   <Eye className="w-3 h-3" /> Lihat di Browser
                                 </button>
                                 <a
-                                  href={f.dataUrl || FAKE_BLOB}
+                                  href={f.url || f.dataUrl || FAKE_BLOB}
                                   download={f.name}
                                   className="p-0.5 text-green-700 hover:text-green-900"
                                   title="Download"
@@ -1600,7 +1600,7 @@ function SmartGoalsApproverReview({
               </div>
               <div className="flex items-center gap-2">
                 <a
-                  href={previewEvidenceFile.dataUrl || FAKE_BLOB}
+                  href={previewEvidenceFile.url || previewEvidenceFile.dataUrl || FAKE_BLOB}
                   download={previewEvidenceFile.name}
                   className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-semibold"
                 >
@@ -1616,17 +1616,17 @@ function SmartGoalsApproverReview({
               </div>
             </div>
             <div className="flex-1 overflow-auto p-6 bg-gray-100 flex items-center justify-center min-h-[420px]">
-              {previewEvidenceFile.dataUrl ? (
+              {(previewEvidenceFile.url || previewEvidenceFile.dataUrl) ? (
                 previewEvidenceFile.type?.startsWith("image/") ||
                 /\.(jpg|jpeg|png|gif|webp)$/i.test(previewEvidenceFile.name) ? (
                   <img
-                    src={previewEvidenceFile.dataUrl}
+                    src={previewEvidenceFile.url || previewEvidenceFile.dataUrl}
                     alt={previewEvidenceFile.name}
                     className="max-h-[72vh] max-w-full object-contain rounded-xl shadow bg-white p-2"
                   />
                 ) : (
                   <iframe
-                    src={previewEvidenceFile.dataUrl}
+                    src={previewEvidenceFile.url || previewEvidenceFile.dataUrl}
                     title={previewEvidenceFile.name}
                     className="w-full h-[72vh] rounded-xl bg-white border border-gray-200"
                   />

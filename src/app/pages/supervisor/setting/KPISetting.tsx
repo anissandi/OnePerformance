@@ -12,7 +12,7 @@ import {
   type ManagedUser,
 } from "../../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
-import { mergeKvMapRecord, syncToSupabase } from "../../../services/supabaseClient";
+import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, syncToSupabase } from "../../../services/supabaseClient";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
@@ -4172,10 +4172,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const persistKpiItemsToBackend = (nextItems: KPISetting[], statusLabel: string) => {
     if (isCorporate) {
       try {
-        const raw = localStorage.getItem("pa_kpi_business_by_scope_v1");
+        const raw = safeGetLocalRaw("pa_kpi_business_by_scope_v1");
         const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
         map[effectiveScopeKey] = nextItems;
-        localStorage.setItem("pa_kpi_business_by_scope_v1", JSON.stringify(map));
+        safeSetLocalJson("pa_kpi_business_by_scope_v1", map);
       } catch {
         // ignore
       }
@@ -4198,10 +4198,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     } else {
       const normId = normalizeEmployeeId(effectiveOwner.employeeId);
       try {
-        const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+        const raw = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
         const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
         map[normId] = nextItems;
-        localStorage.setItem("pa_kpi_setting_by_emp_v2", JSON.stringify(map));
+        safeSetLocalJson("pa_kpi_setting_by_emp_v2", map);
       } catch {
         // ignore
       }
@@ -4343,10 +4343,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     if (isCorporate) {
       const statusRecord = { submitted: true, approved: false, submittedDate: todayStr, submittedBy: actorLabel };
       try {
-        const raw = localStorage.getItem("pa_kpi_business_status_v1");
+        const raw = safeGetLocalRaw("pa_kpi_business_status_v1");
         const map = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
         map[effectiveScopeKey] = statusRecord;
-        localStorage.setItem("pa_kpi_business_status_v1", JSON.stringify(map));
+        safeSetLocalJson("pa_kpi_business_status_v1", map);
       } catch {
         // ignore
       }
