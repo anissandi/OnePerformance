@@ -27,7 +27,12 @@ import {
   loginWithCompanyAndEmployeeId,
   validateLoginCompanyUnit,
 } from "../store/authStore";
-import { refreshLoginCriticalStateFromBackend, syncToSupabase } from "../services/supabaseClient";
+import {
+  forcePushLocalAuthStateToBackend,
+  getLastBackendAuthSyncStatus,
+  refreshLoginCriticalStateFromBackend,
+  syncToSupabase,
+} from "../services/supabaseClient";
 import {
   requestOtpFromBackend,
   saveUserSecurityRecordAsync,
@@ -85,6 +90,8 @@ export function LoginPage() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showPasswordUpdatedModal, setShowPasswordUpdatedModal] = useState(false);
   const [forgotTooltipOpen, setForgotTooltipOpen] = useState(false);
+  const [syncingDb, setSyncingDb] = useState(false);
+  const [syncDbFeedback, setSyncDbFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     const firstOtp = unitLoginCfg.enabledMethods.find((m) => m !== "password") as
@@ -117,6 +124,7 @@ export function LoginPage() {
     }
 
     const onUsersRefresh = () => setUsersTick((t) => t + 1);
+    void refreshLoginCriticalStateFromBackend().then(onUsersRefresh);
     window.addEventListener("pa-db-hydrated", onUsersRefresh);
     window.addEventListener("pa-auth-updated", onUsersRefresh);
     return () => {
@@ -211,9 +219,9 @@ export function LoginPage() {
         await Promise.race([
           Promise.all([
             saveUserSecurityRecordAsync(pwdVerify.record),
-            syncToSupabase({ kind: "user-upsert", user: unitCheck.user }),
+            forcePushLocalAuthStateToBackend(),
           ]),
-          new Promise((resolve) => setTimeout(resolve, 3500)),
+          new Promise((resolve) => setTimeout(resolve, 4000)),
         ]);
       }
 
@@ -619,6 +627,54 @@ export function LoginPage() {
           )}
           </>
           )}
+          {(() => {
+            const st = getLastBackendAuthSyncStatus();
+            const totalLocal = allManaged.length;
+            return (
+              <div className="mt-4 pt-3 border-t border-gray-100 space-y-1.5 text-[11px] text-gray-400">
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    {st.connected
+                      ? `DB: ${st.remoteUsersCount} akun · Browser ini: ${totalLocal} akun`
+                      : `Browser ini: ${totalLocal} akun`}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={syncingDb}
+                    onClick={() => {
+                      setSyncingDb(true);
+                      setSyncDbFeedback(null);
+                      void forcePushLocalAuthStateToBackend()
+                        .then(async (res) => {
+                          await refreshLoginCriticalStateFromBackend();
+                          setUsersTick((t) => t + 1);
+                          setSyncDbFeedback(
+                            res.ok
+                              ? {
+                                  ok: true,
+                                  msg: `Berhasil menyinkronkan ${res.pushedUsers} akun & ${res.pushedPasswords} password ke Supabase (${res.supabaseHost}).`,
+                                }
+                              : {
+                                  ok: false,
+                                  msg: res.errorReason || `Gagal menyinkronkan ke ${res.supabaseHost}.`,
+                                },
+                          );
+                        })
+                        .finally(() => setSyncingDb(false));
+                    }}
+                    className="font-semibold text-[#1A284F] hover:underline disabled:opacity-50"
+                  >
+                    {syncingDb ? "Menyinkronkan..." : "Sinkronkan ke Database"}
+                  </button>
+                </div>
+                {syncDbFeedback && (
+                  <p className={`text-[11px] leading-relaxed ${syncDbFeedback.ok ? "text-emerald-600" : "text-red-600"}`}>
+                    {syncDbFeedback.msg}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
 

@@ -22,9 +22,32 @@ export const SUPABASE_URL =
 export const SUPABASE_ANON_KEY =
   env.VITE_SUPABASE_ANON_KEY?.trim() ||
   env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
+  env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ||
+  env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY?.trim() ||
   fallbackAnonKey;
 
 export const PA_APP_API_BASE = `${SUPABASE_URL}/functions/v1/make-server-74dadec6/pa-app`;
+export const VERCEL_SYNC_API = "/api/pa-sync";
+
+async function callVercelSyncApi(init?: RequestInit, query = ""): Promise<Record<string, unknown> | null> {
+  if (typeof window === "undefined") return null;
+  try {
+    const res = await fetch(`${VERCEL_SYNC_API}${query}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+    });
+    if (!res.ok) return null;
+    const ct = res.headers.get("content-type") ?? "";
+    if (!ct.includes("application/json")) return null;
+    const data = await res.json();
+    return data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
 export const SUPABASE_REST_BASE = `${SUPABASE_URL}/rest/v1`;
 export const SUPABASE_STORAGE_BASE = `${SUPABASE_URL}/storage/v1`;
 
@@ -147,6 +170,55 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
         },
         "employee_id",
       );
+    }
+  } else if (kind === "users-batch" && Array.isArray(payload.users)) {
+    const valid = (payload.users as Array<Record<string, unknown>>).filter((u) => Boolean(u && String(u.employeeId ?? "").trim()));
+    if (valid.length > 0) {
+      const fullRows = valid.map((u) => ({
+        employee_id: String(u.employeeId ?? "").trim(),
+        no: String(u.no ?? ""),
+        reg_no: String(u.regNo ?? ""),
+        name: String(u.name || "-"),
+        email: String(u.email ?? ""),
+        position: String(u.position || "-"),
+        company: String(u.company || "PT RSUP (Industry)"),
+        unit_id: String(u.unitId ?? "IND"),
+        division: String(u.division || "-"),
+        department: String(u.department || "-"),
+        bagian: String(u.bagian ?? ""),
+        join_date: String(u.joinDate ?? ""),
+        telegram_no: String(u.telegramNo ?? ""),
+        grade: String(u.grade || "Grade 5"),
+        role: String(u.role || "Employee"),
+        groupings: String(u.groupings || "Operasional"),
+        status: u.status === "Inactive" ? "Inactive" : "Active",
+        last_login: String(u.lastLogin ?? ""),
+        reg_no_ap1: String(u.regNoAp1 ?? ""),
+        reg_no_ap2: String(u.regNoAp2 ?? ""),
+        is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
+        is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+        updated_at: now,
+      }));
+      ok = await restUpsert("pa_users", fullRows, "employee_id");
+      if (!ok) {
+        const minRows = fullRows.map((r) => ({
+          employee_id: r.employee_id,
+          name: r.name,
+          email: r.email,
+          position: r.position,
+          company: r.company,
+          unit_id: r.unit_id,
+          division: r.division,
+          department: r.department,
+          grade: r.grade,
+          role: r.role,
+          groupings: r.groupings,
+          status: r.status,
+          last_login: r.last_login,
+          updated_at: now,
+        }));
+        ok = await restUpsert("pa_users", minRows, "employee_id");
+      }
     }
   } else if (kind === "user-delete" && payload.employeeId) {
     try {
@@ -592,15 +664,21 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
     const isCriticalDualWrite =
       kind === "kv-map-merge" ||
       kind === "user-upsert" ||
+      kind === "users-batch" ||
       kind === "users-replace" ||
       kind === "user-delete" ||
       (kind === "kv-state" && CRITICAL_AUTH_KV_KEYS.has(String(payload.stateKey ?? "")));
+
+    // Path 0 (Vercel Serverless API with SUPABASE_SERVICE_ROLE_KEY — bypasses RLS & build-time env issues)
+    const vercelResp = await callVercelSyncApi({ method: "POST", body: JSON.stringify(payload) });
+    const vercelOk = Boolean(vercelResp?.ok);
 
     const directOk = kind === "kv-map-merge" || kind === "users-replace"
       ? false
       : await syncDirectToPostgrest(payload);
 
-    if (directOk && !isCriticalDualWrite) return;
+    if ((vercelOk || directOk) && !isCriticalDualWrite) return;
+    if (vercelOk && directOk) return;
 
     await fetch(`${PA_APP_API_BASE}/sync`, {
       method: "POST",
@@ -960,6 +1038,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
   try {
     // Jalankan pembacaan PostgREST DAN Edge Function /bootstrap secara paralel agar data dari
     // pa_kv_state, pa_users, maupun kv_store_74dadec6 selalu terambil di browser/perangkat baru.
+    const vercelPromise = callVercelSyncApi({ method: "GET" });
     const edgePromise = fetch(`${PA_APP_API_BASE}/bootstrap`, {
       headers: {
         apikey: SUPABASE_ANON_KEY,
@@ -991,6 +1070,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       kpiBusinesses,
       smartGoalRows,
       edgeData,
+      vercelData,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
@@ -1013,13 +1093,32 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_kpi_business", "select=*&order=updated_at.desc"),
       restSelect("pa_smart_goals", "select=*&order=updated_at.desc"),
       edgePromise,
+      vercelPromise,
     ]);
 
     const edgeOk = Boolean(edgeData && typeof edgeData === "object" && edgeData.ok);
+    const vercelOk = Boolean(vercelData && typeof vercelData === "object" && vercelData.ok);
     const mergedKvByKey = new Map<string, unknown>();
     for (const row of kvStates as Array<{ state_key?: string; state_value?: unknown }>) {
       if (row?.state_key && row.state_value !== undefined) {
         mergedKvByKey.set(String(row.state_key), row.state_value);
+      }
+    }
+    if (vercelOk && Array.isArray(vercelData?.kvStates)) {
+      for (const row of vercelData.kvStates as Array<{ state_key?: string; state_value?: unknown }>) {
+        if (!row?.state_key || row.state_value === undefined) continue;
+        const k = String(row.state_key);
+        if (k === "pa_user_password_security_v1" && mergedKvByKey.has(k)) {
+          mergedKvByKey.set(
+            k,
+            mergePasswordSecurityMapsClient(
+              mergedKvByKey.get(k) as Record<string, Record<string, unknown>>,
+              row.state_value as Record<string, Record<string, unknown>>,
+            ),
+          );
+        } else {
+          mergedKvByKey.set(k, row.state_value);
+        }
       }
     }
     if (edgeOk && Array.isArray(edgeData.kvStates)) {
@@ -1044,7 +1143,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       state_value,
     }));
 
-    const finalUsers = users.length > 0 ? users : edgeOk && Array.isArray(edgeData.users) ? edgeData.users : [];
+    const vercelUsers = vercelOk && Array.isArray(vercelData?.users) ? (vercelData.users as Array<Record<string, unknown>>) : [];
+    const finalUsers = vercelUsers.length >= users.length && vercelUsers.length > 0 ? vercelUsers : users.length > 0 ? users : edgeOk && Array.isArray(edgeData.users) ? edgeData.users : [];
     const pick = <T>(a: T[], b: unknown): T[] => (a.length > 0 ? a : Array.isArray(b) ? (b as T[]) : []);
 
     if (
@@ -1061,7 +1161,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       kpiSettings.length > 0 ||
       kpiBusinesses.length > 0 ||
       smartGoalRows.length > 0 ||
-      edgeOk
+      edgeOk ||
+      vercelOk
     ) {
       return {
         ok: true,
@@ -1130,12 +1231,13 @@ export async function refreshKvKeysFromBackend(keys: string[]): Promise<Record<s
     .then((res) => (res.ok ? res.json() : null))
     .catch(() => null);
 
-  const [pgRows, edgeResp] = await Promise.all([
+  const [pgRows, edgeResp, vercelResp] = await Promise.all([
     restSelect<{ state_key: string; state_value: unknown }>(
       "pa_kv_state",
       `select=state_key,state_value&state_key=in.(${cleanInList})`,
     ),
     edgeKvPromise,
+    callVercelSyncApi({ method: "GET" }, `?keys=${encodeURIComponent(keys.join(","))}`),
   ]);
 
   const pgMap: Record<string, unknown> = {};
@@ -1144,10 +1246,15 @@ export async function refreshKvKeysFromBackend(keys: string[]): Promise<Record<s
       pgMap[row.state_key] = row.state_value;
     }
   }
-  const edgeMap: Record<string, unknown> =
+  const vercelMap: Record<string, unknown> =
+    vercelResp && vercelResp.ok && vercelResp.kvMap && typeof vercelResp.kvMap === "object"
+      ? (vercelResp.kvMap as Record<string, unknown>)
+      : {};
+  const edgeRawMap: Record<string, unknown> =
     edgeResp && typeof edgeResp === "object" && edgeResp.ok && edgeResp.kvMap && typeof edgeResp.kvMap === "object"
       ? (edgeResp.kvMap as Record<string, unknown>)
       : {};
+  const edgeMap: Record<string, unknown> = { ...edgeRawMap, ...vercelMap };
 
   for (const k of keys) {
     const pv = pgMap[k];
@@ -1204,8 +1311,17 @@ export async function mergeKvMapRecord(stateKey: string, recordKey: string, reco
     // ignore
   }
 
-  // 2. Atomic server-side merge on Edge Function (writes to BOTH kv_store_74dadec6 & pa_kv_state via SERVICE_ROLE_KEY)
+  // 1b. Atomic server-side merge via Vercel Serverless API (/api/pa-sync with SUPABASE_SERVICE_ROLE_KEY)
   let serverMerged: Record<string, unknown> | null = null;
+  const vercelMerged = await callVercelSyncApi({
+    method: "POST",
+    body: JSON.stringify({ kind: "kv-map-merge", stateKey, recordKey, record }),
+  });
+  if (vercelMerged?.ok && vercelMerged.stateValue && typeof vercelMerged.stateValue === "object") {
+    serverMerged = vercelMerged.stateValue as Record<string, unknown>;
+  }
+
+  // 2. Atomic server-side merge on Edge Function (writes to BOTH kv_store_74dadec6 & pa_kv_state via SERVICE_ROLE_KEY)
   try {
     const res = await fetch(`${PA_APP_API_BASE}/sync`, {
       method: "POST",
@@ -1286,6 +1402,102 @@ export async function mergeKvArrayById<T>(
 }
 
 /** Ambil ulang daftar karyawan & keamanan password langsung dari backend untuk validasi login lintas perangkat. */
+export interface BackendAuthSyncStatus {
+  connected: boolean;
+  supabaseHost: string;
+  remoteUsersCount: number;
+  localUsersCount: number;
+}
+
+let _lastBackendStatus: BackendAuthSyncStatus = {
+  connected: false,
+  supabaseHost: "",
+  remoteUsersCount: 0,
+  localUsersCount: 0,
+};
+
+export function getLastBackendAuthSyncStatus(): BackendAuthSyncStatus {
+  return _lastBackendStatus;
+}
+
+/** Dorong paksa seluruh akun karyawan & keamanan password dari browser ini ke database Supabase dan verifikasi hasilnya. */
+export async function forcePushLocalAuthStateToBackend(): Promise<{
+  ok: boolean;
+  pushedUsers: number;
+  pushedPasswords: number;
+  supabaseHost: string;
+  errorReason?: string;
+}> {
+  const localUsers = loadPersistedState<Array<Record<string, unknown>>>("pa_managed_users_v1", []);
+  const localSec = loadPersistedState<Record<string, Record<string, unknown>>>("pa_user_password_security_v1", {});
+  const localCfg = loadPersistedState<Record<string, unknown>>("pa_unit_login_configs_v1", {});
+  const isCleanTrial =
+    localStorage.getItem("pa_trial_mode_clean_v1") === "true" ||
+    localStorage.getItem("pa_trial_mode_clean_v1") === '"true"';
+
+  let wroteUsersOk = localUsers.length === 0;
+  let wroteSecOk = Object.keys(localSec).length === 0;
+  let detectedHost = SUPABASE_URL.replace(/^https?:\/\//, "");
+
+  // 1. Coba via Vercel Serverless API (/api/pa-sync dengan SUPABASE_SERVICE_ROLE_KEY)
+  const vProbe = await callVercelSyncApi({ method: "GET" }, "?keys=pa_managed_users_v1");
+  if (vProbe?.supabaseHost) detectedHost = String(vProbe.supabaseHost);
+
+  if (localUsers.length > 0) {
+    const vU = await callVercelSyncApi({
+      method: "POST",
+      body: JSON.stringify({ kind: "users-batch", users: localUsers }),
+    });
+    const pgU = await syncDirectToPostgrest({ kind: "users-batch", users: localUsers });
+    const pgKvU = await syncDirectToPostgrest({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: localUsers });
+    wroteUsersOk = Boolean(vU?.ok || pgU || pgKvU);
+    if (!wroteUsersOk) {
+      await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: localUsers });
+    }
+  }
+
+  if (Object.keys(localSec).length > 0) {
+    const vS = await callVercelSyncApi({
+      method: "POST",
+      body: JSON.stringify({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: localSec }),
+    });
+    const pgS = await syncDirectToPostgrest({
+      kind: "kv-state",
+      stateKey: "pa_user_password_security_v1",
+      stateValue: localSec,
+    });
+    wroteSecOk = Boolean(vS?.ok || pgS);
+    if (!wroteSecOk) {
+      await syncToSupabase({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: localSec });
+    }
+  }
+
+  if (Object.keys(localCfg).length > 0) {
+    await syncToSupabase({ kind: "kv-state", stateKey: "pa_unit_login_configs_v1", stateValue: localCfg });
+  }
+  if (isCleanTrial) {
+    await syncToSupabase({ kind: "kv-state", stateKey: "pa_trial_mode_clean_v1", stateValue: true });
+  }
+
+  const ok = wroteUsersOk && wroteSecOk;
+  let errorReason: string | undefined;
+  if (!ok) {
+    if (vProbe?.reason === "ENV_NOT_CONFIGURED" || detectedHost.startsWith("ekzrnltjbcauihoftkiy")) {
+      errorReason = "Environment variable Supabase di Vercel belum aktif pada deployment ini. Buka Vercel -> Deployments -> klik Redeploy.";
+    } else {
+      errorReason = `Penulisan ke ${detectedHost} ditolak (RLS). Pastikan SQL 20261104 sudah di-Run pada project Supabase tersebut.`;
+    }
+  }
+
+  return {
+    ok,
+    pushedUsers: localUsers.length,
+    pushedPasswords: Object.values(localSec).filter((r) => Boolean(r?.passwordDigest)).length,
+    supabaseHost: detectedHost,
+    errorReason,
+  };
+}
+
 export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
   const keys = [
     "pa_user_password_security_v1",
@@ -1294,7 +1506,7 @@ export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
     "pa_archived_users_v1",
     "pa_trial_mode_clean_v1",
   ];
-  const [, pgUsers, edgeResp] = await Promise.all([
+  const [kvOut, pgUsers, edgeResp, vercelResp] = await Promise.all([
     refreshKvKeysFromBackend(keys),
     restSelect<Record<string, unknown>>("pa_users", "select=*&order=employee_id.asc"),
     fetch(`${PA_APP_API_BASE}/kv?keys=pa_managed_users_v1`, {
@@ -1302,14 +1514,25 @@ export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
     })
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null),
+    callVercelSyncApi({ method: "GET" }, "?keys=pa_managed_users_v1"),
   ]);
+  const vercelUsers = vercelResp && Array.isArray(vercelResp.users) ? (vercelResp.users as Array<Record<string, unknown>>) : [];
   const dbUsers =
-    pgUsers.length > 0
+    vercelUsers.length >= pgUsers.length && vercelUsers.length > 0
+      ? vercelUsers
+      : pgUsers.length > 0
       ? pgUsers
       : edgeResp && Array.isArray(edgeResp.users)
       ? (edgeResp.users as Array<Record<string, unknown>>)
       : [];
-  applyDbUsersToLocal(dbUsers);
+  const synced = applyDbUsersToLocal(dbUsers);
+  const kvManagedCount = Array.isArray(kvOut.pa_managed_users_v1) ? kvOut.pa_managed_users_v1.length : 0;
+  _lastBackendStatus = {
+    connected: Boolean(vercelResp?.ok || pgUsers.length > 0 || kvManagedCount > 0 || edgeResp?.ok),
+    supabaseHost: String(vercelResp?.supabaseHost || SUPABASE_URL.replace(/^https?:\/\//, "")),
+    remoteUsersCount: Math.max(dbUsers.length, kvManagedCount),
+    localUsersCount: synced.length,
+  };
   window.dispatchEvent(new Event("pa-auth-updated"));
 }
 
@@ -1493,13 +1716,11 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
   if (!data) {
     // Jika backend masih kosong saat koneksi pertama dari browser yang sudah punya data lokal, dorong ke backend!
     if (Object.keys(preLocalSec).length > 0) {
-      void syncToSupabase({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: preLocalSec });
+      await syncToSupabase({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: preLocalSec });
     }
     if (preLocalUsers.length > 0) {
-      void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
-      for (const u of preLocalUsers) {
-        void syncToSupabase({ kind: "user-upsert", user: u });
-      }
+      await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
+      await syncToSupabase({ kind: "users-batch", users: preLocalUsers });
     }
     for (const [k, v] of preLocalAllKv) {
       void syncToSupabase({ kind: "kv-state", stateKey: k, stateValue: v });
@@ -1532,7 +1753,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       const remoteDigests = Object.values(remoteSec).filter((r) => Boolean(r?.passwordDigest)).length;
       const mergedDigests = Object.values(mergedSec).filter((r) => Boolean(r?.passwordDigest)).length;
       if (mergedDigests > remoteDigests || (!seenBackendKvKeys.has("pa_user_password_security_v1") && Object.keys(preLocalSec).length > 0)) {
-        void syncToSupabase({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: mergedSec });
+        await syncToSupabase({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: mergedSec });
       }
     }
 
@@ -1556,10 +1777,8 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       }
       if (!seenBackendKvKeys.has("pa_managed_users_v1") || currentKvUsers.length === 0) {
         localStorage.setItem("pa_managed_users_v1", JSON.stringify(preLocalUsers));
-        void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
-        for (const u of preLocalUsers) {
-          void syncToSupabase({ kind: "user-upsert", user: u });
-        }
+        await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
+        await syncToSupabase({ kind: "users-batch", users: preLocalUsers });
       } else {
         const remoteIds = new Set(currentKvUsers.map((u) => String(u.employeeId ?? "").toLowerCase()).filter(Boolean));
         const missingOnRemote = preLocalUsers.filter((u) => {
@@ -1569,10 +1788,8 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         if (missingOnRemote.length > 0) {
           const combined = [...currentKvUsers, ...missingOnRemote];
           localStorage.setItem("pa_managed_users_v1", JSON.stringify(combined));
-          void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: combined });
-          for (const u of missingOnRemote) {
-            void syncToSupabase({ kind: "user-upsert", user: u });
-          }
+          await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: combined });
+          await syncToSupabase({ kind: "users-batch", users: combined });
         }
       }
     }
@@ -1973,6 +2190,12 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       localStorage.setItem("sg_checkin_by_emp_v2", JSON.stringify(checkinByEmp));
     }
 
+    _lastBackendStatus = {
+      connected: true,
+      supabaseHost: SUPABASE_URL.replace(/^https?:\/\//, ""),
+      remoteUsersCount: syncedActiveUsers.length,
+      localUsersCount: syncedActiveUsers.length,
+    };
     window.dispatchEvent(new Event("pa-db-hydrated"));
     window.dispatchEvent(new Event("pa-auth-updated"));
     window.dispatchEvent(new Event("appraisal-updated"));
