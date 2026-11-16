@@ -1439,6 +1439,43 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     ? loadPersistedState<Record<string, unknown>>("pa_unit_login_configs_v1", {})
     : null;
 
+  // Snapshot seluruh state KV aplikasi yang sudah ada di browser lama (untuk auto-backfill sekali jalan setelah RLS dibuka)
+  const preLocalAllKv: Array<[string, unknown]> = [];
+  try {
+    if (typeof localStorage !== "undefined") {
+      const skipKeys = new Set([
+        "pa_active_user_v1",
+        "pa_auth_session_v1",
+        "pa_session_expired_notice_v1",
+        "pa_login_default_pwd_migrated_v2",
+        "pa_user_password_security_v1",
+        "pa_managed_users_v1",
+      ]);
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || skipKeys.has(k)) continue;
+        if (
+          k.startsWith("pa_") ||
+          k.startsWith("kpi_") ||
+          k.startsWith("sg_") ||
+          k.startsWith("calibration_") ||
+          k.startsWith("score_") ||
+          k.startsWith("appraisal_") ||
+          k.startsWith("ms_") ||
+          k.startsWith("inter_department_") ||
+          k.startsWith("year_end_")
+        ) {
+          const rawVal = localStorage.getItem(k);
+          if (rawVal !== null) {
+            try { preLocalAllKv.push([k, JSON.parse(rawVal)]); } catch { /* ignore */ }
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   const data = await fetchBootstrapFromSupabase();
   if (!data) {
     // Jika backend masih kosong saat koneksi pertama dari browser yang sudah punya data lokal, dorong ke backend!
@@ -1447,9 +1484,12 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     }
     if (preLocalUsers.length > 0) {
       void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
+      for (const u of preLocalUsers) {
+        void syncToSupabase({ kind: "user-upsert", user: u });
+      }
     }
-    if (preLocalLoginCfg && Object.keys(preLocalLoginCfg).length > 0) {
-      void syncToSupabase({ kind: "kv-state", stateKey: "pa_unit_login_configs_v1", stateValue: preLocalLoginCfg });
+    for (const [k, v] of preLocalAllKv) {
+      void syncToSupabase({ kind: "kv-state", stateKey: k, stateValue: v });
     }
     return;
   }
@@ -1525,6 +1565,11 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     }
     if (!seenBackendKvKeys.has("pa_unit_login_configs_v1") && preLocalLoginCfg && Object.keys(preLocalLoginCfg).length > 0) {
       void syncToSupabase({ kind: "kv-state", stateKey: "pa_unit_login_configs_v1", stateValue: preLocalLoginCfg });
+    }
+    for (const [k, v] of preLocalAllKv) {
+      if (!seenBackendKvKeys.has(k)) {
+        void syncToSupabase({ kind: "kv-state", stateKey: k, stateValue: v });
+      }
     }
 
     // 2. Hydrate users if available in DB

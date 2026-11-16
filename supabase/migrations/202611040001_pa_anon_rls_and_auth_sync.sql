@@ -1,11 +1,31 @@
 begin;
 
 -- ============================================================================
--- FULL READ/WRITE RLS POLICY UNTUK DIRECT POSTGREST SYNC LINTAS PERANGKAT
--- Memastikan browser/perangkat baru & Vercel dapat membaca dan menyimpan
--- pa_users, pa_kv_state (password security, login config, delegasi), dan modul PA
--- bahkan bila Edge Function belum di-deploy secara terpisah.
+-- MIGRASI LENGKAP & IDEMPOTENT UNTUK ALUR: FIGMA MAKE -> GITHUB -> VERCEL
+-- 1. Memastikan tabel pa_kv_state & kolom lengkap pa_users tersedia
+-- 2. Membuka RLS Read/Write (SELECT, INSERT, UPDATE, DELETE) untuk anon & authenticated
+--    agar frontend Vercel dapat menyimpan & membaca akun, hash password, dan data PA
+--    lintas browser, perangkat baru, dan mode incognito secara langsung via PostgREST.
 -- ============================================================================
+
+create table if not exists public.pa_kv_state (
+  state_key text primary key,
+  state_value jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table if exists public.pa_users
+  add column if not exists no text not null default '',
+  add column if not exists reg_no text not null default '',
+  add column if not exists bagian text not null default '',
+  add column if not exists join_date text not null default '',
+  add column if not exists telegram_no text not null default '',
+  add column if not exists reg_no_ap1 text not null default '',
+  add column if not exists reg_no_ap2 text not null default '',
+  add column if not exists is_hr_unit_checker boolean not null default false,
+  add column if not exists is_hr_icf_validator boolean not null default false;
+
+alter table if exists public.pa_users drop constraint if exists pa_users_role_check;
 
 do $$
 declare tbl text;
@@ -58,7 +78,19 @@ begin
 end;
 $$;
 
-grant usage, select on all sequences in schema public to anon, authenticated, service_role;
+grant usage, select, update on all sequences in schema public to anon, authenticated, service_role;
+
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('pa-evidence', 'pa-evidence', true, 20971520)
+on conflict (id) do update set
+  public = true,
+  file_size_limit = 20971520;
+
+drop policy if exists pa_evidence_public_read on storage.objects;
+create policy pa_evidence_public_read
+  on storage.objects for select
+  to public
+  using (bucket_id = 'pa-evidence');
 
 drop policy if exists pa_evidence_public_write on storage.objects;
 create policy pa_evidence_public_write
