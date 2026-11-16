@@ -9,16 +9,21 @@ import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
-import { saveRCASubmission, loadRCASubmissions } from "../shared/rcaStore";
+import { saveRCASubmission, loadRCASubmissions, submitRCAsForMonths } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
-import { savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { mergeKvMapRecord, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
+import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
 import {
   getActiveUser,
   getGroupCompaniesForUnit,
   getGroupNameForUnit,
   isDirectorRoleOrGrouping,
+  loadManagedUsers,
+  useAuthStore,
+  type ManagedUser,
 } from "../../store/authStore";
 import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type KpiMonthState } from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
@@ -197,6 +202,8 @@ interface PendingRCA {
   satuan: string;
   baseline: string;
   target: string;
+  /** Target tahunan dari kolom Target pada baris KPI di KPI Tracking */
+  targetYearly: string;
   actual: string;
 }
 
@@ -439,25 +446,24 @@ function getRolePrefix(): string {
   return "employee";
 }
 
-function loadSubmitState(): { submitted: boolean; submittedDate: string } {
+function loadSubmitState(employeeId?: string): { submitted: boolean; submittedDate: string } {
   try {
-    const user = getActiveUser();
-    const normId = normalizeEmployeeId(user.employeeId);
+    const targetEmpId = employeeId ?? getActiveUser().employeeId;
+    const normId = normalizeEmployeeId(targetEmpId);
     const wfRec = loadWorkflowRecords().find(
       (r) =>
         r.year === "2026" &&
         r.module === "KPI" &&
         r.phase === "measurement" &&
-        (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
+        (r.employeeId === normId || r.employeeId.toLowerCase() === targetEmpId.toLowerCase()),
     );
     if (wfRec) {
       const isRev = Object.values(wfRec.decisions).some((d) => d?.status === "Revision");
       const isValidated = wfRec.decisions.validator?.status === "Validated";
-      // Setelah Validated, bulan baru yang belum tervalidasi dapat diajukan kembali (siklus bulanan)
       const hasUnvalidatedMonth =
         isValidated &&
         Array.isArray(wfRec.validatedMonths) &&
-        readTrackedKpiMonthLabels(user.employeeId).some((m) => !wfRec.validatedMonths!.includes(m));
+        readTrackedKpiMonthLabels(targetEmpId).some((m) => !wfRec.validatedMonths!.includes(m));
       if (isRev || hasUnvalidatedMonth) {
         return { submitted: false, submittedDate: wfRec.submittedDate || "" };
       }
@@ -469,10 +475,10 @@ function loadSubmitState(): { submitted: boolean; submittedDate: string } {
   return { submitted: false, submittedDate: "" };
 }
 
-function saveSubmitState(submitted: boolean, submittedDate: string): void {
+function saveSubmitState(submitted: boolean, submittedDate: string, employeeId?: string): void {
   try {
-    const user = getActiveUser();
-    const normId = normalizeEmployeeId(user.employeeId);
+    const targetEmpId = employeeId ?? getActiveUser().employeeId;
+    const normId = normalizeEmployeeId(targetEmpId);
     savePersistedState(
       `${KPI_SUBMIT_KEY}_${normId}`,
       { submitted, submittedDate },
@@ -485,23 +491,28 @@ export interface KPITrackingSnapshot {
   cellsMap: Record<string, Record<CellKey, string>>;
 }
 
-export function saveKPITracking(data: KPITrackingSnapshot): void {
+export function saveKPITracking(data: KPITrackingSnapshot, ownerOverride?: { employeeId: string; name: string }): void {
   try {
-    const activeUser = getActiveUser();
-    const normId = normalizeEmployeeId(activeUser.employeeId);
+    const actor = getActiveUser();
+    const owner = ownerOverride ?? actor;
+    const normId = normalizeEmployeeId(owner.employeeId);
+    const isDelegated = normId !== normalizeEmployeeId(actor.employeeId);
+    const actorLabel = isDelegated ? `${actor.name} | atas nama ${owner.name}` : actor.name;
     savePersistedState(`${KPI_STORE_KEY}_${normId}`, data, {
       kind: "kpi-tracking",
-      docKey: `${activeUser.employeeId}:2026`,
-      employeeId: activeUser.employeeId,
+      docKey: `${owner.employeeId}:2026`,
+      employeeId: owner.employeeId,
       period: "2026",
       months: data.months,
       cellsMap: data.cellsMap,
       comments: loadAllKPIComments(),
       audit: {
+        userId: actor.employeeId,
+        userName: actorLabel,
         action: "Update",
         module: "KPI",
         subModule: "KPI Tracking",
-        description: `Updated KPI Tracking realization for ${activeUser.name} (${activeUser.employeeId})`,
+        description: `Updated KPI Tracking realization for ${owner.name} (${owner.employeeId}) by ${actorLabel}`,
       },
     });
   } catch { /* ignore */ }
@@ -897,6 +908,51 @@ function getPrefilledCells(monthLabel: string): Record<CellKey, string> {
 
 // ─── Add Month Modal ──────────────────────────────────────────────────────────
 
+// ─── Validasi operator desimal / ribuan Actual vs Target ─────────────────────
+type NumberSeparatorFormat = { decimal: "." | "," | null; thousands: "." | "," | null };
+
+/** Deteksi pemisah desimal & ribuan dari sebuah nilai angka (mis. "62.5", "1,250.75", "62,5", "1.250,75"). */
+export function detectNumberSeparators(raw: string): NumberSeparatorFormat {
+  const v = String(raw ?? "").trim().replace(/[^0-9.,]/g, "");
+  const hasDot = v.includes(".");
+  const hasComma = v.includes(",");
+  if (hasDot && hasComma) {
+    return v.lastIndexOf(".") > v.lastIndexOf(",") ? { decimal: ".", thousands: "," } : { decimal: ",", thousands: "." };
+  }
+  const sep = hasDot ? "." : hasComma ? "," : null;
+  if (!sep) return { decimal: null, thousands: null };
+  const parts = v.split(sep);
+  const tail = parts[parts.length - 1];
+  // Grup 3 digit berulang (1.250 / 1,250,000) dianggap pemisah ribuan; selain itu pemisah desimal
+  const looksThousands = parts.length > 2 || (tail.length === 3 && parts[0].length >= 1 && parts[0].length <= 3 && parts[0] !== "0");
+  return looksThousands ? { decimal: null, thousands: sep } : { decimal: sep, thousands: null };
+}
+
+/** Pesan error bila operator pada Actual tidak sama dengan operator pada Target indikator KPI tsb. */
+export function separatorMismatchMessage(target: string, actual: string): string | null {
+  const a = String(actual ?? "").trim();
+  if (!a || !/[.,]/.test(a)) return null;
+  const t = detectNumberSeparators(target);
+  if (!t.decimal && !t.thousands) return null;
+  const act = detectNumberSeparators(a);
+  const label = (sep: "." | ",") => (sep === "." ? "titik (.)" : "koma (,)");
+  const expectedDecimal = t.decimal ?? (t.thousands === "." ? "," : ".");
+  if (act.decimal && act.decimal !== expectedDecimal) {
+    return `Operator desimal harus menggunakan ${label(expectedDecimal)} sesuai format Target (${target}).`;
+  }
+  if (act.thousands && t.thousands && act.thousands !== t.thousands) {
+    return `Operator ribuan harus menggunakan ${label(t.thousands)} sesuai format Target (${target}).`;
+  }
+  if (act.thousands && !t.thousands && act.thousands === expectedDecimal) {
+    return null;
+  }
+  if (act.thousands && !t.thousands && act.thousands !== expectedDecimal) {
+    // mis. Target "62.5" lalu Actual "1,250" → koma dianggap tidak sesuai format desimal titik
+    return `Gunakan operator ${label(expectedDecimal)} sesuai format Target (${target}).`;
+  }
+  return null;
+}
+
 function AddMonthModal({
   existingLabels,
   onAdd,
@@ -938,6 +994,21 @@ function AddMonthModal({
   };
 
   const missingFields = getMissingFields();
+  // Target per indikator: baris "Target" pada KPI yang sama (atau Target tahunan bila tidak ada)
+  const targetFor = (kpi: KPIItem): string => {
+    const tIdx = kpi.subRows.findIndex((sb) => !sb.compute && sb.label.toLowerCase().startsWith("target"));
+    return (tIdx >= 0 ? cells[ck(kpi.no, tIdx)] : "") || kpi.monthlyTargets?.[label] || kpi.target2026 || "";
+  };
+  const separatorErrors: Record<string, string> = {};
+  KPI_ITEMS.forEach((kpi) => {
+    const target = targetFor(kpi);
+    kpi.subRows.forEach((sub, si) => {
+      if (sub.compute || sub.label.toLowerCase().startsWith("target")) return;
+      const msg = separatorMismatchMessage(target, cells[ck(kpi.no, si)] ?? "");
+      if (msg) separatorErrors[ck(kpi.no, si)] = msg;
+    });
+  });
+  const separatorErrorCount = Object.keys(separatorErrors).length;
   const missingByKpi = missingFields.reduce<Record<string, number>>((acc, f) => {
     acc[f.kpiNo] = (acc[f.kpiNo] ?? 0) + 1;
     return acc;
@@ -952,6 +1023,10 @@ function AddMonthModal({
 
   const handleAdd = () => {
     if (!label) return;
+    if (separatorErrorCount > 0) {
+      toast.error(`${separatorErrorCount} nilai Actual menggunakan operator angka yang tidak sesuai dengan Target. Perbaiki terlebih dahulu.`);
+      return;
+    }
     setAttempted(true);
     if (missingFields.length > 0) {
       setShowEmptyConfirm(true);
@@ -1097,17 +1172,25 @@ function AddMonthModal({
                                 <Lock className="w-3 h-3 text-sky-400 shrink-0" />
                               </div>
                             ) : (
-                              <input
-                                type="text"
-                                value={cells[ck(kpi.no, si)] ?? ""}
-                                onChange={(e) => setVal(ck(kpi.no, si), e.target.value)}
-                                placeholder="Masukkan nilai aktual"
-                                className={`text-xs border rounded px-2 py-1.5 outline-none transition-colors ${
-                                  empty
-                                    ? "border-red-400 bg-red-50 focus:border-red-500 placeholder-red-300"
-                                    : "border-gray-200 focus:border-[#1A284F]"
-                                }`}
-                              />
+                              <>
+                                <input
+                                  type="text"
+                                  value={cells[ck(kpi.no, si)] ?? ""}
+                                  onChange={(e) => setVal(ck(kpi.no, si), e.target.value)}
+                                  placeholder="Masukkan nilai aktual"
+                                  className={`text-xs border rounded px-2 py-1.5 outline-none transition-colors ${
+                                    empty || separatorErrors[ck(kpi.no, si)]
+                                      ? "border-red-400 bg-red-50 focus:border-red-500 placeholder-red-300"
+                                      : "border-gray-200 focus:border-[#1A284F]"
+                                  }`}
+                                />
+                                {separatorErrors[ck(kpi.no, si)] && (
+                                  <span className="flex items-start gap-1 text-[10px] font-medium text-red-600">
+                                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                                    {separatorErrors[ck(kpi.no, si)]}
+                                  </span>
+                                )}
+                              </>
                             )}
                           </div>
                         );
@@ -1122,6 +1205,11 @@ function AddMonthModal({
 
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100">
           <div>
+            {separatorErrorCount > 0 && (
+              <p className="text-[11px] text-red-600 font-semibold">
+                {separatorErrorCount} field Actual memakai operator angka berbeda dari Target
+              </p>
+            )}
             {attempted && missingFields.length > 0 && (
               <p className="text-[11px] text-amber-600 font-medium">
                 {missingFields.length} field kosong — akan ditandai merah di tabel
@@ -1137,7 +1225,8 @@ function AddMonthModal({
             </button>
             <button
               onClick={handleAdd}
-              disabled={!label || !available.length}
+              disabled={!label || !available.length || separatorErrorCount > 0}
+              title={separatorErrorCount > 0 ? "Perbaiki operator angka (titik/koma) pada field Actual agar sesuai dengan Target" : undefined}
               className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -1152,15 +1241,19 @@ function AddMonthModal({
 
 // ─── Confirm / Success modals ─────────────────────────────────────────────────
 
-function ConfirmModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+function ConfirmModal({ onCancel, onConfirm, months, rcaCount }: { onCancel: () => void; onConfirm: () => void; months?: string[]; rcaCount?: number }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full mx-4 text-center">
         <div className="w-14 h-14 rounded-full bg-[#1A284F]/10 flex items-center justify-center mx-auto mb-4">
           <Send className="w-6 h-6 text-[#1A284F]" />
         </div>
-        <h3 className="font-bold text-gray-900 text-lg mb-1">Action Confirmation</h3>
-        <p className="text-gray-500 text-sm mb-6">Are you sure you want to submit your KPI Tracking for approval?</p>
+        <h3 className="font-bold text-gray-900 text-lg mb-1">Konfirmasi Submit KPI Tracking</h3>
+        <p className="text-gray-500 text-sm mb-6">
+          KPI Tracking{months && months.length ? <> bulan <strong>{months.join(", ")}</strong></> : null}
+          {rcaCount ? <> beserta <strong>{rcaCount} RCA</strong></> : null} akan dikirim ke approver
+          (Checker → Approver 1 → Approver 2 → Validator). Lanjutkan?
+        </p>
         <div className="flex gap-3 justify-center">
           <button onClick={onCancel} className="px-6 py-2 rounded-full border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">Cancel</button>
           <button onClick={onConfirm} className="px-6 py-2 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors">Submit</button>
@@ -1216,37 +1309,58 @@ function RCAListEditor({ items: rawItems, onChange }: { items: string[] | string
   );
 }
 
+function parseKpiRcaEvidence(raw: string): { name: string; url?: string } {
+  const str = String(raw ?? "");
+  const sep = str.indexOf("||");
+  if (sep >= 0) return { name: str.slice(0, sep) || "file", url: str.slice(sep + 2) || undefined };
+  return { name: str };
+}
+
 function RCAMultiFileUpload({ files: rawFiles, onChange }: { files: string[] | string; onChange: (v: string[]) => void }) {
   const files = Array.isArray(rawFiles) ? rawFiles : (rawFiles ? [rawFiles] : []);
   const ref = useRef<HTMLInputElement>(null);
-  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [uploading, setUploading] = useState(false);
+  const handleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawList = Array.from(e.target.files || []);
-    rawList.forEach((rawFile) => {
-      void uploadEvidenceFileToSupabase(rawFile, {
-        moduleType: "RCA",
-        period: "2026",
-        month: "June",
-      });
-    });
-    const newFiles = rawList.map((f) => f.name);
-    if (newFiles.length) onChange([...files, ...newFiles]);
     e.target.value = "";
+    if (!rawList.length) return;
+    setUploading(true);
+    try {
+      const uploaded: string[] = [];
+      for (const rawFile of rawList) {
+        const rec = await uploadEvidenceFileToSupabase(rawFile, {
+          moduleType: "RCA",
+          period: "2026",
+        });
+        uploaded.push(rec?.url ? `${rawFile.name}||${rec.url}` : rawFile.name);
+      }
+      if (uploaded.length) onChange([...files, ...uploaded]);
+    } finally {
+      setUploading(false);
+    }
   };
   return (
     <div className="flex flex-col gap-1">
-      {files.map((f, idx) => (
-        <div key={idx} className="flex items-center gap-1 text-[10px] text-green-700">
-          <FileText className="w-3 h-3 shrink-0 text-green-500" />
-          <span className="flex-1 truncate" title={f}>{f}</span>
-          <button onClick={() => onChange(files.filter((_, i) => i !== idx))} className="text-gray-300 hover:text-red-400 transition-colors"><X className="w-3 h-3" /></button>
-        </div>
-      ))}
-      <button onClick={() => ref.current?.click()}
-        className="flex items-center gap-1.5 text-[10px] text-blue-600 font-medium hover:text-blue-700 mt-0.5 border border-dashed border-blue-300 rounded px-2 py-1 bg-blue-50/40 hover:bg-blue-50 transition-colors">
-        <Upload className="w-3 h-3" /> Upload file
+      {files.map((f, idx) => {
+        const parsed = parseKpiRcaEvidence(f);
+        return (
+          <div key={idx} className="flex items-center gap-1 text-[10px] text-green-700">
+            <FileText className="w-3 h-3 shrink-0 text-green-500" />
+            {parsed.url ? (
+              <a href={parsed.url} target="_blank" rel="noreferrer" download={parsed.name} className="flex-1 truncate hover:underline" title={parsed.name}>{parsed.name}</a>
+            ) : (
+              <span className="flex-1 truncate" title={parsed.name}>{parsed.name}</span>
+            )}
+            <button type="button" onClick={() => onChange(files.filter((_, i) => i !== idx))} className="text-gray-300 hover:text-red-400 transition-colors"><X className="w-3 h-3" /></button>
+          </div>
+        );
+      })}
+      <button type="button" disabled={uploading} onClick={() => ref.current?.click()}
+        className="flex items-center gap-1.5 text-[10px] text-blue-600 font-medium hover:text-blue-700 mt-0.5 border border-dashed border-blue-300 rounded px-2 py-1 bg-blue-50/40 hover:bg-blue-50 transition-colors disabled:opacity-50">
+        <Upload className="w-3 h-3" /> {uploading ? "Mengunggah…" : "Upload file"}
       </button>
       <p className="text-[9px] text-gray-400">JPG, PNG, PDF</p>
-      <input ref={ref} type="file" accept=".jpg,.jpeg,.png,.pdf" multiple className="hidden" onChange={handleFiles} />
+      <input ref={ref} type="file" accept=".jpg,.jpeg,.png,.pdf" multiple className="hidden" onChange={(e) => { void handleFiles(e); }} />
     </div>
   );
 }
@@ -1416,7 +1530,7 @@ function RCAModal({
       <div className="mx-8 mt-4 flex items-center justify-between gap-4 px-4 py-3 rounded-xl bg-red-50 border border-red-100 shrink-0">
         <div className="flex items-center gap-2">
           <Info className="w-4 h-4 text-red-400 shrink-0" />
-          <p className="text-xs text-red-600">Target KPI tidak tercapai — RCA wajib diisi sebelum submit KPI Tracking.</p>
+          <p className="text-xs text-red-600">Target KPI tidak tercapai — RCA wajib diisi sebelum submit KPI Tracking di bulan berjalan.</p>
         </div>
         <div className="flex items-center gap-6 shrink-0">
           <div className="text-right">
@@ -1440,7 +1554,7 @@ function RCAModal({
               <p className="text-xs font-bold text-white uppercase tracking-widest">Informasi KPI</p>
             </div>
             <div className="p-5 bg-white">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Periode</label>
                   <p className="text-xs text-gray-700 px-3 py-2 bg-gray-50 rounded-lg border border-gray-100 min-h-[32px] flex items-center gap-1.5">
@@ -1460,6 +1574,10 @@ function RCAModal({
                   <p className="text-xs text-gray-500 italic px-3 py-2 bg-blue-50 rounded-lg border border-blue-100 min-h-[32px] flex items-center">{form.baseline || "—"}</p>
                 </div>
                 <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wide text-blue-600">Target (Yearly) <span className="text-blue-400 font-normal normal-case tracking-normal">(auto)</span></label>
+                  <p className="text-xs font-bold text-[#1A284F] px-3 py-2 bg-blue-50 rounded-lg border border-blue-100 min-h-[32px] flex items-center">{pending.targetYearly || "—"}</p>
+                </div>
+                <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold uppercase tracking-wide text-blue-600">Monthly Target <span className="text-blue-400 font-normal normal-case tracking-normal">(auto)</span></label>
                   <p className="text-xs font-bold text-[#1A284F] px-3 py-2 bg-blue-50 rounded-lg border border-blue-100 min-h-[32px] flex items-center">{form.target || "—"}</p>
                 </div>
@@ -1477,7 +1595,7 @@ function RCAModal({
                 />
               </div>
               <p className="mt-2 text-[10px] text-blue-500 flex items-center gap-1">
-                <Info className="w-3 h-3 shrink-0" /> Periode, KPI, Satuan, Baseline, dan Monthly Target terisi otomatis sesuai tag RCA; field Actual dapat disesuaikan.
+                <Info className="w-3 h-3 shrink-0" /> Periode, KPI, Satuan, Baseline, Target (Yearly), dan Monthly Target terisi otomatis sesuai baris KPI pada tabel KPI Tracking; field Actual dapat disesuaikan.
               </p>
             </div>
           </div>
@@ -1551,11 +1669,20 @@ function RCAModal({
                           { fk: "kenapaC" as const, label: "Kenapa C? (D)", hint: "Alasan/kendala sehingga (C) terjadi" },
                         ].map(({ fk, label, hint }) => (
                           <div key={fk} className="flex flex-col gap-1">
-                            <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{label}</label>
+                            <label className={`text-[10px] font-bold uppercase tracking-wide ${hasFactor ? "text-gray-500" : "text-gray-300"}`}>{label}</label>
                             {hint && <p className="text-[10px] text-gray-400 -mt-0.5">{hint}</p>}
-                            <textarea rows={2} value={block[fk]}
-                              onChange={(e) => updateBlock(block.id, { [fk]: e.target.value })}
-                              placeholder="—" className={F_CLS + " resize-none"} />
+                            <div className="group relative">
+                              <textarea rows={2} value={block[fk]}
+                                disabled={!hasFactor}
+                                onChange={(e) => updateBlock(block.id, { [fk]: e.target.value })}
+                                placeholder={hasFactor ? "—" : "Pilih Faktor terlebih dahulu"}
+                                className={F_CLS + " resize-none disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-300"} />
+                              {!hasFactor && (
+                                <span role="tooltip" className="pointer-events-none invisible absolute left-1/2 top-full z-20 mt-1 w-64 -translate-x-1/2 rounded-lg bg-[#1A284F] px-3 py-2 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100">
+                                  Pilih Faktor Internal atau Faktor Eksternal pada Masalah Utama terlebih dahulu untuk mengisi {label}.
+                                </span>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1571,9 +1698,9 @@ function RCAModal({
                             <Plus className="w-3 h-3" /> Tambah Action Plan
                           </button>
                         </div>
-                        <div className="p-4 flex flex-col gap-3">
+                        <div className="p-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
                           {block.actionPlans.length === 0 && (
-                            <p className="text-xs text-gray-400 text-center py-4 border border-dashed border-gray-200 rounded-lg">
+                            <p className="lg:col-span-2 text-xs text-gray-400 text-center py-4 border border-dashed border-gray-200 rounded-lg">
                               Klik "Tambah Action Plan" untuk menambahkan.
                             </p>
                           )}
@@ -1676,7 +1803,7 @@ function RCAModal({
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-bold text-[#1A284F]">Submit Root Cause Analysis (RCA)?</h3>
             <p className="text-sm text-gray-600 leading-relaxed">
-              RCA untuk <strong>{pending.kpiName}</strong> ({pending.monthLabel}) akan disimpan ke menu RCA Measurement dan masuk ke alur approval (Check → Approval 1 → Approval 2 → Validate).
+              RCA untuk <strong>{pending.kpiName}</strong> ({pending.monthLabel}) akan disimpan ke menu RCA Measurement (tag RCA berubah kuning) dan dikirim ke approver bersama <strong>Submit KPI Tracking</strong> bulan tsb (Check → Approval 1 → Approval 2 → Validate).
             </p>
             <div className="flex justify-end gap-3 pt-2">
               <button
@@ -2009,6 +2136,7 @@ function KPITable({
   rcaMap,
   storedRCAStatus,
   approvedEditCells,
+  highlightMissingRca,
 }: {
   months: MonthEntry[];
   editable: boolean;
@@ -2024,6 +2152,8 @@ function KPITable({
   rcaMap?: RCAMap;
   storedRCAStatus?: Record<string, RCAStatus>;
   approvedEditCells?: Set<string>;
+  /** Highlight tag RCA merah (belum add RCA) saat Submit KPI Tracking diklik */
+  highlightMissingRca?: boolean;
 }) {
   const sectionItems = (sec: "A" | "B") => KPI_ITEMS.filter((k) => k.section === sec);
 
@@ -2200,11 +2330,16 @@ function KPITable({
 
                           const canInteract = isFilled ? !!onViewRCA : !!onOpenRCA;
 
+                          const highlightCls =
+                            !isFilled && highlightMissingRca
+                              ? " ring-2 ring-red-500 ring-offset-1 scale-110 shadow-[0_0_0_4px_rgba(248,113,113,0.35)]"
+                              : "";
                           if (canInteract) {
                             return (
                               <button
                                 onClick={handleTagClick}
-                                className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${tagStyle.cls}`}
+                                data-rca-missing={!isFilled ? "true" : undefined}
+                                className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${tagStyle.cls}${highlightCls}`}
                                 title={tagStyle.label}
                               >
                                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tagStyle.dot}`} />
@@ -2214,7 +2349,8 @@ function KPITable({
                           }
                           return (
                             <span
-                              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold ${tagStyle.cls.replace(/ hover:\S+/g, "").replace(" animate-pulse", "")}`}
+                              data-rca-missing={!isFilled ? "true" : undefined}
+                              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${tagStyle.cls.replace(/ hover:\S+/g, "").replace(" animate-pulse", "")}${highlightCls}`}
                               title={tagStyle.label}
                             >
                               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tagStyle.dot}`} />
@@ -2340,8 +2476,8 @@ function KPITable({
                     {isEditableMth && (
                       <span className="text-[9px] font-bold bg-white/20 text-white px-1.5 py-0.5 rounded-full tracking-wide">editable</span>
                     )}
-                    {editable && (
-                      <button onClick={() => onRemoveMonth?.(m.id)} className="text-white/40 hover:text-red-300 transition-colors" title="Remove">
+                    {editable && onRemoveMonth && (
+                      <button onClick={() => onRemoveMonth(m.id)} className="text-white/40 hover:text-red-300 transition-colors" title="Remove">
                         <X className="w-3 h-3" />
                       </button>
                     )}
@@ -2359,13 +2495,13 @@ function KPITable({
             </th>
             {editable && (
               <th className="border border-[#1A284F]/30 py-3 px-2 text-center" style={{ minWidth: 48 }}>
-                <button
+                {onAddMonth && <button
                   onClick={onAddMonth}
                   className="flex items-center justify-center w-7 h-7 rounded-full bg-white/20 hover:bg-white/40 transition-colors mx-auto"
                   title="Add month"
                 >
                   <Plus className="w-4 h-4 text-white" />
-                </button>
+                </button>}
               </th>
             )}
           </tr>
@@ -2475,14 +2611,14 @@ function KPITable({
   );
 }
 
-// ─── RCA Read-Only Viewer Modal ───────────────────────────────────────────────
+// ─── RCA Read-Only Viewer Modal (Format Tabel Gambar 1) ──────────────────────
 
 const AP_STATUS_STYLE: Record<string, string> = {
-  "Selesai":             "bg-green-100 text-green-700 border-green-200",
-  "Sedang dilaksanakan": "bg-amber-100 text-amber-700 border-amber-200",
-  "Belum dilaksanakan":  "bg-red-100 text-red-700 border-red-200",
-  "Ditunda":             "bg-purple-100 text-purple-700 border-purple-200",
-  "Dibatalkan":          "bg-gray-100 text-gray-500 border-gray-200",
+  "Selesai":             "bg-green-50 text-green-700",
+  "Sedang dilaksanakan": "bg-amber-50 text-amber-700",
+  "Belum dilaksanakan":  "bg-red-50 text-red-700",
+  "Ditunda":             "bg-purple-50 text-purple-700",
+  "Dibatalkan":          "bg-red-100 text-red-700",
 };
 
 function RCAReadOnlyModal({
@@ -2490,6 +2626,7 @@ function RCAReadOnlyModal({
   secondaryKey,
   kpiName,
   monthLabel,
+  ownerEmployeeId,
   onClose,
   onNavigate,
 }: {
@@ -2497,32 +2634,40 @@ function RCAReadOnlyModal({
   secondaryKey: string;
   kpiName: string;
   monthLabel: string;
+  ownerEmployeeId?: string;
   onClose: () => void;
   onNavigate: () => void;
 }) {
-  // Load the stored submission by primary or secondary key
   const sub = React.useMemo(() => {
-    const all = loadRCASubmissions();
+    const all = loadRCASubmissions(ownerEmployeeId);
     return all.find((s) => s.key === rcaKey) ?? all.find((s) => s.key === secondaryKey) ?? null;
-  }, [rcaKey, secondaryKey]);
+  }, [rcaKey, secondaryKey, ownerEmployeeId]);
 
-  const blocks = sub?.masalahBlocks ?? (sub ? [{
-    id: "flat",
-    masalahUtama: sub.masalahUtama.join(", "),
-    kenapaA: sub.kenapaA,
-    kenapaB: sub.kenapaB,
-    kenapaC: sub.kenapaC,
-    actionPlans: sub.actionPlans,
-  }] : []);
+  const blocks = sub?.masalahBlocks && sub.masalahBlocks.length > 0
+    ? sub.masalahBlocks
+    : sub
+    ? [{
+        id: "flat",
+        masalahUtama: sub.masalahUtama.join(" / "),
+        kenapaA: sub.kenapaA,
+        kenapaB: sub.kenapaB,
+        kenapaC: sub.kenapaC,
+        actionPlans: sub.actionPlans,
+      }]
+    : [];
+
+  const totalRows = blocks.reduce((acc, b) => acc + Math.max(1, b.actionPlans.length), 0);
+  const th = "border border-[#1A284F]/30 py-3 px-3 text-center font-semibold text-xs whitespace-nowrap";
+  const tdBase = "border border-gray-200 align-top py-2 px-3 bg-white text-gray-700";
+  const tdAP = "border border-gray-200 align-top py-2 px-3 bg-blue-50/20 text-gray-700";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl">
-        {/* Header */}
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[95vw]" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100">
           <div>
             <h3 className="font-bold text-[#1A284F] text-base leading-tight">{kpiName}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">RCA — {monthLabel} · Hanya Baca</p>
+            <p className="text-xs text-gray-500 mt-0.5">RCA — {monthLabel} · Format Tabel RCA</p>
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-4">
             <button
@@ -2530,7 +2675,7 @@ function RCAReadOnlyModal({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
             >
               <ArrowLeft className="w-3 h-3 rotate-180" />
-              Buka Submenu RCA
+              Buka Submenu RCA (Update Progress)
             </button>
             <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
               <X className="w-4 h-4 text-gray-500" />
@@ -2541,81 +2686,109 @@ function RCAReadOnlyModal({
         {!sub ? (
           <div className="px-6 py-10 text-center text-sm text-gray-400">Data RCA tidak ditemukan.</div>
         ) : (
-          <div className="px-6 py-4 flex flex-col gap-5 max-h-[70vh] overflow-y-auto">
-            {/* Meta info */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              {[
-                { label: "KPI Indicator", value: sub.kpiIndicator },
-                { label: "Periode", value: `${sub.periode} ${sub.year}` },
-                { label: "Target", value: sub.targetMonthly || "—" },
-                { label: "Aktual", value: sub.actual || "—" },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex flex-col gap-0.5 bg-gray-50 rounded-lg px-3 py-2 border border-gray-100">
-                  <span className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
-                  <span className="font-semibold text-gray-800">{value}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Masalah blocks */}
-            {blocks.map((block, bi) => (
-              <div key={block.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="bg-[#1A284F] px-4 py-2 text-white text-xs font-bold">
-                  Masalah #{bi + 1}{block.masalahUtama ? ` — ${block.masalahUtama}` : ""}
-                </div>
-                <div className="px-4 py-3 flex flex-col gap-3">
-                  {/* 5 Why */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                    {[
-                      { label: "Kenapa A (Gejala)", value: block.kenapaA },
-                      { label: "Kenapa B (Penyebab)", value: block.kenapaB },
-                      { label: "Kenapa C (Akar Masalah)", value: block.kenapaC },
-                    ].map(({ label, value }) => (
-                      <div key={label} className="flex flex-col gap-0.5">
-                        <span className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
-                        <p className="text-gray-700 bg-gray-50 rounded px-2 py-1.5 border border-gray-100 leading-relaxed min-h-[2rem]">{value || "—"}</p>
-                      </div>
+          <div className="p-6 max-h-[75vh] overflow-y-auto">
+            <div className="overflow-x-auto rounded-xl border border-gray-200">
+              <table className="border-collapse text-xs" style={{ minWidth: 1900 }}>
+                <thead>
+                  <tr className="bg-[#1A284F] text-white">
+                    {([
+                      ["No",42],["Periode",72],["KPI",160],["Satuan",90],["Baseline",90],["Target",80],["Actual",80],
+                      ["Masalah Utama (A)",180],["Kenapa A? (B)",150],["Kenapa B? (C)",150],["Kenapa C? (D)",150],
+                      ["Action Plan",180],["Target Penyelesaian",120],["PIC",120],["Status Perbaikan",130],
+                      ["Keterangan",160],["Output",160],["Evidence",160],
+                    ] as [string, number][]).map(([h, w]) => (
+                      <th key={h} className={th} style={{ minWidth: w }}>{h}</th>
                     ))}
-                  </div>
-
-                  {/* Action Plans table */}
-                  {block.actionPlans.length > 0 && (
-                    <div className="overflow-x-auto rounded-lg border border-gray-200">
-                      <table className="text-xs w-full border-collapse">
-                        <thead>
-                          <tr className="bg-gray-50 text-gray-500 uppercase text-[10px] tracking-wide">
-                            {["#", "Tindak Lanjut", "Target Selesai", "PIC", "Status"].map((h) => (
-                              <th key={h} className="border border-gray-200 px-3 py-2 text-left font-semibold whitespace-nowrap">{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {block.actionPlans.map((ap, ai) => (
-                            <tr key={ap.id} className="even:bg-gray-50/50">
-                              <td className="border border-gray-200 px-3 py-2 text-center text-gray-500 font-medium">{ai + 1}</td>
-                              <td className="border border-gray-200 px-3 py-2 text-gray-700 max-w-xs">{ap.action || "—"}</td>
-                              <td className="border border-gray-200 px-3 py-2 whitespace-nowrap text-gray-600">{ap.targetDate || "—"}</td>
-                              <td className="border border-gray-200 px-3 py-2 whitespace-nowrap text-gray-600">{ap.pic || "—"}</td>
-                              <td className="border border-gray-200 px-3 py-2">
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold border ${AP_STATUS_STYLE[ap.status] ?? "bg-gray-100 text-gray-500 border-gray-200"}`}>
-                                  {ap.status || "—"}
+                  </tr>
+                </thead>
+                <tbody>
+                  {blocks.flatMap((block, bi) => {
+                    const isInternal = block.masalahUtama.startsWith("[Faktor Internal]");
+                    const isEksternal = block.masalahUtama.startsWith("[Faktor Eksternal]");
+                    const hasFactor = isInternal || isEksternal;
+                    const factorLabel = isInternal ? "Faktor Internal" : isEksternal ? "Faktor Eksternal" : null;
+                    const bodyText = hasFactor ? block.masalahUtama.replace(/^\[Faktor (Internal|Eksternal)\]\s*/, "") : block.masalahUtama;
+                    const aps = block.actionPlans.length > 0 ? block.actionPlans : [null];
+                    const blockRows = aps.length;
+                    return aps.map((ap, ai) => (
+                      <tr key={`${bi}_${ai}`} className="border-t border-gray-200">
+                        {bi === 0 && ai === 0 && (
+                          <>
+                            <td rowSpan={totalRows} className={`${tdBase} text-center font-semibold text-gray-600`}>1</td>
+                            <td rowSpan={totalRows} className={`${tdBase} text-center`}>
+                              <span className="px-2 py-0.5 bg-[#1A284F]/10 text-[#1A284F] rounded-full text-[10px] font-bold">{sub.periode || "—"}</span>
+                            </td>
+                            <td rowSpan={totalRows} className={`${tdBase} font-medium text-gray-800`}>{sub.kpiIndicator || "—"}</td>
+                            <td rowSpan={totalRows} className={`${tdBase} text-gray-600`}>{sub.satuan || "—"}</td>
+                            <td rowSpan={totalRows} className={`${tdBase} text-gray-500 italic`}>{sub.baseline || "—"}</td>
+                            <td rowSpan={totalRows} className={`${tdBase} text-center font-bold text-[#1A284F]`}>{sub.targetMonthly || "—"}</td>
+                            <td rowSpan={totalRows} className={`${tdBase} text-center font-bold text-gray-800`}>{sub.actual || "—"}</td>
+                          </>
+                        )}
+                        {ai === 0 && (
+                          <>
+                            <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>
+                              {factorLabel && (
+                                <span className={`inline-block mb-1 px-2 py-0.5 rounded-full text-[9px] font-bold ${isInternal ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"}`}>
+                                  {factorLabel}
                                 </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
+                              )}
+                              <p>{bodyText || "—"}</p>
+                            </td>
+                            <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>{block.kenapaA || "—"}</td>
+                            <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>{block.kenapaB || "—"}</td>
+                            <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>{block.kenapaC || "—"}</td>
+                          </>
+                        )}
+                        {ap ? (
+                          <>
+                            <td className={`${tdAP} leading-relaxed`}>{ap.action || "—"}</td>
+                            <td className={`${tdAP} text-center`}>{ap.targetDate || "—"}</td>
+                            <td className={tdAP}>{ap.pic || "—"}</td>
+                            <td className={`${tdAP} text-center`}>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${AP_STATUS_STYLE[ap.status] ?? "bg-gray-100 text-gray-500"}`}>
+                                {ap.status || "—"}
+                              </span>
+                            </td>
+                            <td className={tdAP}>
+                              {ap.keterangan.length > 0
+                                ? <ul className="flex flex-col gap-0.5">{ap.keterangan.map((k, ki) => <li key={ki} className="text-[10px] leading-relaxed">• {k}</li>)}</ul>
+                                : <span className="text-gray-300 text-[10px]">—</span>}
+                            </td>
+                            <td className={tdAP}>
+                              {ap.output.length > 0
+                                ? <ul className="flex flex-col gap-0.5">{ap.output.map((o, oi) => <li key={oi} className="text-[10px] leading-relaxed">• {o}</li>)}</ul>
+                                : <span className="text-gray-300 text-[10px]">—</span>}
+                            </td>
+                            <td className={tdAP}>
+                              {ap.evidence.length > 0
+                                ? <div className="flex flex-col gap-0.5">{ap.evidence.map((ev, ei) => {
+                                    const parsed = parseKpiRcaEvidence(ev);
+                                    return parsed.url ? (
+                                      <a key={ei} href={parsed.url} target="_blank" rel="noreferrer" download={parsed.name} className="flex items-center gap-1 text-[10px] text-green-700 font-medium hover:underline">
+                                        <FileText className="w-3 h-3 shrink-0 text-green-600" />{parsed.name}
+                                      </a>
+                                    ) : (
+                                      <span key={ei} className="flex items-center gap-1 text-[10px] text-green-700 font-medium"><FileText className="w-3 h-3 shrink-0 text-green-600" />{parsed.name}</span>
+                                    );
+                                  })}</div>
+                                : <span className="text-gray-300 text-[10px]">—</span>}
+                            </td>
+                          </>
+                        ) : (
+                          <td colSpan={7} className={`${tdAP} text-center text-gray-300`}>Belum ada action plan</td>
+                        )}
+                      </tr>
+                    ));
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
-        {/* Footer */}
         <div className="px-6 py-3 border-t border-gray-100 flex items-center justify-between">
-          <p className="text-[11px] text-gray-400">Edit atau update RCA di submenu Performance Appraisal Measurement.</p>
+          <p className="text-[11px] text-gray-400">Update progress (Status Perbaikan, Keterangan, Output, Evidence) tersedia melalui View Detail di submenu RCA.</p>
           <button onClick={onClose} className="px-4 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
             Tutup
           </button>
@@ -2657,24 +2830,34 @@ function EvidenceUploadSection({
   onAdd,
   onRemove,
   editable,
+  canDelete = false,
+  ownerUser,
   monthLabels,
+  uploadMonthLabels,
 }: {
   files: EvidenceFile[];
   onAdd: (files: EvidenceFile[]) => void;
-  onRemove: (id: string) => void;
+  onRemove?: (id: string) => void;
   editable: boolean;
+  canDelete?: boolean;
+  ownerUser?: ManagedUser;
   monthLabels: string[];
+  /** Bulan yang boleh diupload (bulan tracking baru / belum diajukan / revisi) */
+  uploadMonthLabels?: string[];
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [selectedMonth, setSelectedMonth] = useState<string>(monthLabels[monthLabels.length - 1] ?? "");
+  const selectable = uploadMonthLabels ?? monthLabels;
+  const [selectedMonth, setSelectedMonth] = useState<string>(selectable[selectable.length - 1] ?? "");
   const [open, setOpen] = useState(true);
   const [staged, setStaged] = useState<{ files: EvidenceFile[]; month: string } | null>(null);
 
+  // Saat bulan tracking baru ditambahkan, otomatis pilih bulan terbaru agar evidence langsung dapat diupload
+  const selectableKey = selectable.join("|");
   React.useEffect(() => {
-    if (monthLabels.length && !monthLabels.includes(selectedMonth)) {
-      setSelectedMonth(monthLabels[monthLabels.length - 1]);
+    if (selectable.length && (!selectable.includes(selectedMonth) || selectedMonth !== selectable[selectable.length - 1])) {
+      setSelectedMonth(selectable[selectable.length - 1]);
     }
-  }, [monthLabels]);
+  }, [selectableKey]);
 
   const handleFiles = (raw: FileList | null) => {
     if (!raw || !selectedMonth) return;
@@ -2690,6 +2873,12 @@ function EvidenceUploadSection({
               let remoteUrl = "";
               try {
                 const up = await uploadEvidenceFileToSupabase(f, {
+                  employeeId: ownerUser?.employeeId,
+                  employeeName: ownerUser?.name,
+                  companyUnit: ownerUser?.company,
+                  division: ownerUser?.division,
+                  department: ownerUser?.department,
+                  position: ownerUser?.position,
                   moduleType: "KPI Tracking",
                   period: "2026",
                   month: selectedMonth,
@@ -2788,7 +2977,7 @@ function EvidenceUploadSection({
               <div className="flex flex-col items-center gap-3 py-5 border border-dashed border-gray-300 rounded-xl bg-gray-50/60 hover:border-[#1A284F]/40 transition-colors">
                 <Upload className="w-6 h-6 text-gray-400" />
                 <p className="text-xs text-gray-500 text-center">Pilih file evidence untuk bulan</p>
-                {monthLabels.length === 0 ? (
+                {selectable.length === 0 ? (
                   <span className="text-xs text-amber-600 font-medium">Tambah bulan KPI dahulu</span>
                 ) : (
                   <div className="flex items-center gap-2">
@@ -2797,7 +2986,7 @@ function EvidenceUploadSection({
                       onChange={(e) => setSelectedMonth(e.target.value)}
                       className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-[#1A284F] bg-white font-semibold text-[#1A284F]"
                     >
-                      {monthLabels.map((m) => <option key={m} value={m}>{m}</option>)}
+                      {selectable.map((m) => <option key={m} value={m}>{m}</option>)}
                     </select>
                     <button
                       onClick={() => inputRef.current?.click()}
@@ -2835,6 +3024,11 @@ function EvidenceUploadSection({
                               {f.name}
                             </a>
                             <span className="text-[10px] text-gray-400 shrink-0 ml-1">{formatBytes(f.size)}</span>
+                            {canDelete && onRemove && (
+                              <button type="button" onClick={() => onRemove(f.id)} className="ml-0.5 text-gray-300 hover:text-red-500 transition-colors shrink-0" title="Hapus evidence">
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -2941,11 +3135,11 @@ function KpiMonthStatusStrip({ statuses }: { statuses: Array<{ label: string; st
   );
 }
 
-function KPIHistorySection() {
-  const activeUser = getActiveUser();
+function KPIHistorySection({ employeeId }: { employeeId?: string }) {
+  const empId = employeeId ?? getActiveUser().employeeId;
   return (
     <ApproverNotesHistory
-      employeeId={activeUser.employeeId}
+      employeeId={empId}
       module="KPI"
       phase="measurement"
       title="History Catatan Approver (per Bulan)"
@@ -3020,29 +3214,55 @@ const BUSINESS_KPI_ITEMS: KPIItem[] = [
   },
 ];
 
-export function KPIPage() {
+function KPIWorkspace({
+  ownerOverride,
+  forcedTab,
+  delegationAccess,
+  actorName,
+  hideHeader,
+  workspaceLabel,
+}: {
+  ownerOverride?: ManagedUser;
+  forcedTab?: "business" | "personal";
+  delegationAccess?: DelegationAccess;
+  actorName?: string;
+  hideHeader?: boolean;
+  workspaceLabel?: string;
+}) {
   const navigate = useNavigate();
-  const activeUser = getActiveUser();
+  const actorUser = getActiveUser();
+  const activeUser = ownerOverride ?? actorUser;
+  const canCreate = !delegationAccess || Boolean(delegationAccess.create);
+  const canEdit = !delegationAccess || Boolean(delegationAccess.edit);
+  const canDelete = !delegationAccess || Boolean(delegationAccess.delete);
+  const canSubmit = canCreate || canEdit;
+  const isViewOnly = Boolean(delegationAccess && !canCreate && !canEdit && !canDelete);
+
   const isDirectorMode = isDirectorRoleOrGrouping(activeUser);
   const isGmMode = !isDirectorMode && activeUser.role === "GM";
-  const hasDualKpiTabs = isDirectorMode || isGmMode;
-  const [directorKpiTab, setDirectorKpiTab] = useState<"business" | "personal">("business");
+  const hasDualKpiTabs = !forcedTab && (isDirectorMode || isGmMode);
+  const [directorKpiTabState, setDirectorKpiTab] = useState<"business" | "personal">(forcedTab ?? "business");
+  const directorKpiTab = forcedTab ?? directorKpiTabState;
+  const isBusinessWorkspace = forcedTab ? forcedTab === "business" : (hasDualKpiTabs && directorKpiTab === "business");
+
   const groupName = getGroupNameForUnit(activeUser.company);
   const groupUnits = getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits);
-  const [view, setView] = useState<PageView>("input");
-  const [months, setMonths] = useState<MonthEntry[]>(() => loadKPITracking().months);
+  const businessScopeKey = isDirectorMode ? `group:${groupName}` : `unit:${activeUser.company}`;
+
+  const [view, setView] = useState<PageView>(() => (isViewOnly ? "preview" : "input"));
+  const [months, setMonths] = useState<MonthEntry[]>(() => loadKPITracking(activeUser.employeeId).months);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [submitted, setSubmitted] = useState(() => loadSubmitState().submitted);
-  const [submittedDate, setSubmittedDate] = useState(() => loadSubmitState().submittedDate);
+  const [submitted, setSubmitted] = useState(() => loadSubmitState(activeUser.employeeId).submitted);
+  const [submittedDate, setSubmittedDate] = useState(() => loadSubmitState(activeUser.employeeId).submittedDate);
   const [showEditRequest, setShowEditRequest] = useState(false);
   const [showEditRequestSuccess, setShowEditRequestSuccess] = useState(false);
   const [pendingEditRequest, setPendingEditRequest] = useState(false);
   const [editRequestDate, setEditRequestDate] = useState<string>("");
   const [rcaMap, setRcaMap] = useState<RCAMap>({});
   const [storedRCAStatus, setStoredRCAStatus] = useState<Record<string, RCAStatus>>(() =>
-    buildStoredRCAStatusMap(loadRCASubmissions())
+    buildStoredRCAStatusMap(loadRCASubmissions(activeUser.employeeId))
   );
   const [pendingRCA, setPendingRCA] = useState<PendingRCA | null>(null);
   const [viewingRCA, setViewingRCA] = useState<{ rcaKey: string; secondaryKey: string; kpiName: string; monthLabel: string } | null>(null);
@@ -3051,8 +3271,8 @@ export function KPIPage() {
   const [, setWfRefreshTick] = useState(0);
   React.useEffect(() => {
     const sync = () => {
-      setStoredRCAStatus(buildStoredRCAStatusMap(loadRCASubmissions()));
-      const st = loadSubmitState();
+      setStoredRCAStatus(buildStoredRCAStatusMap(loadRCASubmissions(activeUser.employeeId)));
+      const st = loadSubmitState(activeUser.employeeId);
       setSubmitted(st.submitted);
       setSubmittedDate(st.submittedDate);
       setEvidenceFiles(loadEvidenceFiles(activeUser.employeeId));
@@ -3138,35 +3358,34 @@ export function KPIPage() {
       : undefined;
 
   const [cellsMap, setCellsMap] = useState<Record<string, Record<CellKey, string>>>(() => {
-    const snap = loadKPITracking();
+    const snap = loadKPITracking(activeUser.employeeId);
     return snap.cellsMap;
   });
 
-  // Persist months + cells to localStorage whenever they change
+  // Persist months + cells to Supabase backend per owner employee
   React.useEffect(() => {
-    saveKPITracking({ months, cellsMap });
-  }, [months, cellsMap]);
+    saveKPITracking({ months, cellsMap }, activeUser);
+  }, [months, cellsMap, activeUser.employeeId]);
 
-  // Persist submitted state per role
+  // Persist submitted state per owner employee
   React.useEffect(() => {
-    saveSubmitState(submitted, submittedDate);
-  }, [submitted, submittedDate]);
+    saveSubmitState(submitted, submittedDate, activeUser.employeeId);
+  }, [submitted, submittedDate, activeUser.employeeId]);
 
   const [evidenceFiles, setEvidenceFiles] = useState<EvidenceFile[]>(() => loadEvidenceFiles(activeUser.employeeId));
 
-  const addEvidence = (files: EvidenceFile[]) =>
-    setEvidenceFiles((prev) => {
-      const next = [...prev, ...files];
-      saveEvidenceFiles(next, activeUser.employeeId);
-      return next;
-    });
+  // Simpan evidence di luar state updater (menghindari setState saat render & event sinkronisasi yang menimpa list)
+  const addEvidence = (files: EvidenceFile[]) => {
+    const merged = [...evidenceFiles, ...files].filter((f, i, arr) => arr.findIndex((x) => x.id === f.id) === i);
+    setEvidenceFiles(merged);
+    saveEvidenceFiles(merged, activeUser.employeeId);
+  };
 
-  const removeEvidence = (id: string) =>
-    setEvidenceFiles((prev) => {
-      const next = prev.filter((f) => f.id !== id);
-      saveEvidenceFiles(next, activeUser.employeeId);
-      return next;
-    });
+  const removeEvidence = (id: string) => {
+    const next = evidenceFiles.filter((f) => f.id !== id);
+    setEvidenceFiles(next);
+    saveEvidenceFiles(next, activeUser.employeeId);
+  };
 
   const updateCell = (monthId: string, key: CellKey, val: string) =>
     setCellsMap((prev) => ({
@@ -3232,6 +3451,7 @@ export function KPIPage() {
       satuan: kpi.satuan,
       baseline: kpi.baseline2025,
       target,
+      targetYearly: kpi.target2026,
       actual,
     });
   };
@@ -3242,6 +3462,9 @@ export function KPIPage() {
   const addMonth = (entry: MonthEntry) => {
     setMonths((prev) => [...prev, entry]);
     setCellsMap((prev) => ({ ...prev, [entry.id]: entry.cells }));
+    // Bulan tracking baru (belum tervalidasi) membuka kembali mode input & upload Evidence Documents
+    setSubmitted(false);
+    setView("input");
   };
 
   const removeMonth = (id: string) => {
@@ -3308,6 +3531,8 @@ export function KPIPage() {
 
   const [businessCellsMap, setBusinessCellsMap] = useState<Record<string, Record<CellKey, string>>>(() => {
     try {
+      const byScope = JSON.parse(localStorage.getItem("kpi_business_tracking_cells_v2") ?? "{}");
+      if (byScope?.[businessScopeKey]) return byScope[businessScopeKey];
       const raw = localStorage.getItem("kpi_business_tracking_cells_v1");
       if (raw) return JSON.parse(raw);
     } catch {
@@ -3315,21 +3540,71 @@ export function KPIPage() {
     }
     return {};
   });
+  const persistBusinessCells = (next: Record<string, Record<CellKey, string>>) => {
+    try {
+      const byScope = JSON.parse(localStorage.getItem("kpi_business_tracking_cells_v2") ?? "{}") ?? {};
+      byScope[businessScopeKey] = next;
+      localStorage.setItem("kpi_business_tracking_cells_v2", JSON.stringify(byScope));
+    } catch {
+      // ignore
+    }
+    void mergeKvMapRecord("kpi_business_tracking_cells_v2", businessScopeKey, next);
+    savePersistedState("kpi_business_tracking_cells_v1", next);
+  };
   const updateBusinessCell = (monthId: string, key: CellKey, val: string) => {
     setBusinessCellsMap((prev) => {
       const next = {
         ...prev,
         [monthId]: { ...(prev[monthId] ?? {}), [key]: val },
       };
-      savePersistedState("kpi_business_tracking_cells_v1", next);
+      persistBusinessCells(next);
       return next;
     });
   };
 
-  const kpiMonthStatuses = getKpiMonthStatuses(getActiveUser().employeeId);
+  const kpiMonthStatuses = getKpiMonthStatuses(activeUser.employeeId);
   const validatedMonthLabels = new Set(
     kpiMonthStatuses.filter((m) => m.state === "validated").map((m) => m.label),
   );
+
+  const [highlightRca, setHighlightRca] = useState(false);
+  // Bulan yang akan diajukan pada Submit KPI Tracking (belum tervalidasi)
+  const submitMonthLabels = months.filter((m) => !validatedMonthLabels.has(m.label)).map((m) => m.label);
+  // Bulan yang boleh diupload Evidence: belum diajukan atau sedang Revisi (termasuk bulan tracking baru)
+  const monthStateByLabel = new Map(kpiMonthStatuses.map((m) => [m.label, m.state] as const));
+  const evidenceUploadMonths = months
+    .map((m) => m.label)
+    .filter((label) => {
+      const st = monthStateByLabel.get(label) ?? "not_submitted";
+      return st === "not_submitted" || st === "revision" || (!submitted && st !== "validated");
+    });
+  // Tag RCA merah (pencapaian < 100% tetapi belum add RCA) pada bulan yang akan diajukan
+  const missingRcaTags = (() => {
+    const out: Array<{ kpiNo: string; monthId: string; monthLabel: string; kpiName: string }> = [];
+    for (const m of months) {
+      if (validatedMonthLabels.has(m.label)) continue;
+      for (const kpi of KPI_ITEMS) {
+        const kpiName = kpi.kpi.split("\n")[0];
+        const rcaKey = `${kpi.no}__${m.id}`;
+        const inlineEntry = rcaMap[rcaKey];
+        const status: RCAStatus = inlineEntry
+          ? inlineEntryToStatus(inlineEntry)
+          : storedRCAStatus[rcaKey] ??
+            storedRCAStatus[`${kpiName}__${displayMonth(m.label)}`] ??
+            storedRCAStatus[`${kpiName}__${toIdShortPeriode(m.label)}`] ??
+            "none";
+        if (status !== "none") continue;
+        const needsRca = kpi.subRows.some((sub, si) => {
+          if (!sub.compute || sub.compute.type === "avg") return false;
+          const getRaw = (idx: number) => cellsMap[m.id]?.[ck(kpi.no, idx)] ?? "";
+          const n = parseNum(computeCell(kpi.subRows, getRaw, si));
+          return n !== null && n < 100;
+        });
+        if (needsRca) out.push({ kpiNo: kpi.no, monthId: m.id, monthLabel: m.label, kpiName });
+      }
+    }
+    return out;
+  })();
 
   // Poin 6 & 7: Validasi wajib sudah ada aksi pengisian bulan KPI DAN upload evidence wajib untuk SEMUA bulan
   const kpiSubmitValidation = (() => {
@@ -3345,8 +3620,8 @@ export function KPIPage() {
       for (const m of pendingMonths) {
         const mCells = cellsMap[m.id] ?? m.cells ?? {};
         let monthHasEmpty = false;
-        const targetList = hasDualKpiTabs && directorKpiTab === "business" ? BUSINESS_KPI_ITEMS : KPI_ITEMS;
-        const activeMap = hasDualKpiTabs && directorKpiTab === "business" ? (businessCellsMap[m.id] ?? {}) : mCells;
+        const targetList = isBusinessWorkspace ? BUSINESS_KPI_ITEMS : KPI_ITEMS;
+        const activeMap = isBusinessWorkspace ? (businessCellsMap[m.id] ?? {}) : mCells;
         for (const kpi of targetList) {
           for (let si = 0; si < kpi.subRows.length; si++) {
             const sub = kpi.subRows[si];
@@ -3370,11 +3645,18 @@ export function KPIPage() {
         reasons.push(`Nilai aktual belum lengkap pada bulan: ${incompleteMonths.join(", ")}.`);
       }
 
+      if (missingRcaTags.length > 0) {
+        const byMonth = Array.from(new Set(missingRcaTags.map((t) => t.monthLabel)));
+        reasons.push(
+          `Masih ada ${missingRcaTags.length} tag RCA merah (belum add RCA) pada bulan ${byMonth.join(", ")}. Lengkapi RCA hingga tag berwarna kuning.`,
+        );
+      }
+
       const monthsWithoutEvidence = pendingMonths
         .map((m) => m.label)
         .filter((mLabel) => !evidenceFiles.some((f) => f.month === mLabel));
       if (monthsWithoutEvidence.length > 0) {
-        reasons.push(`Evidence wajib diupload untuk semua bulan (belum ada: ${monthsWithoutEvidence.join(", ")}).`);
+        reasons.push(`Evidence Documents wajib diupload untuk bulan: ${monthsWithoutEvidence.join(", ")}.`);
       }
     }
     return {
@@ -3386,6 +3668,15 @@ export function KPIPage() {
   const handleSubmitClick = () => {
     if (!kpiSubmitValidation.canSubmit) {
       setShowEvidenceWarn(true);
+      if (missingRcaTags.length > 0) {
+        // Otomatis highlight tag RCA yang masih merah lembut (belum add RCA)
+        setHighlightRca(true);
+        if (view !== "input") setView("input");
+        window.setTimeout(() => {
+          document.querySelector('[data-rca-missing="true"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 80);
+        window.setTimeout(() => setHighlightRca(false), 6000);
+      }
       return;
     }
     setShowEvidenceWarn(false);
@@ -3403,7 +3694,13 @@ export function KPIPage() {
     const _d = new Date();
     const dateStr = `${String(_d.getDate()).padStart(2, "0")}/${String(_d.getMonth() + 1).padStart(2, "0")}/${_d.getFullYear()}`;
     setSubmittedDate(dateStr);
-    submitWorkflowModule("KPI", "measurement", dateStr, activeUser.employeeId);
+    // KPI Tracking & RCA bulan yang diajukan dikirim bersamaan ke approver (Checker → AP1 → AP2 → Validator)
+    submitWorkflowModule("KPI", "measurement", dateStr, activeUser.employeeId, submitMonthLabels);
+    const rcaSubmitted = submitRCAsForMonths(activeUser.employeeId, submitMonthLabels);
+    setStoredRCAStatus(buildStoredRCAStatusMap(loadRCASubmissions(activeUser.employeeId)));
+    toast.success(
+      `KPI Tracking ${submitMonthLabels.join(", ")}${rcaSubmitted ? ` & ${rcaSubmitted} RCA` : ""} berhasil dikirim ke approver.`,
+    );
     setView("preview");
   };
 
@@ -3425,23 +3722,33 @@ export function KPIPage() {
       };
     }
     setBusinessCellsMap(next);
-    savePersistedState("kpi_business_tracking_cells_v1", next);
+    persistBusinessCells(next);
     toast.success(`Nilai realisasi indikator turunan berhasil di-cascade dari ${groupUnits.length} Unit Usaha (${groupName}).`);
   };
 
   return (
     <div className="w-full flex flex-col gap-6">
+      {delegationAccess && (
+        <DelegatedWorkspaceBanner
+          delegator={activeUser}
+          actorName={actorName || actorUser.name}
+          access={delegationAccess}
+          moduleLabel={workspaceLabel || "KPI Tracking"}
+        />
+      )}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
+          {!hideHeader && (
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-[28px] font-bold text-[#1A284F]">KPI Tracking</h1>
-            {!submitted && (
+            {!submitted && !isViewOnly && (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-widest bg-blue-50 border border-blue-300 text-blue-600">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                 Draft Mode
               </span>
             )}
           </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
             {isDirectorMode && (
@@ -3457,15 +3764,17 @@ export function KPIPage() {
           </div>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {view === "input" && !isLockedByDeadline && (
+          {view === "input" && !isLockedByDeadline && !isViewOnly && (
             <>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Month
-              </button>
+              {canCreate && (
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Month
+                </button>
+              )}
               <button
                 onClick={() => setView("preview")}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
@@ -3478,31 +3787,36 @@ export function KPIPage() {
                   <span tabIndex={0} className="inline-flex">
                     <button
                       type="button"
-                      disabled={!kpiSubmitValidation.canSubmit}
+                      aria-disabled={!kpiSubmitValidation.canSubmit}
                       onClick={handleSubmitClick}
-                      className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors ${kpiSubmitValidation.canSubmit ? "" : "opacity-50 cursor-not-allowed"}`}
                     >
                       <Send className="w-4 h-4" />
                       Submit KPI Tracking
                     </button>
                   </span>
                 </TooltipTrigger>
-                {!kpiSubmitValidation.canSubmit && (
-                  <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
-                    <p className="font-bold text-xs mb-1">Belum dapat Submit KPI Tracking:</p>
-                    <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90">
-                      {kpiSubmitValidation.reasons.map((r, i) => (
-                        <li key={i}>{r}</li>
-                      ))}
-                    </ul>
-                  </TooltipContent>
-                )}
+                <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                  {kpiSubmitValidation.canSubmit ? (
+                    <p className="text-[11px]">Semua tag RCA bulan {submitMonthLabels.join(", ")} sudah kuning & Evidence Documents sudah diupload. Klik untuk submit KPI Tracking & RCA ke approver.</p>
+                  ) : (
+                    <>
+                      <p className="font-bold text-xs mb-1">Belum dapat Submit KPI Tracking:</p>
+                      <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90">
+                        {kpiSubmitValidation.reasons.map((r, i) => (
+                          <li key={i}>{r}</li>
+                        ))}
+                      </ul>
+                      {missingRcaTags.length > 0 && <p className="mt-1.5 text-[10px] text-red-200">Klik tombol untuk menyorot tag RCA merah.</p>}
+                    </>
+                  )}
+                </TooltipContent>
               </Tooltip>
             </>
           )}
           {view === "preview" && (
             <>
-              {!submitted && !isLockedByDeadline && (
+              {!submitted && !isLockedByDeadline && !isViewOnly && (
                 <button
                   onClick={() => setView("input")}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
@@ -3517,28 +3831,33 @@ export function KPIPage() {
                     <span tabIndex={0} className="inline-flex">
                       <button
                         type="button"
-                        disabled={!kpiSubmitValidation.canSubmit}
+                        aria-disabled={!kpiSubmitValidation.canSubmit}
                         onClick={handleSubmitClick}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors ${kpiSubmitValidation.canSubmit ? "" : "opacity-50 cursor-not-allowed"}`}
                       >
                         <Send className="w-4 h-4" />
                         Submit KPI Tracking
                       </button>
                     </span>
                   </TooltipTrigger>
-                  {!kpiSubmitValidation.canSubmit && (
-                    <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
-                      <p className="font-bold text-xs mb-1">Belum dapat Submit KPI Tracking:</p>
-                      <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90">
-                        {kpiSubmitValidation.reasons.map((r, i) => (
-                          <li key={i}>{r}</li>
-                        ))}
-                      </ul>
-                    </TooltipContent>
-                  )}
+                  <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                    {kpiSubmitValidation.canSubmit ? (
+                      <p className="text-[11px]">Semua tag RCA bulan {submitMonthLabels.join(", ")} sudah kuning & Evidence Documents sudah diupload. Klik untuk submit KPI Tracking & RCA ke approver.</p>
+                    ) : (
+                      <>
+                        <p className="font-bold text-xs mb-1">Belum dapat Submit KPI Tracking:</p>
+                        <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90">
+                          {kpiSubmitValidation.reasons.map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))}
+                        </ul>
+                        {missingRcaTags.length > 0 && <p className="mt-1.5 text-[10px] text-red-200">Klik tombol untuk menyorot tag RCA merah.</p>}
+                      </>
+                    )}
+                  </TooltipContent>
                 </Tooltip>
               )}
-              {submitted && !pendingEditRequest && !editRequestApproved && (
+              {submitted && !pendingEditRequest && !editRequestApproved && canEdit && (
                 <button
                   onClick={() => setShowEditRequest(true)}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 transition-colors"
@@ -3564,7 +3883,7 @@ export function KPIPage() {
               )}
             </>
           )}
-          {isKpiSettingValidated && <ExportImportButton onExport={handleExport} onImport={handleImport} />}
+          {isKpiSettingValidated && <ExportImportButton onExport={handleExport} onImport={canCreate || canEdit ? handleImport : undefined} />}
         </div>
       </div>
 
@@ -3573,6 +3892,7 @@ export function KPIPage() {
         phase="measurement"
         submittedOverride={submitted}
         submittedDateOverride={submittedDate}
+        employeeId={activeUser.employeeId}
       />
       <KpiMonthStatusStrip statuses={kpiMonthStatuses} />
 
@@ -3756,7 +4076,7 @@ export function KPIPage() {
         </div>
       )}
 
-      {hasDualKpiTabs && directorKpiTab === "business" ? (
+      {isBusinessWorkspace ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
           <div className="px-4 py-3 bg-[#1A284F] text-white flex items-center justify-between">
             <div>
@@ -3830,7 +4150,7 @@ export function KPIPage() {
                             <input
                               type="text"
                               value={rawVal}
-                              disabled={view !== "input" || submitted || isLockedByDeadline}
+                              disabled={view !== "input" || submitted || isLockedByDeadline || isViewOnly || !(canEdit || canCreate)}
                               onChange={(e) => updateBusinessCell(m.id, ck(item.no, sIdx), e.target.value)}
                               placeholder="—"
                               className="w-full text-center border border-gray-200 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50"
@@ -3848,32 +4168,36 @@ export function KPIPage() {
       ) : (
       <KPITable
         months={months}
-        editable={view === "input" && !submitted && !isLockedByDeadline}
-        editableMonthId={(!submitted && !isLockedByDeadline && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
-        onRemoveMonth={removeMonth}
-        onAddMonth={() => setShowAddModal(true)}
+        editable={view === "input" && !submitted && !isLockedByDeadline && !isViewOnly}
+        editableMonthId={(!submitted && !isLockedByDeadline && !isViewOnly && (canEdit || canCreate) && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
+        onRemoveMonth={canDelete ? removeMonth : undefined}
+        onAddMonth={canCreate ? () => setShowAddModal(true) : undefined}
         cells={cellsMap}
-        onCellChange={updateCell}
+        onCellChange={canEdit || canCreate ? updateCell : undefined}
         onCellBlur={handleCellBlur}
-        onOpenRCA={openRCA}
+        onOpenRCA={canCreate || canEdit ? openRCA : undefined}
         onViewRCA={(rcaKey, secondaryKey, kpiName, monthLabel) =>
           setViewingRCA({ rcaKey, secondaryKey, kpiName, monthLabel })
         }
         rcaMap={rcaMap}
         storedRCAStatus={storedRCAStatus}
         approvedEditCells={approvedEditCells}
+        highlightMissingRca={highlightRca}
       />
       )}
 
       <EvidenceUploadSection
         files={evidenceFiles}
         onAdd={addEvidence}
-        onRemove={removeEvidence}
-        editable={(view === "input" && !submitted && !isLockedByDeadline) || editRequestApproved}
+        onRemove={canDelete ? removeEvidence : undefined}
+        canDelete={canDelete && !submitted && !isLockedByDeadline}
+        ownerUser={activeUser}
+        editable={!isViewOnly && (canCreate || canEdit) && ((!isLockedByDeadline && evidenceUploadMonths.length > 0) || editRequestApproved)}
         monthLabels={months.map((m) => m.label)}
+        uploadMonthLabels={editRequestApproved ? months.map((m) => m.label) : evidenceUploadMonths}
       />
 
-      <KPIHistorySection />
+      <KPIHistorySection employeeId={activeUser.employeeId} />
 
 
       {showAddModal && (
@@ -3901,6 +4225,7 @@ export function KPIPage() {
               actionPlans: b.actionPlans,
             }));
             saveRCASubmission({
+              employeeId: activeUser.employeeId,
               key,
               id: key,
               submittedDate: iso,
@@ -3914,6 +4239,7 @@ export function KPIPage() {
               achievementPct: pendingRCA!.achievementPct,
               satuan: pendingRCA!.satuan,
               baseline: pendingRCA!.baseline,
+              targetYearly: pendingRCA!.targetYearly,
               masalahBlocks: storedBlocks,
               masalahUtama: entry.masalahUtama,
               kenapaA: entry.kenapaA,
@@ -3922,7 +4248,7 @@ export function KPIPage() {
               actionPlans: entry.actionPlans,
             });
             // Refresh storedRCAStatus so tag color updates immediately
-            setStoredRCAStatus(buildStoredRCAStatusMap(loadRCASubmissions()));
+            setStoredRCAStatus(buildStoredRCAStatusMap(loadRCASubmissions(activeUser.employeeId)));
           }}
           onClose={() => setPendingRCA(null)}
         />
@@ -3933,11 +4259,19 @@ export function KPIPage() {
           secondaryKey={viewingRCA.secondaryKey}
           kpiName={viewingRCA.kpiName}
           monthLabel={viewingRCA.monthLabel}
+          ownerEmployeeId={activeUser.employeeId}
           onClose={() => setViewingRCA(null)}
           onNavigate={() => { setViewingRCA(null); navigate("/measurement/rca"); }}
         />
       )}
-      {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
+      {showConfirm && (
+        <ConfirmModal
+          onCancel={() => setShowConfirm(false)}
+          onConfirm={handleConfirm}
+          months={submitMonthLabels}
+          rcaCount={loadRCASubmissions(activeUser.employeeId).filter((r) => submitMonthLabels.includes(r.monthLabel) && r.approvalStatus !== "Closed" && r.approvalStatus !== "Validated").length}
+        />
+      )}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} />}
       {showOpenLockModal && (
         <OpenLockRequestModal
@@ -3969,6 +4303,166 @@ export function KPIPage() {
     </div>
   );
 }
+interface DelegatedKpiTrackingTab {
+  id: string;
+  label: string;
+  owner: ManagedUser;
+  forcedTab: "business" | "personal";
+  access?: DelegationAccess;
+}
+
+export function KPIPage() {
+  const { activeUser, allUsers } = useAuthStore();
+  const [, setDelegTick] = useState(0);
+  React.useEffect(() => {
+    const r = () => setDelegTick((t) => t + 1);
+    window.addEventListener(DELEGATION_EVENT, r);
+    window.addEventListener("pa-db-hydrated", r);
+    return () => {
+      window.removeEventListener(DELEGATION_EVENT, r);
+      window.removeEventListener("pa-db-hydrated", r);
+    };
+  }, []);
+
+  const usersPool = allUsers.length > 0 ? allUsers : loadManagedUsers();
+  const receivedDelegations = getReceivedWorkspaceDelegations(activeUser.employeeId, "kpiTracking", usersPool);
+
+  if (receivedDelegations.length === 0) {
+    return <KPIWorkspace />;
+  }
+
+  const delegatedTabs: DelegatedKpiTrackingTab[] = [];
+  for (const d of receivedDelegations) {
+    const owner = d.delegator;
+    if (isDirectorRoleOrGrouping(owner)) {
+      const grp = getGroupNameForUnit(owner.company);
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-group`,
+        label: `KPI Group (${grp}) · ${owner.name}`,
+        owner,
+        forcedTab: "business",
+        access: d.access,
+      });
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-personal`,
+        label: `KPI Personal · ${owner.name}`,
+        owner,
+        forcedTab: "personal",
+        access: d.access,
+      });
+    } else if (owner.role === "GM") {
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-unit`,
+        label: `KPI Unit (${owner.company}) · ${owner.name}`,
+        owner,
+        forcedTab: "business",
+        access: d.access,
+      });
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-personal`,
+        label: `KPI Personal · ${owner.name}`,
+        owner,
+        forcedTab: "personal",
+        access: d.access,
+      });
+    } else {
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-personal`,
+        label: `KPI Personal · ${owner.name}`,
+        owner,
+        forcedTab: "personal",
+        access: d.access,
+      });
+    }
+  }
+
+  const selfTabs: DelegatedKpiTrackingTab[] = [];
+  if (isDirectorRoleOrGrouping(activeUser)) {
+    const grp = getGroupNameForUnit(activeUser.company);
+    selfTabs.push({
+      id: `self-${activeUser.employeeId}-group`,
+      label: `KPI Group (${grp}) · Saya (${activeUser.name})`,
+      owner: activeUser,
+      forcedTab: "business",
+    });
+  } else if (activeUser.role === "GM") {
+    selfTabs.push({
+      id: `self-${activeUser.employeeId}-unit`,
+      label: `KPI Unit (${activeUser.company}) · Saya (${activeUser.name})`,
+      owner: activeUser,
+      forcedTab: "business",
+    });
+  }
+  selfTabs.push({
+    id: `self-${activeUser.employeeId}-personal`,
+    label: `KPI Personal · Saya (${activeUser.name})`,
+    owner: activeUser,
+    forcedTab: "personal",
+  });
+
+  const allTabs = [...delegatedTabs, ...selfTabs];
+  return <DelegatedKPITrackingTabsView tabs={allTabs} actorName={activeUser.name} />;
+}
+
+function DelegatedKPITrackingTabsView({
+  tabs,
+  actorName,
+}: {
+  tabs: DelegatedKpiTrackingTab[];
+  actorName: string;
+}) {
+  const [selectedId, setSelectedId] = useState<string>(() => tabs[0]?.id ?? "");
+  const current = tabs.find((t) => t.id === selectedId) ?? tabs[0];
+
+  return (
+    <div className="w-full flex flex-col gap-6">
+      <div>
+        <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">KPI Tracking</h1>
+        <p className="text-gray-500 text-sm">
+          2026 Performance Appraisal — Menampilkan {tabs.length} KPI ({tabs.filter((t) => t.access).length} Delegasi &amp; {tabs.filter((t) => !t.access).length} Milik Sendiri)
+        </p>
+      </div>
+
+      <div className="flex gap-1 border-b border-gray-200 flex-wrap">
+        {tabs.map((tab) => {
+          const isActive = tab.id === current.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setSelectedId(tab.id)}
+              className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                isActive
+                  ? "border-[#1A284F] text-[#1A284F] bg-[#1A284F]/5 rounded-t-lg"
+                  : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded-t-lg"
+              }`}
+            >
+              <span>{tab.label}</span>
+              {tab.access && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+                  Delegasi
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {current && (
+        <KPIWorkspace
+          key={current.id}
+          ownerOverride={current.owner}
+          forcedTab={current.forcedTab}
+          delegationAccess={current.access}
+          actorName={actorName}
+          hideHeader
+          workspaceLabel={current.label}
+        />
+      )}
+    </div>
+  );
+}
+
 export interface KPITrackingRCACandidate {
   key: string;
   kpiNo: string;
@@ -3979,6 +4473,7 @@ export interface KPITrackingRCACandidate {
   satuan: string;
   baseline: string;
   target: string;
+  targetYearly: string;
   actual: string;
   score: number;
 }
@@ -4054,6 +4549,7 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
           satuan: kpi.satuan,
           baseline: kpi.baseline2025,
           target: targetVal,
+          targetYearly: kpi.target2026,
           actual: actualVal,
           score: Math.round(n * 10) / 10,
         });

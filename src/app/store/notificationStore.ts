@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { loadPersistedState, savePersistedState, PA_APP_API_BASE, SUPABASE_ANON_KEY } from "../services/supabaseClient";
+import { getActiveDelegateIdsForDelegator } from "./delegationStore";
+import {
+  loadPersistedState,
+  savePersistedState,
+  mergeKvArrayById,
+  PA_APP_API_BASE,
+  SUPABASE_ANON_KEY,
+} from "../services/supabaseClient";
 import {
   getActiveUser,
   loadManagedUsers,
@@ -605,7 +612,12 @@ export function loadAllNotifications(): AppNotificationItem[] {
     return now - ts <= THIRTY_DAYS_MS;
   });
   if (validList.length !== sourceList.length) {
-    savePersistedState(NOTIFICATIONS_LIST_KEY, validList);
+    // Pruning hanya pada cache lokal (tidak menimpa daftar backend yang mungkin berisi notifikasi baru pengguna lain)
+    try {
+      localStorage.setItem(NOTIFICATIONS_LIST_KEY, JSON.stringify(validList));
+    } catch {
+      // ignore
+    }
   }
   return validList.sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
@@ -613,8 +625,68 @@ export function loadAllNotifications(): AppNotificationItem[] {
 }
 
 export function saveAllNotifications(list: AppNotificationItem[]): void {
-  savePersistedState(NOTIFICATIONS_LIST_KEY, list);
+  try {
+    localStorage.setItem(NOTIFICATIONS_LIST_KEY, JSON.stringify(list));
+  } catch {
+    // ignore quota errors
+  }
   queueMicrotask(() => window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT)));
+  // Merge-safe ke backend: notifikasi yang dibuat pengguna/perangkat lain tidak tertimpa cache lokal,
+  // status baca/clear digabung (union) per penerima.
+  void mergeKvArrayById<AppNotificationItem>(
+    NOTIFICATIONS_LIST_KEY,
+    list,
+    (n) => n.id,
+    (local, remote) => ({
+      ...local,
+      readByEmployeeIds: Array.from(new Set([...(local.readByEmployeeIds ?? []), ...(remote.readByEmployeeIds ?? [])])),
+      clearedByEmployeeIds: Array.from(
+        new Set([...(local.clearedByEmployeeIds ?? []), ...(remote.clearedByEmployeeIds ?? [])]),
+      ),
+    }),
+  ).then(() => window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT)));
+}
+
+/** Kirim notifikasi sistem ke daftar karyawan tertentu (tersimpan di backend). */
+export function pushEmployeeNotification(params: {
+  employeeIds: string[];
+  title: string;
+  summary: string;
+  body?: string[];
+  category?: NotificationCategory;
+  moduleName?: string;
+  ctaLabel?: string;
+  ctaRoute?: string;
+  senderName?: string;
+  senderRole?: string;
+  approvalStatus?: string;
+  approverName?: string;
+  attachments?: NotificationAttachment[];
+}): void {
+  const ids = Array.from(new Set(params.employeeIds.map((id) => id.trim().toUpperCase()).filter(Boolean)));
+  if (ids.length === 0) return;
+  const item: AppNotificationItem = {
+    id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title: params.title,
+    summary: params.summary,
+    body: params.body ?? [params.summary],
+    category: params.category ?? "Info",
+    createdAt: new Date().toISOString(),
+    senderName: params.senderName ?? "PA System",
+    senderRole: params.senderRole ?? "System",
+    moduleName: params.moduleName,
+    approvalStatus: params.approvalStatus,
+    approverName: params.approverName,
+    ctaLabel: params.ctaLabel,
+    ctaRoute: params.ctaRoute,
+    targetAll: false,
+    targetEmployeeIds: ids,
+    channels: ["Notifikasi Sistem"],
+    attachments: params.attachments,
+    readByEmployeeIds: [],
+    clearedByEmployeeIds: [],
+  };
+  saveAllNotifications([item, ...loadAllNotifications()]);
 }
 
 /**
@@ -648,9 +720,9 @@ export function triggerInterDeptNominationNotifications(params: {
   const selfNotif: AppNotificationItem = {
     id: `notif-idf-self-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     title: "Nominasi Pemberi Feedback Berhasil Dikirim",
-    summary: `Anda telah memilih 3 pemberi Inter-Department Feedback: ${allNames}.`,
+    summary: `Anda telah memilih ${givers.length} pemberi Inter-Department Feedback: ${allNames}.`,
     body: [
-      `Nominasi pemberi Inter-Department Feedback Anda telah tercatat untuk 3 rekan kerja berikut: ${allNames}.`,
+      `Nominasi pemberi Inter-Department Feedback Anda telah tercatat untuk ${givers.length} rekan kerja berikut: ${allNames}.`,
       ...givers.map(
         (g, idx) => `${idx + 1}. ${g.name} (${g.position || "—"} · ${g.department || g.division} · ${g.companyUnit})`,
       ),
@@ -1118,7 +1190,10 @@ export function triggerApprovalTransactionNotification(params: {
     const resolveApprover1Recipients = (): ManagedUser[] => {
       const direct = findApproverUser(targetUser.regNoAp1);
       if (direct && direct.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
-        return [direct];
+        // Delegasi aktif milik approver juga menerima notifikasi approval
+        const delegateIds = getActiveDelegateIdsForDelegator(direct.employeeId, canonicalMod);
+        const delegates = allUsers.filter((u) => delegateIds.some((id) => id.toUpperCase() === u.employeeId.toUpperCase()));
+        return [direct, ...delegates];
       }
       return allUsers.filter(
         (u) =>
@@ -1133,7 +1208,10 @@ export function triggerApprovalTransactionNotification(params: {
     const resolveApprover2Recipients = (): ManagedUser[] => {
       const direct = findApproverUser(targetUser.regNoAp2);
       if (direct && direct.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
-        return [direct];
+        // Delegasi aktif milik approver juga menerima notifikasi approval
+        const delegateIds = getActiveDelegateIdsForDelegator(direct.employeeId, canonicalMod);
+        const delegates = allUsers.filter((u) => delegateIds.some((id) => id.toUpperCase() === u.employeeId.toUpperCase()));
+        return [direct, ...delegates];
       }
       return allUsers.filter(
         (u) =>

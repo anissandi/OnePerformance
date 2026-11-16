@@ -10,9 +10,9 @@ export interface SoyUnitSnapshot {
   name: string;
   code?: string;
   calibrationGrades: Array<{ id: string; grade: string; proporsi: string }>;
-  divisionProportions: Array<{ id: string; divisi: string; hc: number }>;
-  departemenenProportions: Array<{ id: string; divisiId: string; departemen: string; hc: number }>;
-  bagianProportions: Array<{ id: string; departemenenId: string; bagian: string; hc: number }>;
+  divisionProportions: Array<{ id: string; divisi: string; hc: number; customQuotas?: Record<string, number> }>;
+  departemenenProportions: Array<{ id: string; divisiId: string; departemen: string; hc: number; customQuotas?: Record<string, number> }>;
+  bagianProportions: Array<{ id: string; departemenenId: string; bagian: string; hc: number; customQuotas?: Record<string, number> }>;
 }
 
 export type SoyStatus = "Pending" | "Approved" | "Revision";

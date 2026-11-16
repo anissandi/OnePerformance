@@ -4,6 +4,8 @@ import { getEntries, subscribe, type ScheduleEntry } from "../interviewScheduleS
 import { NAME_TO_EMP_ID, setPenilai1Score } from "../managementInterviewScoreStore";
 import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
 import { getActiveUser, loadManagedUsers, type ManagedUser } from "../../../store/authStore";
+import { getLiveTransactionalEmployees, type Employee } from "../../../data/mockEmployees";
+import { Award, Sparkles } from "lucide-react";
 
 function isUserAppointedInterviewer(user: ManagedUser, interviewers: string[]): boolean {
   if (!user || !Array.isArray(interviewers) || interviewers.length === 0) return false;
@@ -85,6 +87,93 @@ const savedAssessments: Record<string, ParticipantScore[]> = loadPersistedState(
   MI_SUP_ASSESSMENTS_KEY,
   {},
 );
+
+// ── Warna skor & tag PA Score ─────────────────────────────────────────────────
+const SCORE_TONE: Record<number, string> = {
+  1: "bg-rose-500 border-rose-500",
+  2: "bg-orange-500 border-orange-500",
+  3: "bg-amber-500 border-amber-500",
+  4: "bg-sky-600 border-sky-600",
+  5: "bg-emerald-600 border-emerald-600",
+};
+
+function findPAEmployee(name: string): Employee | undefined {
+  const users = loadManagedUsers();
+  const u = users.find((x) => x.name.trim().toLowerCase() === name.trim().toLowerCase());
+  const list = getLiveTransactionalEmployees();
+  return list.find((e) => (u && e.id.toLowerCase() === u.employeeId.toLowerCase()) || e.fullName.trim().toLowerCase() === name.trim().toLowerCase());
+}
+
+const PA_GRADE_TONE: Record<string, string> = {
+  "A+": "bg-violet-50 text-violet-700 border-violet-200",
+  A: "bg-sky-50 text-sky-700 border-sky-200",
+  B: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  C: "bg-amber-50 text-amber-700 border-amber-200",
+  D: "bg-orange-50 text-orange-700 border-orange-200",
+  E: "bg-rose-50 text-rose-700 border-rose-200",
+};
+
+/** Tag PA Score di samping nama peserta; klik → popup summary score & grade semua modul. */
+function PAScoreTag({ name }: { name: string }) {
+  const [open, setOpen] = useState(false);
+  const emp = findPAEmployee(name);
+  const tone = emp ? PA_GRADE_TONE[emp.grade] ?? "bg-gray-50 text-gray-600 border-gray-200" : "bg-gray-50 text-gray-500 border-gray-200";
+  const formAvg = emp ? Math.round((emp.formA.score + emp.formB.score + emp.formC.score) / 3) : 0;
+  const rows: Array<[string, { score: number; grade: string } | null | undefined]> = emp
+    ? [
+        [`KPI${emp.kpiIsYtd ? " (YTD)" : ""}`, emp.kpi],
+        ["SMART Goals", emp.smartGoals],
+        ["Appraisal Form", { score: formAvg, grade: emp.formA.grade }],
+        ["Managerial Skill", emp.managerialSkill],
+        ["Project Outside Job Scope", emp.project],
+        ["Management Interview", emp.managementInterview],
+      ]
+    : [];
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold transition hover:shadow-sm ${tone}`}
+      >
+        <Award className="h-3 w-3" />
+        PA Score {emp ? `${emp.totalScore.toFixed(1)} · ${emp.grade}` : "—"}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4" onClick={() => setOpen(false)}>
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-sky-500 px-5 py-4 text-white">
+              <div>
+                <p className="text-xs text-white/80">Summary Performance Appraisal 2026</p>
+                <p className="font-bold">{name}</p>
+              </div>
+              <button onClick={() => setOpen(false)} className="rounded-lg p-1 hover:bg-white/10"><X className="h-4 w-4" /></button>
+            </div>
+            {!emp ? (
+              <p className="p-6 text-center text-sm text-gray-400">Belum ada data skor PA untuk karyawan ini.</p>
+            ) : (
+              <div className="space-y-2 p-5">
+                {rows.filter(([, v]) => v).map(([label, v]) => (
+                  <div key={label} className="flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2 text-sm">
+                    <span className="text-gray-700">{label}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="font-bold text-gray-800">{v!.score}</span>
+                      <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${PA_GRADE_TONE[v!.grade] ?? "border-gray-200 text-gray-500"}`}>{v!.grade}</span>
+                    </span>
+                  </div>
+                ))}
+                <div className="mt-3 flex items-center justify-between rounded-xl bg-[#1A284F] px-4 py-3 text-white">
+                  <span className="text-sm font-semibold">Total PA Score</span>
+                  <span className="text-lg font-bold">{emp.totalScore.toFixed(1)} · {emp.grade}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 // ── Indicator popover ─────────────────────────────────────────────────────────
 function IndicatorPopover({ aspect, onClose }: { aspect: typeof ASPECTS[number]; onClose: () => void }) {
@@ -177,13 +266,16 @@ function ParticipantTable({
     <>
       <div className={`rounded-xl border overflow-hidden ${isSubmitted ? "border-gray-200" : "border-gray-200"}`}>
         {/* Participant header */}
-        <div className={`flex items-center justify-between px-4 py-3 ${isSubmitted ? "bg-gray-100" : "bg-[#1A284F]/5"}`}>
+        <div className={`flex items-center justify-between px-4 py-3 ${isSubmitted ? "bg-gray-100" : "bg-gradient-to-r from-indigo-50 via-sky-50 to-emerald-50"}`}>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-[#1A284F] text-white text-xs font-bold flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-sky-500 text-white text-xs font-bold flex items-center justify-center shrink-0 shadow-sm">
               {ps.name.charAt(0).toUpperCase()}
             </div>
             <div>
-              <p className="text-sm font-semibold text-gray-800 leading-tight">{ps.name}</p>
+              <p className="flex items-center gap-2 text-sm font-semibold text-gray-800 leading-tight">
+                {ps.name}
+                <PAScoreTag name={ps.name} />
+              </p>
               {PARTICIPANT_META[ps.name] && (
                 <p className="text-[11px] text-gray-400 leading-tight">
                   {PARTICIPANT_META[ps.name].position}
@@ -237,12 +329,19 @@ function ParticipantTable({
                     </td>
                     {[1, 2, 3, 4, 5].map(val => (
                       <td key={val} className="px-3 py-4 text-center border-r border-gray-200 last:border-r-0">
+                        <div className="group/score relative inline-block">
+                        <span
+                          role="tooltip"
+                          className="pointer-events-none invisible absolute bottom-full left-1/2 z-30 mb-2 w-56 -translate-x-1/2 rounded-xl bg-[#1A284F] px-3 py-2 text-left text-[11px] font-medium leading-relaxed text-white opacity-0 shadow-xl transition-opacity group-hover/score:visible group-hover/score:opacity-100 group-focus-within/score:visible group-focus-within/score:opacity-100"
+                        >
+                          <strong className="mr-1">Nilai {val}:</strong>{aspect.indicators.find((ind) => ind.score === val)?.text}
+                        </span>
                         <button
                           onClick={() => !isSubmitted && onScoreChange(pIdx, aIdx, val)}
                           disabled={isSubmitted}
                           className={`w-9 h-9 rounded border-2 text-sm font-bold transition-all mx-auto flex items-center justify-center
                             ${selected === val
-                              ? "bg-[#1A284F] border-[#1A284F] text-white shadow-sm"
+                              ? `${SCORE_TONE[val]} text-white shadow-md scale-105`
                               : isSubmitted
                                 ? "bg-gray-50 border-gray-200 text-gray-300 cursor-not-allowed"
                                 : "bg-white border-gray-300 text-gray-500 hover:border-[#1A284F] hover:text-[#1A284F] hover:bg-[#1A284F]/5 cursor-pointer"
@@ -250,6 +349,7 @@ function ParticipantTable({
                         >
                           {val}
                         </button>
+                        </div>
                       </td>
                     ))}
                   </tr>
@@ -300,19 +400,22 @@ function ParticipantTable({
 
 // ── Assessment modal ───────────────────────────────────────────────────────────
 function AssessmentModal({ entry, readOnly = false, onClose }: { entry: ScheduleEntry; readOnly?: boolean; onClose: () => void }) {
-  const allParticipants = [...entry.addedUsers, ...entry.otherUsers];
+  // Peserta yang dinilai hanya karyawan pada field Employee (Other User bukan peserta assessment)
+  const allParticipants = [...entry.addedUsers];
 
   const [scores, setScores] = useState<ParticipantScore[]>(() => {
     const existing = savedAssessments[entry.id];
-    if (existing) return existing.map(s => ({ ...s, aspectScores: [...s.aspectScores] }));
-    return allParticipants.map(name => ({ name, aspectScores: [null, null, null], comment: "" }));
+    return allParticipants.map((name) => {
+      const prev = existing?.find((s) => s.name === name);
+      return prev ? { ...prev, aspectScores: [...prev.aspectScores] } : { name, aspectScores: [null, null, null], comment: "" };
+    });
   });
 
   // per-participant saved flags (saved ≠ submitted — saved means locally confirmed per tab)
   const [savedFlags, setSavedFlags] = useState<boolean[]>(() => {
     const existing = savedAssessments[entry.id];
-    return allParticipants.map((_, i) =>
-      existing ? existing[i]?.aspectScores.every(s => s !== null) ?? false : false
+    return allParticipants.map((name) =>
+      existing?.find((s) => s.name === name)?.aspectScores.every((v) => v !== null) ?? false
     );
   });
 
@@ -388,9 +491,10 @@ function AssessmentModal({ entry, readOnly = false, onClose }: { entry: Schedule
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl flex flex-col max-h-[95vh]">
 
           {/* Modal header */}
-          <div className="flex items-center justify-between px-6 py-4 bg-[#1A284F] rounded-t-2xl shrink-0">
+          <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-[#1A284F] via-indigo-700 to-sky-600 rounded-t-2xl shrink-0">
             <div>
               <h3 className="font-bold text-white flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-300" />
                 <ClipboardEdit className="w-4 h-4" />
                 Penilaian Management Interview
               </h3>
@@ -519,14 +623,24 @@ function AssessmentModal({ entry, readOnly = false, onClose }: { entry: Schedule
 
                   {/* Submit all */}
                   {!effectiveReadOnly && (
-                    <button
-                      onClick={() => setShowConfirm(true)}
-                      disabled={!allParticipantsSaved}
-                      className="flex items-center gap-1.5 px-5 py-2 bg-[#1A284F] text-white text-sm font-semibold rounded-lg hover:bg-[#243660] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Submit
-                    </button>
+                    <div className="group/submit relative">
+                      <button
+                        onClick={() => allParticipantsSaved && setShowConfirm(true)}
+                        aria-disabled={!allParticipantsSaved}
+                        className={`flex items-center gap-1.5 px-5 py-2 bg-gradient-to-r from-[#1A284F] to-indigo-600 text-white text-sm font-semibold rounded-lg transition-all ${allParticipantsSaved ? "hover:shadow-lg" : "opacity-40 cursor-not-allowed"}`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Submit
+                      </button>
+                      {!allParticipantsSaved && (
+                        <div role="tooltip" className="pointer-events-none invisible absolute bottom-full right-0 z-30 mb-2 w-72 rounded-xl bg-[#1A284F] px-3 py-2 text-[11px] text-white opacity-0 shadow-xl transition-opacity group-hover/submit:visible group-hover/submit:opacity-100 group-focus-within/submit:visible group-focus-within/submit:opacity-100">
+                          <p className="mb-1 font-bold">Masih ada karyawan yang belum di-assessment / belum di-Save:</p>
+                          {scores.filter((sc, i) => !savedFlags[i] || sc.aspectScores.some((v) => v === null)).map((sc) => (
+                            <p key={sc.name}>• {sc.name}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

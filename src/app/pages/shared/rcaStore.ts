@@ -1,6 +1,6 @@
 import { deleteBackendRecordFromSupabase, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
-import { normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
+import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 const KEY = "kpi_rca_submissions";
@@ -52,6 +52,8 @@ export interface StoredRCASubmission {
   achievementPct: number;
   satuan: string;
   baseline: string;
+  /** Target tahunan KPI (kolom Target pada baris KPI di KPI Tracking) */
+  targetYearly?: string;
   /** Per-block data (preferred). Present for submissions created with per-block UI. */
   masalahBlocks?: StoredMasalahBlock[];
   /** Legacy flat fields — kept for backward compat with old submissions */
@@ -96,13 +98,38 @@ function saveAll(rows: StoredRCASubmission[]): void {
   }
 }
 
-export function saveRCASubmission(row: StoredRCASubmission): void {
+/** Status RCA yang sudah dibuat tetapi belum dikirim ke approver (menunggu Submit KPI Tracking bulan tsb). */
+export const RCA_DRAFT_STATUS = "Draft";
+
+/** Apakah bulan KPI Tracking tsb sudah diajukan/tervalidasi (sehingga RCA baru langsung masuk approval). */
+function isKpiMonthAlreadySubmitted(employeeId: string, monthLabel: string): boolean {
+  const normId = normalizeEmployeeId(employeeId);
+  const rec = loadWorkflowRecords().find(
+    (r) => r.module === "KPI" && r.phase === "measurement" && normalizeEmployeeId(r.employeeId) === normId,
+  );
+  if (!rec) return false;
+  const isRevision = Object.values(rec.decisions).some((d) => d?.status === "Revision");
+  if (isRevision) return false;
+  return Boolean(rec.validatedMonths?.includes(monthLabel) || rec.submittedMonths?.includes(monthLabel));
+}
+
+/**
+ * Simpan RCA. Secara default RCA disimpan sebagai Draft (tag RCA menjadi kuning) dan baru dikirim ke approver
+ * bersama Submit KPI Tracking bulan tsb. Jika bulan KPI tsb sudah diajukan, RCA langsung masuk alur approval.
+ */
+export function saveRCASubmission(row: StoredRCASubmission, opts: { submitNow?: boolean } = {}): void {
   const activeUser = getActiveUser();
   const empId = row.employeeId && row.employeeId !== "EMP002" ? row.employeeId : activeUser.employeeId;
   const normEmpId = normalizeEmployeeId(empId);
   const effectiveDate = normalizeDateDDMMYYYY(row.submittedDate);
   const finalDate = effectiveDate === "—" ? formatTodayDDMMYYYY() : effectiveDate;
-  row = { ...row, employeeId: normEmpId, submittedDate: finalDate };
+  const submitNow = opts.submitNow ?? isKpiMonthAlreadySubmitted(empId, row.monthLabel);
+  row = {
+    ...row,
+    employeeId: normEmpId,
+    submittedDate: finalDate,
+    approvalStatus: submitNow ? row.approvalStatus || "Pending-Check" : RCA_DRAFT_STATUS,
+  };
   const all = loadAll();
   const idx = all.findIndex(
     (r) => r.key === row.key && (!r.employeeId || normalizeEmployeeId(r.employeeId) === normEmpId),
@@ -113,12 +140,33 @@ export function saveRCASubmission(row: StoredRCASubmission): void {
     all.push(row);
   }
   saveAll(all);
-  submitWorkflowModule(
-    "RCA",
-    "measurement",
-    finalDate,
-    empId,
-  );
+  if (submitNow) {
+    submitWorkflowModule("RCA", "measurement", finalDate, empId, [row.monthLabel]);
+  }
+}
+
+/**
+ * Dipanggil saat Submit KPI Tracking: seluruh RCA Draft/Revisi pada bulan yang diajukan ikut terkirim ke approver
+ * (Checker → Approver 1 → Approver 2 → Validator). Mengembalikan jumlah RCA yang diajukan.
+ */
+export function submitRCAsForMonths(employeeId: string, monthLabels: string[]): number {
+  const normEmpId = normalizeEmployeeId(employeeId);
+  const months = new Set(monthLabels);
+  const all = loadAll();
+  let count = 0;
+  const today = formatTodayDDMMYYYY();
+  const next = all.map((r) => {
+    const owned = !r.employeeId || normalizeEmployeeId(r.employeeId) === normEmpId;
+    if (!owned || !months.has(r.monthLabel)) return r;
+    if (r.approvalStatus === "Closed" || r.approvalStatus === "Validated") return r;
+    count++;
+    return { ...r, employeeId: normEmpId, approvalStatus: "Pending-Check", submittedDate: today };
+  });
+  if (count > 0) {
+    saveAll(next);
+    submitWorkflowModule("RCA", "measurement", today, employeeId, monthLabels);
+  }
+  return count;
 }
 
 export function loadRCASubmissions(employeeId?: string): StoredRCASubmission[] {

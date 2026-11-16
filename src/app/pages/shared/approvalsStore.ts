@@ -4,6 +4,7 @@ import { saveAppraisalApprover } from "./appraisalFormStore";
 import { saveMSApproverEntry } from "./msStore";
 import { upsertApprovalDecision } from "./smartGoalsStore";
 import { savePersistedState } from "../../services/supabaseClient";
+import { resolveActingApproverLabel } from "../../store/delegationStore";
 import {
   getActiveUser,
   loadManagedUsers,
@@ -46,7 +47,11 @@ export function saveAssessment(
     if (alias && alias.phase === "measurement") {
       const level = approverRole === "approver1" ? 1 : 2;
       const activeUser = getActiveUser();
-      const approverName = activeUser.name || (level === 1 ? "Approver 1" : "Approver 2");
+      const users = loadManagedUsers();
+      const owner = users.find((u) => normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(alias.employeeId));
+      const approverName =
+        resolveActingApproverLabel(activeUser, owner, alias.module, alias.phase, approverRole, users) ||
+        (level === 1 ? "Approver 1" : "Approver 2");
       if (type === "Managerial Skill") {
         const values = Object.fromEntries(Object.entries(ratings).map(([key, value]) => [Number(key.replace("ms-", "")), value]));
         saveMSApproverEntry(
@@ -140,10 +145,14 @@ export function saveOverride(no: string, status: string, approvalDate: string, n
       const assessment = loadAssessment(no, alias.role);
       const values = Object.values(assessment?.ratings ?? {});
       const activeUser = getActiveUser();
+      const users = loadManagedUsers();
+      const owner = users.find((u) => normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(alias.employeeId));
       upsertApprovalDecision({
         employeeId: alias.employeeId,
         approverLevel: alias.role === "approver1" ? 1 : 2,
-        approverName: activeUser.name || (alias.role === "approver1" ? "Approver 1" : "Approver 2"),
+        approverName:
+          resolveActingApproverLabel(activeUser, owner, alias.module, alias.phase, alias.role, users) ||
+          (alias.role === "approver1" ? "Approver 1" : "Approver 2"),
         approverRole: alias.role,
         status: status === "Revision" ? "Needs Revision" : "Approved",
         feedback: note?.trim() || assessment?.comments["0"] || "",
@@ -292,6 +301,8 @@ export function resolveDynamicApprovalRowsForUser(
       row.employeeId,
       row.type,
       { checkerDone, a1Done, a2Done, validatorDone },
+      undefined,
+      phase,
     );
     // Jika user yang login bukan Approver 1, bukan Approver 2, bukan Checker/Validator berwenang untuk karyawan ini -> sembunyikan
     if (!stageForRow) continue;

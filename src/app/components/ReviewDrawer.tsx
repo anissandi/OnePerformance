@@ -83,60 +83,57 @@ function resolveUserByRef(allUsers: ManagedUser[], refValue?: string): ManagedUs
 
 // ─── RCA Review Preview ────────────────────────────────────────────────────────
 
-type RCAStatus = "Belum dilaksanakan" | "Sedang dilaksanakan" | "Selesai";
+type RCAStatus = "Belum dilaksanakan" | "Sedang dilaksanakan" | "Selesai" | "Ditunda" | "Dibatalkan";
 
 interface RCAAp {
   action: string; targetDate: string; pic: string;
   status: RCAStatus; keterangan: string[]; output: string[]; evidence: string[];
 }
+interface RCABlk {
+  masalahUtama: string; kenapaA: string; kenapaB: string; kenapaC: string;
+  actionPlans: RCAAp[];
+}
 interface RCAItem {
   no: number; periode: string; kpi: string; satuan: string; baseline: string;
-  target: string; actual: string; masalahUtama: string;
-  kenapaA: string; kenapaB: string; kenapaC: string;
-  actionPlans: RCAAp[];
+  target: string; actual: string;
+  blocks: RCABlk[];
 }
 
 const STATUS_STYLE: Record<RCAStatus, string> = {
   "Belum dilaksanakan": "bg-red-50 text-red-700",
   "Sedang dilaksanakan": "bg-amber-50 text-amber-700",
   "Selesai": "bg-green-50 text-green-700",
+  "Ditunda": "bg-purple-50 text-purple-700",
+  "Dibatalkan": "bg-red-100 text-red-700",
 };
 
-// Sample 1 — shown to Approver 1 (Supervisor)
-const RCA_SAMPLE_1: RCAItem[] = [{
-  no: 1, periode: "Jan", kpi: "Implementasi ERP System", satuan: "% /bulan",
-  baseline: "0%", target: "100%", actual: "85%",
-  masalahUtama: "Modul Finance dan HR belum selesai",
-  kenapaA: "Tim project kekurangan tenaga ahli modul HR",
-  kenapaB: "Rekruten tenaga ahli HR tertunda karena approval anggaran lambat",
-  kenapaC: "Proses approval anggaran lambat karena dokumen justifikasi belum lengkap",
-  actionPlans: [
-    { action: "Penyusunan dokumen justifikasi kebutuhan tenaga ahli modul HR", targetDate: "2027-01-17", pic: "PM ERP & HR Manager", status: "Sedang dilaksanakan", keterangan: ["Draft awal sudah disusun, menunggu data kebutuhan SDM dari HR"], output: ["Draft dokumen justifikasi"], evidence: [] },
-    { action: "Permohonan approval dokumen justifikasi kepada Direktur Keuangan", targetDate: "2027-01-18", pic: "PM ERP", status: "Belum dilaksanakan", keterangan: ["Menunggu dokumen final dari tim ERP"], output: ["Dokumen justifikasi disetujui"], evidence: [] },
-    { action: "Rekrutmen tenaga ahli modul HR via vendor", targetDate: "2027-02-01", pic: "HR Manager", status: "Belum dilaksanakan", keterangan: ["Menunggu budget approval"], output: ["Tenaga ahli modul HR tersedia"], evidence: [] },
-  ],
-}];
+function parseReviewMasalah(masalahUtama: string) {
+  const isInternal = masalahUtama.startsWith("[Faktor Internal]");
+  const isEksternal = masalahUtama.startsWith("[Faktor Eksternal]");
+  const hasFactor = isInternal || isEksternal;
+  const bodyText = hasFactor ? masalahUtama.replace(/^\[Faktor (Internal|Eksternal)\]\s*/, "") : masalahUtama;
+  const factorLabel = isInternal ? "Faktor Internal" : isEksternal ? "Faktor Eksternal" : null;
+  return { isInternal, bodyText, factorLabel };
+}
 
-// Sample 2 — shown to Approver 2 (HR Admin)
-const RCA_SAMPLE_2: RCAItem[] = [{
-  no: 1, periode: "Feb", kpi: "Training Completion Rate", satuan: "%",
-  baseline: "70%", target: "≥ 90%", actual: "78%",
-  masalahUtama: "Peserta training banyak yang tidak hadir",
-  kenapaA: "Jadwal training berbenturan dengan deadline proyek",
-  kenapaB: "Koordinasi penjadwalan antara HR dan manajer departemen kurang",
-  kenapaC: "Tidak ada sistem reminder otomatis dan konfirmasi kehadiran peserta",
-  actionPlans: [
-    { action: "Implementasi sistem reminder otomatis H-3 dan H-1", targetDate: "2027-02-28", pic: "HR Training Coordinator", status: "Sedang dilaksanakan", keterangan: ["Sistem sedang dikembangkan oleh tim IT"], output: ["Sistem reminder training aktif"], evidence: [] },
-    { action: "Koordinasi jadwal training dengan manajer departemen tiap awal bulan", targetDate: "2027-03-01", pic: "HR Training", status: "Belum dilaksanakan", keterangan: [], output: ["Jadwal training bulanan dikonfirmasi"], evidence: [] },
-    { action: "Buat SOP wajib konfirmasi kehadiran H-1 oleh peserta", targetDate: "2027-03-05", pic: "HR Manager", status: "Belum dilaksanakan", keterangan: [], output: ["SOP konfirmasi kehadiran"], evidence: [] },
-    { action: "Evaluasi dan laporan completion rate bulanan ke manajemen", targetDate: "2027-03-10", pic: "HR Training Coordinator", status: "Belum dilaksanakan", keterangan: [], output: ["Laporan completion rate bulanan"], evidence: [] },
-  ],
-}];
+function parseReviewEvidence(raw: string): { name: string; url?: string } {
+  const str = String(raw ?? "");
+  const sep = str.indexOf("||");
+  if (sep >= 0) return { name: str.slice(0, sep) || "file", url: str.slice(sep + 2) || undefined };
+  return { name: str };
+}
 
 function RCAReviewPreview({ employeeId }: { employeeId: string }) {
-  const storedSubs = loadRCASubmissions(employeeId);
-  const data: RCAItem[] = storedSubs.flatMap((sub, idx) => {
-    const blocks =
+  // Hanya RCA yang sudah diajukan (bukan Draft) pada bulan yang disubmit bersama KPI Tracking
+  const rcaWf = loadWorkflowRecords().find(
+    (r) => r.module === "RCA" && r.phase === "measurement" && normalizeEmployeeId(r.employeeId) === normalizeEmployeeId(employeeId),
+  );
+  const activeMonths = rcaWf?.submittedMonths ?? [];
+  const storedSubs = loadRCASubmissions(employeeId).filter(
+    (sub) => sub.approvalStatus !== "Draft" && (activeMonths.length === 0 || activeMonths.includes(sub.monthLabel)),
+  );
+  const data: RCAItem[] = storedSubs.map((sub, idx) => {
+    const rawBlocks =
       sub.masalahBlocks && sub.masalahBlocks.length > 0
         ? sub.masalahBlocks
         : [
@@ -149,47 +146,48 @@ function RCAReviewPreview({ employeeId }: { employeeId: string }) {
               actionPlans: sub.actionPlans ?? [],
             },
           ];
-    return blocks.map((blk, bi) => ({
-      no: idx + bi + 1,
+    return {
+      no: idx + 1,
       periode: sub.periode || "—",
       kpi: sub.kpiIndicator || "—",
       satuan: sub.satuan || "—",
       baseline: sub.baseline || "—",
       target: sub.targetMonthly || "—",
       actual: sub.actual || "—",
-      masalahUtama: blk.masalahUtama || "—",
-      kenapaA: blk.kenapaA || "—",
-      kenapaB: blk.kenapaB || "—",
-      kenapaC: blk.kenapaC || "—",
-      actionPlans: (blk.actionPlans ?? []).map((ap) => ({
-        action: ap.action || "—",
-        targetDate: normalizeDateDDMMYYYY(ap.targetDate),
-        pic: ap.pic || "—",
-        status: (["Belum dilaksanakan", "Sedang dilaksanakan", "Selesai"].includes(ap.status)
-          ? ap.status
-          : "Belum dilaksanakan") as RCAStatus,
-        keterangan: Array.isArray(ap.keterangan) ? ap.keterangan : [],
-        output: Array.isArray(ap.output) ? ap.output : [],
-        evidence: Array.isArray(ap.evidence) ? ap.evidence : [],
+      blocks: rawBlocks.map((blk) => ({
+        masalahUtama: blk.masalahUtama || "—",
+        kenapaA: blk.kenapaA || "—",
+        kenapaB: blk.kenapaB || "—",
+        kenapaC: blk.kenapaC || "—",
+        actionPlans: (blk.actionPlans ?? []).map((ap) => ({
+          action: ap.action || "—",
+          targetDate: normalizeDateDDMMYYYY(ap.targetDate),
+          pic: ap.pic || "—",
+          status: (["Belum dilaksanakan", "Sedang dilaksanakan", "Selesai", "Ditunda", "Dibatalkan"].includes(ap.status)
+            ? ap.status
+            : "Belum dilaksanakan") as RCAStatus,
+          keterangan: Array.isArray(ap.keterangan) ? ap.keterangan : [],
+          output: Array.isArray(ap.output) ? ap.output : [],
+          evidence: Array.isArray(ap.evidence) ? ap.evidence : [],
+        })),
       })),
-    }));
+    };
   });
 
   const th = "border border-[#1A284F]/30 py-3 px-3 text-center font-semibold text-xs whitespace-nowrap";
   const headers: [string, number][] = [
-    ["No",42],["Periode",72],["KPI",160],["Satuan",80],["Baseline",80],["Target",80],["Actual",80],
-    ["Masalah Utama (A)",160],["Kenapa A? (B)",140],["Kenapa B? (C)",140],["Kenapa C? (D)",140],
-    ["Action Plan",180],["Target Penyelesaian",110],["PIC",120],["Status Perbaikan",130],
-    ["Keterangan",160],["Output",160],["Evidence",140],
+    ["No",42],["Periode",72],["KPI",160],["Satuan",90],["Baseline",90],["Target",80],["Actual",80],
+    ["Masalah Utama (A)",180],["Kenapa A? (B)",150],["Kenapa B? (C)",150],["Kenapa C? (D)",150],
+    ["Action Plan",180],["Target Penyelesaian",120],["PIC",120],["Status Perbaikan",130],
+    ["Keterangan",160],["Output",160],["Evidence",160],
   ];
 
   return (
     <div className="flex flex-col gap-4">
-      {/* info banner */}
       <div className="flex items-start gap-2 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
         <FileText className="w-4 h-4 shrink-0 mt-0.5 text-blue-500" />
         <span>
-          Tabel berikut menampilkan <strong>Root Cause Analysis (RCA)</strong> yang disubmit karyawan.
+          Tabel berikut menampilkan <strong>Root Cause Analysis (RCA)</strong> yang disubmit karyawan bersama KPI Tracking{activeMonths.length ? ` bulan ${activeMonths.join(", ")}` : ""}.
           Tinjau akar masalah dan action plan, lalu <strong>Approve</strong> atau <strong>Request Revision</strong>.
         </span>
       </div>
@@ -209,69 +207,91 @@ function RCAReviewPreview({ employeeId }: { employeeId: string }) {
             </tr>
           </thead>
           <tbody>
-            {data.map((item) => {
-              const aps = item.actionPlans.length > 0 ? item.actionPlans : [null];
-              const rs  = aps.length;
+            {data.flatMap((item) => {
+              const totalItemRows = item.blocks.reduce((acc, b) => acc + Math.max(1, b.actionPlans.length), 0);
               const tdBase = "border border-gray-200 align-top py-2 px-3 bg-white text-gray-700";
               const tdAP   = "border border-gray-200 align-top py-2 px-3 bg-blue-50/20 text-gray-700";
-              return aps.map((ap, i) => (
-                <tr key={`${item.no}_${i}`} className="border-t border-gray-100">
-                  {i === 0 && (
-                    <>
-                      <td rowSpan={rs} className={`${tdBase} text-center font-semibold text-gray-600`}>{item.no}</td>
-                      <td rowSpan={rs} className={`${tdBase} text-center`}>
-                        <span className="px-2 py-0.5 bg-[#1A284F]/10 text-[#1A284F] rounded-full text-[10px] font-bold">{item.periode}</span>
-                      </td>
-                      <td rowSpan={rs} className={`${tdBase} font-medium text-gray-800`}>{item.kpi}</td>
-                      <td rowSpan={rs} className={`${tdBase}`}>{item.satuan}</td>
-                      <td rowSpan={rs} className={`${tdBase} text-gray-500 italic`}>{item.baseline}</td>
-                      <td rowSpan={rs} className={`${tdBase} text-center font-bold text-[#1A284F]`}>{item.target}</td>
-                      <td rowSpan={rs} className={`${tdBase} text-center font-bold`}>{item.actual}</td>
-                      <td rowSpan={rs} className={`${tdBase} leading-relaxed`}>{item.masalahUtama}</td>
-                      <td rowSpan={rs} className={`${tdBase} leading-relaxed`}>{item.kenapaA}</td>
-                      <td rowSpan={rs} className={`${tdBase} leading-relaxed`}>{item.kenapaB}</td>
-                      <td rowSpan={rs} className={`${tdBase} leading-relaxed`}>{item.kenapaC}</td>
-                    </>
-                  )}
-                  {ap ? (
-                    <>
-                      <td className={`${tdAP} leading-relaxed`}>{ap.action}</td>
-                      <td className={`${tdAP} text-center`}>{ap.targetDate}</td>
-                      <td className={`${tdAP}`}>{ap.pic}</td>
-                      <td className={`${tdAP} text-center`}>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_STYLE[ap.status]}`}>{ap.status}</span>
-                      </td>
-                      <td className={tdAP}>
-                        {ap.keterangan.length > 0 ? (
-                          <ul className="flex flex-col gap-0.5">
-                            {ap.keterangan.map((k, ki) => <li key={ki} className="text-[10px] leading-relaxed">• {k}</li>)}
-                          </ul>
-                        ) : <span className="text-gray-300 text-[10px]">—</span>}
-                      </td>
-                      <td className={tdAP}>
-                        {ap.output.length > 0 ? (
-                          <ul className="flex flex-col gap-0.5">
-                            {ap.output.map((o, oi) => <li key={oi} className="text-[10px] leading-relaxed">• {o}</li>)}
-                          </ul>
-                        ) : <span className="text-gray-300 text-[10px]">—</span>}
-                      </td>
-                      <td className={tdAP}>
-                        {ap.evidence.length > 0 ? (
-                          <div className="flex flex-col gap-0.5">
-                            {ap.evidence.map((ev, ei) => (
-                              <span key={ei} className="flex items-center gap-1 text-[10px] text-green-700 font-medium">
-                                <FileText className="w-3 h-3 shrink-0" />{ev}
-                              </span>
-                            ))}
-                          </div>
-                        ) : <span className="text-gray-300 text-[10px]">—</span>}
-                      </td>
-                    </>
-                  ) : (
-                    <td colSpan={7} className={`${tdAP} text-center text-gray-300`}>Belum ada action plan</td>
-                  )}
-                </tr>
-              ));
+              return item.blocks.flatMap((block, bi) => {
+                const { isInternal, bodyText, factorLabel } = parseReviewMasalah(block.masalahUtama);
+                const aps = block.actionPlans.length > 0 ? block.actionPlans : [null];
+                const blockRows = aps.length;
+                return aps.map((ap, ai) => (
+                  <tr key={`${item.no}_${bi}_${ai}`} className="border-t border-gray-200">
+                    {bi === 0 && ai === 0 && (
+                      <>
+                        <td rowSpan={totalItemRows} className={`${tdBase} text-center font-semibold text-gray-600`}>{item.no}</td>
+                        <td rowSpan={totalItemRows} className={`${tdBase} text-center`}>
+                          <span className="px-2 py-0.5 bg-[#1A284F]/10 text-[#1A284F] rounded-full text-[10px] font-bold">{item.periode}</span>
+                        </td>
+                        <td rowSpan={totalItemRows} className={`${tdBase} font-medium text-gray-800`}>{item.kpi}</td>
+                        <td rowSpan={totalItemRows} className={`${tdBase} text-gray-600`}>{item.satuan}</td>
+                        <td rowSpan={totalItemRows} className={`${tdBase} text-gray-500 italic`}>{item.baseline}</td>
+                        <td rowSpan={totalItemRows} className={`${tdBase} text-center font-bold text-[#1A284F]`}>{item.target}</td>
+                        <td rowSpan={totalItemRows} className={`${tdBase} text-center font-bold text-gray-800`}>{item.actual}</td>
+                      </>
+                    )}
+                    {ai === 0 && (
+                      <>
+                        <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>
+                          {factorLabel && (
+                            <span className={`inline-block mb-1 px-2 py-0.5 rounded-full text-[9px] font-bold ${isInternal ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"}`}>
+                              {factorLabel}
+                            </span>
+                          )}
+                          <p>{bodyText || "—"}</p>
+                        </td>
+                        <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>{block.kenapaA}</td>
+                        <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>{block.kenapaB}</td>
+                        <td rowSpan={blockRows} className={`${tdBase} leading-relaxed`}>{block.kenapaC}</td>
+                      </>
+                    )}
+                    {ap ? (
+                      <>
+                        <td className={`${tdAP} leading-relaxed`}>{ap.action}</td>
+                        <td className={`${tdAP} text-center`}>{ap.targetDate}</td>
+                        <td className={`${tdAP}`}>{ap.pic}</td>
+                        <td className={`${tdAP} text-center`}>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_STYLE[ap.status]}`}>{ap.status}</span>
+                        </td>
+                        <td className={tdAP}>
+                          {ap.keterangan.length > 0 ? (
+                            <ul className="flex flex-col gap-0.5">
+                              {ap.keterangan.map((k, ki) => <li key={ki} className="text-[10px] leading-relaxed">• {k}</li>)}
+                            </ul>
+                          ) : <span className="text-gray-300 text-[10px]">—</span>}
+                        </td>
+                        <td className={tdAP}>
+                          {ap.output.length > 0 ? (
+                            <ul className="flex flex-col gap-0.5">
+                              {ap.output.map((o, oi) => <li key={oi} className="text-[10px] leading-relaxed">• {o}</li>)}
+                            </ul>
+                          ) : <span className="text-gray-300 text-[10px]">—</span>}
+                        </td>
+                        <td className={tdAP}>
+                          {ap.evidence.length > 0 ? (
+                            <div className="flex flex-col gap-0.5">
+                              {ap.evidence.map((ev, ei) => {
+                                const parsed = parseReviewEvidence(ev);
+                                return parsed.url ? (
+                                  <a key={ei} href={parsed.url} target="_blank" rel="noreferrer" download={parsed.name} className="flex items-center gap-1 text-[10px] text-green-700 font-medium hover:underline">
+                                    <FileText className="w-3 h-3 shrink-0 text-green-600" />{parsed.name}
+                                  </a>
+                                ) : (
+                                  <span key={ei} className="flex items-center gap-1 text-[10px] text-green-700 font-medium">
+                                    <FileText className="w-3 h-3 shrink-0 text-green-600" />{parsed.name}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : <span className="text-gray-300 text-[10px]">—</span>}
+                        </td>
+                      </>
+                    ) : (
+                      <td colSpan={7} className={`${tdAP} text-center text-gray-300`}>Belum ada action plan</td>
+                    )}
+                  </tr>
+                ));
+              });
             })}
           </tbody>
         </table>

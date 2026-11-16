@@ -1,4 +1,5 @@
 // @refresh reset
+import { KpiMonthlyApprovalBar } from "../../components/KpiMonthlyApprovalBar";
 import React, { useState, useMemo, useEffect } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { ArrowRight, TrendingUp, Lightbulb, ClipboardList, FolderKanban, Target, Clock, CheckCircle2, Search, AlertTriangle, LayoutDashboard, ClipboardCheck, Star, X, Briefcase, Users, ChevronDown, ChevronUp, Sparkles } from "lucide-react";
@@ -674,13 +675,27 @@ function MilestoneProgress() {
                 </div>
               </div>
 
-              {/* Progress bar */}
+              {/* Progress bar — KPI (Tracking) dibagi per bulan dengan warna status approval masing-masing bulan */}
+
+              {mod.module === "KPI (Tracking)" ? (
+
+                <KpiMonthlyApprovalBar employeeId={getActiveUser().employeeId} />
+
+              ) : (
+
               <div className="relative h-2.5 w-full bg-gray-100 rounded-full overflow-hidden">
+
                 <div
+
                   className={`h-full rounded-full transition-all duration-700 ${STAGE_BAR_COLOR[status]}`}
+
                   style={{ width: `${fillPct}%` }}
+
                 />
+
               </div>
+
+              )}
 
               {/* Step labels below bar */}
               <div className="flex justify-between mt-0.5">

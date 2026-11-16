@@ -29,8 +29,10 @@ import {
   FolderOpen,
   LockOpen,
   Bell,
+  UserCheck,
 } from "lucide-react";
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
+import { getDelegatedModuleFlagsForUser } from "../store/delegationStore";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import { useAuthStore } from "../store/authStore";
 import { useAccessManagement } from "../pages/hr/settings/AccessManagement";
@@ -201,6 +203,7 @@ const bodLinks = [
       { to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock },
       { to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target },
       { to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare },
+      { to: "/bod/approvals/delegation", label: "Delegation", icon: UserCheck },
       { to: "/bod/approvals/calibration", label: "Calibration", icon: Target },
     ]
   },
@@ -266,8 +269,15 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     return () => window.removeEventListener(MENU_UPDATED_EVENT, onMenuUpdate);
   }, []);
   const rolePerms = getRolePermissions(activeUser.role || "Employee");
-  const canView = (menuId: string) =>
-    isMenuVisibleInMenuManagement(menuId) && Boolean(rolePerms[menuId]?.view);
+  const delegFlags = getDelegatedModuleFlagsForUser(activeUser.employeeId);
+  const canView = (menuId: string) => {
+    if (menuId === "pa_setting" && (delegFlags.kpiSetting || delegFlags.smartGoalsSetting)) return true;
+    if (menuId === "pa_setting_kpi" && delegFlags.kpiSetting) return true;
+    if (menuId === "pa_setting_smart" && delegFlags.smartGoalsSetting) return true;
+    if (menuId === "pa_measurement" && delegFlags.kpiTracking) return true;
+    if (menuId === "pa_measurement_kpi" && delegFlags.kpiTracking) return true;
+    return isMenuVisibleInMenuManagement(menuId) && Boolean(rolePerms[menuId]?.view);
+  };
 
   const hasKpi = allowedModules.includes("KPI (Setting/Measurement)");
   const hasSmart = allowedModules.includes("SMART Goals (Setting/Measurement)");
@@ -375,6 +385,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/hr/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        { to: "/hr/approvals/delegation", label: "Delegation", icon: UserCheck },
         ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
           ? [{ label: "Calibration", icon: Target, children: [
               ...(canView("approvals_calibration_soy") ? [{ to: "/hr/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
@@ -489,6 +500,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
+        { to: "/bod/approvals/delegation", label: "Delegation", icon: UserCheck },
         ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
           ? [{ label: "Calibration", icon: Target, children: [
               ...(canView("approvals_calibration_soy") ? [{ to: "/bod/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
@@ -629,6 +641,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("approvals_pa_setting") ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: Target }] : []),
       ...(canView("approvals_pa_measurement") ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }] : []),
       ...(canView("approvals_mgmt_interview") ? [{ to: `${prefix}/approvals/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
+        { to: `${prefix}/approvals/delegation`, label: "Delegation", icon: UserCheck },
       ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
           ? [{ label: "Calibration", icon: Target, children: [
               ...(canView("approvals_calibration_soy") ? [{ to: `${prefix}/approvals/calibration/setting`, label: "Setting (SOY)", icon: Settings }] : []),

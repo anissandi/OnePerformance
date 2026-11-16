@@ -6,10 +6,15 @@ import {
   getActiveUser,
   getGroupNameForUnit,
   isDirectorRoleOrGrouping,
+  loadManagedUsers,
   resolveEffectiveUserGrouping,
+  useAuthStore,
+  type ManagedUser,
 } from "../../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
-import { savePersistedState } from "../../../services/supabaseClient";
+import { mergeKvMapRecord, syncToSupabase } from "../../../services/supabaseClient";
+import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../../store/delegationStore";
+import { DelegatedWorkspaceBanner } from "../../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../../components/ApproverNotesHistory";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
@@ -3243,8 +3248,12 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
                     <button onClick={cancelEdit} className="w-full px-2 py-1 rounded text-[10px] font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors">Cancel</button>
                   </div>
                 : <div className="flex items-center justify-center gap-1">
-                    <button onClick={() => startEdit(item)} className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F]" title="Edit"><Edit3 className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => onDelete?.(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                    {onUpdateItem && (
+                      <button onClick={() => startEdit(item)} className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F]" title="Edit"><Edit3 className="w-3.5 h-3.5" /></button>
+                    )}
+                    {onDelete && (
+                      <button onClick={() => onDelete(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                    )}
                   </div>}
             </td>
           )}
@@ -3315,7 +3324,7 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
                         </div>
                       : <div className="flex items-center justify-between px-4 py-2">
                           <span className="text-white text-xs font-bold uppercase tracking-widest">{label}</span>
-                          {editable && (
+                          {editable && onUpdateItem && (
                             <button onClick={() => setEditingSection(sec)} className="p-1 rounded hover:bg-white/20 text-white/70 hover:text-white" title="Edit section label">
                               <Edit3 className="w-3 h-3" />
                             </button>
@@ -3585,7 +3594,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
   const masterCascRoles = master.cascading.map(c => ({ key: c.value, label: c.description || c.value }));
   const hasCascadedRows = items.some(i => !!i._cascadeType);
   const cascadingWidth = COLS.slice(14).reduce((s, c) => s + c.w, 0) + 80;
-  const showAksi = !previewMode && !kpiApproved && !submitted;
+  const showAksi = !previewMode && !kpiApproved && !submitted && Boolean(onUpdateItem || onDeleteItem);
   const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? 80 : 0) - (hideCascading ? cascadingWidth : 0) + (hasCascadedRows && !previewMode ? 62 : 0);
   const totalCols = 14
     + (showAksi ? 1 : 0)
@@ -3610,7 +3619,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
             )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {!submitted && !kpiApproved && (
+          {!submitted && !kpiApproved && onAddClick && (
             <button onClick={onAddClick}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors">
               <Plus className="w-3.5 h-3.5" /> Add KPI
@@ -3636,13 +3645,13 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
               {previewMode ? (submitted || kpiApproved ? "Back" : "Back to Edit") : "Preview"}
             </button>
           )}
-          {!submitted && (
+          {!submitted && onSubmit && (
             <button onClick={onSubmit}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
               <Send className="w-3.5 h-3.5" /> Submit KPI
             </button>
           )}
-          {onExport && <ExportImportButton onExport={onExport} onImport={onImport ?? (() => {})} size="sm" />}
+          {onExport && <ExportImportButton onExport={onExport} onImport={onImport} size="sm" />}
         </div>
       </div>
     <div className="overflow-x-auto">
@@ -3979,14 +3988,16 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                             </div>
                           ) : (
                             <div className="flex items-center justify-center gap-1">
-                              <button
-                                onClick={() => startEdit(item)}
-                                title={ct === "FC" ? "Edit Cascading (FC — data fields read-only)" : ct ? "Edit Cascading" : "Edit"}
-                                className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F] transition-colors">
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-                              {(!ct || ct === "CC") && (
-                                <button onClick={() => onDeleteItem?.(item.id)} title="Delete"
+                              {onUpdateItem && (
+                                <button
+                                  onClick={() => startEdit(item)}
+                                  title={ct === "FC" ? "Edit Cascading (FC — data fields read-only)" : ct ? "Edit Cascading" : "Edit"}
+                                  className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F] transition-colors">
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {(!ct || ct === "CC") && onDeleteItem && (
+                                <button onClick={() => onDeleteItem(item.id)} title="Delete"
                                   className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors">
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -4090,7 +4101,40 @@ type TabStatus = "idle" | "pending" | "approved" | "pending-target";
 
 // ─── KPI Section per tab ──────────────────────────────────────────────────────
 
-function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divisionApproved = true, useValidateTerms = false, onTabStatusChange, onItemsChange, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange }: {
+function readStoredPersonalKpiItems(employeeId: string): KPISetting[] | null {
+  try {
+    const normId = normalizeEmployeeId(employeeId);
+    const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+    const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
+    if (Array.isArray(map[normId]) && map[normId].length > 0) return map[normId];
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function readStoredBusinessKpiItems(scopeKey: string): KPISetting[] | null {
+  try {
+    const raw = localStorage.getItem("pa_kpi_business_by_scope_v1");
+    const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
+    if (Array.isArray(map[scopeKey]) && map[scopeKey].length > 0) return map[scopeKey];
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function readStoredBusinessKpiStatus(scopeKey: string): { submitted: boolean; approved: boolean } {
+  try {
+    const raw = localStorage.getItem("pa_kpi_business_status_v1");
+    const map = raw ? (JSON.parse(raw) as Record<string, { submitted?: boolean; approved?: boolean }>) : {};
+    return { submitted: Boolean(map[scopeKey]?.submitted), approved: Boolean(map[scopeKey]?.approved) };
+  } catch {
+    return { submitted: false, approved: false };
+  }
+}
+
+function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divisionApproved = true, useValidateTerms = false, onTabStatusChange, onItemsChange, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, ownerUser, businessScopeKey, delegationAccess, actorName, workspaceLabel }: {
   initialItems: KPISetting[]; isPersonal: boolean; isCorporate?: boolean; hideCascading?: boolean; divisionApproved?: boolean; useValidateTerms?: boolean;
   onTabStatusChange?: (s: TabStatus) => void;
   onItemsChange?: (items: KPISetting[]) => void;
@@ -4099,12 +4143,96 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   parentSectionCascadeMap?: Record<string, string>;
   editedSectionBobots?: Record<string, string>;
   onSectionBobotChange?: (sec: string, val: string) => void;
+  ownerUser?: ManagedUser;
+  businessScopeKey?: string;
+  delegationAccess?: DelegationAccess;
+  actorName?: string;
+  workspaceLabel?: string;
 }) {
-  const [view, setView]               = useState<PageView>("input");
-  const [items, setItems_]            = useState<KPISetting[]>(initialItems);
+  const effectiveOwner = ownerUser ?? getActiveUser();
+  const actorUser = getActiveUser();
+  const isDelegated = normalizeEmployeeId(effectiveOwner.employeeId) !== normalizeEmployeeId(actorUser.employeeId);
+  const actorLabel = isDelegated ? `${actorName || actorUser.name} | atas nama ${effectiveOwner.name}` : (actorName || actorUser.name);
+
+  const canCreate = !delegationAccess || Boolean(delegationAccess.create);
+  const canEdit = !delegationAccess || Boolean(delegationAccess.edit);
+  const canDelete = !delegationAccess || Boolean(delegationAccess.delete);
+  const canSubmit = canCreate || canEdit;
+  const isViewOnly = Boolean(delegationAccess && !canCreate && !canEdit && !canDelete);
+  const effectiveScopeKey = businessScopeKey || (isCorporate ? `corporate-${getGroupNameForUnit(effectiveOwner.company)}` : "");
+
+  const [view, setView]               = useState<PageView>(() => (isViewOnly ? "preview" : "input"));
+  const [items, setItems_]            = useState<KPISetting[]>(() => {
+    if (isCorporate) {
+      return readStoredBusinessKpiItems(effectiveScopeKey) ?? initialItems;
+    }
+    return readStoredPersonalKpiItems(effectiveOwner.employeeId) ?? initialItems;
+  });
+
+  const persistKpiItemsToBackend = (nextItems: KPISetting[], statusLabel: string) => {
+    if (isCorporate) {
+      try {
+        const raw = localStorage.getItem("pa_kpi_business_by_scope_v1");
+        const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
+        map[effectiveScopeKey] = nextItems;
+        localStorage.setItem("pa_kpi_business_by_scope_v1", JSON.stringify(map));
+      } catch {
+        // ignore
+      }
+      void mergeKvMapRecord("pa_kpi_business_by_scope_v1", effectiveScopeKey, nextItems);
+      void syncToSupabase({
+        kind: "kpi-business",
+        id: effectiveScopeKey,
+        period: "2026",
+        items: nextItems,
+        status: statusLabel,
+        audit: {
+          userId: actorUser.employeeId,
+          userName: actorLabel,
+          action: statusLabel === "Submitted" ? "Create" : "Update",
+          module: "KPI",
+          subModule: workspaceLabel || "KPI Business Setting",
+          description: `${statusLabel === "Submitted" ? "Submitted" : "Updated"} ${nextItems.length} KPI Business (${effectiveScopeKey}) by ${actorLabel}`,
+        },
+      });
+    } else {
+      const normId = normalizeEmployeeId(effectiveOwner.employeeId);
+      try {
+        const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+        const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
+        map[normId] = nextItems;
+        localStorage.setItem("pa_kpi_setting_by_emp_v2", JSON.stringify(map));
+      } catch {
+        // ignore
+      }
+      void mergeKvMapRecord("pa_kpi_setting_by_emp_v2", normId, nextItems);
+      void syncToSupabase({
+        kind: "kpi-setting",
+        docKey: `${effectiveOwner.employeeId}:personal:2026`,
+        employeeId: effectiveOwner.employeeId,
+        companyUnit: effectiveOwner.company,
+        tab: "personal",
+        period: "2026",
+        items: nextItems,
+        status: statusLabel,
+        audit: {
+          userId: actorUser.employeeId,
+          userName: actorLabel,
+          action: statusLabel === "Submitted" ? "Create" : "Update",
+          module: "KPI",
+          subModule: "KPI Setting (Personal)",
+          description: `${statusLabel === "Submitted" ? "Submitted" : "Updated"} ${nextItems.length} KPI Setting Personal (${effectiveOwner.employeeId}) by ${actorLabel}`,
+        },
+      });
+    }
+  };
 
   const setItems = (updater: KPISetting[] | ((prev: KPISetting[]) => KPISetting[])) => {
-    setItems_((prev) => typeof updater === "function" ? updater(prev) : updater);
+    setItems_((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      persistKpiItemsToBackend(next, "Draft");
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -4115,25 +4243,23 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const readPersonalWorkflowState = () => {
-    if (isCorporate) return { isSub: false, isApp: false, rec: undefined as ReturnType<typeof loadWorkflowRecords>[number] | undefined, storedItems: null as KPISetting[] | null };
-    const u = getActiveUser();
-    const normId = normalizeEmployeeId(u.employeeId);
-    let storedItems: KPISetting[] | null = null;
-    try {
-      const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
-      const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
-      if (Array.isArray(map[normId]) && map[normId].length > 0) {
-        storedItems = map[normId];
-      }
-    } catch {
-      // ignore
+    if (isCorporate) {
+      const st = readStoredBusinessKpiStatus(effectiveScopeKey);
+      return {
+        isSub: st.submitted,
+        isApp: st.approved,
+        rec: undefined as ReturnType<typeof loadWorkflowRecords>[number] | undefined,
+        storedItems: readStoredBusinessKpiItems(effectiveScopeKey),
+      };
     }
+    const normId = normalizeEmployeeId(effectiveOwner.employeeId);
+    const storedItems = readStoredPersonalKpiItems(effectiveOwner.employeeId);
     const rec = loadWorkflowRecords().find(
       (r) =>
         r.year === "2026" &&
         r.module === "KPI" &&
         r.phase === "setting" &&
-        (r.employeeId === normId || r.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
+        (r.employeeId === normId || r.employeeId.toLowerCase() === effectiveOwner.employeeId.toLowerCase()),
     );
     if (!rec) return { isSub: false, isApp: false, rec: undefined, storedItems };
     const chk = rec.decisions.checker?.status ?? "";
@@ -4173,9 +4299,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       if (st.storedItems) {
         setItems_(st.storedItems);
       }
-      if (st.rec && !st.isSub) {
-        // Jika dikembalikan untuk Revision, buka kembali ke mode input
+      if (st.rec && !st.isSub && !isViewOnly) {
         setView("input");
+      }
+      if (isViewOnly) {
+        setView("preview");
       }
     };
     window.addEventListener("pa-auth-updated", onSync);
@@ -4188,7 +4316,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       window.removeEventListener("pa-db-hydrated", onSync);
       window.removeEventListener("storage", onSync);
     };
-  }, [isCorporate]);
+  }, [isCorporate, effectiveOwner.employeeId, effectiveScopeKey, isViewOnly]);
 
   useEffect(() => {
     let ts: TabStatus = "idle";
@@ -4210,18 +4338,22 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     setShowSuccess(false);
     setSubmitted(true);
     setView("preview");
-    const u = getActiveUser();
-    const normId = normalizeEmployeeId(u.employeeId);
     const todayStr = formatTodayDDMMYYYY();
-    try {
-      const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
-      const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
-      map[normId] = items;
-      savePersistedState("pa_kpi_setting_by_emp_v2", map);
-    } catch {
-      // ignore
+    persistKpiItemsToBackend(items, "Submitted");
+    if (isCorporate) {
+      const statusRecord = { submitted: true, approved: false, submittedDate: todayStr, submittedBy: actorLabel };
+      try {
+        const raw = localStorage.getItem("pa_kpi_business_status_v1");
+        const map = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        map[effectiveScopeKey] = statusRecord;
+        localStorage.setItem("pa_kpi_business_status_v1", JSON.stringify(map));
+      } catch {
+        // ignore
+      }
+      void mergeKvMapRecord("pa_kpi_business_status_v1", effectiveScopeKey, statusRecord);
+    } else {
+      submitWorkflowModule("KPI", "setting", todayStr, effectiveOwner.employeeId);
     }
-    submitWorkflowModule("KPI", "setting", todayStr, u.employeeId);
     setWfRecState(readPersonalWorkflowState().rec);
   };
 
@@ -4273,12 +4405,22 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   return (
     <div className="flex flex-col gap-5">
+      {delegationAccess && (
+        <DelegatedWorkspaceBanner
+          delegator={effectiveOwner}
+          actorName={actorName || actorUser.name}
+          access={delegationAccess}
+          moduleLabel={workspaceLabel || "KPI Setting"}
+        />
+      )}
+
       {/* Up-to-date Approval Status Bar (Submitted -> HR Unit Check -> Approver 1 -> Approver 2 -> HR ICF Validate) */}
       {!isCorporate && (
         <ModuleApprovalStatusBar
           module="KPI"
           phase="setting"
           submittedOverride={submitted}
+          employeeId={effectiveOwner.employeeId}
         />
       )}
 
@@ -4323,38 +4465,44 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         {/* Action buttons */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* Non-corporate pre-submit flow */}
-          {!isCorporate && view === "input" && !submitted && (
+          {!isCorporate && view === "input" && !submitted && !isViewOnly && (
             <>
-              <button onClick={() => !isPersonal || divisionApproved ? setShowAddModal(true) : undefined}
-                disabled={isPersonal && !divisionApproved}
-                title={isPersonal && !divisionApproved ? "KPI Division harus disetujui terlebih dahulu" : ""}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-                <Plus className="w-4 h-4" /> Add KPI
-              </button>
+              {canCreate && (
+                <button onClick={() => !isPersonal || divisionApproved ? setShowAddModal(true) : undefined}
+                  disabled={isPersonal && !divisionApproved}
+                  title={isPersonal && !divisionApproved ? "KPI Division harus disetujui terlebih dahulu" : ""}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                  <Plus className="w-4 h-4" /> Add KPI
+                </button>
+              )}
               <button onClick={() => setView("preview")}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
                 <Eye className="w-4 h-4" /> Preview
               </button>
-              <button onClick={() => setShowConfirm(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                <Send className="w-4 h-4" /> Submit KPI
-              </button>
+              {canSubmit && (
+                <button onClick={() => setShowConfirm(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
+                  <Send className="w-4 h-4" /> Submit KPI
+                </button>
+              )}
             </>
           )}
-          {!isCorporate && view === "preview" && !submitted && (
+          {!isCorporate && view === "preview" && !submitted && !isViewOnly && (
             <>
               <button onClick={() => setView("input")}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
                 <Edit3 className="w-4 h-4" /> Back
               </button>
-              <button onClick={() => setShowConfirm(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                <Send className="w-4 h-4" /> Submit KPI
-              </button>
+              {canSubmit && (
+                <button onClick={() => setShowConfirm(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
+                  <Send className="w-4 h-4" /> Submit KPI
+                </button>
+              )}
             </>
           )}
           {/* General Edit Request (submitted, not yet approved) */}
-          {!isCorporate && submitted && !kpiApproved && !pendingEditRequest && (
+          {!isCorporate && submitted && !kpiApproved && !pendingEditRequest && canEdit && (
             <button onClick={() => setShowEditRequest(true)}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 transition-colors">
               <FileEdit className="w-4 h-4" /> Edit Request
@@ -4413,7 +4561,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
             </div>
           )}
 
-          {!isCorporate && <ExportImportButton onExport={handleExport} onImport={handleImport} />}
+          {!isCorporate && <ExportImportButton onExport={handleExport} onImport={canCreate || canEdit ? handleImport : undefined} />}
         </div>
       </div>
 
@@ -4443,35 +4591,35 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       {isCorporate ? (
         <CorporateKPITable
           items={items}
-          onUpdateItem={(id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i))}
-          onDeleteItem={(id) => setItems((prev) => prev.filter((i) => i.id !== id))}
-          onAddClick={() => setShowAddModal(true)}
-          onSubmit={() => setShowConfirm(true)}
+          onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
+          onDeleteItem={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
+          onAddClick={canCreate ? () => setShowAddModal(true) : undefined}
+          onSubmit={canSubmit ? () => setShowConfirm(true) : undefined}
           onExport={handleExport}
-          onImport={handleImport}
-          submitted={submitted}
+          onImport={canCreate || canEdit ? handleImport : undefined}
+          submitted={submitted || isViewOnly}
           hideCascading={hideCascading}
           kpiApproved={kpiApproved}
           targetEditApproved={targetEditApproved}
-          onEditTargetRequest={useValidateTerms ? undefined : () => setShowTargetEditRequest(true)}
+          onEditTargetRequest={useValidateTerms || !canEdit ? undefined : () => setShowTargetEditRequest(true)}
           sectionCascadeMap={sectionCascadeMap}
-          onSectionCascadeChange={onSectionCascadeChange}
+          onSectionCascadeChange={canEdit ? onSectionCascadeChange : undefined}
           parentSectionCascadeMap={parentSectionCascadeMap}
           editedSectionBobots={editedSectionBobots}
-          onSectionBobotChange={onSectionBobotChange}
+          onSectionBobotChange={canEdit ? onSectionBobotChange : undefined}
         />
       ) : (
         <KPISettingTable
           items={items}
-          editable={view === "input" && !submitted}
-          onDelete={(id) => setItems((prev) => prev.filter((i) => i.id !== id))}
-          onUpdateItem={(id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i))}
+          editable={view === "input" && !submitted && !isViewOnly && (canEdit || canDelete)}
+          onDelete={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
+          onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
           hideCascading={hideCascading}
         />
       )}
       {!isCorporate && (
         <ApproverNotesHistory
-          employeeId={getActiveUser().employeeId}
+          employeeId={effectiveOwner.employeeId}
           module="KPI"
           phase="setting"
           title="Catatan dari Approver"
@@ -4556,7 +4704,7 @@ function TabStatusBadge({ ts, useValidate = false }: { ts: TabStatus; useValidat
   );
 }
 
-export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = false }: { personalOnly?: boolean } = {}) {
+function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: { personalOnly?: boolean } = {}) {
   const activeUser = getActiveUser();
   const isDirectorMode = !personalOnlyProp && isDirectorRoleOrGrouping(activeUser);
   const isGmMode = !personalOnlyProp && !isDirectorMode && activeUser.role === "GM";
@@ -4835,6 +4983,193 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
           useValidateTerms={false}
           hideCascading={personalOnly || isDirectorMode || isGmMode}
           onTabStatusChange={setPersonalTabStatus}
+        />
+      )}
+    </div>
+  );
+}
+
+interface DelegatedKpiSettingTab {
+  id: string;
+  label: string;
+  kind: "group" | "unit" | "personal";
+  owner: ManagedUser;
+  access?: DelegationAccess;
+  businessScopeKey?: string;
+}
+
+export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = false }: { personalOnly?: boolean } = {}) {
+  const { activeUser, allUsers } = useAuthStore();
+  const [, setDelegTick] = useState(0);
+  useEffect(() => {
+    const r = () => setDelegTick((t) => t + 1);
+    window.addEventListener(DELEGATION_EVENT, r);
+    window.addEventListener("pa-db-hydrated", r);
+    return () => {
+      window.removeEventListener(DELEGATION_EVENT, r);
+      window.removeEventListener("pa-db-hydrated", r);
+    };
+  }, []);
+
+  const usersPool = allUsers.length > 0 ? allUsers : loadManagedUsers();
+  const receivedDelegations = getReceivedWorkspaceDelegations(activeUser.employeeId, "kpiSetting", usersPool);
+
+  // Jika tidak ada delegasi KPI Setting yang diterima, jalankan tampilan standar 100% seperti sedia kala
+  if (receivedDelegations.length === 0) {
+    return <StandardKPISettingContent personalOnly={personalOnlyProp} />;
+  }
+
+  // Bangun daftar tab KPI Setting gabungan (Delegasi dari Pemberi Delegasi + KPI milik Penerima Delegasi sendiri):
+  // - Pemberi delegasi Director -> KPI Group + KPI Personal pemberi delegasi
+  // - Pemberi delegasi GM       -> KPI Unit  + KPI Personal pemberi delegasi
+  // - Pemberi delegasi lainnya  -> KPI Personal pemberi delegasi
+  // Ditambah tab KPI milik penerima delegasi sendiri -> contoh: 2 KPI atau 3 KPI sesuai profil pemberi & penerima!
+  const delegatedTabs: DelegatedKpiSettingTab[] = [];
+  for (const d of receivedDelegations) {
+    const owner = d.delegator;
+    if (isDirectorRoleOrGrouping(owner)) {
+      const grp = getGroupNameForUnit(owner.company);
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-group`,
+        label: `KPI Group (${grp}) · ${owner.name}`,
+        kind: "group",
+        owner,
+        access: d.access,
+        businessScopeKey: `corporate-${grp}`,
+      });
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-personal`,
+        label: `KPI Personal · ${owner.name}`,
+        kind: "personal",
+        owner,
+        access: d.access,
+      });
+    } else if (owner.role === "GM") {
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-unit`,
+        label: `KPI Unit (${owner.company}) · ${owner.name}`,
+        kind: "unit",
+        owner,
+        access: d.access,
+        businessScopeKey: `unit-${owner.company}`,
+      });
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-personal`,
+        label: `KPI Personal · ${owner.name}`,
+        kind: "personal",
+        owner,
+        access: d.access,
+      });
+    } else {
+      delegatedTabs.push({
+        id: `deleg-${owner.employeeId}-personal`,
+        label: `KPI Personal · ${owner.name}`,
+        kind: "personal",
+        owner,
+        access: d.access,
+      });
+    }
+  }
+
+  const selfTabs: DelegatedKpiSettingTab[] = [];
+  if (!personalOnlyProp && isDirectorRoleOrGrouping(activeUser)) {
+    const grp = getGroupNameForUnit(activeUser.company);
+    selfTabs.push({
+      id: `self-${activeUser.employeeId}-group`,
+      label: `KPI Group (${grp}) · Saya (${activeUser.name})`,
+      kind: "group",
+      owner: activeUser,
+      businessScopeKey: `corporate-${grp}`,
+    });
+  } else if (!personalOnlyProp && activeUser.role === "GM") {
+    selfTabs.push({
+      id: `self-${activeUser.employeeId}-unit`,
+      label: `KPI Unit (${activeUser.company}) · Saya (${activeUser.name})`,
+      kind: "unit",
+      owner: activeUser,
+      businessScopeKey: `unit-${activeUser.company}`,
+    });
+  }
+  selfTabs.push({
+    id: `self-${activeUser.employeeId}-personal`,
+    label: `KPI Personal · Saya (${activeUser.name})`,
+    kind: "personal",
+    owner: activeUser,
+  });
+
+  const allTabs = [...delegatedTabs, ...selfTabs];
+  return <DelegatedKPISettingTabsView tabs={allTabs} actorName={activeUser.name} />;
+}
+
+function DelegatedKPISettingTabsView({
+  tabs,
+  actorName,
+}: {
+  tabs: DelegatedKpiSettingTab[];
+  actorName: string;
+}) {
+  const [selectedId, setSelectedId] = useState<string>(() => tabs[0]?.id ?? "");
+  const [statusByTab, setStatusByTab] = useState<Record<string, TabStatus>>({});
+  const [sectionCascadeByTab, setSectionCascadeByTab] = useState<Record<string, Record<string, string>>>({});
+  const current = tabs.find((t) => t.id === selectedId) ?? tabs[0];
+
+  return (
+    <div className="w-full flex flex-col gap-6">
+      <div>
+        <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">KPI Setting</h1>
+        <p className="text-gray-500 text-sm">
+          2026 Performance Appraisal — Menampilkan {tabs.length} KPI ({tabs.filter((t) => t.access).length} Delegasi &amp; {tabs.filter((t) => !t.access).length} Milik Sendiri)
+        </p>
+      </div>
+
+      <div className="flex gap-1 border-b border-gray-200 flex-wrap">
+        {tabs.map((tab) => {
+          const isActive = tab.id === current.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setSelectedId(tab.id)}
+              className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                isActive
+                  ? "border-[#1A284F] text-[#1A284F] bg-[#1A284F]/5 rounded-t-lg"
+                  : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded-t-lg"
+              }`}
+            >
+              <span>{tab.label}</span>
+              {tab.access && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+                  Delegasi
+                </span>
+              )}
+              <TabStatusBadge ts={statusByTab[tab.id] ?? "idle"} useValidate={tab.kind === "group"} />
+            </button>
+          );
+        })}
+      </div>
+
+      {current && (
+        <KPISection
+          key={current.id}
+          initialItems={current.kind === "personal" ? PERSONAL_KPI : CORPORATE_KPI}
+          isPersonal={current.kind === "personal"}
+          isCorporate={current.kind !== "personal"}
+          divisionApproved={true}
+          useValidateTerms={false}
+          hideCascading={current.kind === "personal"}
+          ownerUser={current.owner}
+          businessScopeKey={current.businessScopeKey}
+          delegationAccess={current.access}
+          actorName={actorName}
+          workspaceLabel={current.label}
+          sectionCascadeMap={sectionCascadeByTab[current.id] ?? {}}
+          onSectionCascadeChange={(sec, val) =>
+            setSectionCascadeByTab((prev) => ({
+              ...prev,
+              [current.id]: { ...(prev[current.id] ?? {}), [sec]: val },
+            }))
+          }
+          onTabStatusChange={(st) => setStatusByTab((prev) => ({ ...prev, [current.id]: st }))}
         />
       )}
     </div>

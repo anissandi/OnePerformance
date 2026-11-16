@@ -27,6 +27,8 @@ interface ModuleApprovalStatusBarProps {
   phase: "setting" | "measurement";
   submittedOverride?: boolean;
   submittedDateOverride?: string;
+  /** Jika diisi (mis. pada workspace delegasi), menampilkan rantai approval milik karyawan tersebut */
+  employeeId?: string;
 }
 
 function resolveUserByRef(allUsers: ManagedUser[], refValue?: string): ManagedUser | undefined {
@@ -47,6 +49,7 @@ export function ModuleApprovalStatusBar({
   phase,
   submittedOverride,
   submittedDateOverride,
+  employeeId,
 }: ModuleApprovalStatusBarProps) {
   const [, setTick] = useState(0);
 
@@ -66,8 +69,15 @@ export function ModuleApprovalStatusBar({
     };
   }, []);
 
-  const activeUser = getActiveUser();
   const allUsers = loadManagedUsers();
+  const fallbackActive = getActiveUser();
+  const activeUser = employeeId
+    ? allUsers.find(
+        (u) =>
+          normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(employeeId) ||
+          u.employeeId.toLowerCase() === employeeId.toLowerCase(),
+      ) ?? fallbackActive
+    : fallbackActive;
   const normId = normalizeEmployeeId(activeUser.employeeId);
   const wfRec = loadWorkflowRecords().find(
     (r) =>

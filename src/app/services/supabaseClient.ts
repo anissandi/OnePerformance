@@ -68,6 +68,11 @@ async function restSelect<T = Record<string, unknown>>(table: string, query = "s
   }
 }
 
+/** Query baca langsung ke tabel Supabase (PostgREST). */
+export async function selectRowsFromSupabase<T = Record<string, unknown>>(table: string, query = "select=*"): Promise<T[]> {
+  return restSelect<T>(table, query);
+}
+
 async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<boolean> {
   const kind = String(payload.kind ?? "");
   const now = new Date().toISOString();
@@ -914,6 +919,9 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       interDeptFeedbacks,
       rcaSubmissions,
       kpiTrackings,
+      kpiSettings,
+      kpiBusinesses,
+      smartGoalRows,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
@@ -932,6 +940,9 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_inter_dept_feedbacks", "select=*&order=updated_at.desc"),
       restSelect("pa_rca_submissions", "select=*&order=updated_at.desc"),
       restSelect("pa_kpi_trackings", "select=*&order=updated_at.desc"),
+      restSelect("pa_kpi_settings", "select=*&order=updated_at.desc"),
+      restSelect("pa_kpi_business", "select=*&order=updated_at.desc"),
+      restSelect("pa_smart_goals", "select=*&order=updated_at.desc"),
     ]);
     if (
       users.length > 0 ||
@@ -943,7 +954,10 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       interviewSchedules.length > 0 ||
       interDeptFeedbacks.length > 0 ||
       rcaSubmissions.length > 0 ||
-      kpiTrackings.length > 0
+      kpiTrackings.length > 0 ||
+      kpiSettings.length > 0 ||
+      kpiBusinesses.length > 0 ||
+      smartGoalRows.length > 0
     ) {
       return {
         ok: true,
@@ -964,6 +978,9 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         interDeptFeedbacks,
         rcaSubmissions,
         kpiTrackings,
+        kpiSettings,
+        kpiBusinesses,
+        smartGoalRows,
       };
     }
 
@@ -980,6 +997,172 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
   } catch {
     return null;
   }
+}
+
+let initialHydrationPromise: Promise<void> | null = null;
+
+/** Promise hidrasi awal (dipakai gate App & Login agar browser/perangkat baru membaca data backend terlebih dahulu). */
+export function waitForInitialHydration(timeoutMs = 12000): Promise<void> {
+  if (!initialHydrationPromise) initialHydrationPromise = hydrateAllStoresFromSupabase();
+  return Promise.race([
+    initialHydrationPromise.catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+/** Ambil nilai terbaru beberapa key pa_kv_state langsung dari backend dan tulis ke cache lokal. */
+export async function refreshKvKeysFromBackend(keys: string[]): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  if (keys.length === 0) return out;
+  const inList = keys.map((k) => `"${k.replace(/"/g, "")}"`).join(",");
+  const rows = await restSelect<{ state_key: string; state_value: unknown }>(
+    "pa_kv_state",
+    `select=state_key,state_value&state_key=in.(${encodeURIComponent(inList)})`,
+  );
+  for (const row of rows) {
+    if (!row?.state_key || row.state_value === undefined || row.state_value === null) continue;
+    out[row.state_key] = row.state_value;
+    try {
+      localStorage.setItem(row.state_key, JSON.stringify(row.state_value));
+    } catch {
+      // ignore quota errors
+    }
+  }
+  return out;
+}
+
+/**
+ * Merge satu record ke dalam objek map pa_kv_state secara aman (ambil nilai backend terbaru terlebih dahulu),
+ * sehingga perangkat/browser lain dengan cache lama tidak menimpa record milik pengguna lain.
+ */
+export async function mergeKvMapRecord(stateKey: string, recordKey: string, record: unknown): Promise<void> {
+  let base: Record<string, unknown> = {};
+  try {
+    const rows = await restSelect<{ state_value: unknown }>(
+      "pa_kv_state",
+      `select=state_value&state_key=eq.${encodeURIComponent(stateKey)}&limit=1`,
+    );
+    const remote = rows[0]?.state_value;
+    if (remote && typeof remote === "object" && !Array.isArray(remote)) base = remote as Record<string, unknown>;
+    else base = loadPersistedState<Record<string, unknown>>(stateKey, {});
+  } catch {
+    base = loadPersistedState<Record<string, unknown>>(stateKey, {});
+  }
+  const next = { ...base, [recordKey]: record };
+  savePersistedState(stateKey, next);
+}
+
+/**
+ * Simpan daftar (array) ke pa_kv_state secara merge-safe: item backend milik pengguna lain yang belum ada di cache
+ * lokal tetap dipertahankan (union berdasarkan id). `mergeItem` menentukan cara menggabungkan item ber-id sama.
+ */
+export async function mergeKvArrayById<T>(
+  stateKey: string,
+  localList: T[],
+  idOf: (item: T) => string,
+  mergeItem: (local: T, remote: T) => T = (local) => local,
+): Promise<T[]> {
+  let remote: T[] = [];
+  try {
+    const rows = await restSelect<{ state_value: unknown }>(
+      "pa_kv_state",
+      `select=state_value&state_key=eq.${encodeURIComponent(stateKey)}&limit=1`,
+    );
+    if (Array.isArray(rows[0]?.state_value)) remote = rows[0].state_value as T[];
+  } catch {
+    remote = [];
+  }
+  const localIds = new Set(localList.map(idOf));
+  const remoteById = new Map(remote.map((r) => [idOf(r), r] as const));
+  const merged = [
+    ...localList.map((l) => {
+      const r = remoteById.get(idOf(l));
+      return r ? mergeItem(l, r) : l;
+    }),
+    ...remote.filter((r) => !localIds.has(idOf(r))),
+  ];
+  savePersistedState(stateKey, merged);
+  return merged;
+}
+
+/** Ambil ulang daftar karyawan (pa_users + KV) dari backend untuk validasi login lintas perangkat. */
+export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
+  await refreshKvKeysFromBackend([
+    "pa_user_password_security_v1",
+    "pa_unit_login_configs_v1",
+    "pa_managed_users_v1",
+    "pa_archived_users_v1",
+  ]);
+  const users = await restSelect<Record<string, unknown>>("pa_users", "select=*&order=employee_id.asc");
+  if (users.length > 0) applyDbUsersToLocal(users);
+  window.dispatchEvent(new Event("pa-auth-updated"));
+}
+
+function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  let kvUsersList: Array<Record<string, unknown>> = [];
+  try {
+    const kvParsed = JSON.parse(localStorage.getItem("pa_managed_users_v1") ?? "[]");
+    if (Array.isArray(kvParsed)) {
+      kvUsersList = kvParsed.filter(
+        (item): item is Record<string, unknown> => Boolean(item && typeof item === "object"),
+      );
+    }
+  } catch {
+    kvUsersList = [];
+  }
+  let archivedIds = new Set<string>();
+  try {
+    const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
+    archivedIds = new Set(archived.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
+  } catch {
+    archivedIds = new Set();
+  }
+  if (!Array.isArray(users) || users.length === 0) {
+    const list = kvUsersList.filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
+    if (list.length > 0) localStorage.setItem("pa_managed_users_v1", JSON.stringify(list));
+    return list;
+  }
+  const kvUserExtras = new Map(kvUsersList.map((item) => [String(item.employeeId ?? "").toLowerCase(), item]));
+  const mapped = users.map((u, idx) => {
+    const empKey = String(u.employee_id ?? "").toLowerCase();
+    const extra = kvUserExtras.get(empKey) ?? {};
+    return {
+      ...extra,
+      id: String(idx + 1),
+      no: String(u.no ?? idx + 1),
+      regNo: String(u.reg_no ?? extra.regNo ?? `REG-${String(idx + 1).padStart(3, "0")}`),
+      name: String(u.name ?? ""),
+      employeeId: String(u.employee_id ?? ""),
+      position: String(u.position ?? ""),
+      company: String(u.company ?? ""),
+      division: String(u.division ?? ""),
+      department: String(u.department ?? ""),
+      bagian: String(u.bagian ?? extra.bagian ?? ""),
+      joinDate: String(u.join_date ?? extra.joinDate ?? ""),
+      telegramNo: String(u.telegram_no ?? extra.telegramNo ?? ""),
+      grade: String(u.grade || "Grade 5"),
+      role: String(u.role ?? "Employee"),
+      groupings: String(u.groupings ?? "Operasional"),
+      status: String(u.status || "Active"),
+      lastLogin: String(u.last_login || ""),
+      email: String(u.email ?? ""),
+      regNoAp1: String(u.reg_no_ap1 ?? extra.regNoAp1 ?? ""),
+      regNoAp2: String(u.reg_no_ap2 ?? extra.regNoAp2 ?? ""),
+      isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? extra.isHrUnitChecker ?? u.role === "HR Unit"),
+      isHrIcfValidator: Boolean(
+        u.is_hr_icf_validator ?? extra.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator"),
+      ),
+    };
+  });
+  const seenDbIds = new Set(mapped.map((u) => u.employeeId.toLowerCase()));
+  const kvOnlyUsers = kvUsersList.filter(
+    (item) => Boolean(item.employeeId) && !seenDbIds.has(String(item.employeeId).toLowerCase()),
+  );
+  const synced = [...mapped, ...kvOnlyUsers].filter(
+    (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
+  );
+  localStorage.setItem("pa_managed_users_v1", JSON.stringify(synced));
+  return synced;
 }
 
 export async function hydrateAllStoresFromSupabase(): Promise<void> {
@@ -1022,78 +1205,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
 
     // 2. Hydrate users if available in DB
     const users = data.users as Array<Record<string, unknown>> | undefined;
-    let kvUsersList: Array<Record<string, unknown>> = [];
-    try {
-      const kvParsed = JSON.parse(localStorage.getItem("pa_managed_users_v1") ?? "[]");
-      if (Array.isArray(kvParsed)) {
-        kvUsersList = kvParsed.filter(
-          (item): item is Record<string, unknown> => Boolean(item && typeof item === "object"),
-        );
-      }
-    } catch {
-      kvUsersList = [];
-    }
-
-    let archivedIds = new Set<string>();
-    try {
-      const archived = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
-      archivedIds = new Set(archived.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
-    } catch {
-      archivedIds = new Set();
-    }
-
-    let syncedActiveUsers: Array<Record<string, unknown>> = [];
-    if (Array.isArray(users) && users.length > 0) {
-      const kvUserExtras = new Map(
-        kvUsersList.map((item) => [String(item.employeeId ?? "").toLowerCase(), item]),
-      );
-      const mapped = users.map((u, idx) => {
-        const empKey = String(u.employee_id ?? "").toLowerCase();
-        const extra = kvUserExtras.get(empKey) ?? {};
-        return {
-          ...extra,
-          id: String(idx + 1),
-          no: String(u.no ?? idx + 1),
-          regNo: String(u.reg_no ?? extra.regNo ?? `REG-${String(idx + 1).padStart(3, "0")}`),
-          name: String(u.name ?? ""),
-          employeeId: String(u.employee_id ?? ""),
-          position: String(u.position ?? ""),
-          company: String(u.company ?? ""),
-          division: String(u.division ?? ""),
-          department: String(u.department ?? ""),
-          bagian: String(u.bagian ?? extra.bagian ?? ""),
-          joinDate: String(u.join_date ?? extra.joinDate ?? ""),
-          telegramNo: String(u.telegram_no ?? extra.telegramNo ?? ""),
-          grade: String(u.grade || "Grade 5"),
-          role: String(u.role ?? "Employee"),
-          groupings: String(u.groupings ?? "Operasional"),
-          status: String(u.status || "Active"),
-          lastLogin: String(u.last_login || ""),
-          email: String(u.email ?? ""),
-          regNoAp1: String(u.reg_no_ap1 ?? extra.regNoAp1 ?? ""),
-          regNoAp2: String(u.reg_no_ap2 ?? extra.regNoAp2 ?? ""),
-          isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? extra.isHrUnitChecker ?? u.role === "HR Unit"),
-          isHrIcfValidator: Boolean(
-            u.is_hr_icf_validator ?? extra.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator"),
-          ),
-        };
-      });
-      const seenDbIds = new Set(mapped.map((u) => u.employeeId.toLowerCase()));
-      const kvOnlyUsers = kvUsersList.filter(
-        (item) =>
-          Boolean(item.employeeId) &&
-          !seenDbIds.has(String(item.employeeId).toLowerCase()),
-      );
-      syncedActiveUsers = [...mapped, ...kvOnlyUsers].filter(
-        (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
-      );
-      localStorage.setItem("pa_managed_users_v1", JSON.stringify(syncedActiveUsers));
-    } else if (kvUsersList.length > 0) {
-      syncedActiveUsers = kvUsersList.filter(
-        (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
-      );
-      localStorage.setItem("pa_managed_users_v1", JSON.stringify(syncedActiveUsers));
-    }
+    const syncedActiveUsers: Array<Record<string, unknown>> = applyDbUsersToLocal(Array.isArray(users) ? users : []);
 
     // Khusus lingkungan Figma Make (bukan web produksi Vercel):
     // sinkronkan user aktif preview ke akun Administrator / HR ICF dari database web (Vercel)
@@ -1242,7 +1354,18 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         status: (s.status as "Scheduled" | "Cancelled" | "Done") ?? "Scheduled",
         createdAt: String(s.updated_at ?? new Date().toISOString()),
       }));
-      localStorage.setItem("pa_interview_schedules_v1", JSON.stringify(mappedSchedules));
+      // Gabungkan dengan data KV (lampiran, ID peserta) yang tidak tersimpan di kolom tabel
+      let kvSchedules: Array<Record<string, unknown>> = [];
+      try {
+        kvSchedules = JSON.parse(localStorage.getItem("pa_interview_schedules_v1") ?? "[]");
+      } catch {
+        kvSchedules = [];
+      }
+      const kvById = new Map((Array.isArray(kvSchedules) ? kvSchedules : []).map((k) => [String(k.id), k] as const));
+      const mergedSchedules = mappedSchedules.map((m) => ({ ...(kvById.get(m.id) ?? {}), ...m }));
+      const mergedIds = new Set(mergedSchedules.map((m) => m.id));
+      for (const k of kvById.values()) if (!mergedIds.has(String(k.id))) mergedSchedules.push(k as (typeof mergedSchedules)[number]);
+      localStorage.setItem("pa_interview_schedules_v1", JSON.stringify(mergedSchedules));
     }
 
     // 9. Hydrate normalized group rules by unit if present
@@ -1399,6 +1522,73 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const cellsMap = kt.cells_map && typeof kt.cells_map === "object" ? kt.cells_map : {};
         localStorage.setItem(`kpi_tracking_v1_${normId}`, JSON.stringify({ months, cellsMap }));
       }
+    }
+
+    // 18. Hydrate KPI Settings per employee from dedicated backend table pa_kpi_settings
+    const kpiSettingsRows = data.kpiSettings as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(kpiSettingsRows) && kpiSettingsRows.length > 0) {
+      let byEmp: Record<string, unknown> = {};
+      try {
+        byEmp = JSON.parse(localStorage.getItem("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
+      } catch {
+        byEmp = {};
+      }
+      for (const row of kpiSettingsRows) {
+        const rawEmp = String(row.employee_id ?? "").trim();
+        const tab = String(row.tab ?? "personal");
+        const items = Array.isArray(row.items) ? row.items : [];
+        if (!rawEmp || items.length === 0 || tab !== "personal") continue;
+        const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp;
+        if (!byEmp[normId]) byEmp[normId] = items;
+      }
+      localStorage.setItem("pa_kpi_setting_by_emp_v2", JSON.stringify(byEmp));
+    }
+
+    // 19. Hydrate KPI Business (Group / Unit) from dedicated backend table pa_kpi_business
+    const kpiBusinessRows = data.kpiBusinesses as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(kpiBusinessRows) && kpiBusinessRows.length > 0) {
+      let byScope: Record<string, unknown> = {};
+      try {
+        byScope = JSON.parse(localStorage.getItem("pa_kpi_business_by_scope_v1") ?? "{}") ?? {};
+      } catch {
+        byScope = {};
+      }
+      for (const row of kpiBusinessRows) {
+        const scopeId = String(row.id ?? "").trim();
+        const items = Array.isArray(row.items) ? row.items : [];
+        if (!scopeId || items.length === 0) continue;
+        if (!byScope[scopeId]) byScope[scopeId] = items;
+      }
+      localStorage.setItem("pa_kpi_business_by_scope_v1", JSON.stringify(byScope));
+    }
+
+    // 20. Hydrate SMART Goals per employee from dedicated backend table pa_smart_goals
+    const smartGoalsDb = data.smartGoalRows as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(smartGoalsDb) && smartGoalsDb.length > 0) {
+      let goalsByEmp: Record<string, unknown> = {};
+      let checkinByEmp: Record<string, unknown> = {};
+      try {
+        goalsByEmp = JSON.parse(localStorage.getItem("sg_goals_by_emp_v2") ?? "{}") ?? {};
+        checkinByEmp = JSON.parse(localStorage.getItem("sg_checkin_by_emp_v2") ?? "{}") ?? {};
+      } catch {
+        goalsByEmp = {};
+        checkinByEmp = {};
+      }
+      for (const row of smartGoalsDb) {
+        const rawEmp = String(row.employee_id ?? "").trim();
+        if (!rawEmp) continue;
+        const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp;
+        if (Array.isArray(row.goals) && row.goals.length > 0 && !goalsByEmp[normId]) {
+          goalsByEmp[normId] = row.goals;
+        }
+        if (Array.isArray(row.checkin_entries) && row.checkin_entries.length > 0 && !checkinByEmp[normId]) {
+          checkinByEmp[normId] = row.checkin_entries;
+        }
+      }
+      localStorage.setItem("sg_goals_by_emp_v2", JSON.stringify(goalsByEmp));
+      localStorage.setItem("sg_checkin_by_emp_v2", JSON.stringify(checkinByEmp));
     }
 
     window.dispatchEvent(new Event("pa-db-hydrated"));

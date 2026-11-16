@@ -19,6 +19,7 @@ import {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ApprovalStatus =
+  | "Draft"
   | "Pending-Check"
   | "Pending-Approver 1"
   | "Pending-Approver 2"
@@ -58,6 +59,8 @@ interface RCAItem {
   kpi: string;
   satuan: string;
   baseline: string;
+  /** Target tahunan (kolom Target baris KPI di KPI Tracking) */
+  targetYearly?: string;
   target: string;
   actual: string;
   masalahBlocks: MasalahBlock[];
@@ -82,7 +85,7 @@ interface RCARow {
 interface KPICatalogItem {
   key: string;
   monthLabel: string;
-  kpi: string; satuan: string; baseline: string; target: string;
+  kpi: string; satuan: string; baseline: string; target: string; targetYearly: string;
   actual: string; periode: string; score: number;
 }
 
@@ -243,6 +246,7 @@ export function loadMeasurementRCARecords() {
 
 function StatusBadge({ status }: { status: ApprovalStatus }) {
   const cfg: Record<ApprovalStatus, { cls: string; icon: React.ElementType }> = {
+    "Draft":              { cls: "bg-yellow-50 text-yellow-800 border-yellow-200",    icon: Clock        },
     "Pending-Check":      { cls: "bg-amber-50 text-amber-700 border-amber-200",       icon: Clock        },
     "Pending-Approver 1": { cls: "bg-amber-50 text-amber-700 border-amber-200",       icon: Clock        },
     "Pending-Approver 2": { cls: "bg-sky-50 text-sky-700 border-sky-200",             icon: Clock        },
@@ -256,7 +260,7 @@ function StatusBadge({ status }: { status: ApprovalStatus }) {
   const Icon = meta.icon;
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${meta.cls}`}>
-      <Icon className="w-3 h-3" />{status}
+      <Icon className="w-3 h-3" />{status === "Draft" ? "Draft · menunggu Submit KPI Tracking" : status}
     </span>
   );
 }
@@ -331,40 +335,67 @@ function ListEditor({ items, onChange, lockCount = 0 }: {
   );
 }
 
+// ─── Helper: parse evidence string ("filename||url" or legacy "filename") ────
+
+export function parseRcaEvidenceRef(raw: string): { name: string; url?: string } {
+  const str = String(raw ?? "");
+  const sep = str.indexOf("||");
+  if (sep >= 0) {
+    return { name: str.slice(0, sep) || "file", url: str.slice(sep + 2) || undefined };
+  }
+  return { name: str };
+}
+
 // ─── Multi-file Upload ────────────────────────────────────────────────────────
 
 function MultiFileUpload({ files, onChange }: { files: string[]; onChange: (v: string[]) => void }) {
   const ref = useRef<HTMLInputElement>(null);
-  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [uploading, setUploading] = useState(false);
+  const handleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawFiles = Array.from(e.target.files || []);
-    rawFiles.forEach((rawFile) => {
-      void uploadEvidenceFileToSupabase(rawFile, {
-        moduleType: "RCA",
-        period: "2026",
-        month: "June",
-      });
-    });
-    const newFiles = rawFiles.map((f) => f.name);
-    if (newFiles.length) onChange([...files, ...newFiles]);
     e.target.value = "";
+    if (!rawFiles.length) return;
+    setUploading(true);
+    try {
+      const uploaded: string[] = [];
+      for (const rawFile of rawFiles) {
+        const rec = await uploadEvidenceFileToSupabase(rawFile, {
+          moduleType: "RCA",
+          period: "2026",
+        });
+        uploaded.push(rec?.url ? `${rawFile.name}||${rec.url}` : rawFile.name);
+      }
+      if (uploaded.length) onChange([...files, ...uploaded]);
+    } finally {
+      setUploading(false);
+    }
   };
   return (
     <div className="flex flex-col gap-1 min-w-[150px]">
-      {files.map((f, idx) => (
-        <div key={idx} className="flex items-center gap-1 text-[10px] text-green-700">
-          <FileText className="w-3 h-3 shrink-0 text-green-500" />
-          <span className="flex-1 truncate max-w-[120px]" title={f}>{f}</span>
-          <button onClick={() => onChange(files.filter((_, i) => i !== idx))} className="text-gray-300 hover:text-red-400 transition-colors">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      ))}
-      <button onClick={() => ref.current?.click()}
-        className="flex items-center gap-1.5 text-[10px] text-blue-600 font-medium hover:text-blue-700 mt-0.5 border border-dashed border-blue-300 rounded px-2 py-1 bg-blue-50/40 hover:bg-blue-50 transition-colors">
-        <Upload className="w-3 h-3" /> Upload file
+      {files.map((f, idx) => {
+        const parsed = parseRcaEvidenceRef(f);
+        return (
+          <div key={idx} className="flex items-center gap-1 text-[10px] text-green-700">
+            <FileText className="w-3 h-3 shrink-0 text-green-500" />
+            {parsed.url ? (
+              <a href={parsed.url} target="_blank" rel="noreferrer" download={parsed.name} className="flex-1 truncate max-w-[120px] hover:underline" title={parsed.name}>
+                {parsed.name}
+              </a>
+            ) : (
+              <span className="flex-1 truncate max-w-[120px]" title={parsed.name}>{parsed.name}</span>
+            )}
+            <button type="button" onClick={() => onChange(files.filter((_, i) => i !== idx))} className="text-gray-300 hover:text-red-400 transition-colors">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        );
+      })}
+      <button type="button" disabled={uploading} onClick={() => ref.current?.click()}
+        className="flex items-center gap-1.5 text-[10px] text-blue-600 font-medium hover:text-blue-700 mt-0.5 border border-dashed border-blue-300 rounded px-2 py-1 bg-blue-50/40 hover:bg-blue-50 transition-colors disabled:opacity-50">
+        <Upload className="w-3 h-3" /> {uploading ? "Mengunggah…" : "Upload file"}
       </button>
       <p className="text-[9px] text-gray-400">JPG, PNG, PDF</p>
-      <input ref={ref} type="file" accept=".jpg,.jpeg,.png,.pdf" multiple className="hidden" onChange={handleFiles} />
+      <input ref={ref} type="file" accept=".jpg,.jpeg,.png,.pdf" multiple className="hidden" onChange={(e) => { void handleFiles(e); }} />
     </div>
   );
 }
@@ -457,7 +488,16 @@ function RCAPreviewTable({ data }: { data: RCAItem[] }) {
                       </td>
                       <td className="border border-gray-200 py-2 px-3 bg-blue-50/20">
                         {ap.evidence.length > 0
-                          ? <div className="flex flex-col gap-0.5">{ap.evidence.map((ev, ei) => <span key={ei} className="flex items-center gap-1 text-[10px] text-green-700 font-medium"><FileText className="w-3 h-3 shrink-0" />{ev}</span>)}</div>
+                          ? <div className="flex flex-col gap-0.5">{ap.evidence.map((ev, ei) => {
+                              const parsed = parseRcaEvidenceRef(ev);
+                              return parsed.url ? (
+                                <a key={ei} href={parsed.url} target="_blank" rel="noreferrer" download={parsed.name} className="flex items-center gap-1 text-[10px] text-green-700 font-medium hover:underline">
+                                  <FileText className="w-3 h-3 shrink-0 text-green-600" />{parsed.name}
+                                </a>
+                              ) : (
+                                <span key={ei} className="flex items-center gap-1 text-[10px] text-green-700 font-medium"><FileText className="w-3 h-3 shrink-0 text-green-600" />{parsed.name}</span>
+                              );
+                            })}</div>
                           : <span className="text-gray-300 text-[10px]">—</span>}
                       </td>
                     </>
@@ -648,11 +688,12 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
         kpi: found.kpi,
         satuan: found.satuan,
         baseline: found.baseline,
+        targetYearly: found.targetYearly,
         target: found.target,
         actual: found.actual,
       });
     } else {
-      onChange({ ...item, sourceKey: "", monthLabel: "", periode: "", kpi: "", satuan: "", baseline: "", target: "", actual: "" });
+      onChange({ ...item, sourceKey: "", monthLabel: "", periode: "", kpi: "", satuan: "", baseline: "", targetYearly: "", target: "", actual: "" });
     }
   };
 
@@ -714,7 +755,7 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
                 </span>
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Periode</label>
                 <p className="text-xs font-semibold text-[#1A284F] px-3 py-2 bg-[#1A284F]/5 rounded-lg border border-[#1A284F]/20">
@@ -743,6 +784,7 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
               </div>
               <RO label="Satuan" value={item.satuan} />
               <RO label="Baseline" value={item.baseline} />
+              <RO label="Target (Yearly)" value={item.targetYearly ?? ""} />
               <RO label="Monthly Target" value={item.target} />
             </div>
             <div className="mt-3 max-w-xs">
@@ -750,8 +792,8 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
             </div>
             {kpiSelected && (
               <p className="mt-2 text-[10px] text-blue-500 flex items-center gap-1">
-                <Info className="w-3 h-3" /> Periode, KPI, Satuan, Baseline, dan Monthly Target diisi otomatis dari KPI Tracking; field Actual dapat disesuaikan.
-                <button className="underline ml-1" onClick={() => onChange({ ...item, sourceKey: "", monthLabel: "", kpi: "", satuan: "", baseline: "", target: "", actual: "", periode: "" })}>Reset</button>
+                <Info className="w-3 h-3" /> Periode, KPI, Satuan, Baseline, Target (Yearly), dan Monthly Target diisi otomatis dari baris KPI di KPI Tracking; field Actual dapat disesuaikan.
+                <button className="underline ml-1" onClick={() => onChange({ ...item, sourceKey: "", monthLabel: "", kpi: "", satuan: "", baseline: "", targetYearly: "", target: "", actual: "", periode: "" })}>Reset</button>
               </p>
             )}
           </div>
@@ -827,21 +869,30 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
                   {/* 5-Why fields */}
                   <div className="flex flex-col gap-3">
                     <p className="text-[10px] font-bold text-[#1A284F] uppercase tracking-widest">Analisis 5 Why</p>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Kenapa A? (B)</label>
-                      <textarea value={block.kenapaA} onChange={(e) => updateBlock(block.id, { kenapaA: e.target.value })} rows={3} placeholder="—"
-                        className="text-xs border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] resize-none" />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Kenapa B? (C)</label>
-                      <textarea value={block.kenapaB} onChange={(e) => updateBlock(block.id, { kenapaB: e.target.value })} rows={3} placeholder="—"
-                        className="text-xs border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] resize-none" />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Kenapa C? (D)</label>
-                      <textarea value={block.kenapaC} onChange={(e) => updateBlock(block.id, { kenapaC: e.target.value })} rows={3} placeholder="—"
-                        className="text-xs border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] resize-none" />
-                    </div>
+                    {([
+                      ["kenapaA", "Kenapa A? (B)"],
+                      ["kenapaB", "Kenapa B? (C)"],
+                      ["kenapaC", "Kenapa C? (D)"],
+                    ] as const).map(([fk, label]) => (
+                      <div key={fk} className="flex flex-col gap-1">
+                        <label className={`text-[10px] font-bold uppercase tracking-wide ${hasFactor ? "text-gray-500" : "text-gray-300"}`}>{label}</label>
+                        <div className="group relative">
+                          <textarea
+                            value={block[fk]}
+                            disabled={!hasFactor}
+                            onChange={(e) => updateBlock(block.id, { [fk]: e.target.value })}
+                            rows={3}
+                            placeholder={hasFactor ? "—" : "Pilih Faktor terlebih dahulu"}
+                            className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] resize-none disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-300"
+                          />
+                          {!hasFactor && (
+                            <span role="tooltip" className="pointer-events-none invisible absolute left-1/2 top-full z-20 mt-1 w-64 -translate-x-1/2 rounded-lg bg-[#1A284F] px-3 py-2 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100">
+                              Pilih Faktor Internal atau Faktor Eksternal pada Masalah Utama terlebih dahulu untuk mengisi {label}.
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
                   {/* Action Plans for this block */}
@@ -856,7 +907,8 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
                     {block.actionPlans.length === 0 && (
                       <p className="text-xs text-gray-400 text-center py-4 border border-dashed border-gray-200 rounded-xl">Belum ada action plan.</p>
                     )}
-                    <div className="flex flex-col gap-3">
+                    {/* Maks. 2 Action Plan per baris; Action Plan berikutnya turun ke baris baru */}
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                       {block.actionPlans.map((ap, idx) => (
                         <div key={ap.id} className="border border-gray-100 rounded-xl p-4 bg-gray-50/50">
                           <div className="flex items-center justify-between mb-3">
@@ -947,7 +999,7 @@ function ConfirmModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm
       <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full mx-4 text-center">
         <div className="w-14 h-14 rounded-full bg-[#1A284F]/10 flex items-center justify-center mx-auto mb-4"><Send className="w-6 h-6 text-[#1A284F]" /></div>
         <h3 className="font-bold text-gray-900 text-lg mb-1">Action Confirmation</h3>
-        <p className="text-gray-500 text-sm mb-6">Are you sure you want to submit your RCA for approval?</p>
+        <p className="text-gray-500 text-sm mb-6">Simpan RCA? RCA akan dikirim ke approver bersama Submit KPI Tracking bulan tsb (atau langsung masuk approval bila KPI Tracking bulan tsb sudah diajukan).</p>
         <div className="flex gap-3 justify-center">
           <button onClick={onCancel} className="px-6 py-2 rounded-full border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">Cancel</button>
           <button onClick={onConfirm} className="px-6 py-2 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors">Submit</button>
@@ -975,10 +1027,10 @@ function SuccessModal({ onClose }: { onClose: () => void }) {
 function DetailDrawer({ row, onClose, onSubmit }: {
   row: RCARow; onClose: () => void; onSubmit: (data: RCAItem[]) => void;
 }) {
-  const isApproved = row.approvalStatus === "Approved";
-  const isReadOnly = row.approvalStatus === "Pending-Approver 1"
-                  || row.approvalStatus === "Pending-Approver 2"
-                  || row.approvalStatus === "Closed";
+  // Sesuai Gambar 1 & Gambar 2: selama RCA belum Closed, View Detail menampilkan tabel RCA
+  // yang dapat di-update progress (Edit -> Edit Mode -> Save Update -> Submit RCA).
+  const canUpdateProgress = row.approvalStatus !== "Closed";
+  const isDraft = row.approvalStatus === "Draft";
 
   const cloneData = (d: RCAItem[]) => d.map((it) => ({
     ...it,
@@ -992,7 +1044,7 @@ function DetailDrawer({ row, onClose, onSubmit }: {
   const [isSaved,         setIsSaved]         = useState(false);
   const [editData,        setEditData]        = useState<RCAItem[]>(cloneData(row.rcaData));
   const [originalData,    setOriginalData]    = useState<RCAItem[]>(cloneData(row.rcaData));
-  const [submitted,       setSubmitted]       = useState(row.submitted);
+  const [submitted,       setSubmitted]       = useState(false);
   const [showEvidenceErr, setShowEvidenceErr] = useState(false);
   const [showConfirm,     setShowConfirm]     = useState(false);
   const [showSuccess,     setShowSuccess]     = useState(false);
@@ -1007,8 +1059,8 @@ function DetailDrawer({ row, onClose, onSubmit }: {
     setEditMode(true);
   };
 
-  // Derive the rcaStore key for this row (matches how CreateRCADrawer and KPIPage store entries)
-  const storeKey = `${row.kpiIndicator}__${row.periode}`;
+  // Kunci RCA di rcaStore = id baris (sama dengan key saat dibuat dari KPI Tracking maupun menu RCA)
+  const storeKey = row.id || `${row.kpiIndicator}__${row.periode}`;
 
   const persistToStore = (data: RCAItem[], approvalStatus: string) => {
     const storedBlocks: StoredMasalahBlock[] = data.flatMap((item) =>
@@ -1042,7 +1094,7 @@ function DetailDrawer({ row, onClose, onSubmit }: {
     setShowSuccess(false);
     setSubmitted(true);
     setIsSaved(false);
-    persistToStore(editData, "Pending-Approver 1");
+    persistToStore(editData, "Pending-Check");
     onSubmit(editData);
   };
 
@@ -1055,19 +1107,19 @@ function DetailDrawer({ row, onClose, onSubmit }: {
         <span className="text-sm font-bold text-gray-800">{row.kpiIndicator}</span>
         <span className="text-xs text-gray-400">— {row.periode} {row.year}</span>
         <StatusBadge status={row.approvalStatus} />
-        {isApproved && !submitted && editMode && (
+        {canUpdateProgress && !submitted && editMode && (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700 border border-amber-300">
             <Edit3 className="w-3 h-3" /> Edit Mode
           </span>
         )}
         <div className="ml-auto flex items-center gap-2 flex-wrap">
-          {isApproved && !submitted && !editMode && !isSaved && (
+          {canUpdateProgress && !submitted && !editMode && !isSaved && (
             <button onClick={handleEnterEdit}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-amber-400 text-amber-700 hover:bg-amber-50 transition-colors">
-              <Edit3 className="w-4 h-4" /> Update Progress
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border border-gray-200 bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
+              <Edit3 className="w-4 h-4" /> Edit
             </button>
           )}
-          {isApproved && !submitted && !editMode && isSaved && (
+          {canUpdateProgress && !submitted && !editMode && isSaved && (
             <>
               <button onClick={handleEnterEdit}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
@@ -1079,7 +1131,7 @@ function DetailDrawer({ row, onClose, onSubmit }: {
               </button>
             </>
           )}
-          {isApproved && !submitted && editMode && (
+          {canUpdateProgress && !submitted && editMode && (
             <button onClick={handleSaveUpdate} disabled={missingEvidence}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
                 missingEvidence ? "bg-gray-100 text-gray-300 cursor-not-allowed" : "bg-[#1A284F] text-white hover:bg-[#131d3b] shadow-sm"
@@ -1090,24 +1142,30 @@ function DetailDrawer({ row, onClose, onSubmit }: {
         </div>
       </div>
 
+      {isDraft && !editMode && !isSaved && (
+        <div className="mx-8 mt-4 flex items-center gap-2 px-4 py-3 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-800 text-sm shrink-0">
+          <Info className="w-4 h-4 shrink-0" />
+          RCA tersimpan (tag RCA kuning). Klik <strong className="mx-1">Edit</strong> untuk memperbarui progress, atau kirim bersama <strong className="mx-1">Submit KPI Tracking</strong> bulan {row.periode}.
+        </div>
+      )}
       {submitted && (
         <div className="mx-8 mt-4 flex items-center gap-2 px-4 py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm font-medium shrink-0">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
-          RCA has been submitted and is pending Approver review.
+          Update progress RCA berhasil disubmit dan menunggu review Approver.
         </div>
       )}
-      {isApproved && editMode && !submitted && (
+      {canUpdateProgress && editMode && !submitted && (
         <div className="mx-8 mt-4 flex items-start gap-2 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm shrink-0">
           <Info className="w-4 h-4 shrink-0 mt-0.5" />
           <span>Edit Mode aktif — perbarui <strong>Status Perbaikan</strong>, <strong>Keterangan</strong>, dan <strong>Output</strong> langsung di tabel. Evidence wajib diupload jika Status = <strong>Selesai</strong>. Data Output lama tidak dapat dihapus, hanya bisa menambah.</span>
         </div>
       )}
-      {isApproved && editMode && showEvidenceErr && missingEvidence && (
+      {canUpdateProgress && editMode && showEvidenceErr && missingEvidence && (
         <div className="mx-8 mt-2 flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-300 text-red-700 text-sm font-semibold shrink-0">
           <span>⚠</span> Wajib Upload Evidence untuk setiap Action Plan dengan Status Perbaikan <strong>Selesai</strong>.
         </div>
       )}
-      {isApproved && !editMode && isSaved && !submitted && (
+      {canUpdateProgress && !editMode && isSaved && !submitted && (
         <div className="mx-8 mt-4 flex items-center gap-2 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm shrink-0">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           Update berhasil disimpan. Klik <strong className="mx-1">Submit RCA</strong> untuk mengirim ke approver, atau <strong className="mx-1">Edit</strong> jika ada perubahan lagi.
@@ -1115,12 +1173,9 @@ function DetailDrawer({ row, onClose, onSubmit }: {
       )}
 
       <div className="flex-1 overflow-y-auto px-8 py-6">
-        {isReadOnly && <RCAPreviewTable data={editData} />}
-        {isApproved && (
-          editMode && !submitted
-            ? <RCAEditableTable data={editData} originalData={originalData} onChange={setEditData} showEvidenceErrors={showEvidenceErr} />
-            : <RCAPreviewTable data={editData} />
-        )}
+        {canUpdateProgress && editMode && !submitted
+          ? <RCAEditableTable data={editData} originalData={originalData} onChange={setEditData} showEvidenceErrors={showEvidenceErr} />
+          : <RCAPreviewTable data={editData} />}
       </div>
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
@@ -1137,7 +1192,7 @@ function CreateRCADrawer({ onClose, onCreated }: { onClose: () => void; onCreate
     [],
   );
   const [items, setItems] = useState<RCAItem[]>([{
-    id: genId(), no: 1, sourceKey: "", monthLabel: "", periode: "", kpi: "", satuan: "", baseline: "", target: "", actual: "",
+    id: genId(), no: 1, sourceKey: "", monthLabel: "", periode: "", kpi: "", satuan: "", baseline: "", targetYearly: "", target: "", actual: "",
     masalahBlocks: [newMasalahBlock()],
   }]);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -1146,7 +1201,7 @@ function CreateRCADrawer({ onClose, onCreated }: { onClose: () => void; onCreate
   const updateItem = (id: string, u: RCAItem) => setItems((p) => p.map((it) => it.id === id ? u : it));
   const deleteItem = (id: string) => setItems((p) => { const f = p.filter((it) => it.id !== id); return f.map((it, i) => ({ ...it, no: i + 1 })); });
   const addItem    = () => setItems((p) => [...p, {
-    id: genId(), no: p.length + 1, sourceKey: "", monthLabel: "", periode: "", kpi: "", satuan: "", baseline: "", target: "", actual: "",
+    id: genId(), no: p.length + 1, sourceKey: "", monthLabel: "", periode: "", kpi: "", satuan: "", baseline: "", targetYearly: "", target: "", actual: "",
     masalahBlocks: [newMasalahBlock()],
   }]);
 
@@ -1201,6 +1256,7 @@ function CreateRCADrawer({ onClose, onCreated }: { onClose: () => void; onCreate
         achievementPct: matchedCand?.score ?? 0,
         satuan: item.satuan,
         baseline: item.baseline,
+        targetYearly: item.targetYearly || matchedCand?.targetYearly || "",
         masalahBlocks: storedBlocks,
         masalahUtama: storedBlocks.map((b) => b.masalahUtama),
         kenapaA: storedBlocks[0]?.kenapaA ?? "",
@@ -1383,17 +1439,10 @@ function RCAListTable({ rows, isClosed, onViewDetail, onDelete }: {
                   <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-1.5">
-                        {row.approvalStatus === "Validated" || row.approvalStatus === "Approved" || row.approvalStatus === "Revision" ? (
-                          <button onClick={() => onViewDetail(row)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-amber-700 border border-amber-300 bg-amber-50 hover:bg-amber-100 hover:border-amber-400 transition-colors">
-                            <Edit3 className="w-3.5 h-3.5" /> {row.approvalStatus === "Revision" ? "Perbaiki Revisi" : "Update Progress"}
-                          </button>
-                        ) : (
-                          <button onClick={() => onViewDetail(row)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-600 border border-gray-200 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors">
-                            <Eye className="w-3.5 h-3.5" /> View Detail
-                          </button>
-                        )}
+                        <button onClick={() => onViewDetail(row)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-700 border border-gray-200 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors">
+                          <Eye className="w-3.5 h-3.5" /> View Detail
+                        </button>
                         {onDelete && (
                           <button onClick={() => setPendingDelete(row)}
                             className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
@@ -1490,6 +1539,7 @@ export function RCAPage() {
         kpi: s.kpiIndicator,
         satuan: s.satuan,
         baseline: s.baseline,
+        targetYearly: s.targetYearly ?? "",
         target: s.targetMonthly,
         actual: s.actual,
         masalahBlocks: s.masalahBlocks && s.masalahBlocks.length > 0
@@ -1511,7 +1561,10 @@ export function RCAPage() {
             }],
       };
       const rawSt = (s.approvalStatus as ApprovalStatus) || "Pending-Check";
-      const status: ApprovalStatus = rawSt === "Closed" ? "Closed" : wfDerivedStatus ?? rawSt;
+      // Status workflow RCA berlaku untuk bulan yang diajukan pada siklus submit aktif
+      const inActiveCycle = !wfRec?.submittedMonths?.length || wfRec.submittedMonths.includes(s.monthLabel);
+      const status: ApprovalStatus =
+        rawSt === "Closed" ? "Closed" : rawSt === "Draft" ? "Draft" : inActiveCycle ? wfDerivedStatus ?? rawSt : rawSt;
       const rowObj: RCARow = {
         id: s.id,
         no: status === "Closed" ? nextClosed.length + 1 : nextOpen.length + 1,
@@ -1565,7 +1618,7 @@ export function RCAPage() {
       // Persist updated approval status to rcaStore
       const row = prev.find((r) => r.id === rowId);
       if (row) {
-        const storeKey = `${row.kpiIndicator}__${row.periode}`;
+        const storeKey = row.id || `${row.kpiIndicator}__${row.periode}`;
         const storedBlocks: StoredMasalahBlock[] = updatedData.flatMap((item) =>
           item.masalahBlocks.map((b) => ({
             id: b.id, masalahUtama: b.masalahUtama,
@@ -1584,7 +1637,7 @@ export function RCAPage() {
           masalahBlocks: storedBlocks,
           actionPlans: storedBlocks.flatMap((b) => b.actionPlans),
           approvalStatus: "Pending-Check",
-        });
+        }, { submitNow: true });
       }
       return next;
     });

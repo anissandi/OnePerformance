@@ -24,7 +24,9 @@ import {
   evaluateAndSyncSession,
   loadManagedUsers,
   loginWithCompanyAndEmployeeId,
+  validateLoginCompanyUnit,
 } from "../store/authStore";
+import { refreshLoginCriticalStateFromBackend } from "../services/supabaseClient";
 import {
   requestOtpFromBackend,
   updateEmployeeNewPassword,
@@ -153,47 +155,61 @@ export function LoginPage() {
     setTimeout(() => otpRef.current?.focus(), 50);
   }
 
-  function handleLogin() {
-    if (isPasswordMode) {
-      if (!employeeId.trim()) {
-        setError("Masukkan Employee ID terlebih dahulu.");
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  async function handleLogin() {
+    if (loggingIn) return;
+    if (!employeeId.trim()) {
+      setError("Masukkan Employee ID terlebih dahulu.");
+      return;
+    }
+    if (isPasswordMode && !passwordInput) {
+      setError("Masukkan Password terlebih dahulu.");
+      return;
+    }
+    if (!isPasswordMode && !otpCode.trim()) return;
+    setError("");
+    setLoggingIn(true);
+    try {
+      // Ambil data akun & keamanan password terbaru langsung dari backend (bukan cache browser),
+      // sehingga login berhasil di browser / perangkat / mode incognito mana pun.
+      await Promise.race([
+        refreshLoginCriticalStateFromBackend(),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ]);
+
+      // Validasi Company Unit terlebih dahulu (gagal walaupun Employee ID & password benar)
+      const unitCheck = validateLoginCompanyUnit(selectedLoc.company, employeeId);
+      if (!unitCheck.ok) {
+        setError(unitCheck.error);
         return;
       }
-      if (!passwordInput) {
-        setError("Masukkan Password terlebih dahulu.");
-        return;
+      const targetEmpId = unitCheck.user.employeeId;
+
+      if (isPasswordMode) {
+        const pwdVerify = verifyEmployeePasswordLogin(targetEmpId, passwordInput);
+        if (!pwdVerify.ok) {
+          setError(pwdVerify.error);
+          return;
+        }
+        if (pwdVerify.mustChangePassword) {
+          setMustChangeStep(true);
+          setNewPassword("");
+          setConfirmNewPassword("");
+          setError("");
+          return;
+        }
       }
-      setError("");
-      const targetEmpId = matchedEmployee?.employeeId || employeeId.trim();
-      const pwdVerify = verifyEmployeePasswordLogin(targetEmpId, passwordInput);
-      if (!pwdVerify.ok) {
-        setError(pwdVerify.error);
-        return;
-      }
-      if (pwdVerify.mustChangePassword) {
-        setMustChangeStep(true);
-        setNewPassword("");
-        setConfirmNewPassword("");
-        setError("");
-        return;
-      }
-      const res = loginWithCompanyAndEmployeeId(selectedLoc.company, employeeId);
+
+      const res = loginWithCompanyAndEmployeeId(selectedLoc.company, targetEmpId);
       if (!res.ok) {
         setError(res.error);
         return;
       }
       navigate(resolvePostLoginDestination(res.redirectPath), { replace: true });
-      return;
+    } finally {
+      setLoggingIn(false);
     }
-
-    if (!otpCode.trim()) return;
-    setError("");
-    const res = loginWithCompanyAndEmployeeId(selectedLoc.company, employeeId);
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    navigate(resolvePostLoginDestination(res.redirectPath), { replace: true });
   }
 
   function handleSaveMandatoryNewPassword() {
@@ -463,7 +479,7 @@ export function LoginPage() {
                     type={showPassword ? "text" : "password"}
                     value={passwordInput}
                     onChange={(e) => { setPasswordInput(e.target.value); setError(""); }}
-                    onKeyDown={(e) => { if (e.key === "Enter") handleLogin(); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") void handleLogin(); }}
                     placeholder="Masukkan Password Anda"
                     className="w-full border border-gray-300 rounded-xl pl-4 pr-10 py-2.5 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]/40 transition-colors"
                   />
@@ -478,12 +494,12 @@ export function LoginPage() {
               </div>
               <button
                 type="button"
-                onClick={handleLogin}
-                disabled={!employeeId.trim() || !passwordInput}
+                onClick={() => void handleLogin()}
+                disabled={!employeeId.trim() || !passwordInput || loggingIn}
                 className="w-full flex items-center justify-center gap-2.5 bg-[#1A284F] hover:bg-[#131d3b] disabled:opacity-50 text-white font-semibold rounded-xl py-3 text-sm transition-colors"
               >
                 <LogIn className="w-4 h-4" />
-                Login
+                {loggingIn ? "Memverifikasi..." : "Login"}
               </button>
             </>
           ) : (
@@ -561,8 +577,8 @@ export function LoginPage() {
           ) : (
             <button
               type="button"
-              onClick={handleLogin}
-              disabled={!otpCode.trim()}
+              onClick={() => void handleLogin()}
+              disabled={!otpCode.trim() || loggingIn}
               className="w-full flex items-center justify-center gap-2.5 bg-[#1A284F] hover:bg-[#131d3b] disabled:opacity-50 text-white font-semibold rounded-xl py-3 text-sm transition-colors"
             >
               <LogIn className="w-4 h-4" />

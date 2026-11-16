@@ -1,4 +1,4 @@
-import { savePersistedState } from "../../services/supabaseClient";
+import { mergeKvMapRecord, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { normalizeEmployeeId } from "./appraisalWorkflowStore";
 
@@ -45,7 +45,12 @@ export function saveEvidenceFiles(files: StoredEvidenceFile[], employeeId?: stri
     });
     const byEmp = loadByEmpMap();
     byEmp[targetId] = serializable;
-    savePersistedState(BY_EMP_KEY, byEmp);
+    try {
+      localStorage.setItem(BY_EMP_KEY, JSON.stringify(byEmp));
+    } catch {
+      // ignore
+    }
+    void mergeKvMapRecord(BY_EMP_KEY, targetId, serializable);
     window.dispatchEvent(new Event("appraisal-updated"));
   } catch {
     // ignore

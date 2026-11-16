@@ -8,6 +8,7 @@ import {
   type SoyApprovalRecord,
   type SoyStatus,
 } from "../../store/calibrationSoyStore";
+import { computeUnitQuotaAllocation } from "../hr/CalibrationSetting";
 import {
   getActiveUser,
   getCalibrationInvolvedUnits,
@@ -37,10 +38,11 @@ function pct(v: string) {
 
 function ProportionTable({ title, rows, grades }: {
   title: string;
-  rows: Array<{ id: string; label: string; parent?: string; hc: number }>;
+  rows: Array<{ id: string; label: string; parent?: string; hc: number; calcs: number[] }>;
   grades: SoyApprovalRecord["snapshot"]["calibrationGrades"];
 }) {
   const total = rows.reduce((s, r) => s + r.hc, 0);
+  const colTotals = grades.map((_, gi) => rows.reduce((s, r) => s + (r.calcs[gi] ?? 0), 0));
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200">
       <div className="flex items-center justify-between bg-[#1A284F] px-4 py-2.5 text-white">
@@ -69,13 +71,24 @@ function ProportionTable({ title, rows, grades }: {
                     {r.parent && <span className="block text-[10px] text-gray-400">{r.parent}</span>}
                   </td>
                   <td className="px-3 py-2 text-right font-semibold">{r.hc}</td>
-                  {grades.map((g) => (
-                    <td key={g.id} className="px-3 py-2 text-right text-gray-600">{Math.round((r.hc * pct(g.proporsi)) / 100)}</td>
+                  {grades.map((g, gi) => (
+                    <td key={g.id} className="px-3 py-2 text-right text-gray-600">{r.calcs[gi] ?? 0}</td>
                   ))}
                 </tr>
               ))
             )}
           </tbody>
+          {rows.length > 0 && (
+            <tfoot className="border-t-2 border-gray-200 bg-gray-50 font-semibold text-[#1A284F]">
+              <tr>
+                <td className="px-3 py-2">Jumlah ({rows.length})</td>
+                <td className="px-3 py-2 text-right">{total}</td>
+                {colTotals.map((t, gi) => (
+                  <td key={gi} className="px-3 py-2 text-right">{t}</td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </div>
@@ -135,7 +148,19 @@ export function CalibrationSettingApproval() {
   };
 
   const snap = selected?.snapshot;
-  const totalHC = snap ? snap.divisionProportions.reduce((s, d) => s + d.hc, 0) : 0;
+  const snapAlloc = useMemo(
+    () =>
+      snap
+        ? computeUnitQuotaAllocation({
+            calibrationGrades: snap.calibrationGrades,
+            divisionProportions: snap.divisionProportions,
+            departemenenProportions: snap.departemenenProportions,
+            bagianProportions: snap.bagianProportions,
+          })
+        : null,
+    [snap],
+  );
+  const totalHC = snapAlloc?.totalHC ?? 0;
   const divName = (id: string) => snap?.divisionProportions.find((d) => d.id === id)?.divisi ?? "";
   const deptName = (id: string) => snap?.departemenenProportions.find((d) => d.id === id)?.departemen ?? "";
 
@@ -193,11 +218,11 @@ export function CalibrationSettingApproval() {
                     <tr><th className="px-4 py-2 text-left">Grade</th><th className="px-4 py-2 text-right">Proporsi</th><th className="px-4 py-2 text-right">Kuota (HC {totalHC})</th></tr>
                   </thead>
                   <tbody>
-                    {snap.calibrationGrades.map((g) => (
+                    {snap.calibrationGrades.map((g, gi) => (
                       <tr key={g.id} className="border-t border-gray-100">
                         <td className="px-4 py-2 font-semibold">{g.grade}</td>
                         <td className="px-4 py-2 text-right">{g.proporsi}</td>
-                        <td className="px-4 py-2 text-right">{Math.round((totalHC * pct(g.proporsi)) / 100)}</td>
+                        <td className="px-4 py-2 text-right">{snapAlloc?.unitGradeTargets[gi] ?? 0}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -205,15 +230,44 @@ export function CalibrationSettingApproval() {
                     <tr>
                       <td className="px-4 py-2">Total</td>
                       <td className="px-4 py-2 text-right">{snap.calibrationGrades.reduce((s, g) => s + pct(g.proporsi), 0)}%</td>
-                      <td className="px-4 py-2 text-right">{snap.calibrationGrades.reduce((s, g) => s + Math.round((totalHC * pct(g.proporsi)) / 100), 0)}</td>
+                      <td className="px-4 py-2 text-right">{(snapAlloc?.unitGradeTargets ?? []).reduce((a, b) => a + b, 0)}</td>
                     </tr>
                   </tfoot>
                 </table>
               </div>
 
-              <ProportionTable title="Proporsi per Divisi" grades={snap.calibrationGrades} rows={snap.divisionProportions.map((d) => ({ id: d.id, label: d.divisi, hc: d.hc }))} />
-              <ProportionTable title="Proporsi per Departemen" grades={snap.calibrationGrades} rows={snap.departemenenProportions.map((d) => ({ id: d.id, label: d.departemen, parent: divName(d.divisiId), hc: d.hc }))} />
-              <ProportionTable title="Proporsi per Bagian" grades={snap.calibrationGrades} rows={snap.bagianProportions.map((b) => ({ id: b.id, label: b.bagian, parent: deptName(b.departemenenId), hc: b.hc }))} />
+              <ProportionTable
+                title="Proporsi per Divisi"
+                grades={snap.calibrationGrades}
+                rows={snap.divisionProportions.map((d) => ({
+                  id: d.id,
+                  label: d.divisi,
+                  hc: d.hc,
+                  calcs: snapAlloc?.divMatrix[d.id] ?? [],
+                }))}
+              />
+              <ProportionTable
+                title="Proporsi per Departemen"
+                grades={snap.calibrationGrades}
+                rows={snap.departemenenProportions.map((d) => ({
+                  id: d.id,
+                  label: d.departemen,
+                  parent: divName(d.divisiId),
+                  hc: d.hc,
+                  calcs: snapAlloc?.deptMatrix[d.id] ?? [],
+                }))}
+              />
+              <ProportionTable
+                title="Proporsi per Bagian"
+                grades={snap.calibrationGrades}
+                rows={snap.bagianProportions.map((b) => ({
+                  id: b.id,
+                  label: b.bagian,
+                  parent: deptName(b.departemenenId),
+                  hc: b.hc,
+                  calcs: snapAlloc?.bagianMatrix[b.id] ?? [],
+                }))}
+              />
 
               <div className="rounded-xl border border-gray-100 bg-white p-4">
                 <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Riwayat</p>

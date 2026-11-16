@@ -3,12 +3,13 @@ import { Download, Upload, ChevronDown } from "lucide-react";
 
 interface Props {
   onExport: () => void;
-  onImport: (file: File) => void;
+  onImport?: (file: File) => void;
   label?: string;
   size?: "sm" | "md";
 }
 
-export default function ExportImportButton({ onExport, onImport, label = "Export / Import", size = "md" }: Props) {
+export default function ExportImportButton({ onExport, onImport, label, size = "md" }: Props) {
+  const effectiveLabel = label ?? (onImport ? "Export / Import" : "Export");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -23,7 +24,7 @@ export default function ExportImportButton({ onExport, onImport, label = "Export
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) { onImport(file); setOpen(false); }
+    if (file && onImport) { onImport(file); setOpen(false); }
     e.target.value = "";
   };
 
@@ -38,7 +39,7 @@ export default function ExportImportButton({ onExport, onImport, label = "Export
         }`}
       >
         <Download className={isSm ? "w-3.5 h-3.5" : "w-4 h-4"} />
-        {label}
+        {effectiveLabel}
         <ChevronDown className={`${isSm ? "w-3 h-3" : "w-3.5 h-3.5"} transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
@@ -51,13 +52,15 @@ export default function ExportImportButton({ onExport, onImport, label = "Export
             <Download className="w-4 h-4 shrink-0" />
             Export (.xlsx)
           </button>
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors"
-          >
-            <Upload className="w-4 h-4 shrink-0" />
-            Import (.xlsx)
-          </button>
+          {onImport && (
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors"
+            >
+              <Upload className="w-4 h-4 shrink-0" />
+              Import (.xlsx)
+            </button>
+          )}
         </div>
       )}
 

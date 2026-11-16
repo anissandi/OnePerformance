@@ -11,6 +11,11 @@ export interface ScheduleEntry {
   location: string;
   textNotifikasi: string;
   textLampiran: string;
+  /** Lampiran tersimpan (URL storage backend) — dapat dilihat & di-download */
+  attachments?: Array<{ name: string; url: string; mimeType: string; size: number }>;
+  /** Employee ID peserta (untuk notifikasi & filter akses) */
+  addedUserIds?: string[];
+  createdBy?: string;
   status: "Scheduled" | "Cancelled" | "Done";
   createdAt: string;
 }

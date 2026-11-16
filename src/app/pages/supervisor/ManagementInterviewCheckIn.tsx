@@ -10,7 +10,10 @@ import {
   type ScheduleEntry,
 } from "./interviewScheduleStore";
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
-import { loadManagedUsers } from "../../store/authStore";
+import { isAdminOrHrIcfRole, loadManagedUsers, useAuthStore } from "../../store/authStore";
+import { pushEmployeeNotification } from "../../store/notificationStore";
+import { toast } from "sonner";
+import { Download, Search, Send } from "lucide-react";
 
 // ── Master data ───────────────────────────────────────────────────────────────
 
@@ -27,54 +30,7 @@ const COMPANY_UNITS = [
 
 interface PersonOption { value: string; position: string; }
 
-const ALL_EMPLOYEES: PersonOption[] = [
-  { value: "Ahmad Fauzi",      position: "Staff Administrasi" },
-  { value: "Budi Santoso",     position: "Manajer Operasional" },
-  { value: "Dewi Lestari",     position: "Staff HR" },
-  { value: "Eko Prasetyo",     position: "Supervisor Produksi" },
-  { value: "Fitri Handayani",  position: "Staff Keuangan" },
-  { value: "Gunawan Wibowo",   position: "Kepala Bagian Teknik" },
-  { value: "Heni Kurniawati",  position: "Staff Legal" },
-  { value: "Irfan Hidayat",    position: "Manajer Pemasaran" },
-  { value: "Joko Susilo",      position: "Supervisor Gudang" },
-  { value: "Kartika Hakim",    position: "Staff IT" },
-  { value: "Lukman Sari",      position: "Analis Data" },
-  { value: "Maya Wicaksono",   position: "Koordinator Proyek" },
-  { value: "Nugroho Hermawan", position: "Kepala Divisi Logistik" },
-  { value: "Purnomo Wahyuni",  position: "Staff Pengadaan" },
-  { value: "Rudi Wijaya",      position: "Manajer Umum" },
-  { value: "Sri Rahman",       position: "Staff Akuntansi" },
-  { value: "Teguh Nugroho",    position: "Supervisor QC" },
-  { value: "Wahyu Kusuma",     position: "Staf HSE" },
-  { value: "Yanto Pertiwi",    position: "Manajer Pabrik" },
-  { value: "Arif Utomo",       position: "Staff Perencanaan" },
-];
-
-const ALL_INTERVIEWERS: PersonOption[] = [
-  { value: "Hartono Wijaya",    position: "Direktur Utama" },
-  { value: "Slamet Riyadi",     position: "Direktur Operasional" },
-  { value: "Bambang Susanto",   position: "GM Produksi" },
-  { value: "Ratna Dewi",        position: "GM SDM" },
-  { value: "Doni Prasetya",     position: "GM Finance" },
-  { value: "Agus Setiawan",     position: "Kepala Divisi Produksi" },
-  { value: "Lina Marlina",      position: "Kepala Divisi HR" },
-  { value: "Farhan Anwar",      position: "Kepala Divisi Finance" },
-  { value: "Sari Utami",        position: "Manajer Senior Operasional" },
-  { value: "Hendra Gunawan",    position: "Komisaris Independen" },
-];
-
-const ALL_OTHER_USERS: PersonOption[] = [
-  { value: "Nita Kusuma",      position: "Sekretaris Direktur" },
-  { value: "Andi Firmansyah",  position: "Staf Administrasi HR" },
-  { value: "Rizky Amalia",     position: "Koordinator Penilaian" },
-  { value: "Tio Santoso",      position: "Notulis Interview" },
-  { value: "Dika Prasetya",    position: "Tim IT Support" },
-  { value: "Mega Sari",        position: "Pengamat Independen" },
-  { value: "Herman Candra",    position: "Konsultan Eksternal" },
-  { value: "Suci Rahayu",      position: "Konsultan Eksternal" },
-];
-
-function getMergedPersonOptions(base: PersonOption[], filterFn?: (u: ReturnType<typeof loadManagedUsers>[number]) => boolean): PersonOption[] {
+function getMergedPersonOptions(base: PersonOption[] = [], filterFn?: (u: ReturnType<typeof loadManagedUsers>[number]) => boolean): PersonOption[] {
   const users = loadManagedUsers().filter((u) => u.status === "Active" && (!filterFn || filterFn(u)));
   const seen = new Set<string>();
   const result: PersonOption[] = [];
@@ -124,7 +80,11 @@ function MultiSelect({
   required?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const shown = options.filter(
+    (o) => !query.trim() || `${o.value} ${o.position}`.toLowerCase().includes(query.trim().toLowerCase()),
+  );
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -163,8 +123,21 @@ function MultiSelect({
         </button>
 
         {open && (
-          <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl max-h-56 overflow-y-auto">
-            {options.map(opt => {
+          <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl max-h-72 overflow-y-auto">
+            <div className="sticky top-0 bg-white p-2 border-b border-gray-100">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Cari nama / Employee ID / jabatan…"
+                  className="w-full text-xs border border-gray-200 rounded-lg pl-8 pr-2 py-1.5 outline-none focus:border-indigo-400"
+                />
+              </div>
+            </div>
+            {shown.length === 0 && <p className="px-4 py-3 text-xs text-gray-400">Tidak ada hasil</p>}
+            {shown.map(opt => {
               const checked = selected.includes(opt.value);
               return (
                 <button
@@ -220,13 +193,6 @@ function FileUpload({
   const addFiles = (incoming: FileList | null) => {
     if (!incoming) return;
     const arr = Array.from(incoming);
-    arr.forEach((rawFile) => {
-      void uploadEvidenceFileToSupabase(rawFile, {
-        moduleType: "Management Interview",
-        period: "2026",
-        month: "June",
-      });
-    });
     onChange([...files, ...arr]);
   };
 
@@ -306,6 +272,23 @@ function StatusBadge({ status }: { status: ScheduleEntry["status"] }) {
   );
 }
 
+function AttachmentLinks({ entry }: { entry: ScheduleEntry }) {
+  const list = entry.attachments ?? [];
+  if (list.length === 0) {
+    return entry.textLampiran ? <span className="text-xs text-gray-500">{entry.textLampiran}</span> : <span className="text-gray-300">—</span>;
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      {list.map((a, i) => (
+        <span key={i} className="inline-flex items-center gap-1.5 text-xs">
+          <a href={a.url} target="_blank" rel="noreferrer" className="max-w-[160px] truncate text-indigo-700 hover:underline" title="Lihat">{a.name}</a>
+          <a href={a.url} download={a.name} className="text-gray-400 hover:text-[#1A284F]" title="Download"><Download className="w-3 h-3" /></a>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // ── Detail modal ──────────────────────────────────────────────────────────────
 
 function DetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose: () => void }) {
@@ -318,7 +301,6 @@ function DetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose: () => 
     ["Employee",          entry.addedUsers.join(", ") || "—"],
     ["Other User",        entry.otherUsers.join(", ") || "—"],
     ["Text Notifikasi",   entry.textNotifikasi || "—"],
-    ["Lampiran",          entry.textLampiran || "—"],
   ];
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
@@ -343,6 +325,10 @@ function DetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose: () => 
               <span className="text-gray-800 font-semibold">{val}</span>
             </div>
           ))}
+          <div className="grid grid-cols-[140px_1fr] gap-2 text-sm">
+            <span className="text-gray-400 font-medium">Lampiran</span>
+            <AttachmentLinks entry={entry} />
+          </div>
         </div>
       </div>
     </div>
@@ -352,17 +338,14 @@ function DetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose: () => 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function SupervisorManagementInterviewCheckIn() {
+  const { activeUser } = useAuthStore();
   const [entries, setEntries]     = useState<ScheduleEntry[]>(getEntries);
-  const employeeOptions = React.useMemo(() => getMergedPersonOptions(ALL_EMPLOYEES), [entries]);
-  const interviewerOptions = React.useMemo(
-    () =>
-      getMergedPersonOptions(
-        ALL_INTERVIEWERS,
-        (u) => u.role === "Director" || u.role === "BOD" || u.role === "GM" || /direktur|director|gm|divisi/i.test(u.position),
-      ),
-    [entries],
-  );
-  const otherUserOptions = React.useMemo(() => getMergedPersonOptions(ALL_OTHER_USERS), [entries]);
+  // Data karyawan aktual (tanpa data dummy)
+  const employeeOptions = React.useMemo(() => getMergedPersonOptions(), [entries]);
+  const interviewerOptions = employeeOptions;
+  const otherUserOptions = employeeOptions;
+  const [confirmSend, setConfirmSend] = useState(false);
+  const [sending, setSending] = useState(false);
   const [showForm, setShowForm]   = useState(false);
   const [editId, setEditId]       = useState<string | null>(null);
   const [form, setForm]           = useState<FormState>(EMPTY_FORM);
@@ -398,17 +381,53 @@ export function SupervisorManagementInterviewCheckIn() {
     setShowForm(true);
   };
 
-  const handleSave = () => {
-    if (!valid) return;
-    const fileNames = lampiranFiles.map(f => f.name);
-    const existingNames = form.textLampiran ? form.textLampiran.split(", ").filter(Boolean) : [];
-    const allNames = [...existingNames, ...fileNames].join(", ");
-    const payload = { ...form, textLampiran: allNames };
+  const handleSave = async () => {
+    if (!valid || sending) return;
+    setSending(true);
+    // Upload lampiran ke storage backend agar bisa dilihat & di-download oleh peserta
+    const uploaded: NonNullable<ScheduleEntry["attachments"]> = [];
+    for (const f of lampiranFiles) {
+      const rec = await uploadEvidenceFileToSupabase(f, { moduleType: "Management Interview", period: "2026", kpiName: "Lampiran Jadwal" });
+      if (rec.url) uploaded.push({ name: f.name, url: rec.url, mimeType: f.type, size: f.size });
+    }
+    const existing = editId ? entries.find((e) => e.id === editId)?.attachments ?? [] : [];
+    const attachments = [...existing, ...uploaded];
+    const users = loadManagedUsers();
+    const idOf = (name: string) => users.find((u) => u.name.trim().toLowerCase() === name.trim().toLowerCase());
+    const payload = {
+      ...form,
+      textLampiran: attachments.map((a) => a.name).join(", "),
+      attachments,
+      addedUserIds: form.addedUsers.map((n) => idOf(n)?.employeeId ?? "").filter(Boolean),
+      createdBy: activeUser.employeeId,
+    };
     if (editId) {
       updateEntry(editId, payload);
     } else {
       addEntry(payload);
     }
+    // Notifikasi sistem personal ke setiap karyawan dalam jadwal
+    const people = Array.from(new Set([...form.addedUsers, ...form.interviewers, ...form.otherUsers]));
+    for (const name of people) {
+      const u = idOf(name);
+      if (!u) continue;
+      const msg = `Yth. Bapak/Ibu ${u.name}, ${form.textNotifikasi.trim() || `Anda dijadwalkan mengikuti Management Interview pada ${isoToDMY(form.scheduledDate)} pukul ${form.scheduledTime}${form.location ? ` di ${form.location}` : ""}.`}`;
+      pushEmployeeNotification({
+        employeeIds: [u.employeeId],
+        title: editId ? "Perubahan Jadwal Management Interview" : "Jadwal Management Interview",
+        summary: msg,
+        body: [msg, `Tanggal: ${isoToDMY(form.scheduledDate)} · Waktu: ${form.scheduledTime} · Lokasi: ${form.location || "-"}`],
+        category: "Reminder",
+        moduleName: "Management Interview",
+        ctaLabel: "Lihat Jadwal",
+        ctaRoute: "/calibration/management-interview",
+        senderName: activeUser.name,
+        attachments: attachments.map((a, i) => ({ id: `att-${i}`, name: a.name, mimeType: a.mimeType, dataUrl: a.url, size: a.size, isImage: a.mimeType.startsWith("image/") })),
+      });
+    }
+    setSending(false);
+    setConfirmSend(false);
+    toast.success(`Jadwal terkirim & notifikasi dikirim ke ${people.length} peserta`);
     setShowForm(false);
     setEditId(null);
     setLampiranFiles([]);
@@ -421,7 +440,18 @@ export function SupervisorManagementInterviewCheckIn() {
     setCancelConfirm(null);
   };
 
-  const activeEntries = entries.filter(e => e.status !== "Cancelled");
+  // Hanya karyawan yang diundang (Employee / Interviewer / Other User) yang dapat melihat jadwal;
+  // Administrator & HR ICF (penyusun jadwal) tetap dapat mengelola seluruh jadwal.
+  const me = activeUser.name.trim().toLowerCase();
+  const canManageAll = isAdminOrHrIcfRole(activeUser.role);
+  const visibleEntries = entries.filter(
+    (e) =>
+      canManageAll ||
+      e.createdBy === activeUser.employeeId ||
+      [...e.addedUsers, ...e.interviewers, ...e.otherUsers].some((n) => n.trim().toLowerCase() === me) ||
+      (e.addedUserIds ?? []).includes(activeUser.employeeId),
+  );
+  const activeEntries = visibleEntries.filter(e => e.status !== "Cancelled");
 
   return (
     <div className="w-full flex flex-col gap-6">
@@ -572,11 +602,11 @@ export function SupervisorManagementInterviewCheckIn() {
                 className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
                 Batal
               </button>
-              <button disabled={!valid} onClick={handleSave}
+              <button disabled={!valid} onClick={() => setConfirmSend(true)}
                 className={`flex items-center gap-1.5 px-5 py-2 text-sm font-semibold rounded-lg transition-colors ${
                   valid ? "bg-[#1A284F] text-white hover:bg-[#131d3b]" : "bg-gray-100 text-gray-400 cursor-not-allowed"
                 }`}>
-                <Save className="w-3.5 h-3.5" />{editId ? "Update Jadwal" : "Simpan Jadwal"}
+                <Send className="w-3.5 h-3.5" />{editId ? "Kirim Update Jadwal" : "Kirim Jadwal"}
               </button>
             </div>
           </div>
@@ -598,12 +628,12 @@ export function SupervisorManagementInterviewCheckIn() {
           </div>
         </div>
 
-        {entries.length === 0 ? (
+        {visibleEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-14 gap-3">
             <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
               <Calendar className="w-5 h-5 text-gray-300" />
             </div>
-            <p className="text-sm text-gray-400">Belum ada jadwal interview yang dibuat</p>
+            <p className="text-sm text-gray-400">Belum ada jadwal interview untuk Anda</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -617,12 +647,13 @@ export function SupervisorManagementInterviewCheckIn() {
                   <th className="px-4 py-3 text-left font-semibold whitespace-nowrap">Interviewer</th>
                   <th className="px-4 py-3 text-left font-semibold whitespace-nowrap">Employee</th>
                   <th className="px-4 py-3 text-left font-semibold whitespace-nowrap">Other User</th>
+                  <th className="px-4 py-3 text-left font-semibold whitespace-nowrap">Lampiran</th>
                   <th className="px-4 py-3 text-left font-semibold whitespace-nowrap">Lokasi</th>
                   <th className="px-4 py-3 text-center font-semibold whitespace-nowrap">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {entries.map((entry, i) => (
+                {visibleEntries.map((entry, i) => (
                   <tr key={entry.id} className={`border-b border-gray-100 hover:bg-gray-50/50 transition-colors ${i % 2 === 0 ? "" : "bg-gray-50/30"}`}>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-1.5">
@@ -650,7 +681,7 @@ export function SupervisorManagementInterviewCheckIn() {
                     <td className="px-4 py-3 text-gray-600">
                       <div className="flex flex-wrap gap-1">
                         {entry.interviewers.slice(0, 2).map(iv => {
-                          const pos = ALL_INTERVIEWERS.find(o => o.value === iv)?.position;
+                          const pos = interviewerOptions.find(o => o.value === iv)?.position;
                           return (
                             <span key={iv} className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-medium whitespace-nowrap" title={pos}>{iv}</span>
                           );
@@ -670,6 +701,7 @@ export function SupervisorManagementInterviewCheckIn() {
                         ? <span className="text-xs text-gray-500">{entry.otherUsers.length} user</span>
                         : <span className="text-gray-300">—</span>}
                     </td>
+                    <td className="px-4 py-3"><AttachmentLinks entry={entry} /></td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap max-w-[120px] truncate">{entry.location || "—"}</td>
                     <td className="px-4 py-3 text-center">
                       <StatusBadge status={entry.status} />
@@ -681,6 +713,25 @@ export function SupervisorManagementInterviewCheckIn() {
           </div>
         )}
       </div>
+
+      {confirmSend && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={() => !sending && setConfirmSend(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-[#1A284F]">Konfirmasi Kirim Jadwal</h3>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Jadwal Management Interview {form.companyUnit} pada <strong>{isoToDMY(form.scheduledDate)} {form.scheduledTime}</strong> akan dikirim
+              beserta notifikasi sistem ke {new Set([...form.addedUsers, ...form.interviewers, ...form.otherUsers]).size} peserta
+              (diawali "Yth. Bapak/Ibu &#123;Nama Karyawan&#125;"). Lanjutkan?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button disabled={sending} onClick={() => setConfirmSend(false)} className="px-4 py-2 border border-gray-200 rounded-xl text-sm">Batal</button>
+              <button disabled={sending} onClick={() => void handleSave()} className="px-4 py-2 bg-[#1A284F] text-white rounded-xl text-sm font-semibold disabled:opacity-50">
+                {sending ? "Mengirim…" : "Ya, Kirim Jadwal"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Detail modal */}
       {viewEntry && <DetailModal entry={viewEntry} onClose={() => setViewEntry(null)} />}

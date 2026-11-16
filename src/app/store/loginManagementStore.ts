@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { loadPersistedState, savePersistedState, PA_APP_API_BASE, SUPABASE_ANON_KEY } from "../services/supabaseClient";
+import {
+  loadPersistedState,
+  savePersistedState,
+  mergeKvMapRecord,
+  syncToSupabase,
+  PA_APP_API_BASE,
+  SUPABASE_ANON_KEY,
+} from "../services/supabaseClient";
 import { COMPANY_UNIT_LOCATIONS } from "./authStore";
 
 export type LoginMethodOption = "otp_telegram" | "otp_whatsapp" | "otp_email" | "password";
@@ -213,15 +220,16 @@ export function getUserSecurityRecord(employeeId: string): UserPasswordSecurityR
 export function saveUserSecurityRecord(record: UserPasswordSecurityRecord): void {
   const key = record.employeeId.trim().toUpperCase();
   const map = loadUserSecurityMap();
-  const next = {
-    ...map,
-    [key]: { ...record, employeeId: key, updatedAt: new Date().toISOString() },
-  };
-  savePersistedState(USER_SECURITY_MAP_KEY, next, {
-    kind: "kv-state",
-    stateKey: USER_SECURITY_MAP_KEY,
-    stateValue: next,
-  });
+  const saved = { ...record, employeeId: key, updatedAt: new Date().toISOString() };
+  const next = { ...map, [key]: saved };
+  try {
+    localStorage.setItem(USER_SECURITY_MAP_KEY, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+  // Merge aman ke backend: hanya record milik karyawan ini yang diperbarui (tidak menimpa record karyawan lain
+  // dari cache browser/perangkat yang belum ter-update).
+  void mergeKvMapRecord(USER_SECURITY_MAP_KEY, key, saved);
   queueMicrotask(() => window.dispatchEvent(new Event(LOGIN_CONFIG_UPDATED_EVENT)));
 }
 
@@ -314,22 +322,15 @@ export function updateEmployeeNewPassword(employeeId: string, newPassword: strin
 
 export function resetEmployeePasswordToDefault(employeeId: string, employeeName = ""): void {
   const key = employeeId.trim().toUpperCase();
-  const map = loadUserSecurityMap();
-  const next = {
-    ...map,
-    [key]: {
-      employeeId: key,
-      passwordDigest: undefined,
-      mustChangePassword: true,
-      failedAttempts: 0,
-      isBlocked: false,
-      updatedAt: new Date().toISOString(),
-    },
-  };
-  savePersistedState(USER_SECURITY_MAP_KEY, next, {
-    kind: "kv-state",
-    stateKey: USER_SECURITY_MAP_KEY,
-    stateValue: next,
+  saveUserSecurityRecord({
+    employeeId: key,
+    passwordDigest: undefined,
+    mustChangePassword: true,
+    failedAttempts: 0,
+    isBlocked: false,
+    updatedAt: new Date().toISOString(),
+  });
+  void syncToSupabase({
     audit: {
       action: "Update",
       module: "User Management",
@@ -337,7 +338,6 @@ export function resetEmployeePasswordToDefault(employeeId: string, employeeName 
       description: `Reset password to initial default & unlocked account for ${employeeName || key} (${key})`,
     },
   });
-  queueMicrotask(() => window.dispatchEvent(new Event(LOGIN_CONFIG_UPDATED_EVENT)));
 }
 
 export async function requestOtpFromBackend(payload: {

@@ -1,6 +1,6 @@
 import type { SmartGoal } from "../employee/SMARTGoals";
 import { normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
-import { savePersistedState } from "../../services/supabaseClient";
+import { mergeKvMapRecord, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 
@@ -36,17 +36,26 @@ function readCheckinByEmpMap(): Record<string, StoredCheckInEntry[]> {
 
 export function saveSubmittedGoals(
   goals: SmartGoal[],
-  options?: { submitWorkflow?: boolean; employeeId?: string },
+  options?: { submitWorkflow?: boolean; employeeId?: string; ownerName?: string },
 ): void {
   try {
     const activeUser = getActiveUser();
     const empId = options?.employeeId ?? activeUser.employeeId;
     const normId = normalizeEmployeeId(empId);
+    const isDelegated = normId !== normalizeEmployeeId(activeUser.employeeId);
+    const actorLabel = isDelegated && options?.ownerName
+      ? `${activeUser.name} | atas nama ${options.ownerName}`
+      : activeUser.name;
     const isFinalSubmit = options?.submitWorkflow ?? true;
     const map = readGoalsByEmpMap();
     map[normId] = goals;
-    savePersistedState(GOALS_BY_EMP_KEY, map);
-    savePersistedState(STORAGE_KEY, goals, {
+    try {
+      localStorage.setItem(GOALS_BY_EMP_KEY, JSON.stringify(map));
+    } catch {
+      // ignore
+    }
+    void mergeKvMapRecord(GOALS_BY_EMP_KEY, normId, goals);
+    void syncToSupabase({
       kind: "smart-goals",
       employeeId: empId,
       period: "2026",
@@ -54,17 +63,20 @@ export function saveSubmittedGoals(
       checkinEntries: loadCheckInEntries(empId),
       approvalDecisions: loadApprovalDecisions(empId),
       status: isFinalSubmit ? "Submitted-Setting" : "Draft-Setting",
-      ...(isFinalSubmit
-        ? {
-            audit: {
-              action: "Create",
-              module: "SMART Goals",
-              subModule: "SMART Goals Setting",
-              description: `Submitted ${goals.length} SMART Goals for approval by ${activeUser.name} (${empId})`,
-            },
-          }
-        : {}),
+      audit: {
+        userId: activeUser.employeeId,
+        userName: actorLabel,
+        action: isFinalSubmit ? "Create" : "Update",
+        module: "SMART Goals",
+        subModule: "SMART Goals Setting",
+        description: isFinalSubmit
+          ? `Submitted ${goals.length} SMART Goals for approval (${empId}) by ${actorLabel}`
+          : `Saved SMART Goals draft (${goals.length} goals) for ${empId} by ${actorLabel}`,
+      },
     });
+    if (!isDelegated) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(goals));
+    }
     if (isFinalSubmit) {
       submitWorkflowModule("SMART Goals", "setting", formatTodayDDMMYYYY(), empId);
     }

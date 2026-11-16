@@ -3,7 +3,9 @@ import React, { useEffect, useState } from "react";
 import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, Info, AlertTriangle, Clock, RotateCcw, Lock } from "lucide-react";
 import { loadSubmittedGoals, saveSubmittedGoals } from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
-import { getActiveUser } from "../../store/authStore";
+import { getActiveUser, loadManagedUsers, useAuthStore, type ManagedUser } from "../../store/authStore";
+import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
+import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import ExportImportButton from "../../components/ExportImportButton";
@@ -171,12 +173,18 @@ const newGoal = (idx: number): SmartGoal => ({
 function SmartTable({
   goals,
   editable,
+  canCreate = true,
+  canEdit = true,
+  canDelete = true,
   onUpdate,
   onAdd,
   onRemove,
 }: {
   goals: SmartGoal[];
   editable: boolean;
+  canCreate?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
   onUpdate?: (id: number, key: RowKey, val: string) => void;
   onAdd?: () => void;
   onRemove?: (id: number) => void;
@@ -201,26 +209,32 @@ function SmartTable({
                 key={g.id}
                 className="border-2 border-[#1A284F] bg-[#1A284F] text-white text-center py-3 px-4 font-bold"
               >
-                {editable ? (
+                {editable && (canEdit || canDelete) ? (
                   <div className="flex items-center justify-center gap-2">
-                    <input
-                      value={g.label}
-                      onChange={(e) => onUpdate?.(g.id, "label" as RowKey, e.target.value)}
-                      className="bg-transparent text-white font-bold text-center border-b border-white/40 outline-none w-24 placeholder-white/50"
-                    />
-                    <button
-                      onClick={() => onRemove?.(g.id)}
-                      className="text-white/50 hover:text-red-300 transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {canEdit ? (
+                      <input
+                        value={g.label}
+                        onChange={(e) => onUpdate?.(g.id, "label" as RowKey, e.target.value)}
+                        className="bg-transparent text-white font-bold text-center border-b border-white/40 outline-none w-24 placeholder-white/50"
+                      />
+                    ) : (
+                      <span>{g.label}</span>
+                    )}
+                    {canDelete && (
+                      <button
+                        onClick={() => onRemove?.(g.id)}
+                        className="text-white/50 hover:text-red-300 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 ) : (
                   g.label
                 )}
               </th>
             ))}
-            {editable && (
+            {editable && canCreate && (
               <th className="border-2 border-[#1A284F] bg-[#1A284F] py-3 px-3 w-12">
                 <button
                   onClick={onAdd}
@@ -247,7 +261,7 @@ function SmartTable({
               {/* Goal input cells */}
               {goals.map((g) => (
                 <td key={g.id} className={`border-2 border-black align-top px-3 py-3 ${row.key === "target" ? "bg-blue-50/60" : "bg-white"}`}>
-                  {editable ? (
+                  {editable && canEdit ? (
                     <textarea
                       value={g[row.key] as string}
                       onChange={(e) => onUpdate?.(g.id, row.key, e.target.value)}
@@ -263,7 +277,7 @@ function SmartTable({
                 </td>
               ))}
 
-              {editable && <td className={`border-2 border-black ${row.key === "target" ? "bg-blue-50/60" : "bg-white"}`} />}
+              {editable && canCreate && <td className={`border-2 border-black ${row.key === "target" ? "bg-blue-50/60" : "bg-white"}`} />}
             </tr>
           ))}
         </tbody>
@@ -277,12 +291,18 @@ function SmartTable({
 function ActionPlansSection({
   goals,
   editable,
+  canCreate = true,
+  canEdit = true,
+  canDelete = true,
   onUpdatePlan,
   onAddPlan,
   onRemovePlan,
 }: {
   goals: SmartGoal[];
   editable: boolean;
+  canCreate?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
   onUpdatePlan?: (goalId: number, planId: number, val: string) => void;
   onAddPlan?: (goalId: number) => void;
   onRemovePlan?: (goalId: number, planId: number) => void;
@@ -313,27 +333,33 @@ function ActionPlansSection({
                   <span className="mt-1 shrink-0 w-5 h-5 rounded-full bg-[#1A284F]/10 text-[#1A284F] text-[10px] font-bold flex items-center justify-center">
                     {idx + 1}
                   </span>
-                  {editable ? (
+                  {editable && (canEdit || canDelete) ? (
                     <>
-                      <input
-                        value={ap.description}
-                        onChange={(e) => onUpdatePlan?.(goal.id, ap.id, e.target.value)}
-                        placeholder="Tuliskan rencana tindakan..."
-                        className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-[#1A284F] bg-white text-gray-800"
-                      />
-                      <button
-                        onClick={() => onRemovePlan?.(goal.id, ap.id)}
-                        className="mt-1 text-gray-300 hover:text-red-400 transition-colors shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {canEdit ? (
+                        <input
+                          value={ap.description}
+                          onChange={(e) => onUpdatePlan?.(goal.id, ap.id, e.target.value)}
+                          placeholder="Tuliskan rencana tindakan..."
+                          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-[#1A284F] bg-white text-gray-800"
+                        />
+                      ) : (
+                        <p className="flex-1 text-xs text-gray-700 leading-relaxed py-1">{ap.description || "—"}</p>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => onRemovePlan?.(goal.id, ap.id)}
+                          className="mt-1 text-gray-300 hover:text-red-400 transition-colors shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </>
                   ) : (
                     <p className="flex-1 text-xs text-gray-700 leading-relaxed py-1">{ap.description || "—"}</p>
                   )}
                 </div>
               ))}
-              {editable && (
+              {editable && canCreate && (
                 <button
                   onClick={() => onAddPlan?.(goal.id)}
                   className="flex items-center gap-1.5 text-xs text-[#1A284F] hover:text-[#131d3b] font-semibold mt-1 self-start transition-colors"
@@ -358,12 +384,18 @@ function InputView({
   onPreview,
   onExport,
   onImport,
+  canCreate = true,
+  canEdit = true,
+  canDelete = true,
 }: {
   goals: SmartGoal[];
-  setGoals: React.Dispatch<React.SetStateAction<SmartGoal[]>>;
+  setGoals: (updater: SmartGoal[] | ((prev: SmartGoal[]) => SmartGoal[])) => void;
   onPreview: () => void;
   onExport: () => void;
   onImport: (file: File) => Promise<void>;
+  canCreate?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
 }) {
   const [showMinModal, setShowMinModal] = useState(false);
 
@@ -432,12 +464,15 @@ function InputView({
       </div>
 
       <div className="flex justify-end">
-        <ExportImportButton onExport={onExport} onImport={onImport} size="sm" />
+        <ExportImportButton onExport={onExport} onImport={canCreate || canEdit ? onImport : undefined} size="sm" />
       </div>
 
       <SmartTable
         goals={goals}
         editable={true}
+        canCreate={canCreate}
+        canEdit={canEdit || canCreate}
+        canDelete={canDelete}
         onUpdate={update}
         onAdd={add}
         onRemove={remove}
@@ -447,6 +482,9 @@ function InputView({
       <ActionPlansSection
         goals={goals}
         editable={true}
+        canCreate={canCreate}
+        canEdit={canEdit || canCreate}
+        canDelete={canDelete}
         onAddPlan={addPlan}
         onUpdatePlan={updatePlan}
         onRemovePlan={removePlan}
@@ -613,17 +651,29 @@ const ALL_TABS: TabDef[] = [
   { id: "results", label: "Results", icon: FileText },
 ];
 
-export function SMARTGoalsPage() {
+function SMARTGoalsWorkspace({
+  ownerUser,
+  delegationAccess,
+  actorName,
+}: {
+  ownerUser: ManagedUser;
+  delegationAccess?: DelegationAccess;
+  actorName: string;
+}) {
+  const canCreate = !delegationAccess || Boolean(delegationAccess.create);
+  const canEdit = !delegationAccess || Boolean(delegationAccess.edit);
+  const canDelete = !delegationAccess || Boolean(delegationAccess.delete);
+  const isViewOnly = Boolean(delegationAccess && !canCreate && !canEdit && !canDelete);
+
   const readUserGoalsState = () => {
-    const user = getActiveUser();
-    const normId = normalizeEmployeeId(user.employeeId);
-    const saved = loadSubmittedGoals(user.employeeId);
+    const normId = normalizeEmployeeId(ownerUser.employeeId);
+    const saved = loadSubmittedGoals(ownerUser.employeeId);
     const wfRec = loadWorkflowRecords().find(
       (r) =>
         r.year === "2026" &&
         r.module === "SMART Goals" &&
         r.phase === "setting" &&
-        (r.employeeId === normId || r.employeeId.toLowerCase() === user.employeeId.toLowerCase()),
+        (r.employeeId === normId || r.employeeId.toLowerCase() === ownerUser.employeeId.toLowerCase()),
     );
     const a1 = wfRec?.decisions.approver1?.status ?? "";
     const a2 = wfRec?.decisions.approver2?.status ?? "";
@@ -670,8 +720,8 @@ export function SMARTGoalsPage() {
   };
 
   const init = readUserGoalsState();
-  const [view, setView] = useState<View>(() => (init.lockedSubmitted ? "results" : "input"));
-  const [goals, setGoals] = useState<SmartGoal[]>(() => init.initialGoals);
+  const [view, setView] = useState<View>(() => (init.lockedSubmitted || isViewOnly ? "results" : "input"));
+  const [goals, setGoalsState] = useState<SmartGoal[]>(() => init.initialGoals);
   const [resultGoals, setResultGoals] = useState<SmartGoal[]>(() => init.initialGoals);
   const [submitted, setSubmitted] = useState<boolean>(() => init.lockedSubmitted);
   const [statusLabel, setStatusLabel] = useState<string>(() => init.statusLabel);
@@ -680,16 +730,30 @@ export function SMARTGoalsPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
+  // Setiap Create / Edit / Delete langsung disimpan ke database Supabase (pa_smart_goals + pa_kv_state)
+  const updateGoalsAndPersist = (updater: SmartGoal[] | ((prev: SmartGoal[]) => SmartGoal[])) => {
+    setGoalsState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      setResultGoals(next);
+      saveSubmittedGoals(next, {
+        submitWorkflow: false,
+        employeeId: ownerUser.employeeId,
+        ownerName: ownerUser.name,
+      });
+      return next;
+    });
+  };
+
   useEffect(() => {
     const sync = () => {
       const next = readUserGoalsState();
-      setGoals(next.initialGoals);
+      setGoalsState(next.initialGoals);
       setResultGoals(next.initialGoals);
       setSubmitted(next.lockedSubmitted);
       setStatusLabel(next.statusLabel);
       setStatusTone(next.statusTone);
       setWfRecState(next.wfRec);
-      if (next.lockedSubmitted) {
+      if (next.lockedSubmitted || isViewOnly) {
         setView("results");
       }
     };
@@ -703,7 +767,7 @@ export function SMARTGoalsPage() {
       window.removeEventListener("pa-db-hydrated", sync);
       window.removeEventListener("storage", sync);
     };
-  }, []);
+  }, [ownerUser.employeeId, isViewOnly]);
 
   const handleExport = () => {
     const headers = ["No","Goals","Specific","Measurable","Attainable","Relevant","Timely","Bukti","Target","Action Plans"];
@@ -711,7 +775,7 @@ export function SMARTGoalsPage() {
       String(i + 1), g.label, g.specific, g.measurable, g.attainable, g.relevant, g.timely, g.bukti, g.target,
       g.actionPlans.map((ap, j) => `${j+1}. ${ap.description}`).join("; "),
     ]);
-    exportXLSX("SMART_Goals_2026.xlsx", headers, rows);
+    exportXLSX(`SMART_Goals_2026_${ownerUser.employeeId}.xlsx`, headers, rows);
   };
 
   const handleImport = async (file: File) => {
@@ -737,7 +801,7 @@ export function SMARTGoalsPage() {
         target: targetIdx >= 0 ? r[targetIdx] ?? "" : "",
         actionPlans: [],
       }));
-      if (imported.length > 0) setGoals(imported);
+      if (imported.length > 0) updateGoalsAndPersist(imported);
     } catch { /* ignore parse errors */ }
   };
 
@@ -750,7 +814,11 @@ export function SMARTGoalsPage() {
     setShowSuccess(false);
     setSubmitted(true);
     setResultGoals(goals);
-    saveSubmittedGoals(goals, { submitWorkflow: true });
+    saveSubmittedGoals(goals, {
+      submitWorkflow: true,
+      employeeId: ownerUser.employeeId,
+      ownerName: ownerUser.name,
+    });
     const next = readUserGoalsState();
     setStatusLabel(next.statusLabel);
     setStatusTone(next.statusTone);
@@ -758,8 +826,100 @@ export function SMARTGoalsPage() {
     setView("results");
   };
 
-  // After submission: hide Input Form tab; before submission: Results tab inactive
-  const visibleTabs = submitted ? ALL_TABS.filter((t) => t.id !== "input") : ALL_TABS;
+  void ALL_TABS;
+
+  return (
+    <div className="flex flex-col gap-6">
+      {delegationAccess && (
+        <DelegatedWorkspaceBanner
+          delegator={ownerUser}
+          actorName={actorName}
+          access={delegationAccess}
+          moduleLabel="SMART Goals Setting"
+        />
+      )}
+
+      <ModuleApprovalStatusBar
+        module="SMART Goals"
+        phase="setting"
+        submittedOverride={submitted}
+        employeeId={ownerUser.employeeId}
+      />
+
+      {!submitted && !isViewOnly && view === "input" && (
+        <InputView
+          goals={goals}
+          setGoals={updateGoalsAndPersist}
+          onPreview={() => setView("preview")}
+          onExport={handleExport}
+          onImport={handleImport}
+          canCreate={canCreate}
+          canEdit={canEdit}
+          canDelete={canDelete}
+        />
+      )}
+      {!submitted && !isViewOnly && view === "preview" && (
+        <PreviewView
+          goals={goals}
+          onBack={() => setView("input")}
+          onSubmit={() => {
+            if (canCreate || canEdit) setShowConfirm(true);
+          }}
+        />
+      )}
+      {(submitted || isViewOnly) && (
+        <ResultsView
+          goals={resultGoals}
+          statusLabel={statusLabel}
+          statusTone={statusTone}
+          wfRecord={wfRecState}
+        />
+      )}
+
+      <ApproverNotesHistory
+        employeeId={ownerUser.employeeId}
+        module="SMART Goals"
+        phase="setting"
+        title="Catatan dari Approver"
+      />
+
+      {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
+      {showSuccess && <SuccessModal onClose={handleSuccessClose} />}
+    </div>
+  );
+}
+
+export function SMARTGoalsPage() {
+  const { activeUser, allUsers } = useAuthStore();
+  const [, setDelegTick] = useState(0);
+  useEffect(() => {
+    const r = () => setDelegTick((t) => t + 1);
+    window.addEventListener(DELEGATION_EVENT, r);
+    window.addEventListener("pa-db-hydrated", r);
+    return () => {
+      window.removeEventListener(DELEGATION_EVENT, r);
+      window.removeEventListener("pa-db-hydrated", r);
+    };
+  }, []);
+
+  const usersPool = allUsers.length > 0 ? allUsers : loadManagedUsers();
+  const receivedDelegations = getReceivedWorkspaceDelegations(activeUser.employeeId, "smartGoalsSetting", usersPool);
+  const workspaces: Array<{ id: string; label: string; owner: ManagedUser; access?: DelegationAccess }> = [
+    ...receivedDelegations.map((d) => ({
+      id: `deleg-${d.delegator.employeeId}`,
+      label: `SMART Goals · Delegasi: ${d.delegator.name}`,
+      owner: d.delegator,
+      access: d.access,
+    })),
+    {
+      id: `self-${activeUser.employeeId}`,
+      label: receivedDelegations.length > 0 ? `SMART Goals Saya (${activeUser.name})` : "SMART Goals",
+      owner: activeUser,
+    },
+  ];
+
+  const [selectedWsId, setSelectedWsId] = useState<string>(() => workspaces[workspaces.length - 1]?.id ?? `self-${activeUser.employeeId}`);
+  const activeWs = workspaces.find((w) => w.id === selectedWsId) ?? workspaces[workspaces.length - 1];
 
   return (
     <div className="w-full flex flex-col gap-6">
@@ -770,36 +930,39 @@ export function SMARTGoalsPage() {
         </div>
       </div>
 
-      <ModuleApprovalStatusBar
-        module="SMART Goals"
-        phase="setting"
-        submittedOverride={submitted}
+      {workspaces.length > 1 && (
+        <div className="flex gap-1 border-b border-gray-200 flex-wrap">
+          {workspaces.map((ws) => {
+            const isActive = ws.id === activeWs.id;
+            return (
+              <button
+                key={ws.id}
+                type="button"
+                onClick={() => setSelectedWsId(ws.id)}
+                className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                  isActive
+                    ? "border-[#1A284F] text-[#1A284F] bg-[#1A284F]/5 rounded-t-lg"
+                    : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded-t-lg"
+                }`}
+              >
+                <span>{ws.label}</span>
+                {ws.access && (
+                  <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+                    Delegasi
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <SMARTGoalsWorkspace
+        key={activeWs.id}
+        ownerUser={activeWs.owner}
+        delegationAccess={activeWs.access}
+        actorName={activeUser.name}
       />
-
-      {!submitted && view === "input" && (
-        <InputView goals={goals} setGoals={setGoals} onPreview={() => setView("preview")} onExport={handleExport} onImport={handleImport} />
-      )}
-      {!submitted && view === "preview" && (
-        <PreviewView goals={goals} onBack={() => setView("input")} onSubmit={() => setShowConfirm(true)} />
-      )}
-      {submitted && (
-        <ResultsView
-          goals={resultGoals}
-          statusLabel={statusLabel}
-          statusTone={statusTone}
-          wfRecord={wfRecState}
-        />
-      )}
-
-      <ApproverNotesHistory
-        employeeId={getActiveUser().employeeId}
-        module="SMART Goals"
-        phase="setting"
-        title="Catatan dari Approver"
-      />
-
-      {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
-      {showSuccess && <SuccessModal onClose={handleSuccessClose} />}
     </div>
   );
 }

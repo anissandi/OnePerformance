@@ -1,3 +1,4 @@
+import { DELEGATION_EVENT, getDelegatedModuleFlagsForUser, resolveApproverIdentities } from "./delegationStore";
 import { useEffect, useState } from "react";
 import { notifyLoginToSupabase, savePersistedState, syncToSupabase } from "../services/supabaseClient";
 import {
@@ -545,6 +546,7 @@ export function resolveWorkflowStageForTarget(
     validatorDone?: boolean;
   },
   allUsers = loadManagedUsers(),
+  phase?: "setting" | "measurement",
 ): WorkflowStageRole | null {
   const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
   const viewerClean = viewer.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
@@ -567,14 +569,19 @@ export function resolveWorkflowStageForTarget(
   const a1Done = Boolean(workflowStepState?.a1Done);
   const a2Done = Boolean(workflowStepState?.a2Done);
 
-  const reg = (viewer.regNo ?? "").trim().toLowerCase();
-  const emp = viewer.employeeId.trim().toLowerCase();
-  const nm = viewer.name.trim().toLowerCase();
   const ap1 = (target?.regNoAp1 ?? "").trim().toLowerCase();
   const ap2 = (target?.regNoAp2 ?? "").trim().toLowerCase();
-
-  const isAp1 = Boolean(target && ((reg && ap1 === reg) || (emp && ap1 === emp) || (nm && ap1 === nm)));
-  const isAp2 = Boolean(target && ((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm)));
+  // Identitas approver: diri sendiri + pemberi delegasi aktif untuk modul ini (Approvals → Delegation).
+  // Siapa pun yang ditunjuk sebagai AP1/AP2 dapat melakukan approval tanpa dibatasi role/grouping/unit.
+  const identities = moduleType && !isSelf ? resolveApproverIdentities(viewer, moduleType, phase, allUsers) : [viewer];
+  const matchesRef = (u: ManagedUser, ref: string) => {
+    const reg = (u.regNo ?? "").trim().toLowerCase();
+    const emp = u.employeeId.trim().toLowerCase();
+    const nm = u.name.trim().toLowerCase();
+    return Boolean(ref) && ((reg !== "" && ref === reg) || (emp !== "" && ref === emp) || (nm !== "" && ref === nm));
+  };
+  const isAp1 = Boolean(target && identities.some((u) => matchesRef(u, ap1)));
+  const isAp2 = Boolean(target && identities.some((u) => matchesRef(u, ap2)));
   const isHrUnitChecker = Boolean(
     !isSelf &&
       isFourStepModule &&
@@ -1061,6 +1068,18 @@ export function resolvePortalPathForRole(role: AppUserRole, _position = "", grou
   return "/employee";
 }
 
+function withDelegatedAllowedModules(user: ManagedUser, base: AppraisalModuleName[]): AppraisalModuleName[] {
+  const flags = getDelegatedModuleFlagsForUser(user.employeeId);
+  const next = [...base];
+  if ((flags.kpiSetting || flags.kpiTracking) && !next.includes("KPI (Setting/Measurement)")) {
+    next.push("KPI (Setting/Measurement)");
+  }
+  if (flags.smartGoalsSetting && !next.includes("SMART Goals (Setting/Measurement)")) {
+    next.push("SMART Goals (Setting/Measurement)");
+  }
+  return next;
+}
+
 export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleName[] {
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
   const configuredGroups = loadAccessGroups();
@@ -1079,7 +1098,7 @@ export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleNam
             r.group.toLowerCase() === effectiveGrouping.toLowerCase(),
         );
         if (matched && Array.isArray(matched.allowedModules)) {
-          return matched.allowedModules;
+          return withDelegatedAllowedModules(user, matched.allowedModules);
         }
       }
     }
@@ -1087,12 +1106,9 @@ export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleNam
     // fallback to grouping defaults
   }
   if (isConfiguredInAccessMgmt) {
-    return getGroupAllowedModules(effectiveGrouping);
+    return withDelegatedAllowedModules(user, getGroupAllowedModules(effectiveGrouping));
   }
-  if (user.role === "HR Unit") {
-    return defaultAllowedModulesForGrouping(effectiveGrouping);
-  }
-  return defaultAllowedModulesForGrouping(effectiveGrouping);
+  return withDelegatedAllowedModules(user, defaultAllowedModulesForGrouping(effectiveGrouping));
 }
 
 export function getAllowedApprovalTypesForUser(
@@ -1213,6 +1229,53 @@ export function getEffectiveLockedUnitsForUser(user: ManagedUser): string[] | un
   return Array.from(new Set([user.company, ...extraManaged].filter(Boolean)));
 }
 
+function normalizeCompanyKey(name: string): string {
+  return String(name ?? "")
+    .toLowerCase()
+    .replace(/industri\b/g, "industry")
+    .replace(/\bpt\.?\s*/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/** Bandingkan Company Unit karyawan dengan Company Unit terpilih di halaman login (toleran variasi penulisan). */
+export function isSameCompanyUnit(userCompany: string, selectedCompany: string): boolean {
+  const a = normalizeCompanyKey(userCompany);
+  const b = normalizeCompanyKey(selectedCompany);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const loc = COMPANY_UNIT_LOCATIONS.find((l) => normalizeCompanyKey(l.company) === b);
+  if (!loc) return false;
+  return [loc.company, loc.fullName, loc.code, loc.unitId].some((v) => normalizeCompanyKey(v) === a);
+}
+
+/**
+ * Validasi Company Unit sebelum verifikasi password (agar salah pilih unit tidak dihitung sebagai percobaan password).
+ */
+export function validateLoginCompanyUnit(
+  companyName: string,
+  employeeIdInput: string,
+): { ok: true; user: ManagedUser } | { ok: false; error: string } {
+  const q = employeeIdInput.trim().toLowerCase();
+  if (!q) return { ok: false, error: "Masukkan Employee ID terlebih dahulu." };
+  const candidates = loadManagedUsers().filter(
+    (u) =>
+      u.employeeId.toLowerCase() === q ||
+      (u.regNo ?? "").toLowerCase() === q ||
+      (u.email ?? "").toLowerCase() === q,
+  );
+  if (candidates.length === 0) {
+    return { ok: false, error: `Employee ID "${employeeIdInput}" tidak ditemukan pada User Management.` };
+  }
+  const inUnit = candidates.find((u) => isSameCompanyUnit(u.company, companyName));
+  if (!inUnit) {
+    return {
+      ok: false,
+      error: `Company Unit tidak sesuai. Akun ${candidates[0].employeeId} tidak terdaftar pada ${companyName}. Silakan pilih Company Unit yang sesuai dengan akun Anda.`,
+    };
+  }
+  return { ok: true, user: inUnit };
+}
+
 export function loginWithCompanyAndEmployeeId(
   companyName: string,
   employeeIdInput: string,
@@ -1223,16 +1286,22 @@ export function loginWithCompanyAndEmployeeId(
     return { ok: false, error: "Masukkan Employee ID terlebih dahulu." };
   }
 
-  // Match by Employee ID, email, or name (prioritizing selected company unit)
-  const matched =
-    users.find(
-      (u) =>
-        u.company === companyName &&
-        (u.employeeId.toLowerCase() === q || u.email.toLowerCase() === q || u.name.toLowerCase() === q),
-    ) ??
-    users.find(
-      (u) => u.employeeId.toLowerCase() === q || u.email.toLowerCase() === q || u.name.toLowerCase() === q,
-    );
+  // Cari karyawan berdasarkan Employee ID / Reg No / email / nama
+  const matchesQuery = (u: ManagedUser) =>
+    u.employeeId.toLowerCase() === q ||
+    (u.regNo ?? "").toLowerCase() === q ||
+    (u.email ?? "").toLowerCase() === q ||
+    (u.name ?? "").toLowerCase() === q;
+  const candidates = users.filter(matchesQuery);
+  const matched = candidates.find((u) => isSameCompanyUnit(u.company, companyName));
+
+  // Validasi Unit Usaha: login wajib sesuai Company Unit karyawan walaupun Employee ID & password benar
+  if (!matched && candidates.length > 0) {
+    return {
+      ok: false,
+      error: `Company Unit tidak sesuai. Akun ${candidates[0].employeeId} tidak terdaftar pada ${companyName}. Silakan pilih Company Unit yang sesuai dengan akun Anda.`,
+    };
+  }
 
   if (!matched) {
     // Karyawan yang diarsipkan (dihapus di User Management / Eliminasi HC EOY) tidak dapat login sampai di-restore
@@ -1303,10 +1372,12 @@ export function useAuthStore() {
     const onUpdate = () => setTick((t) => t + 1);
     window.addEventListener("pa-auth-updated", onUpdate);
     window.addEventListener(ACCESS_UPDATED_EVENT, onUpdate);
+    window.addEventListener(DELEGATION_EVENT, onUpdate);
     window.addEventListener("storage", onUpdate);
     return () => {
       window.removeEventListener("pa-auth-updated", onUpdate);
       window.removeEventListener(ACCESS_UPDATED_EVENT, onUpdate);
+      window.removeEventListener(DELEGATION_EVENT, onUpdate);
       window.removeEventListener("storage", onUpdate);
     };
   }, []);

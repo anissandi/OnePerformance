@@ -11,6 +11,7 @@ import {
   type WorkflowStageRole,
 } from "../../store/authStore";
 import { triggerApprovalTransactionNotification } from "../../store/notificationStore";
+import { resolveActingApproverLabel } from "../../store/delegationStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 export const MOCK_EMPLOYEE_ID = "EMP-002";
@@ -141,6 +142,7 @@ export function submitWorkflowModule(
   phase: WorkflowRecord["phase"] = "measurement",
   date = formatTodayDDMMYYYY(),
   employeeId = getActiveUser().employeeId || MOCK_EMPLOYEE_ID,
+  months?: string[],
 ) {
   const normalizedDate = normalizeDateDDMMYYYY(date);
   const effectiveDate = normalizedDate === "—" ? formatTodayDDMMYYYY() : normalizedDate;
@@ -151,7 +153,9 @@ export function submitWorkflowModule(
   const existing = loadWorkflowRecords().find((item) => item.key === key);
   const validatedMonths = existing?.validatedMonths ?? [];
   let submittedMonths: string[] | undefined;
-  if (module === "KPI" && phase === "measurement") {
+  if (months && months.length > 0) {
+    submittedMonths = Array.from(new Set(months));
+  } else if (module === "KPI" && phase === "measurement") {
     const tracked = readTrackedKpiMonthLabels(employeeId);
     const fresh = tracked.filter((m) => !validatedMonths.includes(m));
     submittedMonths = fresh.length > 0 ? fresh : tracked.slice(-1);
@@ -235,6 +239,14 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       : findHrIcfValidatorUser(allUsers)?.name || activeUser.name;
   let notifStatus = status;
   let notifRole: string = effectiveStage;
+  // Nama approver yang tercatat: "Nama Delegasi | atas nama Pemberi Delegasi" bila approval dilakukan via delegasi
+  const actingName = (stage: "approver1" | "approver2") =>
+    resolveActingApproverLabel(activeUser, ownerUser, alias.module, alias.phase, stage, allUsers);
+  // Aturan: bila Approver 1 & Approver 2 adalah orang yang sama → cukup 1 kali approval
+  const refKey = (v?: string) => String(v ?? "").trim().toLowerCase();
+  const sameAp1Ap2 = Boolean(
+    ownerUser && refKey(ownerUser.regNoAp1) && refKey(ownerUser.regNoAp1) === refKey(ownerUser.regNoAp2),
+  );
 
   if (isFourStep && effectiveStage === "checker") {
     const chkStatus = status === "Revision" ? "Revision" : "Checked";
@@ -255,7 +267,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       status: a1Status,
       date: effectiveDate,
       note,
-      approverName: activeUser.name,
+      approverName: actingName("approver1"),
     };
     if (note?.trim()) {
       assessments.approver1 = {
@@ -269,6 +281,23 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     delete assessments.approver2;
     notifStatus = a1Status;
     notifRole = "approver1";
+    if (sameAp1Ap2 && a1Status !== "Revision") {
+      // AP1 == AP2: keputusan Approver 1 otomatis berlaku sebagai Approver 2
+      const mirrored = isFourStep
+        ? "Assessed-Approver 2"
+        : a1Status === "Assessed-Approver 1"
+        ? "Approved"
+        : a1Status.replace("Approver 1", "Approver 2");
+      decisions.approver2 = {
+        status: mirrored,
+        date: effectiveDate,
+        note: note?.trim() ? `${note.trim()} (Otomatis: Approver 1 & Approver 2 sama)` : "Otomatis: Approver 1 & Approver 2 adalah orang yang sama",
+        approverName: actingName("approver1"),
+      };
+      if (assessments.approver1) assessments.approver2 = { ...assessments.approver1 };
+      notifStatus = mirrored;
+      notifRole = "approver2";
+    }
   } else if (isFourStep && effectiveStage === "approver2") {
     const a2Status =
       status === "Revision"
@@ -280,7 +309,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       status: a2Status,
       date: effectiveDate,
       note,
-      approverName: activeUser.name,
+      approverName: actingName("approver2"),
     };
     if (note?.trim() && status !== "Revision") {
       assessments.approver2 = {
@@ -307,7 +336,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       status,
       date: effectiveDate,
       note,
-      approverName: activeUser.name,
+      approverName: actingName("approver2"),
     };
     if (note?.trim() && status !== "Revision") {
       assessments.approver2 = {
@@ -335,7 +364,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
         ? resolvedCheckerName
         : effectiveStage === "validator"
         ? resolvedValidatorName
-        : activeUser.name || roleLabel;
+        : actingName(effectiveStage === "approver2" ? "approver2" : "approver1") || roleLabel;
     revisionHistory.push({
       role: roleLabel,
       approverName: revActor,
@@ -360,6 +389,17 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       ts: Date.now(),
     },
   ];
+  if (logStage === "approver1" && sameAp1Ap2 && decisions.approver2 && storedDecision?.status !== "Revision") {
+    decisionLog.push({
+      stage: "approver2",
+      approverName: decisions.approver2.approverName || activeUser.name,
+      status: decisions.approver2.status,
+      note: decisions.approver2.note,
+      date: effectiveDate !== "-" ? effectiveDate : formatTodayDDMMYYYY(),
+      months: record.submittedMonths && record.submittedMonths.length > 0 ? [...record.submittedMonths] : undefined,
+      ts: Date.now() + 1,
+    });
+  }
   let validatedMonths = record.validatedMonths ?? [];
   if (logStage === "validator" && storedDecision?.status === "Validated" && record.submittedMonths?.length) {
     validatedMonths = Array.from(new Set([...validatedMonths, ...record.submittedMonths]));
@@ -370,7 +410,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     moduleName: `${alias.module} (${alias.phase === "setting" ? "Setting" : "Measurement"})`,
     rawStatus: notifStatus,
     approverRole: notifRole,
-    approverName: activeUser.name,
+    approverName: storedDecision?.approverName || activeUser.name,
   });
 }
 const MONTH_ORDER = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

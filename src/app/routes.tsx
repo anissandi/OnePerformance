@@ -15,7 +15,7 @@ import { ProjectOutsidePage } from "./pages/employee/ProjectOutsidePage"
 import { ProjectOutsideCombinedPage } from "./pages/shared/ProjectOutsideCombinedPage"
 import { DocumentsPage } from "./pages/shared/DocumentsPage"
 import { ViewProfile } from "./pages/shared/ViewProfile"
-import { HRApprovalManagement } from "./pages/hr/ApprovalManagement"
+import { ApprovalsDelegationPage, HRApprovalManagement } from "./pages/hr/ApprovalManagement"
 import { HRSettingKPIPage } from "./pages/hr/setting/KPISetting"
 import { OpenLockPage } from "./pages/hr/setting/OpenLock"
 import { ScoresCalibration } from "./pages/hr/ScoresCalibration"
@@ -265,6 +265,7 @@ export const router = createBrowserRouter([
         Component: InterDepartmentFeedback,
       },
       { path: "approvals", Component: HRApprovals },
+      { path: "approvals/delegation", Component: ApprovalsDelegationPage },
       { path: "approvals/measurement", Component: HRApprovals },
       { path: "approvals/measurement/:tab", Component: HRApprovals },
       {
@@ -440,6 +441,7 @@ export const router = createBrowserRouter([
       { path: "setting/smart-goals", Component: SMARTGoalsPage },
       { path: "setting/project", Component: ProjectOutsidePage },
       { path: "approvals", Component: SupervisorApprovals },
+      { path: "approvals/delegation", Component: ApprovalsDelegationPage },
       { path: "appraisals", Component: SupervisorApprovals },
       { path: "approvals/measurement", Component: SupervisorApprovals },
       { path: "approvals/measurement/:tab", Component: SupervisorApprovals },
@@ -556,6 +558,7 @@ export const router = createBrowserRouter([
       },
       { path: "measurement/inter-department-feedback/:tab", Component: InterDepartmentFeedback },
       { path: "approvals", Component: SupervisorApprovals },
+      { path: "approvals/delegation", Component: ApprovalsDelegationPage },
       { path: "approvals/measurement", Component: SupervisorApprovals },
       { path: "approvals/measurement/:tab", Component: SupervisorApprovals },
       {
@@ -662,6 +665,7 @@ export const router = createBrowserRouter([
       { path: "measurement/inter-department-feedback", Component: InterDepartmentFeedback },
       { path: "measurement/inter-department-feedback/:tab", Component: InterDepartmentFeedback },
       { path: "approvals", Component: BODHRApprovals },
+      { path: "approvals/delegation", Component: ApprovalsDelegationPage },
       { path: "approvals/measurement", Component: BODHRApprovals },
       { path: "approvals/measurement/:tab", Component: BODHRApprovals },
       {

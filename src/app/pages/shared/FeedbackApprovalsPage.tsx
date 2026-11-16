@@ -6,7 +6,11 @@ import type { ApprovalRow } from "../../components/ReviewDrawer"
 import { useAuthStore } from "../../store/authStore"
 import { normalizeDateDDMMYYYY } from "../../utils/dateFormat"
 import { resolveDynamicApprovalRowsForUser } from "./approvalsStore"
-import { feedbackApprovalRows } from "./interDepartmentFeedbackStore"
+import {
+  feedbackApprovalRows,
+  feedbackRowStatusFor,
+  loadFeedbackSubmissions,
+} from "./interDepartmentFeedbackStore"
 import { useAppraisalRevision } from "./useAppraisalRevision"
 
 export function FeedbackApprovalsPage({
@@ -21,15 +25,22 @@ export function FeedbackApprovalsPage({
     ? "approver1"
     : "approver2"
   const moduleBase = location.pathname.replace(/\/inter-department-feedback\/?$/, "")
-  const [selected, setSelected] = useState<ApprovalRow | null>(null)
+  const [selected, setSelected] = useState<(ApprovalRow & { needsAction?: boolean }) | null>(null)
   const [version, setVersion] = useState(0)
+  const submissions = loadFeedbackSubmissions()
   const rows = resolveDynamicApprovalRowsForUser(
     feedbackApprovalRows(role),
     activeUser,
     "measurement",
     new Set(["Inter-Department Feedback"]),
     lockedUnits,
-  )
+  ).map((row) => {
+    // Status & aksi dihitung per baris sesuai peran reviewer (AP1/AP2) user login terhadap karyawan tsb.
+    const sub = submissions.find((s) => s.row.no === row.no)
+    if (!sub) return { ...row, needsAction: false }
+    const st = feedbackRowStatusFor(sub, row.reviewerRoleForRow ?? role)
+    return { ...row, status: st.status, needsAction: st.needsAction }
+  })
   return (
     <main
       className="min-h-screen space-y-6 bg-gray-50 p-6"
@@ -49,8 +60,9 @@ export function FeedbackApprovalsPage({
           {role === "approver1" ? "Approver 1" : "Approver 2"}
         </p>
         <p className="mt-2 text-sm text-gray-500">
-          Urutan wajib: Approver 1 submit tindak lanjut terlebih dahulu,
-          kemudian Approver 2. Tidak ada keputusan approval atau revisi.
+          Urutan wajib: Approver 1 submit tindak lanjut terlebih dahulu, kemudian Approver 2 (jika Approver 1 & 2
+          orang yang sama, cukup 1 kali). Setelah karyawan submit Hasil Tindak Lanjut, Approver memberikan Approve
+          (dengan komentar) atau Revisi (dengan note revisi).
         </p>
       </div>
       <div className="overflow-x-auto rounded-xl border bg-white">
@@ -96,7 +108,7 @@ export function FeedbackApprovalsPage({
                     onClick={() => setSelected(row)}
                     className="rounded-lg bg-[#1A284F] px-4 py-2 text-white"
                   >
-                    {row.status === "Pending" ? "Review" : "View"}
+                    {row.needsAction ? "Review" : "View"}
                   </button>
                 </td>
               </tr>
@@ -118,7 +130,7 @@ export function FeedbackApprovalsPage({
           reviewerRole={selected.reviewerRoleForRow ?? role}
           onClose={() => setSelected(null)}
           onAssessed={() => setVersion((previous) => previous + 1)}
-          readOnly={selected.status !== "Pending"}
+          readOnly={!(selected as { needsAction?: boolean }).needsAction}
         />
       )}
     </main>

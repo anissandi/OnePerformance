@@ -7,10 +7,30 @@ import type { ApprovalRow, ReviewerRole } from "./ReviewDrawer"
 import {
   FOLLOW_UP_COLUMNS,
   FEEDBACK_INDICATORS,
+  decideOwnerFollowUpResult,
+  feedbackRowStatusFor,
   loadFeedbackSubmissions,
+  requiredFollowUpRoles,
   saveFeedbackFollowUp,
   type FeedbackFollowUp,
 } from "../pages/shared/interDepartmentFeedbackStore"
+
+/** Tanggal minimal Timeline Evaluasi: besok (lebih besar dari hari ini). */
+function tomorrowIso(): string {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  const mm = String(d.getMonth() + 1).padStart(2, "0")
+  const dd = String(d.getDate()).padStart(2, "0")
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+function formatTimeline(value: string): string {
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : value
+}
+
+function readOnlyDecision(readOnly?: boolean): boolean {
+  return Boolean(readOnly)
+}
 
 function emptyFollowUp(): FeedbackFollowUp {
   return Object.fromEntries(
@@ -34,9 +54,17 @@ export function FeedbackApprovalDrawer({
   const submission = loadFeedbackSubmissions().find(
     (entry) => entry.row.no === row.no,
   )
+  // AP1 == AP2 → hanya 1 kali tindak lanjut (sebagai Approver 1)
+  const effectiveRole: ReviewerRole =
+    submission && !requiredFollowUpRoles(submission).includes(reviewerRole) ? "approver1" : reviewerRole
+  reviewerRole = effectiveRole
   const [rows, setRows] = useState<FeedbackFollowUp[]>(
-    () => submission?.followUps[reviewerRole] ?? [emptyFollowUp()],
+    () => submission?.followUps[effectiveRole] ?? [emptyFollowUp()],
   )
+  const [decisionNote, setDecisionNote] = useState("")
+  const [decisionConfirm, setDecisionConfirm] = useState<null | "Approved" | "Revision">(null)
+  const rowState = submission ? feedbackRowStatusFor(submission, effectiveRole) : null
+  const canDecideOwnerResult = !readOnlyDecision(readOnly) && rowState?.stage === "owner-result"
   const [confirm, setConfirm] = useState(false)
   const [showExample, setShowExample] = useState(false)
   const awaitingFirstApprover =
@@ -225,7 +253,7 @@ export function FeedbackApprovalDrawer({
                             <span className="block font-semibold">
                               {column}
                             </span>
-                            {item[column]}
+                            {column === "Timeline Evaluasi" ? formatTimeline(item[column]) : item[column]}
                           </p>
                         ))}
                       </div>
@@ -251,7 +279,7 @@ export function FeedbackApprovalDrawer({
                     className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
                   >
                     <Info className="h-3.5 w-3.5" />
-                    Contoh Feedback
+                    Lihat Contoh Feedback
                   </button>
                 </div>
                 {showExample && (
@@ -298,7 +326,7 @@ export function FeedbackApprovalDrawer({
                           "Evaluasi",
                           "Supervisor meninjau ketepatan pengiriman laporan dan meminta umpan balik dari departemen pemohon pada akhir setiap bulan.",
                         ],
-                        ["Timeline Evaluasi", "2 Bulan"],
+                        ["Timeline Evaluasi", "Pilih tanggal evaluasi pada kalender, mis. 30/09/2026"],
                         [
                           "Indikator Keberhasilan",
                           "100% laporan mingguan dikirim tepat waktu selama 8 minggu dan minimal 90% tindak lanjut diselesaikan sesuai target yang disepakati.",
@@ -351,8 +379,28 @@ export function FeedbackApprovalDrawer({
                           </span>
                           {locked ? (
                             <p className="whitespace-pre-wrap rounded-lg bg-gray-50 p-3 font-normal">
-                              {item[column]}
+                              {column === "Timeline Evaluasi" ? formatTimeline(item[column]) : item[column]}
                             </p>
+                          ) : column === "Timeline Evaluasi" ? (
+                            <input
+                              type="date"
+                              required
+                              min={tomorrowIso()}
+                              value={/^\d{4}-\d{2}-\d{2}$/.test(item[column]) ? item[column] : ""}
+                              onChange={(event) => {
+                                const v = event.target.value
+                                if (v && v < tomorrowIso()) {
+                                  toast.error("Timeline Evaluasi harus lebih besar dari hari ini.")
+                                  return
+                                }
+                                setRows((previous) =>
+                                  previous.map((entry, rowIndex) =>
+                                    rowIndex === index ? { ...entry, [column]: v } : entry,
+                                  ),
+                                )
+                              }}
+                              className="block w-full rounded-lg border p-3 font-normal focus:outline-none focus:ring-2 focus:ring-blue-200"
+                            />
                           ) : (
                             <textarea
                               required
@@ -395,6 +443,165 @@ export function FeedbackApprovalDrawer({
                     >
                       Submit Tindak Lanjut
                     </button>
+                  </div>
+                )}
+                {submission.ownerResults && submission.ownerResults.length > 0 && submission.ownerResultStatus && (
+                  <section className="overflow-hidden rounded-2xl border border-violet-200 bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-gradient-to-r from-violet-50 to-indigo-50 px-5 py-4">
+                      <div>
+                        <h3 className="font-bold text-[#1A284F]">Hasil Tindak Lanjut Karyawan</h3>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Disubmit {row.name}
+                          {submission.ownerResultSubmittedAt
+                            ? ` · ${new Date(submission.ownerResultSubmittedAt).toLocaleDateString("id-ID")}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-violet-800">
+                        {submission.ownerResultStatus === "Approved"
+                          ? "Disetujui"
+                          : submission.ownerResultStatus === "Revision"
+                          ? "Revisi"
+                          : "Menunggu Approval"}
+                      </span>
+                    </div>
+                    <div className="space-y-3 p-5">
+                      {submission.ownerResults.map((r, i) => (
+                        <div key={r.ref} className="rounded-xl border border-gray-100 bg-slate-50/60 p-4">
+                          <p className="mb-2 text-xs font-bold uppercase tracking-wider text-violet-700">
+                            Hasil Tindak Lanjut #{i + 1}
+                          </p>
+                          <div className="grid gap-3 md:grid-cols-3">
+                            {[
+                              ["Aspek Perbaikan", r.aspekPerbaikan],
+                              ["Rencana Pengembangan", r.rencanaPengembangan],
+                              ["Tindak Lanjut", r.tindakLanjut],
+                              ["Evaluasi", r.evaluasi],
+                              ["Indikator Keberhasilan", r.indikatorKeberhasilan],
+                              ["Status Tindak Lanjut", r.status],
+                            ].map(([label, value]) => (
+                              <div key={label} className="rounded-lg border border-gray-200/80 bg-white p-3">
+                                <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">{label}</p>
+                                <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{value || "—"}</p>
+                              </div>
+                            ))}
+                          </div>
+                          {r.evidence.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {r.evidence.map((ev) => (
+                                <a
+                                  key={ev.id}
+                                  href={ev.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  download={ev.name}
+                                  className="rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50"
+                                >
+                                  {ev.name}
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {(submission.ownerResultHistory ?? []).map((h, i) => (
+                        <p
+                          key={i}
+                          className={`rounded-lg p-3 text-xs ${
+                            h.status === "Approved" ? "bg-emerald-50 text-emerald-900" : "bg-rose-50 text-rose-900"
+                          }`}
+                        >
+                          <strong>
+                            {h.status === "Approved" ? "Approved" : "Revisi"} · {h.role === "approver1" ? "Approver 1" : "Approver 2"} ·{" "}
+                            {h.approverName} ({h.date})
+                          </strong>
+                          {h.note ? ` — ${h.note}` : ""}
+                        </p>
+                      ))}
+                      {canDecideOwnerResult && (
+                        <div className="space-y-3 rounded-xl border border-gray-200 p-4">
+                          <label className="block text-sm font-medium text-gray-700">
+                            Komentar Approval / Note Revisi
+                            <textarea
+                              value={decisionNote}
+                              onChange={(e) => setDecisionNote(e.target.value)}
+                              placeholder="Komentar (opsional untuk Approve, wajib untuk Revisi)"
+                              className="mt-2 block min-h-20 w-full rounded-lg border p-3 font-normal focus:outline-none focus:ring-2 focus:ring-blue-200"
+                            />
+                          </label>
+                          <div className="flex flex-wrap justify-end gap-3">
+                            <button
+                              type="button"
+                              disabled={!decisionNote.trim()}
+                              title={!decisionNote.trim() ? "Isi note revisi terlebih dahulu" : undefined}
+                              onClick={() => setDecisionConfirm("Revision")}
+                              className="rounded-lg border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-40"
+                            >
+                              Revisi
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDecisionConfirm("Approved")}
+                              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                            >
+                              Approve
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                )}
+                {decisionConfirm && (
+                  <div
+                    className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+                    onClick={() => setDecisionConfirm(null)}
+                  >
+                    <div
+                      role="dialog"
+                      aria-modal="true"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl"
+                    >
+                      <h4 className="text-base font-bold text-[#1A284F]">
+                        {decisionConfirm === "Approved" ? "Konfirmasi Approve" : "Konfirmasi Revisi"} Hasil Tindak Lanjut
+                      </h4>
+                      <p className="text-sm text-gray-700">
+                        {decisionConfirm === "Approved"
+                          ? `Setujui Hasil Tindak Lanjut ${row.name}?`
+                          : `Kembalikan Hasil Tindak Lanjut ke ${row.name} untuk direvisi?`}
+                      </p>
+                      <div className="flex justify-end gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setDecisionConfirm(null)}
+                          className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              decideOwnerFollowUpResult(row.no, effectiveRole, decisionConfirm, decisionNote)
+                              toast.success(
+                                decisionConfirm === "Approved"
+                                  ? "Hasil Tindak Lanjut disetujui"
+                                  : "Hasil Tindak Lanjut dikembalikan untuk revisi",
+                              )
+                              setDecisionConfirm(null)
+                              onAssessed()
+                              onClose()
+                            } catch (error) {
+                              toast.error(error instanceof Error ? error.message : "Gagal menyimpan keputusan")
+                            }
+                          }}
+                          className="rounded-xl bg-[#1A284F] px-5 py-2 text-sm font-semibold text-white"
+                        >
+                          Ya, Lanjutkan
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
                 {confirm && (

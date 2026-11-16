@@ -38,7 +38,7 @@ test("nomination store rejects a prohibited giver even when called outside the U
     giver({ id: "one" }), giver({ id: "two", departmentId: recipient.departmentId }),
     giver({ id: "three" }),
   ]), /departemen/);
-  assert.throws(() => nominateFeedbackGivers(recipient, [giver(), giver()]), /tepat tiga/);
+  assert.throws(() => nominateFeedbackGivers(recipient, [giver(), giver()]), /minimal 3/);
 });
 test("nomination allows all three givers from one other department and preserves organization metadata", () => {
   const records = new Map<string, string>();
@@ -51,6 +51,8 @@ test("nomination allows all three givers from one other department and preserves
   assert.equal(submission.nominations?.length, 3);
   assert.equal(submission.nominations?.[0].giver.sectionId, "bag-2");
   assert.equal(submission.row.employeeId, recipient.id);
+  const more = nominateFeedbackGivers({ ...recipient, id: "rcp-2" }, ["a", "b", "c", "d", "e"].map((id) => giver({ id })));
+  assert.equal(more.nominations?.length, 5);
   Reflect.deleteProperty(globalThis, "localStorage");
   Reflect.deleteProperty(globalThis, "window");
 });

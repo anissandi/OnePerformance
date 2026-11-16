@@ -28,16 +28,31 @@ import {
 import {
   FEEDBACK_INDICATORS,
   FOLLOW_UP_COLUMNS,
+  MIN_FEEDBACK_GIVERS,
+  OWNER_RESULT_STATUS_OPTIONS,
+  buildOwnerResultTemplate,
   feedbackTasksFor,
   getFeedbackSubmission,
+  isFeedbackFollowUpComplete,
   nominateFeedbackGivers,
+  ownerResultMissingFields,
+  refreshFeedbackSubmissionsFromBackend,
+  requiredFollowUpRoles,
+  saveFeedbackSummaryDraft,
   submitFeedbackSummary,
   submitNominatedFeedback,
+  submitOwnerFollowUpResults,
+  summaryKey,
+  summarySubmitReadiness,
   type FeedbackFollowUp,
   type FeedbackPerson,
   type FeedbackTask,
+  type OwnerEvidenceFile,
+  type OwnerFollowUpResult,
 } from "../shared/interDepartmentFeedbackStore"
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar"
+import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient"
+import { toast } from "sonner"
 
 const CANDIDATES_PER_PAGE = 10
 
@@ -128,6 +143,14 @@ export function InterDepartmentFeedback() {
   const workflow = actor ? getFeedbackSubmission(actor.id) : undefined
   const status = feedbackWindow(activation)
   const refresh = () => setVersion((current) => current + 1)
+
+  useEffect(() => {
+    // Selalu ambil status feedback terbaru dari backend (feedback baru, tindak lanjut approver, dll.)
+    void refreshFeedbackSubmissionsFromBackend()
+    const onFocus = () => void refreshFeedbackSubmissionsFromBackend()
+    window.addEventListener("focus", onFocus)
+    return () => window.removeEventListener("focus", onFocus)
+  }, [])
 
   useEffect(() => {
     const update = () => {
@@ -223,14 +246,13 @@ export function InterDepartmentFeedback() {
       : "green"
   const receivedDotTone: "yellow" | "green" | null = !workflow
     ? null
-    : workflow.feedbacks.length >= 3
+    : workflow.summarySubmittedAt
     ? "green"
     : "yellow"
-  const hasAp1FollowUp = Boolean(workflow?.followUps.approver1?.length)
-  const hasAp2FollowUp = Boolean(workflow?.followUps.approver2?.length)
+  // Tab Tindak Lanjut: dot kuning lembut selama tindak lanjut berjalan; hijau setelah Hasil Tindak Lanjut disetujui
   const followUpDotTone: "yellow" | "green" | null = !workflow?.summarySubmittedAt
     ? null
-    : hasAp1FollowUp && (hasAp2FollowUp || !activeUser.regNoAp2)
+    : workflow.ownerResultStatus === "Approved"
     ? "green"
     : "yellow"
 
@@ -256,7 +278,7 @@ export function InterDepartmentFeedback() {
       nominateFeedbackGivers(actor, selected)
       setConfirmNomination(false)
       setNotice(
-        "Tiga pemberi feedback berhasil dipilih. Tugas feedback telah dibuat untuk masing-masing karyawan.",
+        `${selected.length} pemberi feedback berhasil dipilih. Tugas feedback telah dibuat untuk masing-masing karyawan.`,
       )
       refresh()
     } catch (failure) {
@@ -274,8 +296,8 @@ export function InterDepartmentFeedback() {
             Inter-Department & Factories Feedback / Comments
           </h1>
           <p className="mt-1 text-sm text-gray-500">
-            Performance Year 2026 · Karyawan memilih tepat tiga pemberi feedback
-            untuk dirinya.
+            Performance Year 2026 · Karyawan memilih minimal {MIN_FEEDBACK_GIVERS} pemberi
+            feedback untuk dirinya.
           </p>
         </div>
       </header>
@@ -383,7 +405,6 @@ export function InterDepartmentFeedback() {
           onSearch={setCandidateSearch}
           onAdd={(person) =>
             setSelected((current) =>
-              current.length < 3 &&
               !current.some((entry) => entry.id === person.id)
                 ? [...current, person]
                 : current,
@@ -417,10 +438,8 @@ export function InterDepartmentFeedback() {
           actor={actor}
           workflow={workflow}
           approvalOpen={status.approval}
-          onDone={() => {
-            setNotice(
-              "Summary feedback berhasil diteruskan kepada Approver 1 dan Approver 2.",
-            )
+          onDone={(message) => {
+            setNotice(message)
             refresh()
           }}
           onError={setError}
@@ -429,9 +448,13 @@ export function InterDepartmentFeedback() {
       {activeTab === "followup" && (
         <FollowUpResultPanel
           workflow={workflow}
-          ap1Name={ap1User?.name || activeUser.regNoAp1 || "Approver 1"}
-          ap2Name={ap2User?.name || activeUser.regNoAp2 || "Approver 2"}
-          hasSecondApprover={Boolean(activeUser.regNoAp2)}
+          ap1Name={workflow?.followUpMeta?.approver1?.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1"}
+          ap2Name={workflow?.followUpMeta?.approver2?.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2"}
+          onDone={(message) => {
+            setNotice(message)
+            refresh()
+          }}
+          onError={setError}
         />
       )}
 
@@ -446,7 +469,7 @@ export function InterDepartmentFeedback() {
               Konfirmasi Pemberi Feedback
             </h2>
             <p className="mt-2 text-sm text-gray-600">
-              Tiga karyawan berikut akan menerima tugas untuk memberi feedback
+              {selected.length} karyawan berikut akan menerima tugas untuk memberi feedback
               anonim kepada Anda. Pilihan tidak dapat diubah setelah dikirim.
             </p>
             <div className="my-5 space-y-2">
@@ -529,12 +552,12 @@ function NominationPanel({
     (safePage - 1) * CANDIDATES_PER_PAGE,
     safePage * CANDIDATES_PER_PAGE,
   )
-  const canSubmitNomination = enabled && selected.length === 3
+  const canSubmitNomination = enabled && selected.length >= MIN_FEEDBACK_GIVERS
   const submitTooltipText = !enabled
     ? "Nominasi hanya tersedia selama periode penerimaan feedback aktif."
-    : selected.length < 3
-    ? `Pilih tepat 3 pemberi feedback (${selected.length}/3 terpilih) untuk mengaktifkan tombol Kirim Nominasi.`
-    : "Klik untuk mengirim nominasi ke 3 pemberi feedback terpilih."
+    : selected.length < MIN_FEEDBACK_GIVERS
+    ? `Pilih minimal ${MIN_FEEDBACK_GIVERS} pemberi feedback (${selected.length} terpilih) untuk mengaktifkan tombol Kirim Nominasi.`
+    : `Klik untuk mengirim nominasi ke ${selected.length} pemberi feedback terpilih.`
 
   if (workflow)
     return (
@@ -546,14 +569,14 @@ function NominationPanel({
               Pemberi feedback sudah dipilih
             </h2>
             <p className="mt-1 text-sm text-green-800">
-              Anda telah menominasikan tiga karyawan. Pilihan terkunci untuk
+              Anda telah menominasikan {workflow.nominations?.length ?? 0} karyawan. Pilihan terkunci untuk
               periode ini; status tugas diperbarui saat feedback diterima.
             </p>
           </div>
         </div>
         <section className="rounded-2xl border bg-white p-6">
           <h3 className="mb-4 font-bold text-[#1A284F]">
-            Tiga pemberi feedback Anda
+            {workflow.nominations?.length ?? 0} pemberi feedback Anda
           </h3>
           <div className="space-y-3">
             {workflow.nominations?.map((nomination, index) => (
@@ -593,7 +616,7 @@ function NominationPanel({
           </span>
           <div>
             <h2 className="font-bold text-gray-900">
-              Pilih 3 Karyawan sebagai Pemberi Feedback
+              Pilih Minimal {MIN_FEEDBACK_GIVERS} Karyawan sebagai Pemberi Feedback
             </h2>
             <p className="mt-1 text-xs text-gray-500">
               Pilih rekan dari departemen dan bagian yang berbeda dari Anda.
@@ -674,7 +697,7 @@ function NominationPanel({
                   </span>
                 ) : (
                   <button
-                    disabled={!enabled || selected.length === 3}
+                    disabled={!enabled}
                     onClick={() => onAdd(person)}
                     className="rounded-lg border border-[#1A284F]/30 px-3 py-2 text-xs font-bold text-[#1A284F] disabled:opacity-40"
                   >
@@ -721,16 +744,16 @@ function NominationPanel({
           <h2 className="font-bold text-gray-900">Pemberi Feedback Terpilih</h2>
           <span
             className={`rounded-full px-3 py-1 text-xs font-bold ${
-              selected.length === 3
+              selected.length >= MIN_FEEDBACK_GIVERS
                 ? "bg-green-100 text-green-800"
                 : "bg-amber-100 text-amber-800"
             }`}
           >
-            {selected.length} / 3
+            {selected.length} / min. {MIN_FEEDBACK_GIVERS}
           </span>
         </div>
         <p className="mt-2 text-xs text-gray-500">
-          Tepat tiga karyawan wajib dipilih.
+          Minimal {MIN_FEEDBACK_GIVERS} karyawan wajib dipilih; Anda boleh memilih lebih dari {MIN_FEEDBACK_GIVERS}.
         </p>
         <div className="mt-4 space-y-2">
           {selected.length ? (
@@ -1055,6 +1078,66 @@ function TaskInbox({
   )
 }
 
+function HoverTooltip({ text, children, wide }: { text: React.ReactNode; children: React.ReactNode; wide?: boolean }) {
+  return (
+    <div className="group relative inline-flex">
+      {children}
+      <div
+        role="tooltip"
+        className={`pointer-events-none invisible absolute bottom-full left-1/2 z-30 mb-2 -translate-x-1/2 rounded-xl bg-[#1A284F] px-3 py-2 text-[11px] font-medium leading-relaxed text-white opacity-0 shadow-xl transition-opacity duration-150 group-hover:visible group-hover:opacity-100 ${
+          wide ? "w-80" : "w-64"
+        }`}
+      >
+        {text}
+      </div>
+    </div>
+  )
+}
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+}: {
+  title: string
+  message: React.ReactNode
+  confirmLabel: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={onCancel}>
+      <section
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl"
+      >
+        <h3 className="text-lg font-bold text-[#1A284F]">{title}</h3>
+        <div className="text-sm leading-relaxed text-gray-600">{message}</div>
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-xl bg-[#1A284F] px-5 py-2 text-sm font-semibold text-white hover:bg-[#131d3b]"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function ReceivedPanel({
   actor,
   workflow,
@@ -1065,47 +1148,74 @@ function ReceivedPanel({
   actor: FeedbackPerson
   workflow: ReturnType<typeof getFeedbackSubmission>
   approvalOpen: boolean
-  onDone: () => void
+  onDone: (message: string) => void
   onError: (message: string) => void
 }) {
-  const [summaries, setSummaries] = useState<Record<string, string>>(
-    () => workflow?.summaries ?? {},
-  )
+  const [summaries, setSummaries] = useState<Record<string, string>>(() => workflow?.summaries ?? {})
+  const [dirty, setDirty] = useState(false)
   const [active, setActive] = useState(0)
+  const [confirmSubmit, setConfirmSubmit] = useState(false)
+  // Sinkron dengan summary tersimpan (draft) — tidak menimpa ketikan owner yang belum disimpan
   useEffect(() => {
-    setSummaries(workflow?.summaries ?? {})
-    setActive(0)
-  }, [workflow?.row.no, workflow?.summarySubmittedAt])
+    if (!dirty) setSummaries(workflow?.summaries ?? {})
+  }, [workflow?.row.no, workflow?.summaryDraftSavedAt, workflow?.summarySubmittedAt, dirty])
+  useEffect(() => {
+    if (workflow && active >= workflow.feedbacks.length) setActive(0)
+  }, [workflow?.feedbacks.length])
+
   if (!workflow)
     return (
       <section className="rounded-2xl border border-dashed bg-white p-10 text-center">
         <Users className="mx-auto h-8 w-8 text-gray-300" />
-        <h2 className="mt-3 font-bold text-gray-700">
-          Belum ada feedback diterima
-        </h2>
+        <h2 className="mt-3 font-bold text-gray-700">Belum ada feedback diterima</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Pilih tepat tiga pemberi feedback terlebih dahulu.
+          Pilih minimal {MIN_FEEDBACK_GIVERS} pemberi feedback terlebih dahulu.
         </p>
       </section>
     )
-  const complete = workflow.feedbacks.length === 3
+  const total = workflow.nominations?.length ?? 0
+  const received = workflow.feedbacks.length
   const submitted = !!workflow.summarySubmittedAt
-  const allFilled =
-    complete &&
-    workflow.feedbacks.every((feedback) =>
-      FEEDBACK_INDICATORS.every((indicator) =>
-        summaries[`${feedback.id}-${indicator.key}`]?.trim(),
-      ),
-    )
+  const readiness = summarySubmitReadiness(workflow, summaries)
+  const canSubmit = approvalOpen && readiness.ready
   const feedback = workflow.feedbacks[active]
+  const feedbackComplete = (id: string) =>
+    FEEDBACK_INDICATORS.every((indicator) => summaries[summaryKey(id, indicator.key)]?.trim())
+  const submitTooltip = submitted
+    ? "Feedback & Summary sudah disubmit ke Approver."
+    : !approvalOpen
+    ? "Submit tersedia selama periode aktif Inter-Department Feedback (Module Activation)."
+    : readiness.ready
+    ? "Semua feedback sudah diterima & seluruh Summary / Catatan Penerima terisi. Klik untuk submit ke Approver 1."
+    : (
+        <span>
+          Tombol aktif jika semua feedback telah diterima & seluruh Summary / Catatan Penerima terisi:
+          <br />
+          {readiness.reasons.map((r) => (
+            <span key={r} className="block">• {r}</span>
+          ))}
+        </span>
+      )
+
+  function saveDraft() {
+    try {
+      saveFeedbackSummaryDraft(actor.id, summaries)
+      setDirty(false)
+      toast.success("Draft Summary / Catatan Penerima tersimpan")
+      onDone("Draft Summary / Catatan Penerima tersimpan. Belum dikirim ke Approver.")
+    } catch (failure) {
+      onError(failure instanceof Error ? failure.message : "Draft gagal disimpan.")
+    }
+  }
   function submit() {
     try {
       submitFeedbackSummary(actor.id, summaries)
-      onDone()
+      setDirty(false)
+      setConfirmSubmit(false)
+      onDone("Feedback & Summary berhasil disubmit ke Approver 1 untuk tindak lanjut.")
     } catch (failure) {
-      onError(
-        failure instanceof Error ? failure.message : "Summary gagal disubmit.",
-      )
+      setConfirmSubmit(false)
+      onError(failure instanceof Error ? failure.message : "Summary gagal disubmit.")
     }
   }
   return (
@@ -1115,129 +1225,151 @@ function ReceivedPanel({
           <div>
             <h2 className="font-bold text-[#1A284F]">Feedback Diterima</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Identitas pemberi disembunyikan. Anda melihat unit dan divisinya
-              untuk konteks kolaborasi.
+              Setiap feedback yang masuk langsung tampil. Identitas pemberi disembunyikan; Anda hanya melihat unit & divisinya.
             </p>
           </div>
           <span
             className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-bold ${
-              complete
+              submitted
                 ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                 : "border-amber-200 bg-amber-50 text-amber-800"
             }`}
           >
-            <span
-              className={`h-2.5 w-2.5 rounded-full ${
-                complete ? "bg-emerald-400" : "bg-amber-300"
-              }`}
-            />
-            {submitted
-              ? "Summary disubmit (Feedback lengkap)"
-              : `${workflow.feedbacks.length}/3 feedback diterima`}
+            <span className={`h-2.5 w-2.5 rounded-full ${submitted ? "bg-emerald-400" : "bg-amber-300"}`} />
+            {submitted ? "Feedback & Summary disubmit" : `${received}/${total} feedback diterima`}
           </span>
         </div>
-        {!complete && (
+        {!submitted && received < total && (
           <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            Menunggu {3 - workflow.feedbacks.length} feedback lagi. Summary
-            dapat diisi setelah tiga feedback diterima.
+            Menunggu {total - received} feedback lagi. Anda sudah dapat mengisi Summary / Catatan Penerima untuk feedback
+            yang masuk dan menyimpannya dengan <strong>Save Draft</strong>.
           </div>
         )}
+        {workflow.summaryDraftSavedAt && !submitted && (
+          <p className="mt-3 text-xs text-gray-500">
+            Draft terakhir disimpan: {new Date(workflow.summaryDraftSavedAt).toLocaleString("id-ID")}
+          </p>
+        )}
       </div>
-      {complete && feedback && (
-        <>
-          <div className="flex gap-2 overflow-x-auto">
-            {workflow.feedbacks.map((entry, index) => (
-              <button
-                key={entry.id}
-                onClick={() => setActive(index)}
-                className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold ${
-                  active === index
-                    ? "bg-[#1A284F] text-white"
-                    : "border bg-white text-gray-600"
-                }`}
-              >
-                Feedback {index + 1} · {entry.division}
-              </button>
-            ))}
-          </div>
-          <article className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <header className="border-b bg-gray-50 px-6 py-4">
-              <h3 className="font-bold text-gray-900">
-                Feedback {active + 1} · {feedback.division} ·{" "}
-                {feedback.companyUnit}
-              </h3>
-              <p className="mt-1 text-xs text-gray-500">
-                Pemberi feedback anonim
-              </p>
-            </header>
-            <div className="space-y-4 p-6">
-              {FEEDBACK_INDICATORS.map((indicator, index) => {
-                const key = `${feedback.id}-${indicator.key}`
+      {received === 0 ? (
+        <section className="rounded-2xl border border-dashed bg-white p-10 text-center text-sm text-gray-500">
+          Belum ada feedback yang masuk.
+        </section>
+      ) : (
+        feedback && (
+          <>
+            <div className="flex gap-2 overflow-x-auto">
+              {workflow.feedbacks.map((entry, index) => {
+                const done = feedbackComplete(entry.id)
                 return (
-                  <div
-                    key={indicator.key}
-                    className="rounded-xl border border-gray-100 p-4"
+                  <button
+                    key={entry.id}
+                    onClick={() => setActive(index)}
+                    className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold ${
+                      active === index ? "bg-[#1A284F] text-white" : "border bg-white text-gray-600"
+                    }`}
                   >
-                    <p className="text-sm font-semibold text-gray-800">
-                      {index + 1}. {indicator.label}
-                    </p>
-                    <div className="mt-3 rounded-lg bg-sky-50 p-3 text-sm text-gray-800">
-                      {feedback.answers[indicator.key]}
-                    </div>
-                    <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Summary / Catatan Penerima{!submitted && " *"}
-                      {submitted ? (
-                        <p className="mt-2 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm normal-case tracking-normal text-gray-700">
-                          {summaries[key]}
-                        </p>
-                      ) : (
-                        <textarea
-                          rows={2}
-                          value={summaries[key] ?? ""}
-                          onChange={(event) =>
-                            setSummaries({
-                              ...summaries,
-                              [key]: event.target.value,
-                            })
-                          }
-                          className={
-                            inputClass +
-                            " mt-2 resize-none normal-case tracking-normal"
-                          }
-                          placeholder="Tuliskan ringkasan atau tindak lanjut pribadi..."
-                        />
-                      )}
-                    </label>
-                  </div>
+                    <span
+                      className={`h-2 w-2 rounded-full ${done ? "bg-emerald-400" : "bg-amber-300"}`}
+                      title={done ? "Summary lengkap" : "Summary belum lengkap"}
+                    />
+                    Feedback {index + 1} · {entry.division}
+                  </button>
                 )
               })}
             </div>
-          </article>
-          {!submitted && (
-            <section className="rounded-2xl border bg-white p-6 shadow-sm">
-              <h3 className="font-bold text-gray-900">
-                Submit Summary Feedback
-              </h3>
-              <p className="mt-1 text-sm text-gray-500">
-                Summary yang lengkap diteruskan kepada Approver 1 lalu Approver
-                2 untuk tindak lanjut.
-              </p>
+            <article className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+              <header className="border-b bg-gray-50 px-6 py-4">
+                <h3 className="font-bold text-gray-900">
+                  Feedback {active + 1} · {feedback.division} · {feedback.companyUnit}
+                </h3>
+                <p className="mt-1 text-xs text-gray-500">Pemberi feedback anonim</p>
+              </header>
+              <div className="space-y-4 p-6">
+                {FEEDBACK_INDICATORS.map((indicator, index) => {
+                  const key = summaryKey(feedback.id, indicator.key)
+                  return (
+                    <div key={indicator.key} className="rounded-xl border border-gray-100 p-4">
+                      <p className="text-sm font-semibold text-gray-800">
+                        {index + 1}. {indicator.label}
+                      </p>
+                      <div className="mt-3 rounded-lg bg-sky-50 p-3 text-sm text-gray-800">
+                        {feedback.answers[indicator.key]}
+                      </div>
+                      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-gray-500">
+                        Summary / Catatan Penerima{!submitted && " *"}
+                        {submitted ? (
+                          <p className="mt-2 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm normal-case tracking-normal text-gray-700">
+                            {summaries[key]}
+                          </p>
+                        ) : (
+                          <textarea
+                            rows={2}
+                            value={summaries[key] ?? ""}
+                            onChange={(event) => {
+                              setDirty(true)
+                              setSummaries({ ...summaries, [key]: event.target.value })
+                            }}
+                            className={inputClass + " mt-2 resize-none normal-case tracking-normal"}
+                            placeholder="Tuliskan ringkasan atau catatan pribadi atas feedback ini..."
+                          />
+                        )}
+                      </label>
+                    </div>
+                  )
+                })}
+              </div>
+            </article>
+          </>
+        )
+      )}
+      {!submitted && received > 0 && (
+        <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-white p-6 shadow-sm">
+          <div>
+            <h3 className="font-bold text-gray-900">Submit Feedback & Summary</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Feedback & Summary dikirim ke Approver 1 (lalu Approver 2) hanya setelah Anda menekan Submit.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <HoverTooltip text="Simpan Summary / Catatan Penerima yang sudah ditulis tanpa mengirim ke Approver.">
               <button
-                disabled={!approvalOpen || !allFilled}
-                onClick={submit}
-                className="mt-4 flex items-center gap-2 rounded-xl bg-[#1A284F] px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
+                type="button"
+                onClick={saveDraft}
+                className="flex items-center gap-2 rounded-xl border border-[#1A284F]/30 px-4 py-3 text-sm font-semibold text-[#1A284F] hover:bg-[#1A284F]/5"
+              >
+                <FileText className="h-4 w-4" />
+                Save Draft
+              </button>
+            </HoverTooltip>
+            <HoverTooltip text={submitTooltip} wide>
+              <button
+                type="button"
+                disabled={!canSubmit}
+                onClick={() => setConfirmSubmit(true)}
+                className="flex items-center gap-2 rounded-xl bg-[#1A284F] px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Send className="h-4 w-4" />
-                Submit Summary untuk Approval
+                Submit Feedback & Summary
+                <Info className="h-3.5 w-3.5 opacity-75" />
               </button>
-              {!approvalOpen && (
-                <p className="mt-2 text-xs text-amber-700">
-                  Submission summary tersedia selama periode aktif mulai nominasi hingga akhir summary & approval.
-                </p>
-              )}
-            </section>
-          )}
-        </>
+            </HoverTooltip>
+          </div>
+        </section>
+      )}
+      {confirmSubmit && (
+        <ConfirmDialog
+          title="Konfirmasi Submit Feedback & Summary"
+          message={
+            <>
+              Kirim seluruh feedback ({received}) beserta Summary / Catatan Penerima ke <strong>Approver 1</strong> untuk tindak
+              lanjut? Setelah disubmit, Summary tidak dapat diubah kembali.
+            </>
+          }
+          confirmLabel="Ya, Submit"
+          onCancel={() => setConfirmSubmit(false)}
+          onConfirm={submit}
+        />
       )}
     </section>
   )
@@ -1248,11 +1380,13 @@ function FollowUpSectionCard({
   approverName,
   items,
   accent,
+  finished,
 }: {
   title: string
   approverName: string
   items?: FeedbackFollowUp[]
   accent: "indigo" | "teal"
+  finished: boolean
 }) {
   const done = Boolean(items && items.length > 0)
   return (
@@ -1268,17 +1402,19 @@ function FollowUpSectionCard({
         </div>
         <span
           className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
-            done
+            done && finished
               ? "bg-emerald-100 text-emerald-900"
-              : "bg-amber-100 text-amber-900"
+              : done
+              ? "bg-yellow-100 text-yellow-900"
+              : "bg-gray-100 text-gray-700"
           }`}
         >
           <span
             className={`h-2 w-2 rounded-full ${
-              done ? "bg-emerald-500" : "bg-amber-500"
+              done && finished ? "bg-emerald-500" : done ? "bg-yellow-400" : "bg-gray-400"
             }`}
           />
-          {done ? "Sudah Ditindaklanjuti" : "Menunggu Tindak Lanjut"}
+          {done && finished ? "Tindak Lanjut Selesai" : done ? "Tindak Lanjut Berjalan" : "Menunggu Tindak Lanjut"}
         </span>
       </header>
       <div className="p-6">
@@ -1289,25 +1425,15 @@ function FollowUpSectionCard({
         ) : (
           <div className="space-y-4">
             {items!.map((item, idx) => (
-              <div
-                key={idx}
-                className="rounded-xl border border-gray-100 bg-slate-50/60 p-4 space-y-3"
-              >
+              <div key={idx} className="space-y-3 rounded-xl border border-gray-100 bg-slate-50/60 p-4">
                 <p className="text-xs font-bold uppercase tracking-wider text-[#1A284F]">
                   Rencana Tindak Lanjut #{idx + 1}
                 </p>
                 <div className="grid gap-3 md:grid-cols-2">
                   {FOLLOW_UP_COLUMNS.map((col) => (
-                    <div
-                      key={col}
-                      className="rounded-lg border border-gray-200/80 bg-white p-3"
-                    >
-                      <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">
-                        {col}
-                      </p>
-                      <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
-                        {item[col] || "—"}
-                      </p>
+                    <div key={col} className="rounded-lg border border-gray-200/80 bg-white p-3">
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">{col}</p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-gray-800">{item[col] || "—"}</p>
                     </div>
                   ))}
                 </div>
@@ -1320,30 +1446,260 @@ function FollowUpSectionCard({
   )
 }
 
+const OWNER_TEXT_FIELDS: Array<{ key: keyof Omit<OwnerFollowUpResult, "ref" | "status" | "evidence">; label: string }> = [
+  { key: "aspekPerbaikan", label: "Aspek Perbaikan" },
+  { key: "rencanaPengembangan", label: "Rencana Pengembangan" },
+  { key: "tindakLanjut", label: "Tindak Lanjut" },
+  { key: "evaluasi", label: "Evaluasi" },
+  { key: "indikatorKeberhasilan", label: "Indikator Keberhasilan" },
+]
+
+function OwnerResultSection({
+  workflow,
+  onDone,
+  onError,
+}: {
+  workflow: NonNullable<ReturnType<typeof getFeedbackSubmission>>
+  onDone: (message: string) => void
+  onError: (message: string) => void
+}) {
+  const [results, setResults] = useState<OwnerFollowUpResult[]>(() => buildOwnerResultTemplate(workflow))
+  const [uploading, setUploading] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState(false)
+  useEffect(() => {
+    setResults(buildOwnerResultTemplate(workflow))
+  }, [workflow.row.no, workflow.ownerResultStatus, workflow.ownerResultSubmittedAt])
+
+  const status = workflow.ownerResultStatus
+  const editable = !status || status === "Draft" || status === "Revision"
+  const missing = ownerResultMissingFields(results)
+  const lastRevision = [...(workflow.ownerResultHistory ?? [])].reverse().find((h) => h.status === "Revision")
+
+  const update = (ref: string, patch: Partial<OwnerFollowUpResult>) =>
+    setResults((prev) => prev.map((r) => (r.ref === ref ? { ...r, ...patch } : r)))
+
+  async function addEvidence(ref: string, files: FileList | null) {
+    if (!files || files.length === 0) return
+    setUploading(ref)
+    try {
+      const uploaded: OwnerEvidenceFile[] = []
+      for (const file of Array.from(files)) {
+        const rec = await uploadEvidenceFileToSupabase(file, {
+          employeeId: workflow.row.employeeId,
+          employeeName: workflow.row.name,
+          companyUnit: workflow.row.companyUnit,
+          division: workflow.row.division,
+          department: workflow.row.department,
+          position: workflow.row.position,
+          moduleType: "Inter-Department Feedback",
+          kpiName: "Hasil Tindak Lanjut",
+        })
+        if (rec.url) uploaded.push({ id: rec.id, name: rec.fileName, url: rec.url, mimeType: rec.mimeType, size: rec.fileSize })
+      }
+      setResults((prev) => prev.map((r) => (r.ref === ref ? { ...r, evidence: [...r.evidence, ...uploaded] } : r)))
+      toast.success(`${uploaded.length} evidence berhasil diunggah`)
+    } catch {
+      onError("Evidence gagal diunggah.")
+    } finally {
+      setUploading(null)
+    }
+  }
+
+  function submit() {
+    try {
+      submitOwnerFollowUpResults(workflow.row.employeeId, results)
+      setConfirm(false)
+      onDone("Hasil Tindak Lanjut Saya berhasil disubmit ke Approver untuk approval.")
+    } catch (failure) {
+      setConfirm(false)
+      onError(failure instanceof Error ? failure.message : "Hasil Tindak Lanjut gagal disubmit.")
+    }
+  }
+
+  const statusChip =
+    status === "Approved"
+      ? { label: "Disetujui", cls: "bg-emerald-100 text-emerald-800" }
+      : status === "Submitted"
+      ? { label: "Menunggu Approval", cls: "bg-sky-100 text-sky-800" }
+      : status === "Revision"
+      ? { label: "Perlu Revisi", cls: "bg-rose-100 text-rose-800" }
+      : { label: "Belum Disubmit", cls: "bg-yellow-100 text-yellow-900" }
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm">
+      <header className="flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-violet-50 to-indigo-50 px-6 py-4">
+        <div>
+          <h3 className="text-sm font-bold text-[#1A284F]">Hasil Tindak Lanjut Saya</h3>
+          <p className="text-xs text-gray-500">
+            Isi hasil pelaksanaan atas setiap tindak lanjut dari Approver, lalu Submit untuk approval.
+          </p>
+        </div>
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusChip.cls}`}>{statusChip.label}</span>
+      </header>
+      <div className="space-y-4 p-6">
+        {status === "Revision" && lastRevision && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+            <p className="font-semibold">Note Revisi · {lastRevision.approverName} ({lastRevision.date})</p>
+            <p className="mt-1 whitespace-pre-wrap">{lastRevision.note}</p>
+          </div>
+        )}
+        {(workflow.ownerResultHistory ?? []).filter((h) => h.status === "Approved" && h.note).map((h, i) => (
+          <div key={i} className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+            <p className="font-semibold">
+              Komentar Approval {h.role === "approver1" ? "Approver 1" : "Approver 2"} · {h.approverName} ({h.date})
+            </p>
+            <p className="mt-1 whitespace-pre-wrap">{h.note}</p>
+          </div>
+        ))}
+        {results.map((r, idx) => (
+          <div key={r.ref} className="space-y-3 rounded-xl border border-gray-100 bg-slate-50/60 p-4">
+            <p className="text-xs font-bold uppercase tracking-wider text-violet-700">
+              Hasil Tindak Lanjut #{idx + 1}
+              <span className="ml-2 font-medium normal-case tracking-normal text-gray-400">
+                (atas tindak lanjut {r.ref.startsWith("approver2") ? "Approver 2" : "Approver 1"})
+              </span>
+            </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              {OWNER_TEXT_FIELDS.map((f) => (
+                <label key={f.key} className="text-xs font-bold uppercase tracking-wide text-gray-500">
+                  {f.label}
+                  {editable && " *"}
+                  {editable ? (
+                    <textarea
+                      rows={2}
+                      value={r[f.key]}
+                      onChange={(e) => update(r.ref, { [f.key]: e.target.value } as Partial<OwnerFollowUpResult>)}
+                      className={inputClass + " mt-1 resize-none normal-case tracking-normal font-normal"}
+                    />
+                  ) : (
+                    <p className="mt-1 whitespace-pre-wrap rounded-lg bg-white p-3 text-sm font-normal normal-case tracking-normal text-gray-800">
+                      {r[f.key] || "—"}
+                    </p>
+                  )}
+                </label>
+              ))}
+              <label className="text-xs font-bold uppercase tracking-wide text-gray-500">
+                Status Tindak Lanjut
+                <select
+                  value={r.status}
+                  disabled={!editable}
+                  onChange={(e) => update(r.ref, { status: e.target.value as OwnerFollowUpResult["status"] })}
+                  className={inputClass + " mt-1 normal-case font-medium"}
+                >
+                  {OWNER_RESULT_STATUS_OPTIONS.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-gray-500">Evidence</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {r.evidence.map((ev) => (
+                  <span
+                    key={ev.id}
+                    className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-700"
+                  >
+                    <a href={ev.url} target="_blank" rel="noreferrer" className="max-w-[180px] truncate hover:underline">
+                      {ev.name}
+                    </a>
+                    {editable && (
+                      <button
+                        type="button"
+                        onClick={() => update(r.ref, { evidence: r.evidence.filter((e) => e.id !== ev.id) })}
+                        className="text-gray-400 hover:text-red-600"
+                        aria-label="Hapus evidence"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {r.evidence.length === 0 && !editable && <span className="text-xs text-gray-400">Tidak ada evidence</span>}
+                {editable && (
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-violet-300 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50">
+                    {uploading === r.ref ? "Mengunggah..." : "+ Upload Evidence"}
+                    <input
+                      type="file"
+                      multiple
+                      className="hidden"
+                      disabled={uploading !== null}
+                      onChange={(e) => {
+                        void addEvidence(r.ref, e.target.files)
+                        e.target.value = ""
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        {editable && (
+          <div className="flex justify-end">
+            <HoverTooltip
+              text={
+                missing.length
+                  ? `Lengkapi terlebih dahulu: ${missing.slice(0, 4).join(", ")}${missing.length > 4 ? ", ..." : ""}`
+                  : "Kirim Hasil Tindak Lanjut ke Approver untuk approval."
+              }
+              wide
+            >
+              <button
+                type="button"
+                disabled={missing.length > 0}
+                onClick={() => setConfirm(true)}
+                className="flex items-center gap-2 rounded-xl bg-[#1A284F] px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Send className="h-4 w-4" />
+                Submit
+              </button>
+            </HoverTooltip>
+          </div>
+        )}
+      </div>
+      {confirm && (
+        <ConfirmDialog
+          title="Konfirmasi Submit Hasil Tindak Lanjut"
+          message="Kirim Hasil Tindak Lanjut Saya ke Approver untuk di-approve? Data tidak dapat diubah kecuali Approver meminta revisi."
+          confirmLabel="Ya, Submit"
+          onCancel={() => setConfirm(false)}
+          onConfirm={submit}
+        />
+      )}
+    </section>
+  )
+}
+
 function FollowUpResultPanel({
   workflow,
   ap1Name,
   ap2Name,
-  hasSecondApprover,
+  onDone,
+  onError,
 }: {
   workflow: ReturnType<typeof getFeedbackSubmission>
   ap1Name: string
   ap2Name: string
-  hasSecondApprover: boolean
+  onDone: (message: string) => void
+  onError: (message: string) => void
 }) {
   if (!workflow || !workflow.summarySubmittedAt) {
     return (
       <section className="rounded-2xl border border-dashed bg-white p-10 text-center">
         <ClipboardCheck className="mx-auto h-8 w-8 text-gray-300" />
-        <h2 className="mt-3 font-bold text-gray-700">
-          Tindak Lanjut Belum Tersedia
-        </h2>
+        <h2 className="mt-3 font-bold text-gray-700">Tindak Lanjut Belum Tersedia</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Hasil tindak lanjut dari Approver 1 dan Approver 2 akan muncul setelah Anda melengkapi dan men-submit Summary pada tab Feedback Diterima.
+          Hasil tindak lanjut dari Approver akan muncul setelah Anda men-submit Feedback & Summary pada tab Feedback Diterima.
         </p>
       </section>
     )
   }
+  const roles = requiredFollowUpRoles(workflow)
+  const finished = workflow.ownerResultStatus === "Approved"
+  const complete = isFeedbackFollowUpComplete(workflow)
   return (
     <section className="space-y-5">
       <FollowUpSectionCard
@@ -1351,14 +1707,23 @@ function FollowUpResultPanel({
         approverName={ap1Name}
         items={workflow.followUps.approver1}
         accent="indigo"
+        finished={finished}
       />
-      {hasSecondApprover && (
+      {roles.includes("approver2") && (
         <FollowUpSectionCard
           title="Tindak Lanjut Approver 2"
           approverName={ap2Name}
           items={workflow.followUps.approver2}
           accent="teal"
+          finished={finished}
         />
+      )}
+      {complete ? (
+        <OwnerResultSection workflow={workflow} onDone={onDone} onError={onError} />
+      ) : (
+        <p className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-900">
+          Section <strong>Hasil Tindak Lanjut Saya</strong> akan terbuka setelah seluruh tindak lanjut Approver diterima.
+        </p>
       )}
     </section>
   )

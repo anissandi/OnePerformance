@@ -1,21 +1,38 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
-import { FileText, Download, BookOpen, Target, TrendingUp, Lightbulb, ClipboardList, FolderKanban, Users, ChevronDown, ChevronUp, Info, Search } from "lucide-react";
+import {
+  FileText, Download, BookOpen, Target, TrendingUp, Lightbulb, ClipboardList, FolderKanban, Users, ChevronDown,
+  ChevronUp, Info, Search, Plus, Pencil, Send, EyeOff, Trash2, Video, Paperclip, MessageSquare, Network, Layers, X,
+} from "lucide-react";
+import { toast } from "sonner";
+import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { isAdminOrHrIcfRole, useAuthStore } from "../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DocTab =
   | "Overview"
   | "KPI"
+  | "RCA"
   | "SMART Goals"
-  | "Appraisal Form"
-  | "Project Outside Job Scope"
+  | "Appraisals Form"
   | "Managerial Skill"
-  | "RCA";
+  | "Project Outside Job Scope"
+  | "Inter-Department Feedback"
+  | "Management Interview"
+  | "Other";
 
 interface DocSection {
   title: string;
   content: string;
+}
+
+interface DocAttachment {
+  id: string;
+  name: string;
+  url: string;
+  mimeType: string;
+  kind: "file" | "video";
 }
 
 interface DocEntry {
@@ -24,6 +41,10 @@ interface DocEntry {
   type: "Guide" | "Template" | "Reference" | "FAQ";
   description: string;
   sections: DocSection[];
+  attachments?: DocAttachment[];
+  status?: "Draft" | "Published";
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 // ─── Tab config ───────────────────────────────────────────────────────────────
@@ -31,16 +52,31 @@ interface DocEntry {
 const TABS: { id: DocTab; icon: React.ElementType; color: string; bg: string }[] = [
   { id: "Overview",                   icon: BookOpen,      color: "text-[#1A284F]", bg: "bg-[#1A284F]/10" },
   { id: "KPI",                        icon: TrendingUp,    color: "text-blue-700",  bg: "bg-blue-50" },
-  { id: "SMART Goals",                icon: Lightbulb,     color: "text-amber-700", bg: "bg-amber-50" },
-  { id: "Appraisal Form",             icon: ClipboardList, color: "text-green-700", bg: "bg-green-50" },
-  { id: "Project Outside Job Scope",  icon: FolderKanban,  color: "text-teal-700",  bg: "bg-teal-50" },
-  { id: "Managerial Skill",           icon: Users,         color: "text-purple-700",bg: "bg-purple-50" },
   { id: "RCA",                        icon: Target,        color: "text-rose-700",  bg: "bg-rose-50" },
+  { id: "SMART Goals",                icon: Lightbulb,     color: "text-amber-700", bg: "bg-amber-50" },
+  { id: "Appraisals Form",            icon: ClipboardList, color: "text-green-700", bg: "bg-green-50" },
+  { id: "Managerial Skill",           icon: Users,         color: "text-purple-700",bg: "bg-purple-50" },
+  { id: "Project Outside Job Scope",  icon: FolderKanban,  color: "text-teal-700",  bg: "bg-teal-50" },
+  { id: "Inter-Department Feedback",  icon: Network,       color: "text-indigo-700",bg: "bg-indigo-50" },
+  { id: "Management Interview",       icon: MessageSquare, color: "text-cyan-700",  bg: "bg-cyan-50" },
+  { id: "Other",                      icon: Layers,        color: "text-gray-700",  bg: "bg-gray-100" },
 ];
+
+const DOCS_KEY = "pa_documents_v1";
+type DocsMap = Partial<Record<DocTab, DocEntry[]>>;
+
+function loadDocs(): DocsMap {
+  const saved = loadPersistedState<DocsMap | null>(DOCS_KEY, null);
+  if (saved && typeof saved === "object") return saved;
+  // Data bawaan dianggap sudah Published
+  const seed: DocsMap = {};
+  for (const [k, list] of Object.entries(DEFAULT_DOCS)) seed[k as DocTab] = (list ?? []).map((d) => ({ ...d, status: "Published" }));
+  return seed;
+}
 
 // ─── Document data ────────────────────────────────────────────────────────────
 
-const DOCS: Record<DocTab, DocEntry[]> = {
+const DEFAULT_DOCS: Partial<Record<DocTab, DocEntry[]>> = {
   Overview: [
     {
       id: "ov-1",
@@ -190,7 +226,7 @@ const DOCS: Record<DocTab, DocEntry[]> = {
     },
   ],
 
-  "Appraisal Form": [
+  "Appraisals Form": [
     {
       id: "af-1",
       title: "Appraisal Form — Behavioural Competency Guide",
@@ -366,7 +402,55 @@ const TYPE_STYLE: Record<DocEntry["type"], string> = {
   FAQ:       "bg-purple-600 text-white",
 };
 
-function DocCard({ doc }: { doc: DocEntry }) {
+function youtubeEmbed(url: string): string | null {
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([\w-]{6,})/);
+  return m ? `https://www.youtube.com/embed/${m[1]}` : null;
+}
+
+function downloadDoc(doc: DocEntry) {
+  const text = [doc.title, "", doc.description, "", ...doc.sections.flatMap((s) => [`## ${s.title}`, s.content, ""])].join("\n");
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${doc.title.replace(/[^\w\- ]+/g, "").trim() || "document"}.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function AttachmentView({ att }: { att: DocAttachment }) {
+  if (att.kind === "video") {
+    const emb = youtubeEmbed(att.url);
+    return emb ? (
+      <iframe src={emb} title={att.name} className="aspect-video w-full rounded-xl border" allowFullScreen />
+    ) : (
+      <a href={att.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-[#1A284F] underline">
+        <Video className="h-4 w-4" /> {att.name || att.url}
+      </a>
+    );
+  }
+  const isImg = att.mimeType.startsWith("image/");
+  const isPdf = att.mimeType === "application/pdf";
+  return (
+    <div className="overflow-hidden rounded-xl border border-gray-200">
+      {isImg && <img src={att.url} alt={att.name} className="max-h-96 w-full bg-gray-50 object-contain" />}
+      {isPdf && <iframe src={att.url} title={att.name} className="h-96 w-full" />}
+      <div className="flex items-center justify-between gap-2 bg-gray-50 px-3 py-2 text-xs">
+        <span className="truncate font-medium text-gray-700">{att.name}</span>
+        <a href={att.url} download={att.name} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-semibold text-[#1A284F] hover:underline">
+          <Download className="h-3.5 w-3.5" /> Download
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function DocCard({ doc, canManage, onEdit, onTogglePublish, onDelete }: {
+  doc: DocEntry;
+  canManage: boolean;
+  onEdit: () => void;
+  onTogglePublish: () => void;
+  onDelete: () => void;
+}) {
   const [openSections, setOpenSections] = useState<Set<number>>(new Set([0]));
   const toggle = (i: number) =>
     setOpenSections((prev) => {
@@ -374,42 +458,44 @@ function DocCard({ doc }: { doc: DocEntry }) {
       next.has(i) ? next.delete(i) : next.add(i);
       return next;
     });
+  const published = doc.status !== "Draft";
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      {/* Card header */}
       <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between gap-4">
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${TYPE_STYLE[doc.type]}`}>
-              {doc.type}
-            </span>
+            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${TYPE_STYLE[doc.type]}`}>{doc.type}</span>
+            {canManage && (
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${published ? "bg-emerald-50 text-emerald-700" : "bg-yellow-50 text-yellow-800"}`}>
+                {published ? "Published" : "Draft"}
+              </span>
+            )}
           </div>
           <h3 className="font-bold text-[#1A284F] text-base leading-snug">{doc.title}</h3>
           <p className="text-xs text-gray-500 leading-relaxed">{doc.description}</p>
         </div>
-        <button
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
-          onClick={() => {}}
-          title="Download (demo)"
-        >
-          <Download className="w-3.5 h-3.5" />
-          Download
-        </button>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          {canManage && (
+            <>
+              <button onClick={onEdit} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50"><Pencil className="w-3.5 h-3.5" /> Edit</button>
+              <button onClick={onTogglePublish} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold ${published ? "border border-gray-200 text-gray-600 hover:bg-gray-50" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>
+                {published ? <><EyeOff className="w-3.5 h-3.5" /> Unpublish</> : <><Send className="w-3.5 h-3.5" /> Publish</>}
+              </button>
+              <button onClick={onDelete} title="Hapus" className="rounded-lg border border-gray-200 px-2 text-gray-400 hover:bg-red-50 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
+            </>
+          )}
+          <button className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50" onClick={() => downloadDoc(doc)}>
+            <Download className="w-3.5 h-3.5" /> Download
+          </button>
+        </div>
       </div>
-
-      {/* Sections */}
       <div className="divide-y divide-gray-50">
         {doc.sections.map((sec, i) => (
           <div key={i}>
-            <button
-              onClick={() => toggle(i)}
-              className="w-full flex items-center justify-between px-6 py-3 text-left hover:bg-gray-50 transition-colors"
-            >
+            <button onClick={() => toggle(i)} className="w-full flex items-center justify-between px-6 py-3 text-left hover:bg-gray-50 transition-colors">
               <span className="text-sm font-semibold text-gray-800">{sec.title}</span>
-              {openSections.has(i)
-                ? <ChevronUp className="w-4 h-4 text-gray-400 shrink-0" />
-                : <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />}
+              {openSections.has(i) ? <ChevronUp className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />}
             </button>
             {openSections.has(i) && (
               <div className="px-6 pb-4">
@@ -418,6 +504,116 @@ function DocCard({ doc }: { doc: DocEntry }) {
             )}
           </div>
         ))}
+      </div>
+      {doc.attachments && doc.attachments.length > 0 && (
+        <div className="grid gap-3 border-t border-gray-100 p-5 md:grid-cols-2">
+          {doc.attachments.map((a) => <AttachmentView key={a.id} att={a} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Editor (Add New / Edit) ─────────────────────────────────────────────────
+
+function DocEditor({ initial, tab, onCancel, onSave }: {
+  initial: DocEntry | null;
+  tab: DocTab;
+  onCancel: () => void;
+  onSave: (doc: DocEntry, publish: boolean) => void;
+}) {
+  const [doc, setDoc] = useState<DocEntry>(
+    () => initial ?? { id: `doc-${Date.now()}`, title: "", type: "Guide", description: "", sections: [{ title: "", content: "" }], attachments: [], status: "Draft" },
+  );
+  const [videoUrl, setVideoUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const set = (patch: Partial<DocEntry>) => setDoc((d) => ({ ...d, ...patch }));
+  const setSec = (i: number, patch: Partial<DocSection>) => set({ sections: doc.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) });
+  const valid = doc.title.trim() && doc.sections.every((s) => s.title.trim());
+
+  async function addFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    const added: DocAttachment[] = [];
+    for (const f of Array.from(files)) {
+      if (!/^(image\/jpe?g|image\/png|application\/pdf)$/.test(f.type)) {
+        toast.error(`${f.name}: hanya JPG, PNG, atau PDF`);
+        continue;
+      }
+      const rec = await uploadEvidenceFileToSupabase(f, { moduleType: "Documents", kpiName: tab });
+      if (rec.url) added.push({ id: rec.id, name: f.name, url: rec.url, mimeType: f.type, kind: "file" });
+    }
+    set({ attachments: [...(doc.attachments ?? []), ...added] });
+    setUploading(false);
+  }
+
+  const input = "w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#1A284F]";
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4" onClick={onCancel}>
+      <div className="my-8 w-full max-w-3xl space-y-4 rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-[#1A284F]">{initial ? "Edit Document" : "Add New Document"} · {tab}</h3>
+          <button onClick={onCancel} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[160px_1fr]">
+          <label className="text-xs font-bold text-gray-500">Tag
+            <select value={doc.type} onChange={(e) => set({ type: e.target.value as DocEntry["type"] })} className={input + " mt-1"}>
+              {(["Guide", "Template", "Reference", "FAQ"] as const).map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-gray-500">Judul Section *
+            <input value={doc.title} onChange={(e) => set({ title: e.target.value })} className={input + " mt-1"} />
+          </label>
+        </div>
+        <label className="block text-xs font-bold text-gray-500">Note Judul Section
+          <textarea value={doc.description} onChange={(e) => set({ description: e.target.value })} rows={2} className={input + " mt-1 resize-none"} />
+        </label>
+        <div className="space-y-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-[#1A284F]">Sub Section (collapsible)</p>
+          {doc.sections.map((sec, i) => (
+            <div key={i} className="space-y-2 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+              <div className="flex gap-2">
+                <input value={sec.title} onChange={(e) => setSec(i, { title: e.target.value })} placeholder="Judul Sub Section *" className={input} />
+                {doc.sections.length > 1 && (
+                  <button onClick={() => set({ sections: doc.sections.filter((_, j) => j !== i) })} className="rounded-lg px-2 text-gray-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                )}
+              </div>
+              <textarea value={sec.content} onChange={(e) => setSec(i, { content: e.target.value })} placeholder="Isi kalimat…" rows={4} className={input + " resize-y"} />
+            </div>
+          ))}
+          <button onClick={() => set({ sections: [...doc.sections, { title: "", content: "" }] })} className="inline-flex items-center gap-1 text-xs font-semibold text-[#1A284F]"><Plus className="h-3.5 w-3.5" /> Tambah Sub Section</button>
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs font-bold uppercase tracking-wide text-[#1A284F]">Add Document (JPG / PNG / PDF) & Video</p>
+          <div className="flex flex-wrap gap-2">
+            {(doc.attachments ?? []).map((a) => (
+              <span key={a.id} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1 text-xs">
+                {a.kind === "video" ? <Video className="h-3 w-3" /> : <Paperclip className="h-3 w-3" />}
+                <span className="max-w-[200px] truncate">{a.name}</span>
+                <button onClick={() => set({ attachments: (doc.attachments ?? []).filter((x) => x.id !== a.id) })} className="text-gray-400 hover:text-red-600"><X className="h-3 w-3" /></button>
+              </span>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-[#1A284F]/40 px-3 py-2 text-xs font-semibold text-[#1A284F] hover:bg-[#1A284F]/5">
+              <Paperclip className="h-3.5 w-3.5" /> {uploading ? "Mengunggah…" : "Upload File"}
+              <input type="file" multiple accept=".jpg,.jpeg,.png,.pdf" className="hidden" disabled={uploading} onChange={(e) => { void addFiles(e.target.files); e.target.value = ""; }} />
+            </label>
+            <input value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="Link video (YouTube / URL)" className={input + " max-w-xs"} />
+            <button
+              disabled={!/^https?:\/\//.test(videoUrl)}
+              onClick={() => { set({ attachments: [...(doc.attachments ?? []), { id: `vid-${Date.now()}`, name: videoUrl, url: videoUrl, mimeType: "video", kind: "video" }] }); setVideoUrl(""); }}
+              className="rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40"
+            >
+              + Add Video
+            </button>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t pt-4">
+          <button onClick={onCancel} className="rounded-xl border px-4 py-2 text-sm">Batal</button>
+          <button disabled={!valid} onClick={() => onSave(doc, false)} className="rounded-xl border border-[#1A284F] px-4 py-2 text-sm font-semibold text-[#1A284F] disabled:opacity-40">Simpan Draft</button>
+          <button disabled={!valid} onClick={() => onSave(doc, true)} className="rounded-xl bg-[#1A284F] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">Simpan & Publish</button>
+        </div>
       </div>
     </div>
   );
@@ -428,58 +624,70 @@ function DocCard({ doc }: { doc: DocEntry }) {
 export function DocumentsPage() {
   const [activeTab, setActiveTab] = useRouteTab<DocTab>(TABS.map((t) => t.id), "Overview");
   const [search, setSearch] = useState("");
+  const { activeUser } = useAuthStore();
+  const canManage = isAdminOrHrIcfRole(activeUser.role);
+  const [docsMap, setDocsMap] = useState<DocsMap>(() => loadDocs());
+  const [editing, setEditing] = useState<{ doc: DocEntry | null } | null>(null);
+  useEffect(() => {
+    const r = () => setDocsMap(loadDocs());
+    window.addEventListener("pa-db-hydrated", r);
+    return () => window.removeEventListener("pa-db-hydrated", r);
+  }, []);
 
-  const docs = DOCS[activeTab] ?? [];
-  const filtered = search.trim()
-    ? docs.filter(
-        (d) =>
-          d.title.toLowerCase().includes(search.toLowerCase()) ||
-          d.description.toLowerCase().includes(search.toLowerCase()) ||
-          d.sections.some((s) => s.title.toLowerCase().includes(search.toLowerCase()) || s.content.toLowerCase().includes(search.toLowerCase()))
-      )
+  function persist(next: DocsMap, desc: string) {
+    setDocsMap(next);
+    savePersistedState(DOCS_KEY, next, {
+      kind: "master-catalog",
+      catalogKey: DOCS_KEY,
+      data: next,
+      audit: { userId: activeUser.employeeId, userName: activeUser.name, action: "Update", module: "Documents", subModule: activeTab, description: desc },
+    });
+  }
+  const list = docsMap[activeTab] ?? [];
+  const upsert = (doc: DocEntry, desc: string) => {
+    const exists = list.some((d) => d.id === doc.id);
+    persist({ ...docsMap, [activeTab]: exists ? list.map((d) => (d.id === doc.id ? doc : d)) : [...list, doc] }, desc);
+  };
+
+  const docs = canManage ? list : list.filter((d) => d.status !== "Draft");
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? docs.filter((d) => d.title.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || d.sections.some((s) => s.title.toLowerCase().includes(q) || s.content.toLowerCase().includes(q)))
     : docs;
 
   const activeTabMeta = TABS.find((t) => t.id === activeTab)!;
 
   return (
     <div className="w-full flex flex-col gap-6">
-      {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">Documents</h1>
           <p className="text-gray-500 text-sm">Performance appraisal filling guides, templates, and references</p>
         </div>
-        {/* Search */}
-        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm w-72">
-          <Search className="w-4 h-4 text-gray-400 shrink-0" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search documents…"
-            className="flex-1 text-sm outline-none bg-transparent text-gray-700 placeholder-gray-400"
-          />
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm w-72">
+            <Search className="w-4 h-4 text-gray-400 shrink-0" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search documents…" className="flex-1 text-sm outline-none bg-transparent text-gray-700 placeholder-gray-400" />
+          </div>
+          {canManage && (
+            <button onClick={() => setEditing({ doc: null })} className="flex items-center gap-1.5 rounded-xl bg-[#1A284F] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#131d3b]">
+              <Plus className="h-4 w-4" /> Add New
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Info banner */}
       <div className="flex items-start gap-3 px-4 py-3 bg-blue-50 border border-blue-100 rounded-xl text-sm text-blue-700">
         <Info className="w-4 h-4 mt-0.5 shrink-0" />
-        <span>
-          These documents are official guides for completing each module of the 2026 Performance Appraisal. Read the relevant guide before filling any section.
-        </span>
+        <span>These documents are official guides for completing each module of the 2026 Performance Appraisal. Read the relevant guide before filling any section.</span>
       </div>
 
-      {/* Tab bar */}
       <div className="flex gap-1 flex-wrap border-b border-gray-200 pb-0">
         {TABS.map(({ id, icon: Icon, color, bg }) => (
           <button
             key={id}
             onClick={() => { setActiveTab(id); setSearch(""); }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-t-xl text-xs font-semibold transition-all border-b-2 ${
-              activeTab === id
-                ? `border-[#1A284F] ${bg} ${color}`
-                : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50"
-            }`}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-t-xl text-xs font-semibold transition-all border-b-2 ${activeTab === id ? `border-[#1A284F] ${bg} ${color}` : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50"}`}
           >
             <Icon className="w-3.5 h-3.5" />
             {id}
@@ -487,7 +695,6 @@ export function DocumentsPage() {
         ))}
       </div>
 
-      {/* Tab label */}
       <div className={`flex items-center gap-2 px-4 py-2.5 rounded-xl w-fit ${activeTabMeta.bg}`}>
         <activeTabMeta.icon className={`w-4 h-4 ${activeTabMeta.color}`} />
         <span className={`text-xs font-bold uppercase tracking-wide ${activeTabMeta.color}`}>
@@ -495,19 +702,46 @@ export function DocumentsPage() {
         </span>
       </div>
 
-      {/* Document cards */}
       {filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-2xl border border-dashed border-gray-300">
           <FileText className="w-10 h-10 text-gray-300 mb-3" />
           <p className="text-sm font-semibold text-gray-400 mb-1">No documents found</p>
-          <p className="text-xs text-gray-400">Try a different search term or select another tab.</p>
+          <p className="text-xs text-gray-400">{canManage ? "Klik Add New untuk menambahkan dokumen pada tab ini." : "Try a different search term or select another tab."}</p>
         </div>
       ) : (
         <div className="flex flex-col gap-5">
           {filtered.map((doc) => (
-            <DocCard key={doc.id} doc={doc} />
+            <DocCard
+              key={doc.id}
+              doc={doc}
+              canManage={canManage}
+              onEdit={() => setEditing({ doc })}
+              onTogglePublish={() => {
+                const next = { ...doc, status: doc.status === "Draft" ? "Published" as const : "Draft" as const };
+                upsert(next, `${next.status === "Published" ? "Publish" : "Unpublish"} document "${doc.title}"`);
+                toast.success(next.status === "Published" ? "Dokumen dipublish" : "Dokumen dikembalikan ke Draft");
+              }}
+              onDelete={() => {
+                if (!window.confirm(`Hapus dokumen "${doc.title}"?`)) return;
+                persist({ ...docsMap, [activeTab]: list.filter((d) => d.id !== doc.id) }, `Delete document "${doc.title}"`);
+              }}
+            />
           ))}
         </div>
+      )}
+
+      {editing && (
+        <DocEditor
+          initial={editing.doc}
+          tab={activeTab}
+          onCancel={() => setEditing(null)}
+          onSave={(doc, publish) => {
+            const next: DocEntry = { ...doc, status: publish ? "Published" : doc.status ?? "Draft", updatedAt: new Date().toISOString(), updatedBy: activeUser.name };
+            upsert(next, `${editing.doc ? "Edit" : "Add"} document "${doc.title}"${publish ? " (Published)" : ""}`);
+            toast.success(publish ? "Dokumen tersimpan & dipublish" : "Dokumen tersimpan sebagai Draft");
+            setEditing(null);
+          }}
+        />
       )}
     </div>
   );

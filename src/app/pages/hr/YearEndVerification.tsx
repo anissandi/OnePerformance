@@ -4,7 +4,7 @@ import { CheckCircle2, XCircle, Clock, Users, AlertTriangle, Bell, BellRing, Use
 import { useNavigate } from "react-router";
 import { loadYearEndState, saveYearEndState, canProceedToInterview } from "../shared/yearEndWorkflowStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
-import { loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
+import { isFeedbackFollowUpComplete, loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
 import { isExcludedFromVerification, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 import { evaluateEmployeeKPITracking } from "../employee/KPIPage";
@@ -357,7 +357,7 @@ export function YearEndVerification() {
       updated.projectOJS = "pending";
     }
     const received = feedback.find((entry) => normalizeEmployeeId(entry.row.employeeId) === normalizeEmployeeId(employee.id));
-    if (received && updated.interDept !== "na") updated.interDept = received.followUps.approver1?.length && received.followUps.approver2?.length ? "complete" : "pending";
+    if (received && updated.interDept !== "na") updated.interDept = isFeedbackFollowUpComplete(received) ? "complete" : "pending";
     const statuses = [updated.kpi, updated.smartGoals, updated.appraisalForm, updated.managerialSkill, updated.projectOJS, updated.interDept];
     updated.overall = statuses.includes("incomplete") ? "Incomplete" : statuses.includes("pending") ? "Pending" : "Complete";
     return updated;

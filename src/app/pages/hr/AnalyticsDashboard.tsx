@@ -52,13 +52,16 @@ import {
   shouldBypassCheckerForSubmission,
   useAuthStore,
   type ManagedUser,
+  getActiveUser as getActiveUserForScope,
+  resolveUserAllowedModules as resolveAllowedModulesForScope,
+  resolveUserAuthorityLevel as resolveAuthorityForScope,
 } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "./settings/AccessManagement";
 import { evaluateEmployeeKPITracking } from "../employee/KPIPage";
-import { loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
+import { isFeedbackFollowUpComplete, loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
 import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 const MONTH_NAME_TO_MM: Record<string, string> = {
@@ -186,7 +189,7 @@ function computeModuleStatsForUsers(
           s.row.employeeId.toLowerCase() === u.employeeId.toLowerCase(),
       );
       const fbDone = Boolean(
-        (fb?.followUps.approver1?.length && fb?.followUps.approver2?.length) ||
+        (fb && isFeedbackFollowUpComplete(fb)) ||
           (rec &&
             (rec.decisions.approver2?.status === "Approved" ||
               rec.decisions.approver2?.status?.startsWith("Assessed"))),
@@ -316,7 +319,7 @@ function ModuleCompletionOverview({
         onClick={() => setCollapsed((c) => !c)}
         className={`w-full flex items-center gap-3 text-left transition-all ${collapsed ? "" : "pb-3 border-b border-gray-100 mb-5"}`}
       >
-        <div className="w-8 h-8 rounded-lg bg-[#1A284F]/8 flex items-center justify-center text-[#1A284F]">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-sm shadow-indigo-200">
           <Layers className="w-4 h-4" />
         </div>
         <div className="flex-1">
@@ -617,7 +620,7 @@ function MultiModuleDivisionSection({
         aria-expanded={expanded}
         className="w-full text-left flex items-start gap-3 pb-3.5 border-b border-gray-100 mb-4"
       >
-        <div className="w-9 h-9 rounded-xl bg-cyan-50 text-teal-600 flex items-center justify-center shrink-0">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-400 to-cyan-600 text-white shadow-sm shadow-teal-200 flex items-center justify-center shrink-0">
           <BarChart3 className="w-4 h-4" />
         </div>
         <div className="min-w-0 flex-1">
@@ -633,9 +636,9 @@ function MultiModuleDivisionSection({
 
       <div key={`mm-${motionKey}`} className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1 items-stretch pa-card-motion">
         {/* Left: Module Completion Spider Diagram (klik label/titik untuk filter divisi) */}
-        <div className="flex flex-col">
+        <div className="flex flex-col rounded-xl bg-gradient-to-br from-sky-50/80 via-white to-violet-50/70 p-2.5 ring-1 ring-sky-100">
           <div className="flex items-center justify-between gap-2 mb-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">MODULE COMPLETION</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-sky-700">MODULE COMPLETION</p>
             {selectedModule && (
               <button
                 type="button"
@@ -696,9 +699,9 @@ function MultiModuleDivisionSection({
                 <Radar
                   name="Completion"
                   dataKey="pct"
-                  stroke="#0284C7"
+                  stroke="#7C3AED"
                   strokeWidth={2}
-                  fill="#0EA5E9"
+                  fill="#A78BFA"
                   fillOpacity={0.22}
                   dot={(props: {
                     cx?: number;
@@ -1185,7 +1188,7 @@ function ScoreGradeDistributionDashboard({
         onClick={() => setCollapsed((c) => !c)}
         className={`w-full flex items-center gap-3 text-left transition-all ${collapsed ? "" : "pb-3 border-b border-gray-100 mb-6"}`}
       >
-        <div className="w-8 h-8 rounded-lg bg-[#1A284F]/8 flex items-center justify-center text-[#1A284F]">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-rose-500 flex items-center justify-center text-white shadow-sm shadow-amber-200">
           <Award className="w-4 h-4" />
         </div>
         <div className="flex-1">
@@ -1389,7 +1392,32 @@ function FilterSelect({ label, options, value, onChange, highlight }: { label: s
 export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const { t } = useLanguage();
   const { lockedUnits: authLockedUnits } = useAuthStore();
-  const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
+  // Scope Supervisor & HR Unit: terkunci pada Unit Usaha, Divisi, Departemen milik user; modul sesuai Groupings
+  const scopeUser = getActiveUserForScope();
+  const isScopedRole = scopeUser.role === "Supervisor" || scopeUser.role === "HR Unit";
+  const scopeLevel = isScopedRole ? resolveAuthorityForScope(scopeUser) : null;
+  const lockDivision = isScopedRole && scopeLevel !== "hr_unit" && scopeLevel !== "gm_unit" ? scopeUser.division : "";
+  const lockDepartment =
+    isScopedRole && (scopeLevel === "department" || scopeLevel === "bagian" || scopeLevel === "seksi" || scopeLevel === "operational")
+      ? scopeUser.department
+      : "";
+  const effectiveLockedUnits = isScopedRole ? [scopeUser.company] : lockedUnits ?? authLockedUnits;
+  const moduleOptions = useMemo(() => {
+    if (!isScopedRole) return filterOptions.module;
+    const allowed = resolveAllowedModulesForScope(scopeUser);
+    const map: Record<string, string[]> = {
+      "KPI (Setting/Measurement)": ["KPI (Setting)", "KPI (Tracking)"],
+      "SMART Goals (Setting/Measurement)": ["SMART Goals (Setting)", "SMART Goals (Tracking)"],
+      "Appraisals Form": ["Appraisal Form"],
+      "Project Outside Job Scope": ["Project OJS"],
+      "Managerial Skill": ["Managerial Skill"],
+      "Management Interview": ["Management Interview"],
+      "Inter-Departement Feedback": ["Inter-Department Feedback"],
+    };
+    const opts = new Set(allowed.flatMap((m) => map[m] ?? []));
+    return ["All Modules", ...filterOptions.module.filter((m) => opts.has(m))];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isScopedRole, scopeUser.employeeId, scopeUser.groupings]);
   const defaultCompanyUnit =
     effectiveLockedUnits && effectiveLockedUnits.length === 1
       ? effectiveLockedUnits[0]
@@ -1407,8 +1435,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const toggleCard = (id: "timeline" | "multi" | "approval") => setExpandedCard((cur) => (cur === id ? null : id));
   const cardSpan = (id: "timeline" | "multi" | "approval") => (expandedCard === id ? "xl:col-span-3 xl:order-first" : "");
   const [companyUnit, setCompanyUnit] = useState(() => defaultCompanyUnit);
-  const [division, setDivision] = useState("All Divisions");
-  const [department, setDepartment] = useState("All Departments");
+  const [division, setDivision] = useState(() => lockDivision || "All Divisions");
+  const [department, setDepartment] = useState(() => lockDepartment || "All Departments");
   const [module, setModule] = useState("All Modules");
   const [year, setYear] = useState("2026");
   const [month, setMonth] = useState("All Months");
@@ -1417,8 +1445,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   useEffect(() => {
     if (!companyUnitOptions.includes(companyUnit)) {
       setCompanyUnit(defaultCompanyUnit);
-      setDivision("All Divisions");
-      setDepartment("All Departments");
+      setDivision(lockDivision || "All Divisions");
+      setDepartment(lockDepartment || "All Departments");
     }
   }, [companyUnitOptions, companyUnit, defaultCompanyUnit]);
 
@@ -1464,6 +1492,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       ? allManagedActiveUsers
       : allManagedActiveUsers.filter((u) => u.company === companyUnit);
     const divs = Array.from(new Set(pool.map((u) => (u.division || "").trim()).filter(Boolean))).sort();
+    if (lockDivision) return [lockDivision];
     return ["All Divisions", ...divs];
   }, [allManagedActiveUsers, companyUnit]);
 
@@ -1474,6 +1503,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         (division === "All Divisions" || u.division === division),
     );
     const depts = Array.from(new Set(pool.map((u) => (u.department || "").trim()).filter(Boolean))).sort();
+    if (lockDepartment) return [lockDepartment];
     return ["All Departments", ...depts];
   }, [allManagedActiveUsers, companyUnit, division]);
 
@@ -1623,8 +1653,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             value={companyUnit}
             onChange={(val) => {
               setCompanyUnit(val);
-              setDivision("All Divisions");
-              setDepartment("All Departments");
+              setDivision(lockDivision || "All Divisions");
+              setDepartment(lockDepartment || "All Departments");
             }}
           />
           <FilterSelect
@@ -1633,7 +1663,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             value={division}
             onChange={(val) => {
               setDivision(val);
-              setDepartment("All Departments");
+              setDepartment(lockDepartment || "All Departments");
             }}
           />
           <FilterSelect
@@ -1642,7 +1672,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             value={department}
             onChange={setDepartment}
           />
-          <FilterSelect label={t("Module")}       options={filterOptions.module}       value={module}       onChange={setModule} highlight />
+          <FilterSelect label={t("Module")}       options={moduleOptions}       value={module}       onChange={setModule} highlight />
           <FilterSelect label={t("Year")}         options={filterOptions.year}         value={year}         onChange={setYear} />
           <FilterSelect label={t("Month")}        options={filterOptions.month}        value={month}        onChange={setMonth} />
         </div>
@@ -1665,8 +1695,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                 type="button"
                 onClick={() => {
                   setCompanyUnit(defaultCompanyUnit);
-                  setDivision("All Divisions");
-                  setDepartment("All Departments");
+                  setDivision(lockDivision || "All Divisions");
+                  setDepartment(lockDepartment || "All Departments");
                   setModule("All Modules");
                   setYear("2026");
                   setMonth("All Months");
@@ -1759,7 +1789,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             aria-expanded={expandedCard === "timeline"}
             className="w-full flex items-start gap-3 text-left pb-3.5 border-b border-gray-100 mb-4"
           >
-            <div className="w-9 h-9 rounded-xl bg-[#1A284F]/8 flex items-center justify-center text-[#1A284F] shrink-0">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white shadow-sm shadow-violet-200 shrink-0">
               <Clock className="w-4 h-4" />
             </div>
             <div className="flex-1 min-w-0">

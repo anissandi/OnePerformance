@@ -1,4 +1,5 @@
 // @refresh reset
+import { getKpiMonthVisuals, lastFullyApprovedMonth, monthNameId } from "../../components/KpiMonthlyApprovalBar";
 import React, { useState, useMemo, useEffect } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import {
@@ -1006,8 +1007,15 @@ export function ViewProfile() {
                     : gradeBar(m.grade);
                 const barWidth =
                   isIdfFullApproved && isIdfUnweighted ? 100 : m.score;
+                const isKpiModule = m.module === "KPI";
+                const kpiProgress = isKpiModule && isCurrent ? lastFullyApprovedMonth(getKpiMonthVisuals(activeUser.employeeId)) : null;
+                const kpiYtd = Boolean(kpiProgress && kpiProgress.count < 12);
                 const idfTooltip = isIdfUnweighted
                   ? "Inter-Department Feedback tidak dinilai"
+                  : kpiYtd && kpiProgress
+                  ? kpiProgress.label
+                    ? `Nilai KPI YTD — KPI Tracking sudah full approve s.d. ${monthNameId(kpiProgress.label)} 2026 (${kpiProgress.count}/12 bulan)`
+                    : "Nilai KPI YTD — belum ada bulan KPI Tracking yang full approve (0/12 bulan)"
                   : undefined;
 
                 return (
@@ -1019,6 +1027,11 @@ export function ViewProfile() {
                     <div className="flex items-center gap-2 w-52 shrink-0">
                       <m.icon className={`w-4 h-4 shrink-0 ${m.color}`} />
                       <span className="text-xs text-gray-700 font-medium truncate">{m.module}</span>
+                      {kpiYtd && (
+                        <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-bold text-sky-700">
+                          YTD {kpiProgress?.count ?? 0}/12
+                        </span>
+                      )}
                     </div>
                     <div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
                       <div

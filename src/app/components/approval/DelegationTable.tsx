@@ -1,0 +1,375 @@
+import { useEffect, useMemo, useState } from "react";
+import { Ban, Eye, Pencil, PlayCircle, Search, X } from "lucide-react";
+import { toast } from "sonner";
+import {
+  isAdminOrHrIcfRole,
+  loadManagedUsers,
+  saveManagedUsers,
+  useAuthStore,
+  type ManagedUser,
+} from "../../store/authStore";
+import {
+  DELEGATION_EVENT,
+  blankDelegation,
+  loadDelegations,
+  saveDelegation,
+  type DelegationAccess,
+  type DelegationRecord,
+} from "../../store/delegationStore";
+import { pushEmployeeNotification } from "../../store/notificationStore";
+
+const lc = (v?: string) => String(v ?? "").trim().toLowerCase();
+const findByRef = (users: ManagedUser[], ref?: string) =>
+  ref ? users.find((u) => lc(u.regNo) === lc(ref) || lc(u.employeeId) === lc(ref)) : undefined;
+
+function useLiveData() {
+  const { activeUser, allUsers } = useAuthStore();
+  const [delegations, setDelegations] = useState(() => loadDelegations());
+  useEffect(() => {
+    const r = () => setDelegations(loadDelegations());
+    window.addEventListener(DELEGATION_EVENT, r);
+    window.addEventListener("pa-db-hydrated", r);
+    return () => {
+      window.removeEventListener(DELEGATION_EVENT, r);
+      window.removeEventListener("pa-db-hydrated", r);
+    };
+  }, []);
+  return { activeUser, allUsers: allUsers.filter((u) => u.status === "Active"), delegations };
+}
+
+/** Pencarian karyawan (dropdown dengan search) untuk kolom Delegation To. */
+function EmployeePicker({
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  options: ManagedUser[];
+  disabled?: boolean;
+  onChange: (employeeId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const selected = options.find((u) => lc(u.employeeId) === lc(value));
+  const list = options
+    .filter((u) => !q || [u.name, u.employeeId, u.regNo, u.position].some((v) => lc(v).includes(lc(q))))
+    .slice(0, 30);
+  return (
+    <div className="relative min-w-[200px]">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-left text-xs disabled:opacity-50"
+      >
+        <span className={selected ? "text-gray-800" : "text-gray-400"}>
+          {selected ? `${selected.name} (${selected.employeeId})` : "Pilih karyawan…"}
+        </span>
+        {selected && !disabled && (
+          <X
+            className="h-3 w-3 text-gray-400 hover:text-red-500"
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange("");
+            }}
+          />
+        )}
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-72 rounded-xl border border-gray-200 bg-white p-2 shadow-xl">
+          <div className="relative mb-2">
+            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+            <input
+              autoFocus
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Cari nama / Employee ID…"
+              className="w-full rounded-lg border border-gray-200 py-1.5 pl-7 pr-2 text-xs outline-none focus:border-[#1A284F]"
+            />
+          </div>
+          <div className="max-h-56 overflow-y-auto">
+            {list.map((u) => (
+              <button
+                key={u.employeeId}
+                type="button"
+                onClick={() => {
+                  onChange(u.employeeId);
+                  setOpen(false);
+                  setQ("");
+                }}
+                className="block w-full rounded-lg px-2 py-1.5 text-left text-xs hover:bg-[#1A284F]/5"
+              >
+                <span className="font-semibold text-gray-800">{u.name}</span>
+                <span className="block text-[10px] text-gray-500">
+                  {u.employeeId} · {u.position} · {u.division}
+                </span>
+              </button>
+            ))}
+            {list.length === 0 && <p className="py-3 text-center text-xs text-gray-400">Tidak ada karyawan</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ACCESS_KEYS: Array<[keyof DelegationAccess, string]> = [
+  ["view", "View"],
+  ["create", "Create"],
+  ["edit", "Edit"],
+  ["delete", "Delete"],
+  ["approve", "Approve"],
+];
+
+/**
+ * Tabel Delegation (dipakai di Settings → Approval Management dan Approvals → Delegation).
+ * Non-admin hanya melihat & memilih delegasi dalam Unit Usaha + Divisi miliknya.
+ */
+export function DelegationTable() {
+  const { activeUser, allUsers, delegations } = useLiveData();
+  const isAdmin = isAdminOrHrIcfRole(activeUser.role);
+  const [search, setSearch] = useState("");
+  const scoped = (u: ManagedUser) =>
+    isAdmin || (lc(u.company) === lc(activeUser.company) && lc(u.division) === lc(activeUser.division));
+  const approverIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const u of allUsers) {
+      for (const ref of [u.regNoAp1, u.regNoAp2]) {
+        const ap = findByRef(allUsers, ref);
+        if (ap) set.add(ap.employeeId);
+      }
+    }
+    return set;
+  }, [allUsers]);
+  void approverIds;
+  const rows = allUsers
+    .filter((u) => scoped(u))
+    .filter((u) => !search || [u.name, u.employeeId, u.regNo, u.division, u.department, u.role].some((v) => lc(v).includes(lc(search))))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const candidates = allUsers.filter(scoped);
+
+  function update(user: ManagedUser, patch: Partial<DelegationRecord>, action: string) {
+    const base = delegations[user.employeeId.toUpperCase()] ?? blankDelegation(user.employeeId);
+    const next = { ...base, ...patch };
+    if (next.delegateEmployeeId && lc(next.delegateEmployeeId) === lc(user.employeeId)) {
+      toast.error("Delegasi tidak boleh kepada diri sendiri.");
+      return;
+    }
+    const saved = saveDelegation(next, activeUser, action);
+    const becameActive = saved.active && saved.delegateEmployeeId && (!base.active || base.delegateEmployeeId !== saved.delegateEmployeeId);
+    if (becameActive) {
+      const mods = [saved.kpiSetting && "KPI Setting", saved.kpiTracking && "KPI Tracking", saved.smartGoalsSetting && "SMART Goals Setting"].filter(Boolean).join(", ");
+      const perms = ACCESS_KEYS.filter(([k]) => saved.access?.[k]).map(([, lbl]) => lbl).join(", ");
+      const targetRoute = saved.kpiSetting ? "/setting/kpi" : saved.kpiTracking ? "/measurement/kpi-tracking" : saved.smartGoalsSetting ? "/setting/smart-goals" : "/approvals";
+      pushEmployeeNotification({
+        employeeIds: [saved.delegateEmployeeId],
+        title: "Anda Ditunjuk sebagai Penerima Delegasi",
+        summary: `Anda menerima delegasi atas nama ${user.name} untuk modul: ${mods || "-"} (Akses: ${perms || "-"}).`,
+        category: "Approval",
+        moduleName: "Delegation",
+        ctaLabel: "Buka Modul Delegasi",
+        ctaRoute: targetRoute,
+        senderName: activeUser.name,
+      });
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Cari nama, Employee ID, divisi…"
+          className="w-full rounded-xl border border-gray-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-[#1A284F]"
+        />
+      </div>
+      <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
+        <table className="w-full text-xs">
+          <thead className="bg-[#1A284F] text-white">
+            <tr>
+              {["No", "Action", "Reg No", "Employee ID", "Company Unit", "Division", "Departement", "Role", "Delegation To", "KPI Setting", "KPI Tracking", "SMART Goals Setting", "Access"].map((h) => (
+                <th key={h} className="whitespace-nowrap px-3 py-2.5 text-left font-semibold">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((u, i) => {
+              const d = delegations[u.employeeId.toUpperCase()] ?? blankDelegation(u.employeeId);
+              const canStart = Boolean(d.delegateEmployeeId) && (d.kpiSetting || d.kpiTracking || d.smartGoalsSetting);
+              return (
+                <tr key={u.employeeId} className={`border-t border-gray-100 ${d.active ? "bg-emerald-50/40" : ""}`}>
+                  <td className="px-3 py-2">{i + 1}</td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      disabled={!d.active && !canStart}
+                      title={d.active ? "Stop delegation" : canStart ? "Start delegation" : "Pilih Delegation To & minimal 1 modul"}
+                      onClick={() => update(u, { active: !d.active }, d.active ? "Stop delegation" : "Start delegation")}
+                      className={`rounded-lg p-1.5 disabled:opacity-30 ${d.active ? "text-rose-600 hover:bg-rose-50" : "text-emerald-600 hover:bg-emerald-50"}`}
+                    >
+                      {d.active ? <Ban className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2">{u.regNo || "-"}</td>
+                  <td className="px-3 py-2 font-semibold">{u.employeeId}<span className="block text-[10px] font-normal text-gray-500">{u.name}</span></td>
+                  <td className="px-3 py-2">{u.company}</td>
+                  <td className="px-3 py-2">{u.division}</td>
+                  <td className="px-3 py-2">{u.department}</td>
+                  <td className="px-3 py-2">{u.role}</td>
+                  <td className="px-3 py-2">
+                    <EmployeePicker
+                      value={d.delegateEmployeeId}
+                      options={candidates.filter((c) => c.employeeId !== u.employeeId)}
+                      onChange={(id) => update(u, { delegateEmployeeId: id, active: id ? d.active : false }, "Set Delegation To")}
+                    />
+                  </td>
+                  {(["kpiSetting", "kpiTracking", "smartGoalsSetting"] as const).map((k) => (
+                    <td key={k} className="px-3 py-2 text-center">
+                      <input type="checkbox" checked={d[k]} onChange={() => update(u, { [k]: !d[k] }, `Toggle ${k}`)} className="h-4 w-4 accent-[#1A284F]" />
+                    </td>
+                  ))}
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-2">
+                      {ACCESS_KEYS.map(([k, label]) => (
+                        <label key={k} className="inline-flex items-center gap-1 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(d.access?.[k])}
+                            onChange={() => update(u, { access: { ...d.access, [k]: !d.access?.[k] } }, `Toggle access ${k}`)}
+                            className="h-3.5 w-3.5 accent-[#1A284F]"
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr><td colSpan={13} className="py-10 text-center text-gray-400">Tidak ada approver dalam cakupan Anda.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[11px] text-gray-500">
+        Delegasi aktif membuat karyawan yang ditunjuk menerima notifikasi & task approval sesuai modul yang dicentang (akses Approve wajib),
+        dan nama approver tercatat sebagai <strong>"Nama Delegasi | atas nama Nama Pemberi Delegasi"</strong>.
+      </p>
+    </div>
+  );
+}
+
+/** Tab Approver Monitoring: AP1 & AP2 seluruh karyawan, dengan View & Edit. */
+export function ApproverMonitoringTable() {
+  const { allUsers } = useLiveData();
+  const [search, setSearch] = useState("");
+  const [view, setView] = useState<ManagedUser | null>(null);
+  const [edit, setEdit] = useState<ManagedUser | null>(null);
+  const [ap1, setAp1] = useState("");
+  const [ap2, setAp2] = useState("");
+  const rows = allUsers
+    .filter((u) => !search || [u.name, u.employeeId, u.regNo, u.company, u.division, u.department, u.bagian, u.role].some((v) => lc(v).includes(lc(search))))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const nameOf = (ref?: string) => {
+    const u = findByRef(allUsers, ref);
+    return u ? `${u.name} (${u.employeeId})` : ref || "-";
+  };
+  function saveEdit() {
+    if (!edit) return;
+    const a1 = allUsers.find((u) => u.employeeId === ap1);
+    const a2 = allUsers.find((u) => u.employeeId === ap2);
+    const changed: ManagedUser = { ...edit, regNoAp1: a1 ? a1.regNo || a1.employeeId : "", regNoAp2: a2 ? a2.regNo || a2.employeeId : "" };
+    saveManagedUsers(loadManagedUsers().map((u) => (u.employeeId === edit.employeeId ? changed : u)), changed);
+    toast.success(`Approver ${edit.name} diperbarui`);
+    setEdit(null);
+  }
+  return (
+    <div className="space-y-4">
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari karyawan, unit, divisi, role…" className="w-full rounded-xl border border-gray-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-[#1A284F]" />
+      </div>
+      <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
+        <table className="w-full text-xs">
+          <thead className="bg-[#1A284F] text-white">
+            <tr>
+              {["No", "Action", "Reg No", "Employee ID", "Company Unit", "Division", "Departement", "Section", "Role", "Approver 1", "Approver 2"].map((h) => (
+                <th key={h} className="whitespace-nowrap px-3 py-2.5 text-left font-semibold">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((u, i) => (
+              <tr key={u.employeeId} className="border-t border-gray-100">
+                <td className="px-3 py-2">{i + 1}</td>
+                <td className="px-3 py-2">
+                  <div className="flex gap-1">
+                    <button type="button" title="View" onClick={() => setView(u)} className="rounded-lg p-1.5 text-sky-600 hover:bg-sky-50"><Eye className="h-4 w-4" /></button>
+                    <button
+                      type="button"
+                      title="Edit"
+                      onClick={() => {
+                        setEdit(u);
+                        setAp1(findByRef(allUsers, u.regNoAp1)?.employeeId ?? "");
+                        setAp2(findByRef(allUsers, u.regNoAp2)?.employeeId ?? "");
+                      }}
+                      className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  </div>
+                </td>
+                <td className="px-3 py-2">{u.regNo || "-"}</td>
+                <td className="px-3 py-2 font-semibold">{u.employeeId}<span className="block text-[10px] font-normal text-gray-500">{u.name}</span></td>
+                <td className="px-3 py-2">{u.company}</td>
+                <td className="px-3 py-2">{u.division}</td>
+                <td className="px-3 py-2">{u.department}</td>
+                <td className="px-3 py-2">{u.bagian || "-"}</td>
+                <td className="px-3 py-2">{u.role}</td>
+                <td className="px-3 py-2">{nameOf(u.regNoAp1)}</td>
+                <td className="px-3 py-2">{nameOf(u.regNoAp2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {(view || edit) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { setView(null); setEdit(null); }}>
+          <div className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            {view && (
+              <>
+                <h3 className="text-lg font-bold text-[#1A284F]">{view.name}</h3>
+                <dl className="grid grid-cols-2 gap-2 text-sm">
+                  {[["Employee ID", view.employeeId], ["Reg No", view.regNo], ["Company Unit", view.company], ["Division", view.division], ["Departement", view.department], ["Section", view.bagian], ["Role", view.role], ["Position", view.position], ["Approver 1", nameOf(view.regNoAp1)], ["Approver 2", nameOf(view.regNoAp2)]].map(([k, v]) => (
+                    <div key={k}><dt className="text-[10px] font-bold uppercase text-gray-400">{k}</dt><dd className="text-gray-800">{v || "-"}</dd></div>
+                  ))}
+                </dl>
+                <div className="flex justify-end"><button onClick={() => setView(null)} className="rounded-xl border px-4 py-2 text-sm">Tutup</button></div>
+              </>
+            )}
+            {edit && (
+              <>
+                <h3 className="text-lg font-bold text-[#1A284F]">Edit Approver · {edit.name}</h3>
+                <label className="block text-xs font-bold text-gray-500">Approver 1
+                  <div className="mt-1"><EmployeePicker value={ap1} options={allUsers.filter((u) => u.employeeId !== edit.employeeId)} onChange={setAp1} /></div>
+                </label>
+                <label className="block text-xs font-bold text-gray-500">Approver 2
+                  <div className="mt-1"><EmployeePicker value={ap2} options={allUsers.filter((u) => u.employeeId !== edit.employeeId)} onChange={setAp2} /></div>
+                </label>
+                {ap1 && ap1 === ap2 && <p className="text-xs text-amber-700">Approver 1 & 2 sama — approval cukup dilakukan 1 kali.</p>}
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setEdit(null)} className="rounded-xl border px-4 py-2 text-sm">Batal</button>
+                  <button onClick={saveEdit} className="rounded-xl bg-[#1A284F] px-4 py-2 text-sm font-semibold text-white">Simpan</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
