@@ -1,7 +1,10 @@
 import { Hono } from "npm:hono";
-import { createClient } from "jsr:@supabase/supabase-js@2.49.8";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2.49.8";
+import * as kv from "./kv_store.tsx";
 
 export const mainAppRoutes = new Hono();
+
+const KV_PREFIX = "pa_kv::";
 
 function getServiceClient() {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -13,6 +16,182 @@ function getServiceClient() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
+
+function mergePasswordSecurityMaps(
+  a: Record<string, Record<string, unknown>> | null | undefined,
+  b: Record<string, Record<string, unknown>> | null | undefined,
+): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
+  for (const k of keys) {
+    const ra = a?.[k];
+    const rb = b?.[k];
+    if (ra && !rb) { out[k] = ra; continue; }
+    if (rb && !ra) { out[k] = rb; continue; }
+    if (!ra || !rb) continue;
+    const aHas = Boolean(ra.passwordDigest);
+    const bHas = Boolean(rb.passwordDigest);
+    const aReset = String(ra.passwordResetAt ?? "");
+    const bReset = String(rb.passwordResetAt ?? "");
+    const aTs = String(ra.updatedAt ?? "");
+    const bTs = String(rb.updatedAt ?? "");
+    if (aHas && !bHas) {
+      out[k] = bReset && bReset > aTs ? rb : ra;
+    } else if (bHas && !aHas) {
+      out[k] = aReset && aReset > bTs ? ra : rb;
+    } else {
+      out[k] = bTs >= aTs ? rb : ra;
+    }
+  }
+  return out;
+}
+
+async function writeBackendKv(client: SupabaseClient, stateKey: string, stateValue: unknown, now: string): Promise<void> {
+  try {
+    await kv.set(`${KV_PREFIX}${stateKey}`, stateValue ?? {});
+  } catch {
+    // ignore if kv_store_74dadec6 is absent on custom DB
+  }
+  try {
+    await client.from("pa_kv_state").upsert({
+      state_key: stateKey,
+      state_value: stateValue ?? {},
+      updated_at: now,
+    });
+  } catch {
+    // ignore if pa_kv_state is absent
+  }
+}
+
+async function readSingleBackendKv(client: SupabaseClient, stateKey: string): Promise<unknown> {
+  let kvVal: unknown = undefined;
+  let tblVal: unknown = undefined;
+  try {
+    kvVal = await kv.get(`${KV_PREFIX}${stateKey}`);
+  } catch {
+    kvVal = undefined;
+  }
+  try {
+    const { data } = await client.from("pa_kv_state").select("state_value").eq("state_key", stateKey).maybeSingle();
+    tblVal = data?.state_value;
+  } catch {
+    tblVal = undefined;
+  }
+  if (stateKey === "pa_user_password_security_v1" && (kvVal || tblVal)) {
+    return mergePasswordSecurityMaps(
+      (tblVal && typeof tblVal === "object" ? tblVal : {}) as Record<string, Record<string, unknown>>,
+      (kvVal && typeof kvVal === "object" ? kvVal : {}) as Record<string, Record<string, unknown>>,
+    );
+  }
+  return kvVal !== undefined && kvVal !== null ? kvVal : tblVal;
+}
+
+async function readAllBackendKvRows(client: SupabaseClient): Promise<Array<{ state_key: string; state_value: unknown }>> {
+  const byKey = new Map<string, unknown>();
+  try {
+    const { data } = await client.from("pa_kv_state").select("state_key, state_value");
+    for (const row of data ?? []) {
+      if (row?.state_key && row.state_value !== undefined) {
+        byKey.set(String(row.state_key), row.state_value);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    const { data } = await client.from("kv_store_74dadec6").select("key, value").like("key", `${KV_PREFIX}%`);
+    for (const row of data ?? []) {
+      if (!row?.key) continue;
+      const k = String(row.key).slice(KV_PREFIX.length);
+      if (!k) continue;
+      if (k === "pa_user_password_security_v1" && byKey.has(k)) {
+        byKey.set(
+          k,
+          mergePasswordSecurityMaps(
+            byKey.get(k) as Record<string, Record<string, unknown>>,
+            row.value as Record<string, Record<string, unknown>>,
+          ),
+        );
+      } else {
+        byKey.set(k, row.value);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return Array.from(byKey.entries()).map(([state_key, state_value]) => ({ state_key, state_value }));
+}
+
+async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknown>, now: string): Promise<void> {
+  const fullRow = {
+    employee_id: String(u.employeeId ?? ""),
+    no: String(u.no ?? ""),
+    reg_no: String(u.regNo ?? ""),
+    name: String(u.name ?? ""),
+    email: String(u.email ?? ""),
+    position: String(u.position ?? ""),
+    company: String(u.company ?? ""),
+    unit_id: String(u.unitId ?? "IND"),
+    division: String(u.division ?? ""),
+    department: String(u.department ?? ""),
+    bagian: String(u.bagian ?? ""),
+    join_date: String(u.joinDate ?? ""),
+    telegram_no: String(u.telegramNo ?? ""),
+    grade: String(u.grade ?? "Grade 5"),
+    role: String(u.role || "Employee"),
+    groupings: String(u.groupings ?? "Operasional"),
+    status: String(u.status ?? "Active"),
+    last_login: String(u.lastLogin ?? ""),
+    reg_no_ap1: String(u.regNoAp1 ?? ""),
+    reg_no_ap2: String(u.regNoAp2 ?? ""),
+    is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
+    is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+    updated_at: now,
+  };
+  if (!fullRow.employee_id) return;
+  const { error } = await client.from("pa_users").upsert(fullRow);
+  if (error) {
+    await client.from("pa_users").upsert({
+      employee_id: fullRow.employee_id,
+      name: fullRow.name,
+      email: fullRow.email,
+      position: fullRow.position,
+      company: fullRow.company,
+      unit_id: fullRow.unit_id,
+      division: fullRow.division,
+      department: fullRow.department,
+      grade: fullRow.grade,
+      role: fullRow.role,
+      groupings: fullRow.groupings,
+      status: fullRow.status,
+      last_login: fullRow.last_login,
+      updated_at: now,
+    });
+  }
+}
+
+mainAppRoutes.get("/kv", async (c) => {
+  try {
+    const client = getServiceClient();
+    const rawKeys = (c.req.query("keys") ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+    const kvMap: Record<string, unknown> = {};
+    if (rawKeys.length > 0) {
+      await Promise.all(
+        rawKeys.map(async (k) => {
+          const val = await readSingleBackendKv(client, k);
+          if (val !== undefined && val !== null) kvMap[k] = val;
+        }),
+      );
+    } else {
+      const allRows = await readAllBackendKvRows(client);
+      for (const r of allRows) kvMap[r.state_key] = r.state_value;
+    }
+    const usersRes = await client.from("pa_users").select("*").order("employee_id");
+    return c.json({ ok: true, kvMap, users: usersRes.data ?? [] });
+  } catch (err) {
+    return c.json({ ok: false, error: err instanceof Error ? err.message : "KV read failed" }, 503);
+  }
+});
 
 mainAppRoutes.get("/bootstrap", async (c) => {
   try {
@@ -28,12 +207,18 @@ mainAppRoutes.get("/bootstrap", async (c) => {
       schedulesRes,
       auditRes,
       notifRes,
-      kvRes,
+      kvRows,
       evidenceRes,
       catalogsRes,
       calSettingsRes,
       calAdjustRes,
       yearEndRes,
+      idfRes,
+      rcaRes,
+      ktRes,
+      ksRes,
+      kbRes,
+      sgRes,
     ] = await Promise.all([
       client.from("pa_users").select("*").order("employee_id"),
       client.from("pa_group_rules").select("*"),
@@ -45,12 +230,18 @@ mainAppRoutes.get("/bootstrap", async (c) => {
       client.from("pa_interview_schedules").select("*").order("created_at", { ascending: false }),
       client.from("pa_audit_trail").select("*").order("id", { ascending: false }).limit(150),
       client.from("pa_app_notifications").select("*").order("id", { ascending: false }).limit(100),
-      client.from("pa_kv_state").select("*"),
+      readAllBackendKvRows(client),
       client.from("pa_evidence_files").select("*").order("created_at", { ascending: false }),
       client.from("pa_master_catalogs").select("*"),
       client.from("pa_calibration_settings").select("*"),
       client.from("pa_calibration_adjustments").select("*"),
       client.from("pa_year_end_verifications").select("*").eq("period", "2026").maybeSingle(),
+      client.from("pa_inter_dept_feedbacks").select("*").order("updated_at", { ascending: false }),
+      client.from("pa_rca_submissions").select("*").order("updated_at", { ascending: false }),
+      client.from("pa_kpi_trackings").select("*").order("updated_at", { ascending: false }),
+      client.from("pa_kpi_settings").select("*").order("updated_at", { ascending: false }),
+      client.from("pa_kpi_business").select("*").order("updated_at", { ascending: false }),
+      client.from("pa_smart_goals").select("*").order("updated_at", { ascending: false }),
     ]);
     return c.json({
       ok: true,
@@ -60,11 +251,18 @@ mainAppRoutes.get("/bootstrap", async (c) => {
       menuConfig: menusRes.data?.menus ?? null,
       moduleWindows: windowsRes.data ?? [],
       documents: docsRes.data ?? [],
+      workflowDocs: docsRes.data ?? [],
       openLocks: locksRes.data ?? [],
       interviewSchedules: schedulesRes.data ?? [],
       auditTrail: auditRes.data ?? [],
       notifications: notifRes.data ?? [],
-      kvStates: kvRes.data ?? [],
+      kvStates: kvRows ?? [],
+      interDeptFeedbacks: idfRes.data ?? [],
+      rcaSubmissions: rcaRes.data ?? [],
+      kpiTrackings: ktRes.data ?? [],
+      kpiSettings: ksRes.data ?? [],
+      kpiBusinesses: kbRes.data ?? [],
+      smartGoalRows: sgRes.data ?? [],
       evidenceFiles: evidenceRes.data ?? [],
       masterCatalogs: catalogsRes.data ?? [],
       calibrationSettings: calSettingsRes.data ?? [],
@@ -116,25 +314,43 @@ mainAppRoutes.post("/sync", async (c) => {
     const now = new Date().toISOString();
 
     if (kind === "user-upsert" && body.user) {
-      const u = body.user;
-      await client.from("pa_users").upsert({
-        employee_id: u.employeeId,
-        name: u.name,
-        email: u.email,
-        position: u.position,
-        company: u.company,
-        unit_id: u.unitId ?? "IND",
-        division: u.division,
-        department: u.department,
-        grade: u.grade ?? "Grade 5",
-        role: u.role || "Employee",
-        groupings: u.groupings,
-        status: u.status ?? "Active",
-        last_login: u.lastLogin ?? "",
-        updated_at: now,
-      });
+      const u = body.user as Record<string, unknown>;
+      await upsertPaUserSafe(client, u, now);
+      const existingUsers = await readSingleBackendKv(client, "pa_managed_users_v1");
+      if (Array.isArray(existingUsers)) {
+        const empId = String(u.employeeId ?? "").toLowerCase();
+        const exists = existingUsers.some((item) => String((item as Record<string, unknown>)?.employeeId ?? "").toLowerCase() === empId);
+        const nextList = exists
+          ? existingUsers.map((item) =>
+              String((item as Record<string, unknown>)?.employeeId ?? "").toLowerCase() === empId ? { ...(item as object), ...u } : item,
+            )
+          : [...existingUsers, u];
+        await writeBackendKv(client, "pa_managed_users_v1", nextList, now);
+      }
+    } else if (kind === "users-replace" && Array.isArray(body.users)) {
+      await client.from("pa_users").delete().neq("employee_id", "__NONE__");
+      for (const rawU of body.users as Array<Record<string, unknown>>) {
+        await upsertPaUserSafe(client, rawU, now);
+      }
+      await writeBackendKv(client, "pa_managed_users_v1", body.users, now);
+      if (Array.isArray(body.resetKeys)) {
+        for (const rk of body.resetKeys as string[]) {
+          try { await kv.del(`${KV_PREFIX}${rk}`); } catch { /* ignore */ }
+          try { await client.from("pa_kv_state").delete().eq("state_key", rk); } catch { /* ignore */ }
+        }
+      }
     } else if (kind === "user-delete" && body.employeeId) {
       await client.from("pa_users").delete().eq("employee_id", body.employeeId);
+      const existingUsers = await readSingleBackendKv(client, "pa_managed_users_v1");
+      if (Array.isArray(existingUsers)) {
+        const target = String(body.employeeId).toLowerCase();
+        await writeBackendKv(
+          client,
+          "pa_managed_users_v1",
+          existingUsers.filter((item) => String((item as Record<string, unknown>)?.employeeId ?? "").toLowerCase() !== target),
+          now,
+        );
+      }
     } else if (kind === "group-rules" && Array.isArray(body.rules)) {
       const company = String(body.company ?? "DEFAULT");
       for (const r of body.rules) {
@@ -243,11 +459,25 @@ mainAppRoutes.post("/sync", async (c) => {
         updated_at: now,
       });
     } else if (kind === "kv-state" && body.stateKey) {
-      await client.from("pa_kv_state").upsert({
-        state_key: String(body.stateKey),
-        state_value: body.stateValue ?? {},
-        updated_at: now,
-      });
+      const stateKey = String(body.stateKey);
+      if (stateKey === "pa_user_password_security_v1" && body.stateValue && typeof body.stateValue === "object") {
+        const prev = await readSingleBackendKv(client, stateKey);
+        const merged = mergePasswordSecurityMaps(
+          (prev && typeof prev === "object" ? prev : {}) as Record<string, Record<string, unknown>>,
+          body.stateValue as Record<string, Record<string, unknown>>,
+        );
+        await writeBackendKv(client, stateKey, merged, now);
+      } else {
+        await writeBackendKv(client, stateKey, body.stateValue ?? {}, now);
+      }
+    } else if (kind === "kv-map-merge" && body.stateKey && body.recordKey) {
+      const stateKey = String(body.stateKey);
+      const recordKey = String(body.recordKey);
+      const prev = await readSingleBackendKv(client, stateKey);
+      const baseObj = prev && typeof prev === "object" && !Array.isArray(prev) ? (prev as Record<string, unknown>) : {};
+      const nextObj = { ...baseObj, [recordKey]: body.record };
+      await writeBackendKv(client, stateKey, nextObj, now);
+      return c.json({ ok: true, syncedAt: now, stateValue: nextObj });
     } else if (kind === "master-catalog" && body.catalogKey) {
       await client.from("pa_master_catalogs").upsert({
         catalog_key: String(body.catalogKey),

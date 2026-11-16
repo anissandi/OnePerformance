@@ -520,6 +520,42 @@ export interface UploadedEvidenceRecord {
 
 const EVIDENCE_LIST_KEY = "pa_uploaded_evidence_v1";
 const AUDIT_LIST_KEY = "pa_audit_trail_v1";
+const CRITICAL_AUTH_KV_KEYS = new Set([
+  "pa_user_password_security_v1",
+  "pa_managed_users_v1",
+  "pa_unit_login_configs_v1",
+  "pa_archived_users_v1",
+  "pa_trial_mode_clean_v1",
+]);
+
+export function mergePasswordSecurityMapsClient<T extends Record<string, any>>(
+  a: Record<string, T> | null | undefined,
+  b: Record<string, T> | null | undefined,
+): Record<string, T> {
+  const out: Record<string, T> = {};
+  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
+  for (const k of keys) {
+    const ra = a?.[k];
+    const rb = b?.[k];
+    if (ra && !rb) { out[k] = ra; continue; }
+    if (rb && !ra) { out[k] = rb; continue; }
+    if (!ra || !rb) continue;
+    const aHas = Boolean(ra.passwordDigest);
+    const bHas = Boolean(rb.passwordDigest);
+    const aReset = String(ra.passwordResetAt ?? "");
+    const bReset = String(rb.passwordResetAt ?? "");
+    const aTs = String(ra.updatedAt ?? "");
+    const bTs = String(rb.updatedAt ?? "");
+    if (aHas && !bHas) {
+      out[k] = bReset && bReset > aTs ? rb : ra;
+    } else if (bHas && !aHas) {
+      out[k] = aReset && aReset > bTs ? ra : rb;
+    } else {
+      out[k] = bTs >= aTs ? rb : ra;
+    }
+  }
+  return out;
+}
 
 export async function syncToSupabase(payload: Record<string, unknown>): Promise<void> {
   try {
@@ -539,11 +575,20 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
         status: "Success",
       });
     }
-    // Primary path: direct PostgREST write (works immediately once SQL migrations are applied, even without Edge Function CLI deploy)
-    const directOk = await syncDirectToPostgrest(payload);
-    if (directOk) return;
+    const kind = String(payload.kind ?? "");
+    const isCriticalDualWrite =
+      kind === "kv-map-merge" ||
+      kind === "user-upsert" ||
+      kind === "users-replace" ||
+      kind === "user-delete" ||
+      (kind === "kv-state" && CRITICAL_AUTH_KV_KEYS.has(String(payload.stateKey ?? "")));
 
-    // Secondary path: Edge Function
+    const directOk = kind === "kv-map-merge" || kind === "users-replace"
+      ? false
+      : await syncDirectToPostgrest(payload);
+
+    if (directOk && !isCriticalDualWrite) return;
+
     await fetch(`${PA_APP_API_BASE}/sync`, {
       method: "POST",
       headers: {
@@ -900,7 +945,17 @@ export async function notifyLoginToSupabase(user: {
 
 export async function fetchBootstrapFromSupabase(): Promise<Record<string, unknown> | null> {
   try {
-    // 1. Try direct PostgREST queries first (works immediately without requiring Edge Function deployment)
+    // Jalankan pembacaan PostgREST DAN Edge Function /bootstrap secara paralel agar data dari
+    // pa_kv_state, pa_users, maupun kv_store_74dadec6 selalu terambil di browser/perangkat baru.
+    const edgePromise = fetch(`${PA_APP_API_BASE}/bootstrap`, {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null);
+
     const [
       users,
       kvStates,
@@ -922,6 +977,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       kpiSettings,
       kpiBusinesses,
       smartGoalRows,
+      edgeData,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
       restSelect("pa_kv_state", "select=*"),
@@ -943,10 +999,44 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_kpi_settings", "select=*&order=updated_at.desc"),
       restSelect("pa_kpi_business", "select=*&order=updated_at.desc"),
       restSelect("pa_smart_goals", "select=*&order=updated_at.desc"),
+      edgePromise,
     ]);
+
+    const edgeOk = Boolean(edgeData && typeof edgeData === "object" && edgeData.ok);
+    const mergedKvByKey = new Map<string, unknown>();
+    for (const row of kvStates as Array<{ state_key?: string; state_value?: unknown }>) {
+      if (row?.state_key && row.state_value !== undefined) {
+        mergedKvByKey.set(String(row.state_key), row.state_value);
+      }
+    }
+    if (edgeOk && Array.isArray(edgeData.kvStates)) {
+      for (const row of edgeData.kvStates as Array<{ state_key?: string; state_value?: unknown }>) {
+        if (!row?.state_key || row.state_value === undefined) continue;
+        const k = String(row.state_key);
+        if (k === "pa_user_password_security_v1" && mergedKvByKey.has(k)) {
+          mergedKvByKey.set(
+            k,
+            mergePasswordSecurityMapsClient(
+              mergedKvByKey.get(k) as Record<string, Record<string, unknown>>,
+              row.state_value as Record<string, Record<string, unknown>>,
+            ),
+          );
+        } else {
+          mergedKvByKey.set(k, row.state_value);
+        }
+      }
+    }
+    const mergedKvStates = Array.from(mergedKvByKey.entries()).map(([state_key, state_value]) => ({
+      state_key,
+      state_value,
+    }));
+
+    const finalUsers = users.length > 0 ? users : edgeOk && Array.isArray(edgeData.users) ? edgeData.users : [];
+    const pick = <T>(a: T[], b: unknown): T[] => (a.length > 0 ? a : Array.isArray(b) ? (b as T[]) : []);
+
     if (
-      users.length > 0 ||
-      kvStates.length > 0 ||
+      finalUsers.length > 0 ||
+      mergedKvStates.length > 0 ||
       masterCatalogs.length > 0 ||
       evidenceFiles.length > 0 ||
       auditTrail.length > 0 ||
@@ -957,43 +1047,41 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       kpiTrackings.length > 0 ||
       kpiSettings.length > 0 ||
       kpiBusinesses.length > 0 ||
-      smartGoalRows.length > 0
+      smartGoalRows.length > 0 ||
+      edgeOk
     ) {
       return {
         ok: true,
-        users,
-        kvStates,
-        masterCatalogs,
-        evidenceFiles,
-        auditTrail,
-        yearEndVerification: (yearEndRows[0] as { state?: unknown } | undefined)?.state ?? null,
-        workflowDocs,
-        interviewSchedules,
-        groupRules,
-        scoreWeights,
-        projectRecords,
-        rolePermissions,
-        menuConfig: (menuConfigs[0] as { menus?: unknown } | undefined)?.menus ?? null,
-        openLocks,
-        interDeptFeedbacks,
-        rcaSubmissions,
-        kpiTrackings,
-        kpiSettings,
-        kpiBusinesses,
-        smartGoalRows,
+        users: finalUsers,
+        kvStates: mergedKvStates,
+        masterCatalogs: pick(masterCatalogs, edgeData?.masterCatalogs),
+        evidenceFiles: pick(evidenceFiles, edgeData?.evidenceFiles),
+        auditTrail: pick(auditTrail, edgeData?.auditTrail),
+        yearEndVerification:
+          (yearEndRows[0] as { state?: unknown } | undefined)?.state ??
+          edgeData?.yearEndVerification ??
+          null,
+        workflowDocs: pick(workflowDocs, edgeData?.workflowDocs ?? edgeData?.documents),
+        interviewSchedules: pick(interviewSchedules, edgeData?.interviewSchedules),
+        groupRules: pick(groupRules, edgeData?.groupRules),
+        scoreWeights: pick(scoreWeights, edgeData?.scoreWeights),
+        projectRecords: pick(projectRecords, edgeData?.projectRecords),
+        rolePermissions: pick(rolePermissions, edgeData?.rolePermissions),
+        menuConfig:
+          (menuConfigs[0] as { menus?: unknown } | undefined)?.menus ??
+          edgeData?.menuConfig ??
+          null,
+        openLocks: pick(openLocks, edgeData?.openLocks),
+        interDeptFeedbacks: pick(interDeptFeedbacks, edgeData?.interDeptFeedbacks),
+        rcaSubmissions: pick(rcaSubmissions, edgeData?.rcaSubmissions),
+        kpiTrackings: pick(kpiTrackings, edgeData?.kpiTrackings),
+        kpiSettings: pick(kpiSettings, edgeData?.kpiSettings),
+        kpiBusinesses: pick(kpiBusinesses, edgeData?.kpiBusinesses),
+        smartGoalRows: pick(smartGoalRows, edgeData?.smartGoalRows),
       };
     }
 
-    // 2. Fallback to Edge Function /bootstrap
-    const response = await fetch(`${PA_APP_API_BASE}/bootstrap`, {
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      },
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data?.ok ? data : null;
+    return null;
   } catch {
     return null;
   }
@@ -1010,46 +1098,148 @@ export function waitForInitialHydration(timeoutMs = 12000): Promise<void> {
   ]);
 }
 
-/** Ambil nilai terbaru beberapa key pa_kv_state langsung dari backend dan tulis ke cache lokal. */
+/**
+ * Ambil nilai terbaru beberapa key langsung dari backend (PostgREST pa_kv_state + Edge Function kv_store_74dadec6)
+ * dan tulis ke cache lokal tanpa menimpa password digest lokal yang belum sempat tersinkron.
+ */
 export async function refreshKvKeysFromBackend(keys: string[]): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   if (keys.length === 0) return out;
-  const inList = keys.map((k) => `"${k.replace(/"/g, "")}"`).join(",");
-  const rows = await restSelect<{ state_key: string; state_value: unknown }>(
-    "pa_kv_state",
-    `select=state_key,state_value&state_key=in.(${encodeURIComponent(inList)})`,
-  );
-  for (const row of rows) {
-    if (!row?.state_key || row.state_value === undefined || row.state_value === null) continue;
-    out[row.state_key] = row.state_value;
-    try {
-      localStorage.setItem(row.state_key, JSON.stringify(row.state_value));
-    } catch {
-      // ignore quota errors
+
+  // PENTING: koma pemisah PostgREST `in.(k1,k2)` TIDAK BOLEH di-encode menjadi %2C!
+  const cleanInList = keys.map((k) => encodeURIComponent(k.trim())).join(",");
+  const edgeKvPromise = fetch(`${PA_APP_API_BASE}/kv?keys=${encodeURIComponent(keys.join(","))}`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+  })
+    .then((res) => (res.ok ? res.json() : null))
+    .catch(() => null);
+
+  const [pgRows, edgeResp] = await Promise.all([
+    restSelect<{ state_key: string; state_value: unknown }>(
+      "pa_kv_state",
+      `select=state_key,state_value&state_key=in.(${cleanInList})`,
+    ),
+    edgeKvPromise,
+  ]);
+
+  const pgMap: Record<string, unknown> = {};
+  for (const row of pgRows) {
+    if (row?.state_key && row.state_value !== undefined && row.state_value !== null) {
+      pgMap[row.state_key] = row.state_value;
     }
   }
+  const edgeMap: Record<string, unknown> =
+    edgeResp && typeof edgeResp === "object" && edgeResp.ok && edgeResp.kvMap && typeof edgeResp.kvMap === "object"
+      ? (edgeResp.kvMap as Record<string, unknown>)
+      : {};
+
+  for (const k of keys) {
+    const pv = pgMap[k];
+    const ev = edgeMap[k];
+    if (pv === undefined && ev === undefined) continue;
+
+    if (k === "pa_user_password_security_v1") {
+      const localSec = loadPersistedState<Record<string, Record<string, unknown>>>(k, {});
+      const remoteSec = mergePasswordSecurityMapsClient(
+        (pv && typeof pv === "object" ? pv : {}) as Record<string, Record<string, unknown>>,
+        (ev && typeof ev === "object" ? ev : {}) as Record<string, Record<string, unknown>>,
+      );
+      const mergedSec = mergePasswordSecurityMapsClient(remoteSec, localSec);
+      out[k] = mergedSec;
+      try {
+        localStorage.setItem(k, JSON.stringify(mergedSec));
+      } catch {
+        // ignore
+      }
+      // Jika browser ini menyimpan password digest yang belum ada di backend, dorong otomatis ke backend!
+      const remoteDigestCount = Object.values(remoteSec).filter((r) => Boolean(r?.passwordDigest)).length;
+      const mergedDigestCount = Object.values(mergedSec).filter((r) => Boolean(r?.passwordDigest)).length;
+      if (mergedDigestCount > remoteDigestCount) {
+        void syncToSupabase({ kind: "kv-state", stateKey: k, stateValue: mergedSec });
+      }
+    } else {
+      const chosen = ev !== undefined && ev !== null ? ev : pv;
+      if (chosen !== undefined && chosen !== null) {
+        out[k] = chosen;
+        try {
+          localStorage.setItem(k, JSON.stringify(chosen));
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
   return out;
 }
 
 /**
- * Merge satu record ke dalam objek map pa_kv_state secara aman (ambil nilai backend terbaru terlebih dahulu),
- * sehingga perangkat/browser lain dengan cache lama tidak menimpa record milik pengguna lain.
+ * Merge satu record ke dalam objek map pa_kv_state & kv_store_74dadec6 secara aman (server-side atomic merge + PostgREST),
+ * sehingga perangkat/browser lain dengan cache lama tidak pernah menimpa record milik pengguna lain.
  */
 export async function mergeKvMapRecord(stateKey: string, recordKey: string, record: unknown): Promise<void> {
-  let base: Record<string, unknown> = {};
+  // 1. Update local cache immediately
+  const localBase = loadPersistedState<Record<string, unknown>>(stateKey, {});
+  const optimistic = { ...localBase, [recordKey]: record };
+  try {
+    localStorage.setItem(stateKey, JSON.stringify(optimistic));
+    localWriteTs.set(stateKey, Date.now());
+  } catch {
+    // ignore
+  }
+
+  // 2. Atomic server-side merge on Edge Function (writes to BOTH kv_store_74dadec6 & pa_kv_state via SERVICE_ROLE_KEY)
+  let serverMerged: Record<string, unknown> | null = null;
+  try {
+    const res = await fetch(`${PA_APP_API_BASE}/sync`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ kind: "kv-map-merge", stateKey, recordKey, record }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.ok && data.stateValue && typeof data.stateValue === "object") {
+        serverMerged = data.stateValue as Record<string, unknown>;
+      }
+    }
+  } catch {
+    serverMerged = null;
+  }
+
+  // 3. Also read-merge-write direct PostgREST pa_kv_state (for custom Supabase setups without Edge Function)
+  let base: Record<string, unknown> = serverMerged ?? optimistic;
   try {
     const rows = await restSelect<{ state_value: unknown }>(
       "pa_kv_state",
       `select=state_value&state_key=eq.${encodeURIComponent(stateKey)}&limit=1`,
     );
     const remote = rows[0]?.state_value;
-    if (remote && typeof remote === "object" && !Array.isArray(remote)) base = remote as Record<string, unknown>;
-    else base = loadPersistedState<Record<string, unknown>>(stateKey, {});
+    if (remote && typeof remote === "object" && !Array.isArray(remote)) {
+      base = stateKey === "pa_user_password_security_v1"
+        ? mergePasswordSecurityMapsClient(
+            remote as Record<string, Record<string, unknown>>,
+            base as Record<string, Record<string, unknown>>,
+          )
+        : { ...(remote as Record<string, unknown>), ...base, [recordKey]: record };
+    }
   } catch {
-    base = loadPersistedState<Record<string, unknown>>(stateKey, {});
+    // ignore
   }
-  const next = { ...base, [recordKey]: record };
-  savePersistedState(stateKey, next);
+  const finalMap = { ...base, [recordKey]: record };
+  try {
+    localStorage.setItem(stateKey, JSON.stringify(finalMap));
+    localWriteTs.set(stateKey, Date.now());
+  } catch {
+    // ignore
+  }
+  await syncDirectToPostgrest({ kind: "kv-state", stateKey, stateValue: finalMap });
 }
 
 /**
@@ -1064,11 +1254,8 @@ export async function mergeKvArrayById<T>(
 ): Promise<T[]> {
   let remote: T[] = [];
   try {
-    const rows = await restSelect<{ state_value: unknown }>(
-      "pa_kv_state",
-      `select=state_value&state_key=eq.${encodeURIComponent(stateKey)}&limit=1`,
-    );
-    if (Array.isArray(rows[0]?.state_value)) remote = rows[0].state_value as T[];
+    const kvRes = await refreshKvKeysFromBackend([stateKey]);
+    if (Array.isArray(kvRes[stateKey])) remote = kvRes[stateKey] as T[];
   } catch {
     remote = [];
   }
@@ -1085,16 +1272,31 @@ export async function mergeKvArrayById<T>(
   return merged;
 }
 
-/** Ambil ulang daftar karyawan (pa_users + KV) dari backend untuk validasi login lintas perangkat. */
+/** Ambil ulang daftar karyawan & keamanan password langsung dari backend untuk validasi login lintas perangkat. */
 export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
-  await refreshKvKeysFromBackend([
+  const keys = [
     "pa_user_password_security_v1",
     "pa_unit_login_configs_v1",
     "pa_managed_users_v1",
     "pa_archived_users_v1",
+    "pa_trial_mode_clean_v1",
+  ];
+  const [, pgUsers, edgeResp] = await Promise.all([
+    refreshKvKeysFromBackend(keys),
+    restSelect<Record<string, unknown>>("pa_users", "select=*&order=employee_id.asc"),
+    fetch(`${PA_APP_API_BASE}/kv?keys=pa_managed_users_v1`, {
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
   ]);
-  const users = await restSelect<Record<string, unknown>>("pa_users", "select=*&order=employee_id.asc");
-  if (users.length > 0) applyDbUsersToLocal(users);
+  const dbUsers =
+    pgUsers.length > 0
+      ? pgUsers
+      : edgeResp && Array.isArray(edgeResp.users)
+      ? (edgeResp.users as Array<Record<string, unknown>>)
+      : [];
+  applyDbUsersToLocal(dbUsers);
   window.dispatchEvent(new Event("pa-auth-updated"));
 }
 
@@ -1117,90 +1319,212 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
   } catch {
     archivedIds = new Set();
   }
+  const isCleanTrial =
+    localStorage.getItem("pa_trial_mode_clean_v1") === "true" ||
+    localStorage.getItem("pa_trial_mode_clean_v1") === '"true"';
+
   if (!Array.isArray(users) || users.length === 0) {
     const list = kvUsersList.filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
     if (list.length > 0) localStorage.setItem("pa_managed_users_v1", JSON.stringify(list));
     return list;
   }
-  const kvUserExtras = new Map(kvUsersList.map((item) => [String(item.employeeId ?? "").toLowerCase(), item]));
-  const mapped = users.map((u, idx) => {
-    const empKey = String(u.employee_id ?? "").toLowerCase();
-    const extra = kvUserExtras.get(empKey) ?? {};
-    return {
-      ...extra,
-      id: String(idx + 1),
-      no: String(u.no ?? idx + 1),
-      regNo: String(u.reg_no ?? extra.regNo ?? `REG-${String(idx + 1).padStart(3, "0")}`),
-      name: String(u.name ?? ""),
-      employeeId: String(u.employee_id ?? ""),
-      position: String(u.position ?? ""),
-      company: String(u.company ?? ""),
-      division: String(u.division ?? ""),
-      department: String(u.department ?? ""),
-      bagian: String(u.bagian ?? extra.bagian ?? ""),
-      joinDate: String(u.join_date ?? extra.joinDate ?? ""),
-      telegramNo: String(u.telegram_no ?? extra.telegramNo ?? ""),
-      grade: String(u.grade || "Grade 5"),
-      role: String(u.role ?? "Employee"),
-      groupings: String(u.groupings ?? "Operasional"),
-      status: String(u.status || "Active"),
-      lastLogin: String(u.last_login || ""),
-      email: String(u.email ?? ""),
-      regNoAp1: String(u.reg_no_ap1 ?? extra.regNoAp1 ?? ""),
-      regNoAp2: String(u.reg_no_ap2 ?? extra.regNoAp2 ?? ""),
-      isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? extra.isHrUnitChecker ?? u.role === "HR Unit"),
-      isHrIcfValidator: Boolean(
-        u.is_hr_icf_validator ?? extra.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator"),
-      ),
-    };
-  });
-  const seenDbIds = new Set(mapped.map((u) => u.employeeId.toLowerCase()));
-  const kvOnlyUsers = kvUsersList.filter(
-    (item) => Boolean(item.employeeId) && !seenDbIds.has(String(item.employeeId).toLowerCase()),
-  );
-  const synced = [...mapped, ...kvOnlyUsers].filter(
-    (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
-  );
-  localStorage.setItem("pa_managed_users_v1", JSON.stringify(synced));
-  return synced;
+
+  // Jika pa_managed_users_v1 tersedia (hasil User Management / Import Excel), nilai field di pa_managed_users_v1
+  // (seperti Company Unit, Reg No, Role, Divisi, Status) harus diutamakan agar baris seed lama di pa_users tidak menimpanya!
+  const dbByEmp = new Map(users.map((u) => [String(u.employee_id ?? "").toLowerCase(), u]));
+  if (kvUsersList.length > 0) {
+    const mergedFromKv = kvUsersList.map((kvU, idx) => {
+      const empKey = String(kvU.employeeId ?? "").toLowerCase();
+      const dbU = dbByEmp.get(empKey);
+      return {
+        ...kvU,
+        id: String(kvU.id || idx + 1),
+        no: String(kvU.no || dbU?.no || idx + 1),
+        regNo: String(kvU.regNo || dbU?.reg_no || `REG-${String(idx + 1).padStart(3, "0")}`),
+        name: String(kvU.name || dbU?.name || ""),
+        employeeId: String(kvU.employeeId || dbU?.employee_id || ""),
+        position: String(kvU.position || dbU?.position || ""),
+        company: String(kvU.company || dbU?.company || ""),
+        division: String(kvU.division || dbU?.division || ""),
+        department: String(kvU.department || dbU?.department || ""),
+        bagian: String(kvU.bagian ?? dbU?.bagian ?? ""),
+        joinDate: String(kvU.joinDate || dbU?.join_date || ""),
+        telegramNo: String(kvU.telegramNo || dbU?.telegram_no || ""),
+        grade: String(kvU.grade || dbU?.grade || "Grade 5"),
+        role: String(kvU.role || dbU?.role || "Employee"),
+        groupings: String(kvU.groupings || dbU?.groupings || "Operasional"),
+        status: String(kvU.status || dbU?.status || "Active"),
+        lastLogin: String(dbU?.last_login || kvU.lastLogin || ""),
+        email: String(kvU.email || dbU?.email || ""),
+        regNoAp1: String(kvU.regNoAp1 ?? dbU?.reg_no_ap1 ?? ""),
+        regNoAp2: String(kvU.regNoAp2 ?? dbU?.reg_no_ap2 ?? ""),
+      };
+    });
+    const seenIds = new Set(mergedFromKv.map((u) => u.employeeId.toLowerCase()));
+    const extraDbUsers = isCleanTrial
+      ? []
+      : users
+          .filter((u) => !seenIds.has(String(u.employee_id ?? "").toLowerCase()))
+          .map((u, idx) => ({
+            id: String(mergedFromKv.length + idx + 1),
+            no: String(u.no || mergedFromKv.length + idx + 1),
+            regNo: String(u.reg_no || `REG-${String(mergedFromKv.length + idx + 1).padStart(3, "0")}`),
+            name: String(u.name ?? ""),
+            employeeId: String(u.employee_id ?? ""),
+            position: String(u.position ?? ""),
+            company: String(u.company ?? ""),
+            division: String(u.division ?? ""),
+            department: String(u.department ?? ""),
+            bagian: String(u.bagian ?? ""),
+            joinDate: String(u.join_date ?? ""),
+            telegramNo: String(u.telegram_no ?? ""),
+            grade: String(u.grade || "Grade 5"),
+            role: String(u.role || "Employee"),
+            groupings: String(u.groupings || "Operasional"),
+            status: String(u.status || "Active"),
+            lastLogin: String(u.last_login || ""),
+            email: String(u.email ?? ""),
+            regNoAp1: String(u.reg_no_ap1 ?? ""),
+            regNoAp2: String(u.reg_no_ap2 ?? ""),
+            isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
+            isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+          }));
+    const synced = [...mergedFromKv, ...extraDbUsers].filter(
+      (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
+    );
+    localStorage.setItem("pa_managed_users_v1", JSON.stringify(synced));
+    return synced;
+  }
+
+  // Jika pa_managed_users_v1 masih kosong (browser/perangkat baru), bangun dari pa_users
+  const mapped = users.map((u, idx) => ({
+    id: String(idx + 1),
+    no: String(u.no || idx + 1),
+    regNo: String(u.reg_no || `REG-${String(idx + 1).padStart(3, "0")}`),
+    name: String(u.name ?? ""),
+    employeeId: String(u.employee_id ?? ""),
+    position: String(u.position ?? ""),
+    company: String(u.company ?? ""),
+    division: String(u.division ?? ""),
+    department: String(u.department ?? ""),
+    bagian: String(u.bagian ?? ""),
+    joinDate: String(u.join_date ?? ""),
+    telegramNo: String(u.telegram_no ?? ""),
+    grade: String(u.grade || "Grade 5"),
+    role: String(u.role || "Employee"),
+    groupings: String(u.groupings || "Operasional"),
+    status: String(u.status || "Active"),
+    lastLogin: String(u.last_login || ""),
+    email: String(u.email ?? ""),
+    regNoAp1: String(u.reg_no_ap1 ?? ""),
+    regNoAp2: String(u.reg_no_ap2 ?? ""),
+    isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
+    isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+  })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
+  localStorage.setItem("pa_managed_users_v1", JSON.stringify(mapped));
+  return mapped;
 }
 
 export async function hydrateAllStoresFromSupabase(): Promise<void> {
   const hydrateStartedAt = Date.now();
+  // Snapshot state auth lokal sebelum hidrasi agar akun & password yang sudah tersimpan di browser lama
+  // tidak pernah hilang dan otomatis ter-backfill ke backend (kv_store_74dadec6 + pa_kv_state + pa_users)!
+  const preLocalSec = loadPersistedState<Record<string, Record<string, unknown>>>("pa_user_password_security_v1", {});
+  const hasPreLocalUsers = typeof localStorage !== "undefined" && localStorage.getItem("pa_managed_users_v1") !== null;
+  const preLocalUsers = hasPreLocalUsers
+    ? loadPersistedState<Array<Record<string, unknown>>>("pa_managed_users_v1", [])
+    : [];
+  const hasPreLocalLoginCfg = typeof localStorage !== "undefined" && localStorage.getItem("pa_unit_login_configs_v1") !== null;
+  const preLocalLoginCfg = hasPreLocalLoginCfg
+    ? loadPersistedState<Record<string, unknown>>("pa_unit_login_configs_v1", {})
+    : null;
+
   const data = await fetchBootstrapFromSupabase();
   if (!data) {
-    // If backend tables exist but are still empty on first connection, seed current users to backend
-    try {
-      const probe = await fetch(`${SUPABASE_REST_BASE}/pa_users?select=employee_id&limit=1`, {
-        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-      });
-      if (probe.ok) {
-        const existing = await probe.json();
-        if (Array.isArray(existing) && existing.length === 0) {
-          const localUsersRaw = localStorage.getItem("pa_managed_users_v1");
-          const localUsers: Array<Record<string, unknown>> = localUsersRaw ? JSON.parse(localUsersRaw) : [];
-          for (const u of localUsers) {
-            await syncDirectToPostgrest({ kind: "user-upsert", user: u });
-          }
-        }
-      }
-    } catch {
-      // ignore probe errors
+    // Jika backend masih kosong saat koneksi pertama dari browser yang sudah punya data lokal, dorong ke backend!
+    if (Object.keys(preLocalSec).length > 0) {
+      void syncToSupabase({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: preLocalSec });
+    }
+    if (preLocalUsers.length > 0) {
+      void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
+    }
+    if (preLocalLoginCfg && Object.keys(preLocalLoginCfg).length > 0) {
+      void syncToSupabase({ kind: "kv-state", stateKey: "pa_unit_login_configs_v1", stateValue: preLocalLoginCfg });
     }
     return;
   }
 
   try {
-    // 1. Hydrate generic KV states first
+    // 1. Hydrate generic KV states first (dengan proteksi merge untuk password security & auto-backfill!)
     const kvStates = data.kvStates as Array<{ state_key: string; state_value: unknown }> | undefined;
+    const seenBackendKvKeys = new Set<string>();
+    let remoteSec: Record<string, Record<string, unknown>> = {};
     if (Array.isArray(kvStates)) {
       for (const row of kvStates) {
-        // Jangan timpa data yang baru saja disimpan pengguna selama proses hydrate berlangsung
+        if (!row.state_key || row.state_value === undefined) continue;
+        seenBackendKvKeys.add(row.state_key);
+        if (row.state_key === "pa_user_password_security_v1" && typeof row.state_value === "object") {
+          remoteSec = row.state_value as Record<string, Record<string, unknown>>;
+          continue;
+        }
         if ((localWriteTs.get(row.state_key) ?? 0) >= hydrateStartedAt) continue;
-        if (row.state_key && row.state_value !== undefined) {
-          localStorage.setItem(row.state_key, JSON.stringify(row.state_value));
+        localStorage.setItem(row.state_key, JSON.stringify(row.state_value));
+      }
+    }
+
+    // Merge password security map (browser lama -> backend auto-backfill)
+    const mergedSec = mergePasswordSecurityMapsClient(remoteSec, preLocalSec);
+    if (Object.keys(mergedSec).length > 0) {
+      localStorage.setItem("pa_user_password_security_v1", JSON.stringify(mergedSec));
+      const remoteDigests = Object.values(remoteSec).filter((r) => Boolean(r?.passwordDigest)).length;
+      const mergedDigests = Object.values(mergedSec).filter((r) => Boolean(r?.passwordDigest)).length;
+      if (mergedDigests > remoteDigests || (!seenBackendKvKeys.has("pa_user_password_security_v1") && Object.keys(preLocalSec).length > 0)) {
+        void syncToSupabase({ kind: "kv-state", stateKey: "pa_user_password_security_v1", stateValue: mergedSec });
+      }
+    }
+
+    // Jika browser lama sudah memiliki user di pa_managed_users_v1 yang belum tersimpan di KV backend, gabungkan & dorong ke backend!
+    if (preLocalUsers.length > 0) {
+      let currentKvUsers: Array<Record<string, unknown>> = [];
+      try {
+        const parsed = JSON.parse(localStorage.getItem("pa_managed_users_v1") ?? "[]");
+        if (Array.isArray(parsed)) currentKvUsers = parsed;
+      } catch {
+        currentKvUsers = [];
+      }
+      let archSet = new Set<string>();
+      try {
+        const arch = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
+        if (Array.isArray(arch)) {
+          archSet = new Set(arch.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
+        }
+      } catch {
+        archSet = new Set();
+      }
+      if (!seenBackendKvKeys.has("pa_managed_users_v1") || currentKvUsers.length === 0) {
+        localStorage.setItem("pa_managed_users_v1", JSON.stringify(preLocalUsers));
+        void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
+        for (const u of preLocalUsers) {
+          void syncToSupabase({ kind: "user-upsert", user: u });
+        }
+      } else {
+        const remoteIds = new Set(currentKvUsers.map((u) => String(u.employeeId ?? "").toLowerCase()).filter(Boolean));
+        const missingOnRemote = preLocalUsers.filter((u) => {
+          const id = String(u.employeeId ?? "").toLowerCase();
+          return Boolean(id) && !remoteIds.has(id) && !archSet.has(id);
+        });
+        if (missingOnRemote.length > 0) {
+          const combined = [...currentKvUsers, ...missingOnRemote];
+          localStorage.setItem("pa_managed_users_v1", JSON.stringify(combined));
+          void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: combined });
+          for (const u of missingOnRemote) {
+            void syncToSupabase({ kind: "user-upsert", user: u });
+          }
         }
       }
+    }
+    if (!seenBackendKvKeys.has("pa_unit_login_configs_v1") && preLocalLoginCfg && Object.keys(preLocalLoginCfg).length > 0) {
+      void syncToSupabase({ kind: "kv-state", stateKey: "pa_unit_login_configs_v1", stateValue: preLocalLoginCfg });
     }
 
     // 2. Hydrate users if available in DB
@@ -1675,8 +1999,13 @@ export async function replaceAllBackendUsersAndResetForTrial(
     savePersistedState("pa_trial_mode_clean_v1", true);
   }
 
-  // Save new imported users as authoritative state
+  // Save new imported users as authoritative state (both PostgREST & Edge Function kv_store_74dadec6)
   savePersistedState("pa_managed_users_v1", importedUsers);
+  await syncToSupabase({
+    kind: "users-replace",
+    users: importedUsers,
+    resetKeys: resetTransactions ? TRANSACTIONAL_KEYS : [],
+  });
 
   try {
     // Clear old users in Supabase pa_users table then upsert imported users

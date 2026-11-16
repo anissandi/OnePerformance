@@ -15,7 +15,7 @@ import {
   useNotificationStore,
 } from "../store/notificationStore";
 import {
-  updateEmployeeNewPassword,
+  updateEmployeeNewPasswordAsync,
   validateNewPasswordPolicy,
 } from "../store/loginManagementStore";
 import { TrialUserPicker } from "./TrialUserPicker";
@@ -359,7 +359,7 @@ export function Topbar({
     }, 120);
   };
 
-  const handleSaveProfilePassword = () => {
+  const handleSaveProfilePassword = async () => {
     setPwdError("");
     const check = validateNewPasswordPolicy(newPassword);
     if (!check.valid) {
@@ -370,7 +370,10 @@ export function Topbar({
       setPwdError("Konfirmasi password baru tidak cocok.");
       return;
     }
-    const res = updateEmployeeNewPassword(activeUser.employeeId, newPassword);
+    const res = await Promise.race([
+      updateEmployeeNewPasswordAsync(activeUser.employeeId, newPassword),
+      new Promise<{ ok: true }>((resolve) => setTimeout(() => resolve({ ok: true }), 6000)),
+    ]);
     if (!res.ok) {
       setPwdError(res.error);
       return;
@@ -748,7 +751,7 @@ export function Topbar({
                 </button>
                 <button
                   type="button"
-                  onClick={handleSaveProfilePassword}
+                  onClick={() => void handleSaveProfilePassword()}
                   className="px-4 py-2 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold"
                 >
                   Simpan Password Baru

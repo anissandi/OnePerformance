@@ -22,14 +22,16 @@ import {
   COMPANY_UNIT_LOCATIONS,
   SESSION_EXPIRED_NOTICE_KEY,
   evaluateAndSyncSession,
+  isSameCompanyUnit,
   loadManagedUsers,
   loginWithCompanyAndEmployeeId,
   validateLoginCompanyUnit,
 } from "../store/authStore";
-import { refreshLoginCriticalStateFromBackend } from "../services/supabaseClient";
+import { refreshLoginCriticalStateFromBackend, syncToSupabase } from "../services/supabaseClient";
 import {
   requestOtpFromBackend,
-  updateEmployeeNewPassword,
+  saveUserSecurityRecordAsync,
+  updateEmployeeNewPasswordAsync,
   useLoginManagement,
   validateNewPasswordPolicy,
   verifyEmployeePasswordLogin,
@@ -134,11 +136,17 @@ export function LoginPage() {
     return defaultPortalPath;
   }
 
-  const matchedEmployee = loadManagedUsers().find(
-    (u) =>
-      u.employeeId.toLowerCase() === employeeId.trim().toLowerCase() ||
-      (u.regNo ?? "").toLowerCase() === employeeId.trim().toLowerCase(),
-  );
+  const allManaged = loadManagedUsers();
+  const qLower = employeeId.trim().toLowerCase();
+  const matchedEmployee =
+    allManaged.find(
+      (u) =>
+        isSameCompanyUnit(u.company, selectedLoc.company) &&
+        (u.employeeId.toLowerCase() === qLower || (u.regNo ?? "").toLowerCase() === qLower),
+    ) ??
+    allManaged.find(
+      (u) => u.employeeId.toLowerCase() === qLower || (u.regNo ?? "").toLowerCase() === qLower,
+    );
 
   async function handleSendOtp() {
     if (!employeeId.trim()) return;
@@ -187,7 +195,7 @@ export function LoginPage() {
       const targetEmpId = unitCheck.user.employeeId;
 
       if (isPasswordMode) {
-        const pwdVerify = verifyEmployeePasswordLogin(targetEmpId, passwordInput);
+        const pwdVerify = verifyEmployeePasswordLogin(targetEmpId, passwordInput, unitCheck.user.regNo);
         if (!pwdVerify.ok) {
           setError(pwdVerify.error);
           return;
@@ -199,6 +207,14 @@ export function LoginPage() {
           setError("");
           return;
         }
+        // Pastikan data user & digest password-nya tersinkron penuh ke Supabase agar bisa dipakai di semua browser/device/incognito
+        await Promise.race([
+          Promise.all([
+            saveUserSecurityRecordAsync(pwdVerify.record),
+            syncToSupabase({ kind: "user-upsert", user: unitCheck.user }),
+          ]),
+          new Promise((resolve) => setTimeout(resolve, 3500)),
+        ]);
       }
 
       const res = loginWithCompanyAndEmployeeId(selectedLoc.company, targetEmpId);
@@ -212,7 +228,10 @@ export function LoginPage() {
     }
   }
 
-  function handleSaveMandatoryNewPassword() {
+  const [savingNewPwd, setSavingNewPwd] = useState(false);
+
+  async function handleSaveMandatoryNewPassword() {
+    if (savingNewPwd) return;
     setError("");
     const targetEmpId = matchedEmployee?.employeeId || employeeId.trim();
     const policy = validateNewPasswordPolicy(newPassword);
@@ -224,12 +243,23 @@ export function LoginPage() {
       setError("Konfirmasi password baru tidak sama dengan password baru.");
       return;
     }
-    const saved = updateEmployeeNewPassword(targetEmpId, newPassword);
-    if (!saved.ok) {
-      setError(saved.error);
-      return;
+    setSavingNewPwd(true);
+    try {
+      const saved = await Promise.race([
+        updateEmployeeNewPasswordAsync(targetEmpId, newPassword),
+        new Promise<{ ok: true }>((resolve) => setTimeout(() => resolve({ ok: true }), 6000)),
+      ]);
+      if (!saved.ok) {
+        setError(saved.error);
+        return;
+      }
+      if (matchedEmployee) {
+        void syncToSupabase({ kind: "user-upsert", user: matchedEmployee });
+      }
+      setShowPasswordUpdatedModal(true);
+    } finally {
+      setSavingNewPwd(false);
     }
-    setShowPasswordUpdatedModal(true);
   }
 
   function handleAcknowledgePasswordUpdated() {
@@ -372,11 +402,11 @@ export function LoginPage() {
 
               <button
                 type="button"
-                onClick={handleSaveMandatoryNewPassword}
+                onClick={() => void handleSaveMandatoryNewPassword()}
                 className="w-full flex items-center justify-center gap-2 bg-[#1A284F] hover:bg-[#131d3b] text-white font-semibold rounded-xl py-3 text-sm transition-colors"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                Simpan Password Baru
+                {savingNewPwd ? "Menyimpan..." : "Simpan Password Baru"}
               </button>
             </div>
           ) : (

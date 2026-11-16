@@ -43,6 +43,8 @@ export interface UserPasswordSecurityRecord {
   /** Jika true, akun diblokir karena 5x salah password. */
   isBlocked: boolean;
   updatedAt: string;
+  /** Diisi hanya saat Admin melakukan Reset Password ke default agar merge lintas perangkat membedakannya dari cache kosong. */
+  passwordResetAt?: string;
 }
 
 export const LOGIN_CONFIG_BY_UNIT_KEY = "pa_unit_login_configs_v1";
@@ -202,35 +204,57 @@ export function loadUserSecurityMap(): Record<string, UserPasswordSecurityRecord
   return loadPersistedState<Record<string, UserPasswordSecurityRecord>>(USER_SECURITY_MAP_KEY, {});
 }
 
-export function getUserSecurityRecord(employeeId: string): UserPasswordSecurityRecord {
+export function getUserSecurityRecord(employeeId: string, altRegNo?: string): UserPasswordSecurityRecord {
   const key = employeeId.trim().toUpperCase();
+  const altKey = (altRegNo ?? "").trim().toUpperCase();
   const map = loadUserSecurityMap();
+  if (map[key]?.passwordDigest) return { ...map[key], employeeId: key };
+  // Cek juga case-insensitive atau berdasarkan Reg No apabila sebelumnya tersimpan dengan key berbeda
+  const entries = Object.entries(map);
+  const ciMatch = entries.find(([k, v]) => k.trim().toUpperCase() === key && Boolean(v?.passwordDigest));
+  if (ciMatch) return { ...ciMatch[1], employeeId: key };
+  if (altKey) {
+    const regMatch = entries.find(([k, v]) => k.trim().toUpperCase() === altKey && Boolean(v?.passwordDigest));
+    if (regMatch) return { ...regMatch[1], employeeId: key };
+  }
+  const anyMatch =
+    map[key] ??
+    entries.find(([k]) => k.trim().toUpperCase() === key)?.[1] ??
+    (altKey ? entries.find(([k]) => k.trim().toUpperCase() === altKey)?.[1] : undefined);
   return (
-    map[key] ?? {
-      employeeId: key,
-      passwordDigest: undefined,
-      mustChangePassword: true,
-      failedAttempts: 0,
-      isBlocked: false,
-      updatedAt: "",
-    }
+    anyMatch
+      ? { ...anyMatch, employeeId: key }
+      : {
+          employeeId: key,
+          passwordDigest: undefined,
+          mustChangePassword: true,
+          failedAttempts: 0,
+          isBlocked: false,
+          updatedAt: "",
+        }
   );
 }
 
-export function saveUserSecurityRecord(record: UserPasswordSecurityRecord): void {
+export async function saveUserSecurityRecordAsync(record: UserPasswordSecurityRecord): Promise<void> {
   const key = record.employeeId.trim().toUpperCase();
   const map = loadUserSecurityMap();
-  const saved = { ...record, employeeId: key, updatedAt: new Date().toISOString() };
+  const saved: UserPasswordSecurityRecord = {
+    ...record,
+    employeeId: key,
+    updatedAt: record.updatedAt || new Date().toISOString(),
+  };
   const next = { ...map, [key]: saved };
   try {
     localStorage.setItem(USER_SECURITY_MAP_KEY, JSON.stringify(next));
   } catch {
     // ignore
   }
-  // Merge aman ke backend: hanya record milik karyawan ini yang diperbarui (tidak menimpa record karyawan lain
-  // dari cache browser/perangkat yang belum ter-update).
-  void mergeKvMapRecord(USER_SECURITY_MAP_KEY, key, saved);
   queueMicrotask(() => window.dispatchEvent(new Event(LOGIN_CONFIG_UPDATED_EVENT)));
+  await mergeKvMapRecord(USER_SECURITY_MAP_KEY, key, saved);
+}
+
+export function saveUserSecurityRecord(record: UserPasswordSecurityRecord): void {
+  void saveUserSecurityRecordAsync({ ...record, updatedAt: new Date().toISOString() });
 }
 
 /**
@@ -241,10 +265,11 @@ export function saveUserSecurityRecord(record: UserPasswordSecurityRecord): void
 export function verifyEmployeePasswordLogin(
   employeeId: string,
   passwordInput: string,
+  altRegNo?: string,
 ):
-  | { ok: true; mustChangePassword: boolean }
+  | { ok: true; mustChangePassword: boolean; record: UserPasswordSecurityRecord }
   | { ok: false; isBlocked: boolean; remainingAttempts: number; error: string } {
-  const rec = getUserSecurityRecord(employeeId);
+  const rec = getUserSecurityRecord(employeeId, altRegNo);
   if (rec.isBlocked || rec.failedAttempts >= 5) {
     return {
       ok: false,
@@ -284,16 +309,47 @@ export function verifyEmployeePasswordLogin(
     };
   }
 
-  // Berhasil login: reset failedAttempts
+  // Berhasil login: reset failedAttempts & pastikan record tersinkron ke backend di bawah canonical Employee ID
   const mustChange = !rec.passwordDigest || rec.mustChangePassword;
-  saveUserSecurityRecord({
+  const cleanRecord: UserPasswordSecurityRecord = {
     ...rec,
+    employeeId: employeeId.trim().toUpperCase(),
     failedAttempts: 0,
     isBlocked: false,
     mustChangePassword: mustChange,
     updatedAt: new Date().toISOString(),
+  };
+  saveUserSecurityRecord(cleanRecord);
+  return { ok: true, mustChangePassword: mustChange, record: cleanRecord };
+}
+
+export async function updateEmployeeNewPasswordAsync(
+  employeeId: string,
+  newPassword: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const policy = validateNewPasswordPolicy(newPassword);
+  if (!policy.valid) {
+    return { ok: false, error: policy.message };
+  }
+  const digest = computePasswordDigest(newPassword);
+  if (digest === INITIAL_DEFAULT_DIGEST) {
+    return {
+      ok: false,
+      error: "Password baru tidak boleh sama dengan password default awal.",
+    };
+  }
+  const rec = getUserSecurityRecord(employeeId);
+  await saveUserSecurityRecordAsync({
+    ...rec,
+    employeeId: employeeId.trim().toUpperCase(),
+    passwordDigest: digest,
+    mustChangePassword: false,
+    failedAttempts: 0,
+    isBlocked: false,
+    passwordResetAt: undefined,
+    updatedAt: new Date().toISOString(),
   });
-  return { ok: true, mustChangePassword: mustChange };
+  return { ok: true };
 }
 
 export function updateEmployeeNewPassword(employeeId: string, newPassword: string): { ok: true } | { ok: false; error: string } {
@@ -311,10 +367,12 @@ export function updateEmployeeNewPassword(employeeId: string, newPassword: strin
   const rec = getUserSecurityRecord(employeeId);
   saveUserSecurityRecord({
     ...rec,
+    employeeId: employeeId.trim().toUpperCase(),
     passwordDigest: digest,
     mustChangePassword: false,
     failedAttempts: 0,
     isBlocked: false,
+    passwordResetAt: undefined,
     updatedAt: new Date().toISOString(),
   });
   return { ok: true };
@@ -322,13 +380,15 @@ export function updateEmployeeNewPassword(employeeId: string, newPassword: strin
 
 export function resetEmployeePasswordToDefault(employeeId: string, employeeName = ""): void {
   const key = employeeId.trim().toUpperCase();
+  const nowIso = new Date().toISOString();
   saveUserSecurityRecord({
     employeeId: key,
     passwordDigest: undefined,
     mustChangePassword: true,
     failedAttempts: 0,
     isBlocked: false,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIso,
+    passwordResetAt: nowIso,
   });
   void syncToSupabase({
     audit: {
