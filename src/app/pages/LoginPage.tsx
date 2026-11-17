@@ -1,7 +1,9 @@
 // @refresh reset
 import { useState, useRef, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { AnimatePresence, motion } from "motion/react";
 import {
+  ArrowLeft,
   Building2,
   ChevronDown,
   Send,
@@ -18,6 +20,10 @@ import {
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import worldMap from "@/imports/image-3.png";
+import logoRsup from "@/imports/logo-rsup.png";
+import logoPs from "@/imports/logo-ps.png";
+import logoRstm from "@/imports/logo-rstm.png";
+import logoGhs from "@/imports/logo-ghs.png";
 import {
   COMPANY_UNIT_LOCATIONS,
   SESSION_EXPIRED_NOTICE_KEY,
@@ -41,11 +47,19 @@ import {
   type LoginMethodOption,
 } from "../store/loginManagementStore";
 
+function getUnitLogo(code: string): string {
+  if (code === "PSJ" || code === "PSG" || code === "PSKE") return logoPs;
+  if (code === "RSTM") return logoRstm;
+  if (code === "GHS") return logoGhs;
+  return logoRsup;
+}
+
 const locations = [
   ...COMPANY_UNIT_LOCATIONS.map((loc) => ({
     code: loc.code,
     company: loc.company,
     name: loc.fullName,
+    logo: getUnitLogo(loc.code),
   })),
 ];
 
@@ -60,6 +74,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { getUnitLoginConfig } = useLoginManagement();
+  const [step, setStep] = useState<"select-company" | "login">("select-company");
   const [locOpen, setLocOpen] = useState(false);
   const [selectedLoc, setSelectedLoc] = useState(locations[0]);
   const [employeeId, setEmployeeId] = useState("");
@@ -282,17 +297,117 @@ export function LoginPage() {
       />
 
       {/* ── Logo ─────────────────────────────────────────────── */}
-      <div className="relative z-10 flex justify-center pt-10 pb-2">
+      <div className="relative z-10 flex flex-col items-center justify-center pt-10 pb-2">
         <ImageWithFallback
           src={logoSG}
           alt="Sambu Group"
           className="h-24 object-contain"
         />
+        <p className="mt-2 text-xs sm:text-sm font-bold tracking-[0.22em] text-[#1A284F] uppercase text-center">
+          ONE PERFORMANCE SYSTEM
+        </p>
       </div>
 
-      {/* ── Login card ───────────────────────────────────────── */}
-      <div className="relative z-10 flex-1 flex items-center justify-center px-4 pb-16">
-        <div className="w-full max-w-[420px] bg-white/75 backdrop-blur-md rounded-2xl shadow-xl border border-white/80 px-8 py-9">
+      {/* ── Main Content with Professional Motion Transition ─── */}
+      <div className="relative z-10 flex-1 flex items-center justify-center px-4 pb-14">
+        <AnimatePresence mode="wait">
+          {step === "select-company" && !mustChangeStep ? (
+            <motion.div
+              key="select-company"
+              initial={{ opacity: 0, y: 16, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -18, scale: 0.97 }}
+              transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+              className="w-full max-w-[980px] flex flex-col items-center"
+            >
+              <p className="text-sm font-medium text-gray-500 mb-6 text-center">
+                Pilih perusahaan untuk melanjutkan
+              </p>
+
+              {sessionExpiredNotice && (
+                <div className="mb-5 w-full max-w-xl rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-2.5 text-xs text-amber-800 flex items-start gap-2 shadow-sm">
+                  <Clock className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                  <span>
+                    Sesi login 30 menit Anda telah berakhir karena tidak aktif di halaman Sistem PA. Silakan pilih perusahaan dan login kembali.
+                  </span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4.5 w-full">
+                {locations.map((loc, idx) => (
+                  <motion.button
+                    key={loc.code}
+                    type="button"
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.32, delay: idx * 0.035, ease: [0.22, 1, 0.36, 1] }}
+                    whileHover={{ y: -4, scale: 1.015 }}
+                    whileTap={{ scale: 0.985 }}
+                    onClick={() => {
+                      setSelectedLoc(loc);
+                      setLocOpen(false);
+                      setError("");
+                      setStep("login");
+                    }}
+                    className="group bg-white/75 hover:bg-white/95 backdrop-blur-md rounded-2xl border border-white/90 shadow-md hover:shadow-lg px-5 py-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer"
+                  >
+                    <div
+                      className="w-14 h-14 mb-3 flex items-center justify-center transition-transform duration-300 group-hover:scale-105"
+                      style={{ clipPath: "polygon(50% 6%, 94% 88%, 6% 88%)" }}
+                    >
+                      <img
+                        src={loc.logo}
+                        alt={loc.code}
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    <div className="text-xs font-bold text-[#1A284F] uppercase tracking-wide leading-snug">
+                      {loc.name}
+                    </div>
+                    <div className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700/80">
+                      <Building2 className="w-3 h-3" />
+                      <span>{loc.code}</span>
+                    </div>
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="login-form"
+              initial={{ opacity: 0, y: 20, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -16, scale: 0.97 }}
+              transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+              className="w-full max-w-[420px] bg-white/80 backdrop-blur-md rounded-2xl shadow-xl border border-white/80 px-8 py-8"
+            >
+              {!mustChangeStep && (
+                <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-200/70">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep("select-company");
+                      setError("");
+                      setOtpSent(false);
+                      setOtpCode("");
+                      setPasswordInput("");
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] hover:text-[#131d3b] transition-colors"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    Ganti Perusahaan
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-6 h-6 shrink-0"
+                      style={{ clipPath: "polygon(50% 6%, 94% 88%, 6% 88%)" }}
+                    >
+                      <img src={selectedLoc.logo} alt={selectedLoc.code} className="w-full h-full object-contain" />
+                    </div>
+                    <span className="text-xs font-bold text-[#1A284F]">{selectedLoc.code}</span>
+                  </div>
+                </div>
+              )}
 
           {mustChangeStep ? (
             /* ── Halaman Wajib Ganti Password Default ke Password Baru ── */
@@ -416,44 +531,6 @@ export function LoginPage() {
               </span>
             </div>
           )}
-          {/* Lokasi Usaha */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                <Building2 className="w-4 h-4 text-gray-500" />
-                Company Unit
-              </label>
-            </div>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setLocOpen(o => !o)}
-                className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-4 py-2.5 bg-white text-left hover:border-gray-400 transition-colors focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20"
-              >
-                <div>
-                  <div className="text-sm font-semibold text-gray-800">{selectedLoc.code}</div>
-                  <div className="text-xs text-gray-500 mt-0.5">{selectedLoc.name}</div>
-                </div>
-                <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${locOpen ? "rotate-180" : ""}`} />
-              </button>
-              {locOpen && (
-                <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
-                  {locations.map(loc => (
-                    <button
-                      key={loc.code}
-                      type="button"
-                      onClick={() => { setSelectedLoc(loc); setLocOpen(false); setError(""); }}
-                      className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${selectedLoc.code === loc.code ? "bg-[#1A284F]/5 border-l-2 border-[#1A284F]" : ""}`}
-                    >
-                      <div className="text-sm font-semibold text-gray-800">{loc.code}</div>
-                      <div className="text-xs text-gray-500">{loc.name}</div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* ID Karyawan */}
           <div className="mb-5">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -616,7 +693,9 @@ export function LoginPage() {
           )}
           </>
           )}
-        </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Popup Sukses Ganti Password Baru */}
