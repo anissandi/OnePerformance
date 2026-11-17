@@ -1018,7 +1018,9 @@ function SmartGoalsCheckInWorkspace({
     }
 
     const isLocked = Boolean(wfRec && !isRev);
-    setGoals(source);
+    // S5: Tabel SMART Goals Measurement hanya terisi setelah SMART Goals Setting berstatus Validated
+    const effectiveSource = settingValidated ? source : [];
+    setGoals(effectiveSource);
     setSubmitted(isLocked);
     if (isLocked) setView("preview");
     setStatusLabel(nextLabel);
@@ -1026,7 +1028,7 @@ function SmartGoalsCheckInWorkspace({
     setWfRecState(wfRec);
 
     setEntries(
-      source.map((g) => {
+      effectiveSource.map((g) => {
         const st = savedCheckIn.find((x) => x.goalId === g.id);
         if (!st) return makeBlankEntry(g);
         const extras: Record<number, ActionPlanExtra> = {};
@@ -1056,7 +1058,7 @@ function SmartGoalsCheckInWorkspace({
       }),
     );
     setTargetActuals(
-      source.map((g) => {
+      effectiveSource.map((g) => {
         const st = savedCheckIn.find((x) => x.goalId === g.id);
         return {
           goalId: g.id,

@@ -12,8 +12,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/too
 import { saveRCASubmission, loadRCASubmissions, submitRCAsForMonths } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
-import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
-import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
+import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { pushEmployeeNotification } from "../../store/notificationStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
 import {
@@ -113,7 +114,10 @@ export interface KPIItem {
   polaritas: Polaritas;
   detailFormula: string;
   keterangan: string;
-  section: "A" | "B";
+  section: string;
+  sectionLabel?: string;
+  sectionBobot?: string;
+  trackingPeriod?: string;
   subRows: SubRow[];
   /** Per-month target for simple KPIs (mapped to "Target" sub-row) */
   monthlyTargets?: Record<string, string>;
@@ -695,6 +699,61 @@ export function ownerHasKpiTransactions(employeeId: string): boolean {
   );
 }
 
+function deriveTrackingPeriodeLabel(satuan?: string, trackingPeriod?: string): string {
+  const s = String(satuan ?? "");
+  const idx = s.indexOf("/");
+  if (idx >= 0) {
+    const raw = s.slice(idx + 1).trim();
+    if (raw) {
+      if (/^bulan$/i.test(raw)) return "Bulan";
+      if (/^tahun$/i.test(raw)) return "Tahun";
+      return raw;
+    }
+  }
+  return trackingPeriod || "Bulan";
+}
+
+export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, unknown>>): KPIItem[] {
+  return rows.map((r, idx) => ({
+    no: String(r.no ?? idx + 1),
+    section: String(r.section ?? "A").toUpperCase() || "A",
+    sectionLabel: r.sectionLabel ? String(r.sectionLabel) : undefined,
+    sectionBobot: r.sectionBobot ? String(r.sectionBobot) : undefined,
+    trackingPeriod: deriveTrackingPeriodeLabel(String(r.satuan ?? ""), r.trackingPeriod ? String(r.trackingPeriod) : undefined),
+    perspektif: String(r.perspektif ?? "Proses"),
+    kpi: String(r.kpi ?? ""),
+    satuan: String(r.satuan ?? "%"),
+    formula: String(r.formula ?? "Jumlah"),
+    bobot: String(r.bobot ?? "0%"),
+    definisi: String(r.definisi ?? ""),
+    source: String(r.source ?? ""),
+    baseline2025: String(r.baseline2025 ?? ""),
+    target2026: String(r.target2026 ?? ""),
+    polaritas: (String(r.polaritas ?? "Maximize") as Polaritas),
+    detailFormula: String(r.detailFormula ?? ""),
+    keterangan: String(r.keterangan ?? ""),
+    subRows: mkSimple(String(r.polaritas ?? "") === "Minimize"),
+    monthlyTargets: (r.monthlyTargets as Record<string, string>) ?? {},
+    colorIndicator: Boolean(r.colorIndicator),
+    indicatorMode: (r.indicatorMode as KPIItem["indicatorMode"]) ?? "numeric",
+  }));
+}
+
+export function resolveEmployeeTrackingKpiItems(employeeId: string): KPIItem[] {
+  try {
+    const normId = normalizeEmployeeId(employeeId);
+    const rawSet = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+    const setMap = rawSet ? (JSON.parse(rawSet) as Record<string, Array<Record<string, unknown>>>) : {};
+    const empItems = setMap[normId] ?? setMap[employeeId];
+    if (Array.isArray(empItems) && empItems.length > 0) {
+      return mapStoredSettingRowsToTrackingItems(empItems);
+    }
+  } catch {
+    // ignore
+  }
+  return KPI_ITEMS;
+}
+
 export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
   try {
     const activeUser = getActiveUser();
@@ -731,11 +790,12 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
   const cellsMap = snap.cellsMap && typeof snap.cellsMap === "object" ? snap.cellsMap : {};
 
   // Hitung jumlah bulan unik (Jan-26 s/d Dec-26) yang sudah memiliki minimal 1 input aktual terisi
+  const empKpiList = resolveEmployeeTrackingKpiItems(employeeId);
   const filledMonthLabels = new Set<string>();
   for (const m of months) {
     if (!FULL_YEAR_KPI_MONTHS.includes(m.label as typeof FULL_YEAR_KPI_MONTHS[number])) continue;
     const monthCells = cellsMap[m.id] ?? m.cells ?? {};
-    const hasActualValue = KPI_ITEMS.some((kpi) =>
+    const hasActualValue = empKpiList.some((kpi) =>
       kpi.subRows.some((sub, si) => {
         if (sub.compute) return false;
         if (sub.label.toLowerCase().startsWith("target")) return false;
@@ -752,7 +812,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
   const isFullYearMonthsComplete = trackedMonthsCount >= FULL_YEAR_KPI_MONTHS.length;
   const hasAnyTrackingData = trackedMonthsCount > 0;
 
-  let totalKPI = KPI_ITEMS.length;
+  let totalKPI = empKpiList.length;
   try {
     const rawSet = localStorage.getItem("pa_kpi_setting_by_emp_v2");
     const setMap = rawSet ? (JSON.parse(rawSet) as Record<string, unknown[]>) : {};
@@ -767,7 +827,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
   let trackedKpiCount = 0;
   let weightedSum = 0;
   if (hasAnyTrackingData) {
-    for (const k of KPI_ITEMS) {
+    for (const k of empKpiList) {
       const ach = computeKPIAchievement(k, cellsMap, months);
       if (ach !== null) {
         trackedKpiCount++;
@@ -1041,9 +1101,9 @@ const W_KPI = 270;
 
 // ─── Pre-fill helper ──────────────────────────────────────────────────────────
 
-function getPrefilledCells(monthLabel: string): Record<CellKey, string> {
+function getPrefilledCells(monthLabel: string, itemsList: KPIItem[] = KPI_ITEMS): Record<CellKey, string> {
   const cells: Record<CellKey, string> = {};
-  KPI_ITEMS.forEach((kpi) => {
+  itemsList.forEach((kpi) => {
     // Fill specific sub-row targets (complex KPIs)
     if (kpi.subRowTargets) {
       Object.entries(kpi.subRowTargets).forEach(([si, val]) => {
@@ -1116,23 +1176,25 @@ export function separatorMismatchMessage(target: string, actual: string): string
 
 function AddMonthModal({
   existingLabels,
+  kpiItems = KPI_ITEMS,
   onAdd,
   onClose,
 }: {
   existingLabels: string[];
+  kpiItems?: KPIItem[];
   onAdd: (entry: MonthEntry) => void;
   onClose: () => void;
 }) {
   const available = MONTH_OPTIONS.filter((m) => !existingLabels.includes(m));
   const [label, setLabel] = useState(available[0] ?? "");
-  const [cells, setCells] = useState<Record<CellKey, string>>(() => getPrefilledCells(available[0] ?? ""));
+  const [cells, setCells] = useState<Record<CellKey, string>>(() => getPrefilledCells(available[0] ?? "", kpiItems));
   const [attempted, setAttempted] = useState(false);
   const [showEmptyConfirm, setShowEmptyConfirm] = useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
   const handleLabelChange = (newLabel: string) => {
     setLabel(newLabel);
-    setCells(getPrefilledCells(newLabel));
+    setCells(getPrefilledCells(newLabel, kpiItems));
     setAttempted(false);
   };
 
@@ -1142,7 +1204,7 @@ function AddMonthModal({
   // Collect required (actual) fields that are empty
   const getMissingFields = () => {
     const missing: { kpiNo: string; subIdx: number }[] = [];
-    KPI_ITEMS.forEach((kpi) => {
+    kpiItems.forEach((kpi) => {
       kpi.subRows.forEach((sub, si) => {
         if (sub.compute) return;
         if (sub.label.toLowerCase().startsWith("target")) return;
@@ -1254,7 +1316,7 @@ function AddMonthModal({
                 </div>
               </div>
               <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 max-h-36 overflow-y-auto">
-                {KPI_ITEMS.filter((k) => missingFields.some((f) => f.kpiNo === k.no)).map((k) => {
+                {kpiItems.filter((k) => missingFields.some((f) => f.kpiNo === k.no)).map((k) => {
                   const emptySubRows = missingFields.filter((f) => f.kpiNo === k.no).map((f) => k.subRows[f.subIdx].label);
                   return (
                     <div key={k.no} className="mb-1.5 last:mb-0">
@@ -1287,12 +1349,17 @@ function AddMonthModal({
         )}
 
         <div ref={scrollRef} className="px-6 py-4 max-h-[60vh] overflow-y-auto flex flex-col gap-5">
-          {["A", "B"].map((sec) => (
+          {Array.from(new Set(kpiItems.map((k) => k.section))).sort().map((sec, sIdx) => {
+            const firstInSec = kpiItems.find((k) => k.section === sec);
+            const secHeader = firstInSec?.sectionLabel
+              ? `${sec}. ${firstInSec.sectionLabel}${firstInSec.sectionBobot ? ` (${firstInSec.sectionBobot})` : ""}`
+              : sec === "A" ? "A. Objective KPI (20%)" : sec === "B" ? "B. Functional KPI (80%)" : `Section ${sec}`;
+            return (
             <div key={sec}>
-              <p className={`text-xs font-bold text-white px-3 py-1.5 rounded-md mb-3 ${sec === "A" ? "bg-[#1565C0]" : "bg-[#1976D2]"}`}>
-                {sec === "A" ? "A. Objective KPI (20%)" : "B. Functional KPI (80%)"}
+              <p className={`text-xs font-bold text-white px-3 py-1.5 rounded-md mb-3 ${sIdx % 2 === 0 ? "bg-[#1565C0]" : "bg-[#1976D2]"}`}>
+                {secHeader}
               </p>
-              {KPI_ITEMS.filter((k) => k.section === sec).map((kpi) => {
+              {kpiItems.filter((k) => k.section === sec).map((kpi) => {
                 const kpiMissing = attempted ? (missingByKpi[kpi.no] ?? 0) : 0;
                 const getDraftRaw = (idx: number) => cells[ck(kpi.no, idx)] ?? "";
                 // Kelompokkan setiap pasangan Target + Actual (+ % Pencapaian) dalam 1 baris (1 line) agar jelas bagi karyawan
@@ -1536,7 +1603,8 @@ function AddMonthModal({
                 );
               })}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100">
@@ -2495,9 +2563,9 @@ function KPITable({
   /** Daftar KPI yang ditampilkan (DEMO: kosong untuk non-Administrator yang belum bertransaksi) */
   kpiItems?: KPIItem[];
 }) {
-  const sectionItems = (sec: "A" | "B") => kpiItems.filter((k) => k.section === sec);
+  const sectionItems = (sec: string) => kpiItems.filter((k) => k.section === sec);
 
-  const totalCols = 14 + months.length + 2 + (editable ? 1 : 0); // +1 for Total, +1 for Achievement
+  const totalCols = 15 + months.length + 2 + (editable ? 1 : 0); // +1 for Total, +1 for Achievement
 
   const getCellDisplay = (kpi: KPIItem, monthId: string, subIdx: number): string => {
     const sub = kpi.subRows[subIdx];
@@ -2508,7 +2576,7 @@ function KPITable({
     return cells[monthId]?.[ck(kpi.no, subIdx)] ?? "";
   };
 
-  const renderSectionRows = (sec: "A" | "B") =>
+  const renderSectionRows = (sec: string) =>
     sectionItems(sec).map((kpi) =>
       kpi.subRows.map((sub, si) => {
         const isFirst = si === 0;
@@ -2567,6 +2635,9 @@ function KPITable({
                 </td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed" style={{ minWidth: 230 }}>{kpi.detailFormula}</td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed" style={{ minWidth: 160 }}>{kpi.keterangan || "—"}</td>
+                <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 120 }}>
+                  {deriveTrackingPeriodeLabel(kpi.satuan, kpi.trackingPeriod)}
+                </td>
               </>
             )}
 
@@ -2816,6 +2887,7 @@ function KPITable({
             <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 88 }}>Polaritas</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 230 }}>Detail Formula</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 160 }}>Keterangan</th>
+            <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 120 }}>Periode Tracking</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 170 }}>Tracking</th>
             {months.map((m) => {
               const isEditableMth = editable && m.id === editableMonthId;
@@ -2860,21 +2932,21 @@ function KPITable({
         <tbody>
           {(() => {
             // Pre-compute section scores for header rows
-            const sectionScore = (sec: "A" | "B") =>
+            const sectionScore = (sec: string) =>
               kpiItems.filter((k) => k.section === sec).reduce((s, k) => {
                 const ach = computeKPIAchievement(k, cells, months);
                 if (ach === null) return s;
                 return s + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
               }, 0);
 
-            const scoreA = sectionScore("A");
-            const scoreB = sectionScore("B");
+            const dynamicSections = kpiItems.length > 0 ? Array.from(new Set(kpiItems.map((k) => k.section))).sort() : [];
             const totalBobot = kpiItems.reduce((s, k) => s + parseFloat(k.bobot.replace("%", "")), 0);
-            const totalNilai = scoreA + scoreB;
+            const totalNilai = dynamicSections.reduce((sum, sec) => sum + sectionScore(sec), 0);
             // colSpan for label = all cols except Achievement (and editable button)
-            const labelColSpan = 14 + months.length + 1;
+            const labelColSpan = 15 + months.length + 1;
+            const secPalette = ["#1565C0", "#1976D2", "#00838F", "#6A1B9A", "#2E7D32", "#EF6C00"];
 
-            const SectionHeader = ({ sec, label, bg, score }: { sec: "A" | "B"; label: string; bg: string; score: number }) => (
+            const SectionHeader = ({ sec, label, bg, score }: { sec: string; label: string; bg: string; score: number }) => (
               <tr>
                 <td colSpan={labelColSpan} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border"
                   style={{ background: bg, borderColor: bg }}>
@@ -2891,26 +2963,27 @@ function KPITable({
 
             return (
               <>
-                {/* Section A */}
-                <SectionHeader sec="A" label="A. Objective KPI — Bobot 20%" bg="#1565C0" score={scoreA} />
-                {renderSectionRows("A")}
-                {kpiItems.length === 0 && (
+                {kpiItems.length === 0 ? (
                   <tr>
-                    <td colSpan={totalCols} className="border border-gray-200 bg-white px-4 py-6 text-center text-xs text-gray-400">
-                      Belum ada data KPI. KPI akan tampil otomatis setelah KPI Setting berstatus Validated.
+                    <td colSpan={totalCols} className="border border-gray-200 bg-white px-4 py-10 text-center text-xs text-gray-400">
+                      Belum ada data KPI. Tabel KPI akan terisi otomatis setelah pengajuan KPI Setting berstatus Validated.
                     </td>
                   </tr>
-                )}
-
-                {/* Section B */}
-                <SectionHeader sec="B" label="B. Functional KPI — Bobot 80%" bg="#1976D2" score={scoreB} />
-                {renderSectionRows("B")}
-                {kpiItems.length === 0 && (
-                  <tr>
-                    <td colSpan={totalCols} className="border border-gray-200 bg-white px-4 py-6 text-center text-xs text-gray-400">
-                      Belum ada data KPI.
-                    </td>
-                  </tr>
+                ) : (
+                  dynamicSections.map((sec, sIdx) => {
+                    const first = kpiItems.find((k) => k.section === sec);
+                    const defTitle = sec === "A" ? "Objective KPI — Bobot 20%" : sec === "B" ? "Functional KPI — Bobot 80%" : `Section ${sec}`;
+                    const hdrLabel = first?.sectionLabel
+                      ? `${sec}. ${first.sectionLabel}${first.sectionBobot ? ` — Bobot ${first.sectionBobot}` : ""}`
+                      : `${sec}. ${defTitle}`;
+                    const bg = secPalette[sIdx % secPalette.length];
+                    return (
+                      <React.Fragment key={sec}>
+                        <SectionHeader sec={sec} label={hdrLabel} bg={bg} score={sectionScore(sec)} />
+                        {renderSectionRows(sec)}
+                      </React.Fragment>
+                    );
+                  })
                 )}
 
                 {/* ── Summary rows ── */}
@@ -2918,8 +2991,11 @@ function KPITable({
                   <td colSpan={totalCols} className="py-1 border border-[#1A284F]/20 bg-[#1A284F]/5" />
                 </tr>
                 {([
-                  { label: `Objective KPI (Section A)`, value: `${kpiItems.filter((k) => k.section === "A").length} KPI` },
-                  { label: `Functional KPI (Section B)`, value: `${kpiItems.filter((k) => k.section === "B").length} KPI` },
+                  ...dynamicSections.map((sec) => {
+                    const first = kpiItems.find((k) => k.section === sec);
+                    const sName = first?.sectionLabel || (sec === "A" ? "Objective KPI" : sec === "B" ? "Functional KPI" : `Section ${sec}`);
+                    return { label: `${sName} (Section ${sec})`, value: `${kpiItems.filter((k) => k.section === sec).length} KPI` };
+                  }),
                   { label: "Total KPI", value: `${kpiItems.length} KPI`, highlight: true },
                   { label: "Total Bobot KPI", value: `${totalBobot.toFixed(0)}%`, highlight: true },
                 ] as { label: string; value: string; highlight?: boolean }[]).map(({ label, value, highlight }) => (
@@ -3620,11 +3696,6 @@ function KPIWorkspace({
 
   const isDirectorMode = isDirectorRoleOrGrouping(activeUser);
   const isGmMode = !isDirectorMode && activeUser.role === "GM";
-  // DEMO: selain Administrator, karyawan yang belum pernah bertransaksi KPI melihat format tabel tanpa data
-  const showKpiSampleRows = usesDemoSampleData(activeUser) || ownerHasKpiTransactions(activeUser.employeeId);
-  const trackingKpiItems = showKpiSampleRows ? KPI_ITEMS : [];
-  // KPI (Group) tetap tampil sebagai dasar KPI Utama; KPI (Unit) mengikuti aturan demo di atas
-  const businessTrackingItems = isDirectorMode || showKpiSampleRows ? BUSINESS_KPI_ITEMS : [];
   const hasDualKpiTabs = !forcedTab && (isDirectorMode || isGmMode);
   const [directorKpiTabState, setDirectorKpiTab] = useState<"business" | "personal">(forcedTab ?? "business");
   const directorKpiTab = forcedTab ?? directorKpiTabState;
@@ -3661,6 +3732,9 @@ function KPIWorkspace({
       setSubmitted(st.submitted);
       setSubmittedDate(st.submittedDate);
       setEvidenceFiles(loadEvidenceFiles(activeUser.employeeId));
+      const ol = readOpenLockState();
+      setOpenLockRequested(ol.requested);
+      setOpenLockApproved(ol.approved);
       setWfRefreshTick((v) => v + 1);
     };
     window.addEventListener("focus", sync);
@@ -3677,10 +3751,25 @@ function KPIWorkspace({
     };
   }, []);
 
-  // Deadline lock flow
+  // Deadline lock flow (tersinkron ke pa_open_lock_requests_v1 di Supabase)
   const [showOpenLockModal, setShowOpenLockModal] = useState(false);
-  const [openLockRequested, setOpenLockRequested] = useState(false);
-  const [openLockApproved, setOpenLockApproved] = useState(false);
+  const readOpenLockState = () => {
+    try {
+      const list = loadPersistedState<Array<{ employeeId?: string; module?: string; status?: string }>>("pa_open_lock_requests_v1", []);
+      const normId = normalizeEmployeeId(activeUser.employeeId);
+      const mine = (Array.isArray(list) ? list : []).filter(
+        (r) => normalizeEmployeeId(String(r.employeeId ?? "")) === normId && String(r.module ?? "").toLowerCase().includes("kpi"),
+      );
+      return {
+        requested: mine.some((r) => r.status === "pending"),
+        approved: mine.some((r) => r.status === "approved"),
+      };
+    } catch {
+      return { requested: false, approved: false };
+    }
+  };
+  const [openLockRequested, setOpenLockRequested] = useState(() => readOpenLockState().requested);
+  const [openLockApproved, setOpenLockApproved] = useState(() => readOpenLockState().approved);
 
   // Edit request approval flow
   const [editRequestApproved, setEditRequestApproved] = useState(false);
@@ -3719,18 +3808,78 @@ function KPIWorkspace({
   })();
   const isKpiSettingValidated = kpiSettingGate.isValidated;
 
-  const isDeadlinePassed = (() => {
+  // S5 & KB7 & KB12: Tabel KPI Tracking (Personal, Unit, Group) hanya terisi jika KPI Setting sudah berstatus Validated/Approved
+  // dan isinya disinkronkan 100% dengan definisi KPI di KPI Setting.
+  const storedPersonalSettings = (() => {
+    try {
+      const normId = normalizeEmployeeId(activeUser.employeeId);
+      const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+      const map = raw ? (JSON.parse(raw) as Record<string, Array<Record<string, unknown>>>) : {};
+      return map[normId] ?? map[activeUser.employeeId] ?? [];
+    } catch {
+      return [];
+    }
+  })();
+  const trackingKpiItems: KPIItem[] = isKpiSettingValidated
+    ? (storedPersonalSettings.length > 0 ? mapStoredSettingRowsToTrackingItems(storedPersonalSettings) : [])
+    : [];
+
+  const isBusinessSettingApproved = (() => {
+    try {
+      const raw = localStorage.getItem("pa_kpi_business_status_v1");
+      const map = raw ? (JSON.parse(raw) as Record<string, { approved?: boolean }>) : {};
+      const key = isDirectorMode ? `corporate-${groupName}` : `unit-${activeUser.company}`;
+      return Boolean(map[key]?.approved);
+    } catch {
+      return false;
+    }
+  })();
+  const storedBusinessSettings = (() => {
+    try {
+      const raw = localStorage.getItem("pa_kpi_business_by_scope_v1");
+      const map = raw ? (JSON.parse(raw) as Record<string, Array<Record<string, unknown>>>) : {};
+      const key = isDirectorMode ? `corporate-${groupName}` : `unit-${activeUser.company}`;
+      return map[key] ?? [];
+    } catch {
+      return [];
+    }
+  })();
+  const businessTrackingItems: KPIItem[] = isBusinessSettingApproved
+    ? (storedBusinessSettings.length > 0 ? mapStoredSettingRowsToTrackingItems(storedBusinessSettings) : [])
+    : [];
+
+  const kpiMeasurementModuleInfo = (() => {
     try {
       const mods = loadLiveModuleActivationList("2026");
-      const kpiMeasMod = mods.find(
+      return mods.find(
         (m) =>
           m.id === "kpi-measurement" ||
           m.id === "kpi_measurement" ||
           m.label.toLowerCase().includes("kpi · measurement"),
       );
+    } catch {
+      return undefined;
+    }
+  })();
+
+  const isDeadlinePassed = (() => {
+    try {
+      const kpiMeasMod = kpiMeasurementModuleInfo;
       if (!kpiMeasMod) return false;
+      if (kpiMeasMod.active === false && Boolean(kpiMeasMod.startDate || kpiMeasMod.endDate || kpiMeasMod.dateLockPerMonth)) return true;
+      if (kpiMeasMod.dateLockPerMonth) {
+        const rawLock = String(kpiMeasMod.dateLockPerMonth).trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(rawLock)) {
+          const lockTs = new Date(`${rawLock}T23:59:59`).getTime();
+          if (Number.isFinite(lockTs) && Date.now() > lockTs) return true;
+        } else {
+          const dayNum = parseInt(rawLock, 10);
+          if (Number.isFinite(dayNum) && dayNum >= 1 && dayNum <= 31) {
+            if (new Date().getDate() > dayNum) return true;
+          }
+        }
+      }
       if (kpiMeasMod.endDate) {
-        if (kpiMeasMod.active === false) return true;
         const endTs = new Date(`${kpiMeasMod.endDate}T23:59:59`).getTime();
         if (Number.isFinite(endTs)) {
           return Date.now() > endTs;
@@ -3741,7 +3890,8 @@ function KPIWorkspace({
       return false;
     }
   })();
-  const isLockedByDeadline = !isKpiSettingValidated || (isDeadlinePassed && !submitted && !openLockApproved);
+  const isCurrentTabValidated = isBusinessWorkspace ? isBusinessSettingApproved : isKpiSettingValidated;
+  const isLockedByDeadline = !isCurrentTabValidated || (isDeadlinePassed && !submitted && !openLockApproved);
   const approvedEditCells =
     editRequestApproved && approvedEditTargets.length > 0
       ? new Set(approvedEditTargets.map((t) => `${t.kpiNo}::${t.monthId}`))
@@ -3856,7 +4006,15 @@ function KPIWorkspace({
 
   const addMonth = (entry: MonthEntry) => {
     setMonths((prev) => [...prev, entry]);
-    setCellsMap((prev) => ({ ...prev, [entry.id]: entry.cells }));
+    if (isBusinessWorkspace) {
+      setBusinessCellsMap((prev) => {
+        const next = { ...prev, [entry.id]: entry.cells };
+        persistBusinessCells(next);
+        return next;
+      });
+    } else {
+      setCellsMap((prev) => ({ ...prev, [entry.id]: entry.cells }));
+    }
     // Bulan tracking baru (belum tervalidasi) membuka kembali mode input & upload Evidence Documents
     setSubmitted(false);
     setView("input");
@@ -3864,62 +4022,262 @@ function KPIWorkspace({
 
   const removeMonth = (id: string) => {
     setMonths((prev) => prev.filter((m) => m.id !== id));
-    setCellsMap((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    if (isBusinessWorkspace) {
+      setBusinessCellsMap((prev) => {
+        const n = { ...prev };
+        delete n[id];
+        persistBusinessCells(n);
+        return n;
+      });
+    } else {
+      setCellsMap((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    }
   };
 
   const handleExport = () => {
-    const monthHeaders = months.map((m) => m.label);
-    const headers = ["No","Section","Perspektif","KPI","Satuan","Formula Setahun","Bobot","Polaritas","Baseline","Target", ...monthHeaders, "Total", "Achievement"];
-    const rows: string[][] = [];
-    KPI_ITEMS.forEach((kpi) => {
-      kpi.subRows.forEach((sub, si) => {
-        const monthVals = months.map((m) => {
-          const sub_ = kpi.subRows[si];
-          if (sub_.compute) {
-            const getRaw = (idx: number) => cellsMap[m.id]?.[ck(kpi.no, idx)] ?? "";
-            return computeCell(kpi.subRows, getRaw, si, kpi.polaritas);
-          }
-          return cellsMap[m.id]?.[ck(kpi.no, si)] ?? "";
+    const targetList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
+    const activeMap = isBusinessWorkspace ? businessCellsMap : cellsMap;
+    // Bila belum ada bulan tracking ditambahkan, sediakan kolom bulan awal Jan-26 sebagai template pengisian
+    const exportMonths: MonthEntry[] =
+      months.length > 0 ? months : [{ id: "jan26", label: "Jan-26", cells: {} }];
+    const monthLabels = exportMonths.map((m) => m.label);
+
+    const fixedHeaders = [
+      "No","Perspektif","KPI","Satuan","Formula Setahun","Bobot","Definisi","Source",
+      "Baseline","Target","Polaritas","Detail Formula","Keterangan","Periode Tracking","Tracking",
+    ];
+    const allHeaders = [...fixedHeaders, ...monthLabels, "Total", "Achievement"];
+    const totalColCount = allHeaders.length;
+    const colWidths = [
+      7, 16, 32, 14, 15, 10, 28, 18, 13, 13, 12, 28, 22, 16, 18,
+      ...monthLabels.map(() => 13),
+      13, 14,
+    ];
+
+    const rowsOut: StyledExcelCell[][] = [];
+    const merges: StyledExcelMerge[] = [];
+    const rowHeights: Record<number, number> = { 0: 28 };
+
+    const headerRow: StyledExcelCell[] = allHeaders.map((h, ci) => ({
+      value: h,
+      style: {
+        bg:
+          ci === allHeaders.length - 1
+            ? EXCEL_THEME.headerAchBg
+            : ci === allHeaders.length - 2
+            ? EXCEL_THEME.headerTotalBg
+            : ci >= fixedHeaders.length
+            ? EXCEL_THEME.headerSubNavyBg
+            : EXCEL_THEME.headerNavyBg,
+        fg: EXCEL_THEME.white,
+        bold: true,
+        align: "center",
+        vAlign: "center",
+        borderColor: "334155",
+      },
+    }));
+    rowsOut.push(headerRow);
+
+    const dynamicSections = Array.from(new Set(targetList.map((k) => k.section || "A"))).sort();
+    const secPalette = ["1565C0", "1976D2", "00838F", "6A1B9A", "2E7D32", "EF6C00"];
+
+    dynamicSections.forEach((sec, sIdx) => {
+      const secKpis = targetList.filter((k) => (k.section || "A") === sec);
+      const first = secKpis[0];
+      const defTitle = sec === "A" ? "Objective KPI — Bobot 20%" : sec === "B" ? "Functional KPI — Bobot 80%" : `Section ${sec}`;
+      const secTitle = first?.sectionLabel
+        ? `${sec}. ${first.sectionLabel}${first.sectionBobot ? ` — Bobot ${first.sectionBobot}` : ""}`
+        : `${sec}. ${defTitle}`;
+      const secBg = secPalette[sIdx % secPalette.length];
+
+      const secScore = secKpis.reduce((acc, k) => {
+        const ach = computeKPIAchievement(k, activeMap, exportMonths);
+        if (ach === null) return acc;
+        return acc + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
+      }, 0);
+      const hasAnyAch = secKpis.some((k) => computeKPIAchievement(k, activeMap, exportMonths) !== null);
+
+      const bannerIdx = rowsOut.length;
+      const bannerCells: StyledExcelCell[] = Array.from({ length: totalColCount }, (_, ci) => ({
+        value: ci === 0 ? secTitle : ci === totalColCount - 1 ? (hasAnyAch ? `${secScore.toFixed(2)}%` : "—") : "",
+        style: { bg: secBg, fg: EXCEL_THEME.white, bold: true, align: ci === totalColCount - 1 ? "center" : "left", vAlign: "center", borderColor: secBg },
+      }));
+      rowsOut.push(bannerCells);
+      rowHeights[bannerIdx] = 24;
+      merges.push({ sRow: bannerIdx, sCol: 0, eRow: bannerIdx, eCol: totalColCount - 2 });
+
+      secKpis.forEach((kpi, kIdx) => {
+        const startRow = rowsOut.length;
+        const rs = kpi.subRows.length;
+        const ach = computeKPIAchievement(kpi, activeMap, exportMonths);
+        const achStr = ach !== null ? `${ach.toFixed(2)}%` : "—";
+        const pTrack = deriveTrackingPeriodeLabel(kpi.satuan, kpi.trackingPeriod);
+
+        kpi.subRows.forEach((sub, si) => {
+          const isComp = Boolean(sub.compute);
+          const rowBg = isComp ? "F1F5F9" : kIdx % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
+          const fixedVals = [
+            kpi.no, kpi.perspektif, kpi.kpi, kpi.satuan, kpi.formula, kpi.bobot,
+            kpi.definisi, kpi.source, kpi.baseline2025, kpi.target2026,
+            kpi.polaritas, kpi.detailFormula, kpi.keterangan || "—", pTrack,
+          ];
+          const fixedCells: StyledExcelCell[] = fixedVals.map((val, fIdx) => ({
+            value: si === 0 ? val : "",
+            style: { ...inferSystemCellStyle(fixedHeaders[fIdx], val, kIdx), vAlign: "top" },
+          }));
+
+          const trackingLabelCell: StyledExcelCell = {
+            value: sub.label,
+            style: { bg: rowBg, fg: isComp ? EXCEL_THEME.headerNavyBg : EXCEL_THEME.textDark, bold: Boolean(sub.bold || isComp), align: "left" },
+          };
+
+          const mCells: StyledExcelCell[] = exportMonths.map((m) => {
+            const val = isComp
+              ? computeCell(kpi.subRows, (idx) => activeMap[m.id]?.[ck(kpi.no, idx)] ?? "", si, kpi.polaritas)
+              : (activeMap[m.id]?.[ck(kpi.no, si)] ?? (sub.label.toLowerCase().startsWith("target") ? (kpi.monthlyTargets?.[m.label] ?? kpi.target2026 ?? "") : ""));
+            return {
+              value: val,
+              style: isComp ? inferSystemCellStyle("Achievement", val, kIdx) : { bg: rowBg, fg: EXCEL_THEME.textDark, align: "center" },
+            };
+          });
+
+          const totalVal = computeTotal2026(kpi, si, activeMap, exportMonths);
+          const totalCell: StyledExcelCell = {
+            value: totalVal,
+            style: isComp ? inferSystemCellStyle("Achievement", totalVal, kIdx) : { bg: rowBg, fg: EXCEL_THEME.headerNavyBg, bold: true, align: "center" },
+          };
+          const achCell: StyledExcelCell = {
+            value: si === 0 ? achStr : "",
+            style: { ...inferSystemCellStyle("Achievement", achStr, kIdx), vAlign: "center" },
+          };
+
+          const curIdx = rowsOut.length;
+          rowsOut.push([...fixedCells, trackingLabelCell, ...mCells, totalCell, achCell]);
+          rowHeights[curIdx] = 22;
         });
-        const total = computeTotal2026(kpi, si, cellsMap, months);
-        rows.push([kpi.no, kpi.section, kpi.perspektif, kpi.kpi, kpi.satuan, kpi.formula, kpi.bobot, kpi.polaritas, kpi.baseline2025, kpi.target2026, ...monthVals, total]);
+
+        if (rs > 1) {
+          for (let ci = 0; ci < 14; ci++) {
+            merges.push({ sRow: startRow, sCol: ci, eRow: startRow + rs - 1, eCol: ci });
+          }
+          merges.push({ sRow: startRow, sCol: totalColCount - 1, eRow: startRow + rs - 1, eCol: totalColCount - 1 });
+        }
       });
     });
-    exportXLSX("KPI_Tracking_2026.xlsx", headers, rows);
+
+    const fname = isBusinessWorkspace
+      ? (isDirectorMode ? `KPI_Tracking_Group_${groupName.replace(/\s+/g, "_")}_2026.xlsx` : `KPI_Tracking_Unit_${activeUser.company.replace(/[^A-Za-z0-9]+/g, "_")}_2026.xlsx`)
+      : `KPI_Tracking_Personal_${activeUser.employeeId}_2026.xlsx`;
+    exportStyledXLSX(fname, {
+      sheetName: "KPI Tracking",
+      colWidths,
+      rowHeights,
+      rows: rowsOut,
+      merges,
+    });
   };
 
   const handleImport = async (file: File) => {
     try {
-      const { headers, rows } = await parseXLSX(file);
-      // Find the fixed columns
-      const noIdx = headers.findIndex((h) => /^no$/i.test(h.trim()));
-      // Month headers start after "Target" and stop before "Total"
-      const targetIdx = headers.findIndex((h) => /^target/i.test(h.trim()));
-      const totalIdx = headers.findIndex((h) => /^total$/i.test(h.trim()));
-      const monthStartIdx = targetIdx + 1;
-      const monthEndIdx = totalIdx > 0 ? totalIdx : headers.length;
-      const importedMonthLabels = headers.slice(monthStartIdx, monthEndIdx);
-      // Build label→id map from current months state
-      const labelToId: Record<string, string> = {};
-      months.forEach((m) => { labelToId[m.label] = m.id; });
-      // Track subRow sequence per KPI no
-      const subRowCount: Record<string, number> = {};
-      const newCellsMap: Record<string, Record<CellKey, string>> = { ...cellsMap };
-      rows.filter((r) => r.some((c) => c.trim())).forEach((r) => {
-        const kpiNo = noIdx >= 0 ? r[noIdx]?.trim() ?? "" : "";
-        if (!kpiNo) return;
-        const si = subRowCount[kpiNo] ?? 0;
-        subRowCount[kpiNo] = si + 1;
-        importedMonthLabels.forEach((label, li) => {
-          const monthId = labelToId[label];
-          if (!monthId) return;
-          const val = r[monthStartIdx + li] ?? "";
-          if (!newCellsMap[monthId]) newCellsMap[monthId] = {} as Record<CellKey, string>;
-          newCellsMap[monthId][ck(kpiNo, si)] = val;
-        });
+      const buf = await file.arrayBuffer();
+      const matrix = parseXLSXMatrix(buf);
+      if (matrix.length === 0) return;
+
+      const hdrRowIdx = matrix.findIndex((r) => r.some((c) => /^no$/i.test(c.trim())) && r.some((c) => /^tracking$/i.test(c.trim())));
+      if (hdrRowIdx < 0) {
+        toast.error("Format kolom tidak dikenali. Gunakan file hasil Export dari KPI Tracking.");
+        return;
+      }
+      const headers = matrix[hdrRowIdx].map((h) => h.trim());
+      const noIdx = headers.findIndex((h) => /^no$/i.test(h));
+      const trackingColIdx = headers.findIndex((h) => /^tracking$/i.test(h));
+      const totalIdx = headers.findIndex((h) => /^total$/i.test(h));
+      const monthStartIdx = trackingColIdx + 1;
+      const monthEndIdx = totalIdx > monthStartIdx ? totalIdx : headers.length - 1;
+      const rawMonthCols = headers.slice(monthStartIdx, monthEndIdx).filter(Boolean);
+
+      // Normalisasi label bulan (mis. "Jan 2026" -> "Jan-26" atau "Jan-26" tetap "Jan-26")
+      const normalizeImportedMonthLabel = (rawLbl: string): string => {
+        const clean = rawLbl.trim();
+        if (MONTH_OPTIONS.includes(clean)) return clean;
+        const mMatch = clean.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
+        if (mMatch) {
+          const cap = mMatch[1][0].toUpperCase() + mMatch[1].slice(1, 3).toLowerCase();
+          return `${cap}-26`;
+        }
+        return clean;
+      };
+
+      const nextMonths: MonthEntry[] = [...months];
+      const labelToMonthId: Record<string, string> = {};
+      nextMonths.forEach((m) => { labelToMonthId[m.label] = m.id; });
+
+      const targetList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
+      rawMonthCols.forEach((rawM) => {
+        const normLbl = normalizeImportedMonthLabel(rawM);
+        if (!MONTH_OPTIONS.includes(normLbl)) return;
+        if (!labelToMonthId[normLbl]) {
+          const newId = normLbl.toLowerCase().replace(/[^a-z0-9]/g, "");
+          const pre = getPrefilledCells(normLbl, targetList);
+          nextMonths.push({ id: newId, label: normLbl, cells: pre });
+          labelToMonthId[normLbl] = newId;
+        }
       });
-      setCellsMap(newCellsMap);
-    } catch { /* ignore parse errors */ }
+
+      const baseCells = isBusinessWorkspace ? businessCellsMap : cellsMap;
+      const newCellsMap: Record<string, Record<CellKey, string>> = { ...baseCells };
+      const kpiByNo = new Map(targetList.map((k) => [k.no, k]));
+
+      let currentKpiNo = "";
+      const subRowCounter: Record<string, number> = {};
+
+      for (let ri = hdrRowIdx + 1; ri < matrix.length; ri++) {
+        const r = matrix[ri];
+        if (r.every((c) => !String(c ?? "").trim())) continue;
+        // Abaikan baris Section Banner & baris Summary bawah
+        const firstVal = String(r[noIdx] ?? "").trim();
+        const trackingLabel = String(r[trackingColIdx] ?? "").trim();
+        if (/^[A-Z]\.\s+/i.test(firstVal) && !trackingLabel) continue;
+        if (/^(total kpi|total bobot|total nilai)/i.test(firstVal) || /\(section [A-Z]\)/i.test(firstVal)) continue;
+
+        if (firstVal && kpiByNo.has(firstVal)) {
+          currentKpiNo = firstVal;
+        }
+        if (!currentKpiNo) continue;
+        const kpiObj = kpiByNo.get(currentKpiNo);
+        if (!kpiObj) continue;
+
+        let si = subRowCounter[currentKpiNo] ?? 0;
+        if (trackingLabel) {
+          const matchedSi = kpiObj.subRows.findIndex((sr) => sr.label.toLowerCase() === trackingLabel.toLowerCase());
+          if (matchedSi >= 0) si = matchedSi;
+        }
+        subRowCounter[currentKpiNo] = si + 1;
+
+        const subDef = kpiObj.subRows[si];
+        if (!subDef || subDef.compute) continue; // baris % Pencapaian dihitung otomatis
+
+        rawMonthCols.forEach((rawM, li) => {
+          const normLbl = normalizeImportedMonthLabel(rawM);
+          const mId = labelToMonthId[normLbl];
+          if (!mId) return;
+          const cellVal = String(r[monthStartIdx + li] ?? "").trim();
+          if (!newCellsMap[mId]) newCellsMap[mId] = {} as Record<CellKey, string>;
+          newCellsMap[mId][ck(currentKpiNo, si)] = cellVal;
+        });
+      }
+
+      setMonths(nextMonths);
+      if (isBusinessWorkspace) {
+        setBusinessCellsMap(newCellsMap);
+        persistBusinessCells(newCellsMap);
+      } else {
+        setCellsMap(newCellsMap);
+      }
+      toast.success("Data KPI Tracking berhasil di-import dan disimpan.");
+    } catch {
+      toast.error("Gagal membaca file Excel KPI Tracking.");
+    }
   };
 
   const [showEvidenceWarn, setShowEvidenceWarn] = useState(false);
@@ -3978,7 +4336,7 @@ function KPIWorkspace({
     const out: Array<{ kpiNo: string; monthId: string; monthLabel: string; kpiName: string }> = [];
     for (const m of months) {
       if (validatedMonthLabels.has(m.label)) continue;
-      for (const kpi of KPI_ITEMS) {
+      for (const kpi of (isBusinessWorkspace ? businessTrackingItems : trackingKpiItems)) {
         kpi.subRows.forEach((sub, si) => {
           if (!sub.compute || sub.compute.type === "avg") return;
           const getRaw = (idx: number) => cellsMap[m.id]?.[ck(kpi.no, idx)] ?? "";
@@ -4018,7 +4376,7 @@ function KPIWorkspace({
       for (const m of pendingMonths) {
         const mCells = cellsMap[m.id] ?? m.cells ?? {};
         let monthHasEmpty = false;
-        const targetList = isBusinessWorkspace ? BUSINESS_KPI_ITEMS : KPI_ITEMS;
+        const targetList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
         const activeMap = isBusinessWorkspace ? (businessCellsMap[m.id] ?? {}) : mCells;
         for (const kpi of targetList) {
           for (let si = 0; si < kpi.subRows.length; si++) {
@@ -4149,11 +4507,7 @@ function KPIWorkspace({
           )}
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
-            {isDirectorMode && (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                Role Director ({groupName}: {groupUnits.join(", ")}) — 2 Tab: KPI (Group) &amp; KPI (Personal)
-              </span>
-            )}
+
             {isGmMode && (
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
                 Role GM ({activeUser.company}) — 2 Tab: KPI (Unit) &amp; KPI (Personal)
@@ -4281,7 +4635,7 @@ function KPIWorkspace({
               )}
             </>
           )}
-          {isKpiSettingValidated && <ExportImportButton onExport={handleExport} onImport={canCreate || canEdit ? handleImport : undefined} />}
+          {isCurrentTabValidated && <ExportImportButton onExport={handleExport} onImport={!submitted && !isLockedByDeadline && !isViewOnly && (canCreate || canEdit) ? handleImport : undefined} />}
         </div>
       </div>
 
@@ -4295,7 +4649,7 @@ function KPIWorkspace({
       <KpiMonthStatusStrip statuses={kpiMonthStatuses} />
 
       {/* Gate Banner: KPI Setting belum Validated */}
-      {!isKpiSettingValidated && (
+      {!isCurrentTabValidated && (
         <div className="flex items-start gap-3 flex-wrap px-4 py-3.5 rounded-xl border border-amber-300 bg-amber-50">
           <Lock className="w-5 h-5 shrink-0 text-amber-600 mt-0.5" />
           <div className="flex-1">
@@ -4304,8 +4658,8 @@ function KPIWorkspace({
             </p>
             <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
               Anda belum dapat melakukan tindakan atau mengisi KPI Tracking karena pengajuan{" "}
-              <strong>KPI Setting</strong> Anda belum berstatus <strong>Validated</strong> (status saat ini:{" "}
-              <span className="font-bold underline">{kpiSettingGate.statusText}</span>). Sesuai aturan referensi PA, KPI dengan status Validated otomatis terbuka di Measurement → KPI Tracking.
+              <strong>{isBusinessWorkspace ? (isDirectorMode ? "KPI (Group) Setting" : "KPI (Unit) Setting") : "KPI Setting"}</strong> belum berstatus <strong>Validated</strong>
+              {!isBusinessWorkspace ? <> (status saat ini: <span className="font-bold underline">{kpiSettingGate.statusText}</span>)</> : null}. Sesuai aturan referensi PA, tabel KPI Tracking akan otomatis terisi setelah KPI Setting berstatus Validated.
             </p>
           </div>
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
@@ -4314,14 +4668,14 @@ function KPIWorkspace({
         </div>
       )}
 
-      {/* Deadline lock banners */}
-      {isKpiSettingValidated && isLockedByDeadline && !openLockRequested && (
+      {/* Deadline lock banners (berdasarkan Date Lock Per Month / End Date di /hr/modules) */}
+      {isCurrentTabValidated && isLockedByDeadline && !openLockRequested && (
         <div className="flex items-start gap-3 flex-wrap px-4 py-3 rounded-xl border border-red-200 bg-red-50">
           <Lock className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-red-700">KPI Tracking dikunci</p>
+            <p className="text-sm font-semibold text-red-700">KPI Tracking Terkunci (Date Lock Terlewat)</p>
             <p className="text-xs text-red-600 mt-0.5">
-              Deadline pengisian <span className="font-bold">30 Juni 2026</span> telah terlewat. Anda perlu meminta Open Lock ke Admin HR untuk dapat mengisi dan submit data.
+              Batas waktu pengisian KPI Tracking{kpiMeasurementModuleInfo?.dateLockPerMonth ? <> (Date Lock Per Month: <span className="font-bold">tanggal {kpiMeasurementModuleInfo.dateLockPerMonth}</span>)</> : kpiMeasurementModuleInfo?.endDate ? <> (<span className="font-bold">{kpiMeasurementModuleInfo.endDate}</span>)</> : null} telah terlewat. Silakan ajukan <strong>Request Open Lock</strong> ke <strong>HR ICF</strong> untuk membuka pengisian dan submit data.
             </p>
           </div>
           <button
@@ -4338,7 +4692,7 @@ function KPIWorkspace({
         <div className="flex items-center gap-3 flex-wrap px-4 py-3 rounded-xl border border-orange-200 bg-orange-50">
           <Lock className="w-4 h-4 shrink-0 text-orange-600" />
           <span className="text-sm font-medium text-orange-700 flex-1">
-            Request Open Lock sedang menunggu persetujuan Admin HR.
+            Request Open Lock sedang menunggu persetujuan HR ICF.
           </span>
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
@@ -4474,112 +4828,15 @@ function KPIWorkspace({
         </div>
       )}
 
-      {isBusinessWorkspace ? (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
-          <div className="px-4 py-3 bg-[#1A284F] text-white flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wider">
-                {isDirectorMode ? `KPI Measurement (Group) — ${groupName}` : `KPI Measurement (Unit) — ${activeUser.company}`}
-              </p>
-              <p className="text-[11px] text-blue-200">
-                {isDirectorMode
-                  ? `Format Tracking KPI (Group) (mendukung cascading nilai realisasi dari indikator KPI (Unit): ${groupUnits.join(", ")})`
-                  : `Format Tracking KPI (Unit) milik ${activeUser.company}`}
-              </p>
-            </div>
-          </div>
-          <table className="w-full text-xs border-collapse">
-            <thead>
-              <tr className="bg-slate-100 text-slate-700 border-b border-gray-200">
-                <th className="border border-gray-200 px-3 py-2.5 text-center w-12">No</th>
-                <th className="border border-gray-200 px-3 py-2.5 text-left w-36">Perspektif</th>
-                <th className="border border-gray-200 px-3 py-2.5 text-left min-w-[220px]">Indikator KPI Business ({groupName})</th>
-                <th className="border border-gray-200 px-3 py-2.5 text-center w-16">Bobot</th>
-                <th className="border border-gray-200 px-3 py-2.5 text-center w-20">Target 2026</th>
-                <th className="border border-gray-200 px-3 py-2.5 text-left w-44">Tracking</th>
-                {months.map((m) => (
-                  <th key={m.id} className="border border-gray-200 px-2.5 py-2.5 text-center min-w-[76px]">
-                    {m.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {businessTrackingItems.length === 0 && (
-                <tr>
-                  <td colSpan={6 + months.length} className="border border-gray-200 px-3 py-10 text-center text-xs text-gray-400">
-                    Belum ada data KPI (Unit). KPI akan tampil setelah KPI Setting (Unit) berstatus Validated.
-                  </td>
-                </tr>
-              )}
-              {businessTrackingItems.map((item) =>
-                item.subRows.map((sub, sIdx) => {
-                  const isComputed = Boolean(sub.compute);
-                  return (
-                    <tr key={`${item.no}-${sIdx}`} className={isComputed ? "bg-blue-50/50 font-bold" : "hover:bg-gray-50"}>
-                      {sIdx === 0 && (
-                        <>
-                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-center font-bold text-[#1A284F] align-top">
-                            {item.no}
-                          </td>
-                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-gray-700 font-semibold align-top">
-                            {item.perspektif}
-                          </td>
-                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 align-top">
-                            <p className="font-semibold text-gray-800">{item.kpi}</p>
-                            <p className="text-[10px] text-gray-400 mt-0.5">{item.detailFormula}</p>
-                          </td>
-                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-center font-bold text-[#1A284F] align-top">
-                            {item.bobot}
-                          </td>
-                          <td rowSpan={item.subRows.length} className="border border-gray-200 px-3 py-2 text-center font-semibold text-gray-700 align-top">
-                            {item.target2026}
-                          </td>
-                        </>
-                      )}
-                      <td className="border border-gray-200 px-3 py-2 text-gray-700">{sub.label}</td>
-                      {months.map((m) => {
-                        const rawVal = businessCellsMap[m.id]?.[ck(item.no, sIdx)] ?? "";
-                        if (isComputed) {
-                          const act = parseFloat(businessCellsMap[m.id]?.[ck(item.no, 0)] ?? "");
-                          const tgt = parseFloat(businessCellsMap[m.id]?.[ck(item.no, 1)] ?? "100");
-                          const pct = Number.isFinite(act) && Number.isFinite(tgt) && tgt > 0 ? `${Math.round((act / tgt) * 100)}%` : "—";
-                          return (
-                            <td key={m.id} className="border border-gray-200 px-2 py-2 text-center text-[#1A284F] font-bold">
-                              {pct}
-                            </td>
-                          );
-                        }
-                        return (
-                          <td key={m.id} className="border border-gray-200 px-1.5 py-1.5 text-center">
-                            <input
-                              type="text"
-                              value={rawVal}
-                              disabled={view !== "input" || submitted || isLockedByDeadline || isViewOnly || !(canEdit || canCreate)}
-                              onChange={(e) => updateBusinessCell(m.id, ck(item.no, sIdx), e.target.value)}
-                              placeholder="—"
-                              className="w-full text-center border border-gray-200 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50"
-                            />
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                }),
-              )}
-            </tbody>
-          </table>
-        </div>
-      ) : (
       <KPITable
-        kpiItems={trackingKpiItems}
+        kpiItems={isBusinessWorkspace ? businessTrackingItems : trackingKpiItems}
         months={months}
         editable={view === "input" && !submitted && !isLockedByDeadline && !isViewOnly}
         editableMonthId={(!submitted && !isLockedByDeadline && !isViewOnly && (canEdit || canCreate) && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
         onRemoveMonth={canDelete ? removeMonth : undefined}
         onAddMonth={canCreate ? () => setShowAddModal(true) : undefined}
-        cells={cellsMap}
-        onCellChange={canEdit || canCreate ? updateCell : undefined}
+        cells={isBusinessWorkspace ? businessCellsMap : cellsMap}
+        onCellChange={canEdit || canCreate ? (isBusinessWorkspace ? updateBusinessCell : updateCell) : undefined}
         onCellBlur={handleCellBlur}
         onOpenRCA={canCreate || canEdit ? openRCA : undefined}
         onViewRCA={(rcaKey, secondaryKey, kpiName, monthLabel) =>
@@ -4590,7 +4847,6 @@ function KPIWorkspace({
         approvedEditCells={approvedEditCells}
         highlightMissingRca={highlightRca}
       />
-      )}
 
       {/* Sisi owner: tabel RCA disembunyikan; riwayat RCA diakses melalui tag RCA (kuning) pada tabel KPI */}
 
@@ -4611,6 +4867,7 @@ function KPIWorkspace({
       {showAddModal && (
         <AddMonthModal
           existingLabels={months.map((m) => m.label)}
+          kpiItems={isBusinessWorkspace ? businessTrackingItems : trackingKpiItems}
           onAdd={addMonth}
           onClose={() => setShowAddModal(false)}
         />
@@ -4684,7 +4941,68 @@ function KPIWorkspace({
       {showOpenLockModal && (
         <OpenLockRequestModal
           onCancel={() => setShowOpenLockModal(false)}
-          onConfirm={() => { setShowOpenLockModal(false); setOpenLockRequested(true); }}
+          onConfirm={() => {
+            setShowOpenLockModal(false);
+            setOpenLockRequested(true);
+            const list = loadPersistedState<Array<Record<string, unknown>>>("pa_open_lock_requests_v1", []);
+            const reqId = `OL-${Date.now()}`;
+            const newReq = {
+              id: reqId,
+              employeeId: activeUser.employeeId,
+              employeeName: activeUser.name,
+              nip: activeUser.employeeId,
+              companyUnit: activeUser.company,
+              divisi: activeUser.division || "-",
+              departemen: activeUser.department || "-",
+              bagian: activeUser.bagian || "-",
+              posisi: activeUser.position || "-",
+              module: "KPI Tracking",
+              period: "2026",
+              originalDeadline: MOCK_DEADLINE,
+              submittedAt: new Date().toISOString().slice(0, 10),
+              reason: "Permintaan Open Lock untuk pengisian KPI Tracking melewati tanggal kunci bulanan.",
+              status: "pending",
+            };
+            savePersistedState("pa_open_lock_requests_v1", [newReq, ...(Array.isArray(list) ? list : [])], {
+              kind: "open-lock",
+              request: newReq,
+              audit: {
+                userId: activeUser.employeeId,
+                userName: activeUser.name,
+                action: "Create",
+                module: "KPI",
+                subModule: "Open Lock",
+                description: `${activeUser.name} (${activeUser.employeeId}) mengajukan Open Lock KPI Tracking`,
+              },
+            });
+            const hrIcfIds = loadManagedUsers()
+              .filter((u) => u.status === "Active" && (u.role === "HR ICF" || u.role === "Administrator"))
+              .map((u) => u.employeeId);
+            pushEmployeeNotification({
+              employeeIds: [activeUser.employeeId],
+              title: "Permintaan Open Lock KPI Tracking Dikirim",
+              summary: "Permintaan Open Lock Anda telah dikirim ke HR ICF untuk disetujui.",
+              category: "Approval",
+              moduleName: "KPI",
+              approvalStatus: "Pending",
+              ctaLabel: "Buka KPI Tracking",
+              ctaRoute: "/measurement/kpi-tracking",
+              senderName: activeUser.name,
+            });
+            if (hrIcfIds.length > 0) {
+              pushEmployeeNotification({
+                employeeIds: hrIcfIds,
+                title: `Permintaan Open Lock KPI Tracking — ${activeUser.name}`,
+                summary: `${activeUser.name} (${activeUser.company}) mengajukan Open Lock KPI Tracking. Silakan review di Settings → Open Lock.`,
+                category: "Approval",
+                moduleName: "KPI",
+                approvalStatus: "Pending",
+                ctaLabel: "Review Open Lock",
+                ctaRoute: "/settings/open-lock",
+                senderName: activeUser.name,
+              });
+            }
+          }}
         />
       )}
       {showEditRequest && (
@@ -4907,9 +5225,10 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
   const results: KPITrackingRCACandidate[] = [];
   const seen = new Set<string>();
 
+  const candidateKpis = resolveEmployeeTrackingKpiItems(employeeId ?? getActiveUser().employeeId);
   for (const m of monthsList) {
     const mCells = { ...(m.cells ?? {}), ...(map[m.id] ?? {}) };
-    for (const kpi of KPI_ITEMS) {
+    for (const kpi of candidateKpis) {
       for (let si = 0; si < kpi.subRows.length; si++) {
         const sub = kpi.subRows[si];
         if (!sub.compute || sub.compute.type === "avg") continue;

@@ -29,6 +29,9 @@ import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../hr/setting
 import { useLocation } from "react-router";
 import { DashboardNotificationSection } from "../../components/DashboardNotificationSection";
 import { loadSoyApprovals, resolveSoyRoleForUser, SOY_EVENT } from "../../store/calibrationSoyStore";
+import { loadPersistedState } from "../../services/supabaseClient";
+import { getPendingTargetEditRequestsForViewer, KPI_TARGET_EDIT_EVENT } from "../../store/kpiTargetEditStore";
+import { getGroupCompaniesForUnit, isDirectorRoleOrGrouping } from "../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -103,7 +106,7 @@ const MODULE_SETTING_APPROVAL_ROUTE: Partial<Record<Module, string>> = {
   "SMART Goals": "/supervisor/approvals/setting/smart-goals",
 };
 
-function ApprovalDashboard() {
+function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const isHrPortal = location.pathname.startsWith("/hr");
@@ -122,6 +125,7 @@ function ApprovalDashboard() {
     window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
     window.addEventListener("storage", onRefresh);
     window.addEventListener(SOY_EVENT, onRefresh);
+    window.addEventListener(KPI_TARGET_EDIT_EVENT, onRefresh);
     return () => {
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("feedback-updated", onRefresh);
@@ -130,8 +134,116 @@ function ApprovalDashboard() {
       window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
       window.removeEventListener("storage", onRefresh);
       window.removeEventListener(SOY_EVENT, onRefresh);
+      window.removeEventListener(KPI_TARGET_EDIT_EVENT, onRefresh);
     };
   }, []);
+
+  // Task Approval Edit [Target] Request KPI (Fase 1 HR ICF & Fase 2 Approver 1 -> Approver 2 -> GM -> Validate HR ICF)
+  const targetEditItems = useMemo<PendingItem[]>(() => {
+    return getPendingTargetEditRequestsForViewer(activeUser, allUsers).map(({ req, roleLabel }) => ({
+      id: `targetedit-${req.id}`,
+      employeeId: req.employeeId,
+      employeeName: req.employeeName,
+      position: req.position,
+      unit: req.companyUnit,
+      division: req.division,
+      module: "KPI" as Module,
+      phase: "setting" as const,
+      submissionType: `Edit [Target] KPI (${roleLabel})`,
+      actionNeeded: req.stage === "pending_validate" ? ("Review & Validate" as ActionType) : ("Approve" as ActionType),
+      submittedDate: req.phase2SubmittedAt || req.phase1RequestedAt || formatTodayDDMMYYYY(),
+      notes: `[${req.phase1Category}] ${req.phase1Reason}${req.phase2Comment ? ` — Note: ${req.phase2Comment}` : ""}`,
+      urgent: false,
+    }));
+  }, [activeUser, allUsers, tick]);
+
+  // Task Approval KPI Business: KPI (Unit) untuk Director & HR ICF, KPI (Group) untuk HR ICF
+  const kpiBusinessItems = useMemo<PendingItem[]>(() => {
+    const out: PendingItem[] = [];
+    const statusMap = loadPersistedState<Record<string, { submitted?: boolean; directorApproved?: boolean; approved?: boolean; companyUnit?: string; submittedDate?: string; submittedBy?: string }>>("pa_kpi_business_status_v1", {});
+    const isDir = isDirectorRoleOrGrouping(activeUser);
+    const isVal = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
+    const dirUnits = isDir ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits) : [];
+
+    for (const [scopeKey, st] of Object.entries(statusMap)) {
+      if (!st?.submitted || st.approved) continue;
+      if (scopeKey.startsWith("unit-")) {
+        const unitName = st.companyUnit || scopeKey.replace(/^unit-/, "");
+        if (isDir && !st.directorApproved && dirUnits.includes(unitName)) {
+          out.push({
+            id: `kpibiz-dir-${scopeKey}`,
+            employeeId: "-",
+            employeeName: `KPI (Unit) — ${unitName}`,
+            position: `Disubmit oleh ${st.submittedBy || "GM"}`,
+            unit: unitName,
+            division: "-",
+            module: "KPI" as Module,
+            phase: "setting" as const,
+            submissionType: "KPI Business — KPI (Unit)",
+            actionNeeded: "Approve",
+            submittedDate: st.submittedDate || formatTodayDDMMYYYY(),
+            notes: `Pengajuan KPI (Unit) ${unitName} menunggu persetujuan (Approve) Director.`,
+            urgent: false,
+          });
+        } else if (isVal && st.directorApproved) {
+          out.push({
+            id: `kpibiz-val-${scopeKey}`,
+            employeeId: "-",
+            employeeName: `KPI (Unit) — ${unitName}`,
+            position: `Approved by Director · Penyusun: ${st.submittedBy || "GM"}`,
+            unit: unitName,
+            division: "-",
+            module: "KPI" as Module,
+            phase: "setting" as const,
+            submissionType: "KPI Business — KPI (Unit)",
+            actionNeeded: "Review & Validate",
+            submittedDate: st.submittedDate || formatTodayDDMMYYYY(),
+            notes: `KPI (Unit) ${unitName} telah disetujui Director dan menunggu Validate HR ICF.`,
+            urgent: false,
+          });
+        }
+      } else if (scopeKey.startsWith("corporate-") && isVal) {
+        out.push({
+          id: `kpibiz-grp-${scopeKey}`,
+          employeeId: "-",
+          employeeName: "KPI (Group) — RSUP Group",
+          position: `Disubmit oleh ${st.submittedBy || "Director"}`,
+          unit: "PT RSUP (Industry)",
+          division: "-",
+          module: "KPI" as Module,
+          phase: "setting" as const,
+          submissionType: "KPI Business — KPI (Group)",
+          actionNeeded: "Review & Validate",
+          submittedDate: st.submittedDate || formatTodayDDMMYYYY(),
+          notes: "Pengajuan KPI (Group) menunggu validasi (Validate) HR ICF.",
+          urgent: false,
+        });
+      }
+    }
+    return out;
+  }, [activeUser, tick]);
+
+  // Task Approval Open Lock (khusus HR ICF / Administrator)
+  const openLockItems = useMemo<PendingItem[]>(() => {
+    if (!isAdminOrHrIcfRole(activeUser.role) && !activeUser.isHrIcfValidator) return [];
+    const list = loadPersistedState<Array<{ id?: string; employeeId?: string; employeeName?: string; posisi?: string; companyUnit?: string; divisi?: string; module?: string; submittedAt?: string; status?: string; reason?: string }>>("pa_open_lock_requests_v1", []);
+    return (Array.isArray(list) ? list : [])
+      .filter((r) => r.status === "pending")
+      .map((r) => ({
+        id: `openlock-${r.id ?? r.employeeId}`,
+        employeeId: String(r.employeeId ?? "-"),
+        employeeName: String(r.employeeName ?? r.employeeId ?? "-"),
+        position: String(r.posisi ?? "-"),
+        unit: String(r.companyUnit ?? "-"),
+        division: String(r.divisi ?? "-"),
+        module: "KPI" as Module,
+        submissionType: `Open Lock — ${r.module ?? "KPI Tracking"}`,
+        actionNeeded: "Review & Validate" as ActionType,
+        submittedDate: String(r.submittedAt ?? formatTodayDDMMYYYY()),
+        notes: String(r.reason ?? "Permintaan Open Lock menunggu persetujuan HR ICF."),
+        urgent: false,
+      }));
+  }, [activeUser, tick]);
 
   // Task Approval Calibration — Setting (SOY) yang masih Pending untuk Approver / Mengetahui unit tsb
   const calibrationItems = useMemo<PendingItem[]>(() => {
@@ -335,8 +447,12 @@ function ApprovalDashboard() {
       }
     }
 
-    return [...list, ...calibrationItems];
-  }, [subordinates, allowedApprovalModules, tick, calibrationItems]);
+    return [...list, ...targetEditItems, ...kpiBusinessItems, ...openLockItems, ...calibrationItems];
+  }, [subordinates, allowedApprovalModules, tick, calibrationItems, openLockItems, targetEditItems, kpiBusinessItems]);
+
+  useEffect(() => {
+    onCountChange?.(pendingItems.length);
+  }, [pendingItems.length, onCountChange]);
 
   const top5OldestIds = useMemo(
     () =>
@@ -531,8 +647,21 @@ function ApprovalDashboard() {
                   }`}>{item.actionNeeded}</span>
                   <button
                     onClick={() => {
-                      const rawRoute =
-                        item.phase === "setting"
+                      if (item.id.startsWith("kpibiz-dir-")) {
+                        navigate("/bod/settings/kpi/gm");
+                        return;
+                      }
+                      if (item.id.startsWith("kpibiz-val-")) {
+                        navigate("/hr/settings/kpi/gm");
+                        return;
+                      }
+                      if (item.id.startsWith("kpibiz-grp-")) {
+                        navigate("/hr/settings/kpi/group");
+                        return;
+                      }
+                      const rawRoute = item.id.startsWith("openlock-")
+                        ? "/hr/settings/open-lock"
+                        : item.phase === "setting"
                           ? MODULE_SETTING_APPROVAL_ROUTE[item.module] ?? "/supervisor/approvals/setting"
                           : MODULE_APPROVAL_ROUTE[item.module];
                       const portalSeg = location.pathname.split("/").filter(Boolean)[0];
@@ -1171,7 +1300,22 @@ export function SupervisorDashboard() {
   const location = useLocation();
   const { activeUser } = useAuthStore();
   const { getRolePermissions } = useAccessManagement();
+  const [liveApprovalCount, setLiveApprovalCount] = useState<number | null>(null);
   const [, setMenuTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setMenuTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", bump);
+    window.addEventListener("pa-db-hydrated", bump);
+    window.addEventListener(SOY_EVENT, bump);
+    window.addEventListener(KPI_TARGET_EDIT_EVENT, bump);
+    return () => {
+      window.removeEventListener("appraisal-updated", bump);
+      window.removeEventListener("pa-db-hydrated", bump);
+      window.removeEventListener(SOY_EVENT, bump);
+      window.removeEventListener(KPI_TARGET_EDIT_EVENT, bump);
+    };
+  }, []);
+
   useEffect(() => {
     const onMenuUpdate = () => setMenuTick((t) => t + 1);
     window.addEventListener(MENU_UPDATED_EVENT, onMenuUpdate);
@@ -1206,6 +1350,56 @@ export function SupervisorDashboard() {
       ? "my"
       : activeTab;
 
+  const hasPendingApprovalDot = (() => {
+    if (liveApprovalCount !== null && effectiveTab === "approval") return liveApprovalCount > 0;
+    const allUsers = useAuthStore.length >= 0 ? getActiveUser() : activeUser;
+    void allUsers;
+    const isVal = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
+    const isDir = isDirectorRoleOrGrouping(activeUser);
+    if (getPendingTargetEditRequestsForViewer(activeUser).length > 0) return true;
+    if (isVal && loadPersistedState<Array<{ status?: string }>>("pa_open_lock_requests_v1", []).some((r) => r.status === "pending")) return true;
+    for (const soyRec of Object.values(loadSoyApprovals())) {
+      if (soyRec.status === "Pending" && resolveSoyRoleForUser(activeUser, soyRec.unitName, true)) return true;
+    }
+    const bizMap = loadPersistedState<Record<string, { submitted?: boolean; directorApproved?: boolean; approved?: boolean; companyUnit?: string }>>("pa_kpi_business_status_v1", {});
+    for (const [sk, st] of Object.entries(bizMap)) {
+      if (!st?.submitted || st.approved) continue;
+      if (sk.startsWith("unit-")) {
+        const uName = st.companyUnit || sk.replace(/^unit-/, "");
+        if (isDir && !st.directorApproved && getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits).includes(uName)) return true;
+        if (isVal && st.directorApproved) return true;
+      } else if (sk.startsWith("corporate-") && isVal) {
+        return true;
+      }
+    }
+    for (const wf of loadWorkflowRecords()) {
+      const chk = wf.decisions.checker?.status ?? "";
+      const a1 = wf.decisions.approver1?.status ?? "";
+      const a2 = wf.decisions.approver2?.status ?? "";
+      const val = wf.decisions.validator?.status ?? "";
+      if (chk === "Revision" || a1 === "Revision" || a2 === "Revision" || val === "Revision") continue;
+      const isFour = wf.module === "KPI" || wf.module === "SMART Goals" || wf.module === "RCA";
+      const chkDone = Boolean(shouldBypassCheckerForSubmission(wf.employeeId) || (chk && chk !== "Revision"));
+      const a1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
+      const a2Done = a2 === "Approved" || a2.startsWith("Assessed") || a2 === "Validated";
+      const valDone = Boolean(val === "Validated" || a2 === "Validated");
+      if (isFour && valDone) continue;
+      if (!isFour && a2Done) continue;
+      const stage = resolveWorkflowStageForTarget(activeUser, wf.employeeId, wf.module, { checkerDone: chkDone, a1Done, a2Done, validatorDone: valDone });
+      if (!stage) continue;
+      if (isFour) {
+        if (!chkDone && stage === "checker") return true;
+        if (chkDone && !a1Done && stage === "approver1") return true;
+        if (chkDone && a1Done && !a2Done && stage === "approver2") return true;
+        if (chkDone && a1Done && a2Done && !valDone && stage === "validator") return true;
+      } else {
+        if (!a1Done && stage === "approver1") return true;
+        if (a1Done && !a2Done && stage === "approver2") return true;
+      }
+    }
+    return false;
+  })();
+
   return (
     <div className="w-full flex flex-col gap-6">
       {/* Tabs */}
@@ -1224,12 +1418,15 @@ export function SupervisorDashboard() {
             >
               <Icon className="w-4 h-4" />
               {label}
+              {key === "approval" && hasPendingApprovalDot && (
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-300 ring-2 ring-amber-100 shrink-0" title="Ada task approval menunggu tindakan Anda" />
+              )}
             </button>
           );
         })}
       </div>
 
-      {effectiveTab === "approval" ? <ApprovalDashboard /> : <MyDashboard />}
+      {effectiveTab === "approval" ? <ApprovalDashboard onCountChange={setLiveApprovalCount} /> : <MyDashboard />}
     </div>
   );
 }

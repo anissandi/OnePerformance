@@ -740,7 +740,7 @@ function ScheduleDetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose
     ["Notification Text",   entry.textNotifikasi || "—"],
     ["Attachment Text",     entry.textLampiran || "—"],
   ];
-  const ss = SCHED_STATUS_STYLE[entry.status];
+  const ss = SCHED_STATUS_STYLE[entry.status] ?? SCHED_STATUS_STYLE.Scheduled;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -757,7 +757,7 @@ function ScheduleDetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose
         <div className="p-6 flex flex-col gap-3 max-h-[70vh] overflow-y-auto">
           <div className="flex justify-end">
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${ss.bg}`}>
-              <ss.icon className="w-3 h-3" />{entry.status}
+              <ss.icon className="w-3 h-3" />{entry.status === "Cancelled" ? "Cancel" : entry.status}
             </span>
           </div>
           {rows.map(([label, val]) => (
@@ -849,7 +849,8 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
               </thead>
               <tbody>
                 {schedEntries.map((entry, i) => {
-                  const ss = SCHED_STATUS_STYLE[entry.status];
+                  const ss = SCHED_STATUS_STYLE[entry.status] ?? SCHED_STATUS_STYLE.Scheduled;
+                  const isCancelled = entry.status === "Cancelled";
                   const participants = [...entry.addedUsers, ...entry.otherUsers];
                   const entryAssessments = assessmentsMap[entry.id];
                   const isAssessed = Boolean(entryAssessments && entryAssessments.length > 0);
@@ -858,7 +859,7 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
                     <tr key={entry.id} className={`border-b border-gray-100 hover:bg-gray-50/50 transition-colors ${i % 2 !== 0 ? "bg-gray-50/30" : ""}`}>
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          {!hideAssess && isAppointedInterviewer && (
+                          {!hideAssess && !isCancelled && isAppointedInterviewer && (
                             <button
                               onClick={() => setAssessEntry({ entry, readOnly: false })}
                               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap ${
@@ -871,7 +872,7 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
                               {isAssessed ? "Assessed" : "Assess"}
                             </button>
                           )}
-                          {!hideAssess && !isAppointedInterviewer && (
+                          {!hideAssess && !isCancelled && !isAppointedInterviewer && (
                             <button
                               onClick={() => setAssessEntry({ entry, readOnly: true })}
                               title="Anda hanya memiliki akses Read-Only karena bukan Interviewer yang ditunjuk pada jadwal ini"
@@ -936,7 +937,11 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
                       </td>
                       <td className="px-4 py-3 text-gray-600 whitespace-nowrap max-w-[140px] truncate">{entry.location || "—"}</td>
                       <td className="px-4 py-3 text-center">
-                        {isAssessed ? (
+                        {isCancelled ? (
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${ss.bg}`}>
+                            <ss.icon className="w-3 h-3" />Cancel
+                          </span>
+                        ) : isAssessed ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">
                             <CheckCircle2 className="w-3 h-3" />Assessed
                           </span>

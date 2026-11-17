@@ -11,6 +11,7 @@ import { Input } from "../../components/ui/input";
 import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
 import { FeedbackApprovalDrawer } from "../../components/FeedbackApprovalDrawer";
 import { SettingApprovalDrawer } from "../../components/SettingApprovalDrawer";
+import { TargetEditRequestsSection } from "../../components/TargetEditRequestsSection";
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
 import { applyOverrides, resolveDynamicApprovalRowsForUser, saveOverride } from "../shared/approvalsStore";
 import {
@@ -511,6 +512,8 @@ function ApprovalsTable({
         </div>
         <Button className="bg-[#1A284F] hover:bg-[#131d3b] text-white px-10 py-6 rounded-full text-base font-medium">Search</Button>
       </div>
+
+      {isSetting && <TargetEditRequestsSection />}
 
       {/* Table */}
       <div className="overflow-x-auto">

@@ -2,7 +2,7 @@ import React from "react";
 import { CheckCircle2 } from "lucide-react";
 import { loadSubmittedGoals } from "../pages/shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
-import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
+import { loadUnitScoreWeights, weightColumnFromGrouping } from "../pages/shared/scoringWeightStore";
 import { loadManagedUsers, resolveEffectiveUserGrouping } from "../store/authStore";
 
 function pctTone(v: number | null): string {
@@ -22,17 +22,9 @@ function resolveSmartGoalsWeight(employeeId: string): number {
   const norm = normalizeEmployeeId(employeeId);
   const owner = loadManagedUsers().find((u) => normalizeEmployeeId(u.employeeId) === norm);
   const grp = owner ? resolveEffectiveUserGrouping(owner) : "";
-  const col: ScoreWeightColumn =
-    grp === "Ka./Wa.Ka.Div ke atas" || grp === "Direktur / Director"
-      ? "kepalaDivisi"
-      : grp === "Ka./Wa.Ka.Dept"
-      ? "kepalaDepartement"
-      : grp === "Ka./Wa.Ka.Bagian"
-      ? "pengawasKepalaBagian"
-      : grp === "Ka./Wa.Ka.Seksi"
-      ? "kaWaKaSeksi"
-      : "operasional";
-  const raw = loadUnitScoreWeights(owner?.company || "PT RSUP (Industry)")["SMART Goals"]?.[col];
+  const company = owner?.company || "PT RSUP (Industry)";
+  const col = weightColumnFromGrouping(grp, company);
+  const raw = loadUnitScoreWeights(company)["SMART Goals"]?.[col];
   const parsed = raw && raw !== "-" ? parseFloat(String(raw).replace("%", "").trim()) : NaN;
   return Number.isFinite(parsed) ? parsed : 20;
 }

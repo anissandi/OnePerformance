@@ -10,6 +10,7 @@ import {
 } from "../../hr/settings/masterKpiStore";
 import {
   getActiveUser,
+  getGroupCompaniesForUnit,
   getGroupNameForUnit,
   isDirectorRoleOrGrouping,
   loadManagedUsers,
@@ -19,7 +20,9 @@ import {
   type ManagedUser,
 } from "../../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
-import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, syncToSupabase } from "../../../services/supabaseClient";
+import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, syncToSupabase, uploadEvidenceFileToSupabase } from "../../../services/supabaseClient";
+import { pushEmployeeNotification } from "../../../store/notificationStore";
+import { cancelTargetEditPhase1, getTargetEditRequestForEmployee, KPI_TARGET_EDIT_EVENT, submitTargetEditPhase1, submitTargetEditPhase2, type TargetEditAttachment } from "../../../store/kpiTargetEditStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
@@ -29,7 +32,8 @@ import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2,
 import { toast } from "sonner";
 import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
 import ExportImportButton from "../../../components/ExportImportButton";
-import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
+import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
 
 const MONTHS_LIST = ["Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26","Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -1477,12 +1481,12 @@ function generateSampleMonthlyTargets(item: KPISetting): Record<string, string> 
   return mt;
 }
 
-function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1Reason, onSave, onClose, onSubmitted }: {
+function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1Reason, ownerUser, onClose, onSubmitted }: {
   items: KPISetting[];
   selectedKpiIds?: string[];
   phase1Category?: string;
   phase1Reason?: string;
-  onSave: (updated: KPISetting[]) => void;
+  ownerUser: ManagedUser;
   onClose: () => void;
   onSubmitted?: () => void;
 }) {
@@ -1506,7 +1510,10 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
   );
 
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+  const [showSubmittedPopup, setShowSubmittedPopup] = useState(false);
+  const [submitting, setSubmitting]               = useState(false);
   const [targetSubmitted, setTargetSubmitted]     = useState(false);
+  const [ownerComment, setOwnerComment]           = useState("");
   const [supportFiles, setSupportFiles]           = useState<File[]>([]);
   const supportFileRef                            = useRef<HTMLInputElement>(null);
 
@@ -1684,19 +1691,34 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
             </div>
           )}
 
-          {/* File Upload */}
+          {/* Komentar / Note Wajib */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold uppercase tracking-wide text-gray-600">Komentar / Note Perubahan Target</span>
+              <span className="text-[10px] text-red-500 font-semibold">* wajib</span>
+            </div>
+            <textarea
+              rows={3}
+              value={ownerComment}
+              onChange={(e) => setOwnerComment(e.target.value)}
+              placeholder="Tuliskan penjelasan detail perubahan target KPI beserta dasar perhitungannya..."
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-xs text-gray-800 outline-none focus:border-[#1A284F] resize-none"
+            />
+          </div>
+
+          {/* File Upload (multiple jpg, pdf) */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <Paperclip className="w-3.5 h-3.5 text-gray-400" />
-              <span className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Upload Memo &amp; File Pendukung</span>
-              <span className="text-[10px] text-gray-400 font-normal normal-case">(jpg, png, pdf)</span>
+              <span className="text-[11px] font-bold uppercase tracking-wide text-gray-600">Upload Memo &amp; File Pendukung</span>
+              <span className="text-[10px] text-gray-400 font-normal normal-case">(multiple file: jpg, pdf)</span>
               <span className="text-[10px] text-red-500 font-semibold">* wajib</span>
             </div>
             <input
               ref={supportFileRef}
               type="file"
               multiple
-              accept=".jpg,.jpeg,.png,.pdf"
+              accept=".jpg,.jpeg,.pdf"
               onChange={(e) => { setSupportFiles((p) => [...p, ...Array.from(e.target.files ?? [])]); e.target.value = ""; }}
               className="hidden"
             />
@@ -1768,7 +1790,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
             {!targetSubmitted && (
               <button
                 onClick={() => setShowSubmitConfirm(true)}
-                disabled={supportFiles.length === 0}
+                disabled={supportFiles.length === 0 || !ownerComment.trim() || submitting}
                 className="flex items-center gap-2 px-5 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#1A284F] text-white hover:bg-[#131d3b]"
               >
                 <Send className="w-3.5 h-3.5" /> Submit Target
@@ -1796,19 +1818,88 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
                   Batal
                 </button>
                 <button
-                  onClick={() => {
-                    const editMap = new Map(editItems.map((i) => [i.id, i]));
-                    const merged = items.map((i) => editMap.get(i.id) ?? i);
-                    onSave(merged);
-                    setShowSubmitConfirm(false);
-                    setTargetSubmitted(true);
-                    setTimeout(() => { onSubmitted?.(); }, 1200);
+                  disabled={submitting}
+                  onClick={async () => {
+                    setSubmitting(true);
+                    try {
+                      const uploadedMemo: TargetEditAttachment[] = [];
+                      for (const f of supportFiles) {
+                        let fileUrl = "";
+                        try {
+                          const up = await uploadEvidenceFileToSupabase(f, {
+                            employeeId: ownerUser.employeeId,
+                            employeeName: ownerUser.name,
+                            companyUnit: ownerUser.company,
+                            division: ownerUser.division || "-",
+                            department: ownerUser.department || "-",
+                            position: ownerUser.position || "-",
+                            moduleType: "KPI Edit Target Memo",
+                            period: "2026",
+                            month: "All",
+                          });
+                          fileUrl = up?.url || "";
+                        } catch {
+                          fileUrl = "";
+                        }
+                        if (!fileUrl) {
+                          fileUrl = await new Promise<string>((resolve) => {
+                            const r = new FileReader();
+                            r.onload = () => resolve(String(r.result ?? ""));
+                            r.onerror = () => resolve("");
+                            r.readAsDataURL(f);
+                          });
+                        }
+                        uploadedMemo.push({ name: f.name, size: f.size, type: f.type || "application/octet-stream", url: fileUrl });
+                      }
+                      const editMap = new Map(editItems.map((i) => [i.id, i]));
+                      const merged = items.map((i) => editMap.get(i.id) ?? i);
+                      submitTargetEditPhase2({
+                        owner: ownerUser,
+                        comment: ownerComment.trim(),
+                        memoFiles: uploadedMemo,
+                        originalItems: items,
+                        proposedItems: merged,
+                      });
+                      setShowSubmitConfirm(false);
+                      setTargetSubmitted(true);
+                      setShowSubmittedPopup(true);
+                    } finally {
+                      setSubmitting(false);
+                    }
                   }}
-                  className="flex items-center gap-2 px-5 py-2 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"
+                  className="flex items-center gap-2 px-5 py-2 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] disabled:opacity-50 transition-colors"
                 >
-                  <Send className="w-3.5 h-3.5" /> Ya, Submit
+                  <Send className="w-3.5 h-3.5" /> {submitting ? "Mengirim..." : "Ya, Submit"}
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Popup Notifikasi Sukses Submit Fase 2 */}
+        {showSubmittedPopup && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 rounded-2xl">
+            <div className="bg-white rounded-2xl shadow-2xl p-7 max-w-md w-full mx-4 text-center space-y-3">
+              <div className="w-14 h-14 rounded-full bg-emerald-50 flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-7 h-7 text-emerald-600" />
+              </div>
+              <h4 className="font-bold text-gray-900 text-lg">Perubahan Target KPI Terkirim</h4>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Perubahan target KPI beserta komentar dan <strong>{supportFiles.length} lampiran memo pendukung</strong> berhasil dikirim ke alur persetujuan berjenjang:
+              </p>
+              <div className="rounded-xl bg-indigo-50/70 border border-indigo-200 px-3.5 py-2.5 text-[11px] font-semibold text-[#1A284F]">
+                Approver 1 → Approver 2 → GM ({ownerUser.company}) → Validate (HR ICF)
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSubmittedPopup(false);
+                  onSubmitted?.();
+                }}
+                className="w-full py-2.5 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"
+              >
+                Selesai
+              </button>
             </div>
           </div>
         )}
@@ -2191,7 +2282,11 @@ export function AddKPIModal({
       return;
     }
     if (!hideCascading && sectionCascadeType) onSectionCascade?.(form.section, sectionCascadeType);
-    onAdd({ ...form, id: `kpi-${Date.now()}` }); onClose();
+    // S2: Periode Tracking otomatis diambil dari bagian /Periode pada field Satuan (/Periode) di tab Sub Section
+    const satuanSep = form.satuan.indexOf("/");
+    const rawPeriode = satuanSep >= 0 ? form.satuan.slice(satuanSep + 1).trim() : "";
+    const derivedTracking = derivePeriodeTrackingFromSatuan(form.satuan, form.trackingPeriod);
+    onAdd({ ...form, trackingPeriod: derivedTracking, id: `kpi-${Date.now()}` }); onClose();
   };
 
   // Default section mengikuti section pertama pada tabel (mis. hasil copy) bila tersedia
@@ -2365,7 +2460,7 @@ export function AddKPIModal({
               </div>
 
               <Field label="KPI *"><textarea rows={3} value={form.kpi} onChange={(e) => set("kpi", e.target.value)} placeholder="KPI name / description" className={inputCls + " resize-none"} /></Field>
-              <SatuanField value={form.satuan} onChange={(v) => set("satuan", v)} unitOptions={master.satuan} periodeOptions={master.period} />
+              <SatuanField value={form.satuan} onChange={(v) => setForm((p) => ({ ...p, satuan: v, trackingPeriod: derivePeriodeTrackingFromSatuan(v, p.trackingPeriod) }))} unitOptions={master.satuan} periodeOptions={master.period} />
 
               <Field label="Formula Pencapaian">
                 {colorMode || ratioMode
@@ -2691,7 +2786,7 @@ function CascadingDropdownRow({
   );
 }
 
-export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel = "Business" }: { onAdd: (item: KPISetting) => void; onClose: () => void; existingItems?: KPISetting[]; sectionLabel?: string }) {
+export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel = "Business", hideScope = false, hideCascading = false }: { onAdd: (item: KPISetting) => void; onClose: () => void; existingItems?: KPISetting[]; sectionLabel?: string; hideScope?: boolean; hideCascading?: boolean }) {
   const master = useMasterKpi();
   const corpSectionBobotOpts = master.sectionBobot?.length ? master.sectionBobot : SECTION_BOBOT_OPTIONS;
   const corpFormulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
@@ -2939,17 +3034,18 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                         {corpFormulaOpts.map((f) => <option key={f}>{f}</option>)}
                       </select>}
                 </Field>
-                <Field label="Tracking Period">
-                  <select value={form.trackingPeriod} onChange={(e) => set("trackingPeriod", e.target.value)} className={inputCls}>
-                    <option value="">— Period —</option>
-                    {master.trackingPeriod.map((t) => <option key={t}>{t}</option>)}
-                  </select>
+                <Field label="Periode Tracking (dari Satuan)">
+                  <div className={inputCls + " bg-gray-50 text-[#1A284F] font-semibold select-none"}>
+                    {derivePeriodeTrackingFromSatuan(form.satuan, form.trackingPeriod) || "—"}
+                  </div>
                 </Field>
-                <ScopeCheckboxField
-                  options={master.scope}
-                  value={form.scope ? form.scope.split(", ").filter(Boolean) : []}
-                  onChange={(vals) => set("scope", vals.join(", "))}
-                />
+                {!hideScope && (
+                  <ScopeCheckboxField
+                    options={master.scope}
+                    value={form.scope ? form.scope.split(", ").filter(Boolean) : []}
+                    onChange={(vals) => set("scope", vals.join(", "))}
+                  />
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -3011,8 +3107,8 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 <textarea rows={2} value={form.keterangan} onChange={(e) => set("keterangan", e.target.value)} className={inputCls + " resize-none"} />
               </Field>
 
-              {/* CASCADING — compact searchable dropdown per type */}
-              {(() => {
+              {/* CASCADING — compact searchable dropdown per type (hanya pada KPI Group) */}
+              {!hideCascading && (() => {
                 const CASC_STYLE: Record<string, { bg: string; border: string; color: string; pill: string; pillText: string }> = {
                   FC: { bg: "#e0e7ff", border: "#a5b4fc", color: "#312e81", pill: "#c7d2fe", pillText: "#312e81" },
                   PC: { bg: "#fef3c7", border: "#fcd34d", color: "#78350f", pill: "#fde68a", pillText: "#78350f" },
@@ -3205,7 +3301,6 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
     { label: "KPI",                      style: { position: "sticky" as const, left: W_NO + W_PERSP,  zIndex: 20, background: "#1A284F", minWidth: W_KPI   } },
     { label: "Satuan",                   style: { minWidth: 180  } },
     { label: "Formula Setahun",          style: { minWidth: 100  } },
-    { label: "Scope",                    style: { minWidth: 140  } },
     { label: "Bobot",                    style: { minWidth: 72   } },
     { label: "Definisi",                 style: { minWidth: 240  } },
     { label: "Source",                   style: { minWidth: 160  } },
@@ -3214,7 +3309,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
     { label: "Polaritas",                style: { minWidth: 96   } },
     { label: "Detail Formula",           style: { minWidth: 260  } },
     { label: "Keterangan",               style: { minWidth: 180  } },
-    { label: "Tracking Period",          style: { minWidth: 120  } },
+    { label: "Periode Tracking",         style: { minWidth: 120  } },
     ...(!hideCascading ? [{ label: "CASCADING (FC; PC; CC)", style: { minWidth: 100 } }] : []),
     ...(editable ? [{ label: "Aksi", style: { minWidth: 88 } }] : []),
   ];
@@ -3320,12 +3415,6 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
                 </select>
               : item.formula}
           </td>
-          {/* Scope */}
-          <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600" style={{ minWidth: 140 }}>
-            {isEditing
-              ? <input value={row.scope ?? ""} onChange={(e) => setD({ scope: e.target.value })} className={ci} />
-              : item.scope || "—"}
-          </td>
           {/* Bobot */}
           <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 72 }}>
             {isEditing
@@ -3386,14 +3475,9 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
               ? <textarea rows={3} value={row.keterangan ?? ""} onChange={(e) => setD({ keterangan: e.target.value })} className={ci} />
               : item.keterangan || "—"}
           </td>
-          {/* Tracking Period */}
+          {/* Periode Tracking (otomatis dari Satuan / Periode) */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 120 }}>
-            {isEditing
-              ? <select value={row.trackingPeriod ?? ""} onChange={(e) => setD({ trackingPeriod: e.target.value })} className={ci}>
-                  <option value="">— Pilih —</option>
-                  {tableTrackingPeriodOpts.map((p) => <option key={p}>{p}</option>)}
-                </select>
-              : item.trackingPeriod || "—"}
+            {derivePeriodeTrackingFromSatuan(isEditing ? row.satuan : item.satuan, isEditing ? row.trackingPeriod : item.trackingPeriod)}
           </td>
           {/* CASCADING */}
           {!hideCascading && (
@@ -3651,7 +3735,8 @@ function CascadingTypePanel({
   );
 }
 
-export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection }: {
+export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection }: {
+  hideScope?: boolean;
   toolbarExtra?: React.ReactNode;
   onRenameSection?: (oldSec: string, newSec: string) => void;
   items: KPISetting[];
@@ -3757,7 +3842,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
     { label: "Polaritas",         w: 80  },
     { label: "Detail Formula",    w: 240 },
     { label: "Keterangan",        w: 180 },
-    { label: "Tracking Period",   w: 90  },
+    { label: "Periode Tracking",  w: 90  },
     { label: "FC",                w: 150 },
     { label: "PC",                w: 170 },
     { label: "CC",                w: 130 },
@@ -3776,8 +3861,9 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   const hasCascadedRows = items.some(i => !!i._cascadeType);
   const cascadingWidth = COLS.slice(15).reduce((s, c) => s + c.w, 0) + 80;
   const showAksi = !previewMode && !kpiApproved && !submitted && Boolean(onUpdateItem || onDeleteItem);
-  const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? 80 : 0) - (hideCascading ? cascadingWidth : 0) + (hasCascadedRows && !previewMode ? 62 : 0);
-  const totalCols = 15
+  const visibleMainCols = hideScope ? COLS.slice(0, 15).filter((c) => c.label !== "Scope") : COLS.slice(0, 15);
+  const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? 80 : 0) - (hideCascading ? cascadingWidth : 0) - (hideScope ? 180 : 0) + (hasCascadedRows && !previewMode ? 62 : 0);
+  const totalCols = visibleMainCols.length
     + (showAksi ? 1 : 0)
     + (hasCascadedRows && !previewMode ? 1 : 0)
     + (!previewMode && !hideCascading ? 3 : 0);
@@ -3845,7 +3931,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                 Cascade
               </th>
             )}
-            {COLS.slice(0, 15).map(({ label, w }) => (
+            {visibleMainCols.map(({ label, w }) => (
               <th key={label} rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px] align-middle"
                 style={{ minWidth: w }}>{label}</th>
             ))}
@@ -4056,6 +4142,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                           : <span className="text-[11px] text-gray-600">{row.formula || "—"}</span>}
                       </td>
                       {/* Scope */}
+                      {!hideScope && (
                       <td className="border border-gray-200 py-2 px-1.5">
                         {isEditing && isFieldEditable("scope")
                           ? <ScopeCheckboxField
@@ -4066,6 +4153,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                             />
                           : <span className="text-[11px] text-gray-500 italic">{row.scope || "—"}</span>}
                       </td>
+                      )}
                       {/* Bobot */}
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("bobot")
@@ -4343,6 +4431,21 @@ function readStoredBusinessKpiItems(scopeKey: string): KPISetting[] | null {
   return null;
 }
 
+/** Ambil nilai Periode Tracking dari bagian /Periode pada Satuan (Add New KPI -> Sub Section -> Satuan -> Periode). */
+export function derivePeriodeTrackingFromSatuan(satuan?: string, fallback?: string): string {
+  const s = String(satuan ?? "");
+  const idx = s.indexOf("/");
+  if (idx >= 0) {
+    const raw = s.slice(idx + 1).trim();
+    if (raw) {
+      if (/^bulan$/i.test(raw)) return "Bulan";
+      if (/^tahun$/i.test(raw)) return "Tahun";
+      return raw;
+    }
+  }
+  return fallback || "Bulan";
+}
+
 const SECTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 /** Nama section sebuah baris KPI (label tersimpan pada item → metadata statis KPI Group → kode). */
@@ -4409,7 +4512,7 @@ export function mapCopiedKpiRows(source: KPISetting[], target: KPISetting[], toP
       indicatorMode: src.indicatorMode ?? "numeric",
       ratioPositiveLabel: src.ratioPositiveLabel,
       ratioNegativeLabel: src.ratioNegativeLabel,
-      scope: src.scope ?? "",
+      scope: "",
       trackingPeriod: src.trackingPeriod ?? "",
       copiedFromId: src.id,
     };
@@ -4579,6 +4682,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     setItems((prev) => renameKpiSection(prev, oldSec, newSec, !isCorporate));
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [submitTipOpen, setSubmitTipOpen] = useState(false);
   const readPersonalWorkflowState = () => {
     if (isCorporate) {
       const st = readStoredBusinessKpiStatus(effectiveScopeKey);
@@ -4613,15 +4717,31 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const [showEditRequestSuccess, setShowEditRequestSuccess] = useState(false);
   const [pendingEditRequest, setPendingEditRequest]       = useState(false);
   const [kpiApproved, setKpiApproved]                   = useState(() => readPersonalWorkflowState().isApp);
+  const readTargetEditState = () => {
+    const req = getTargetEditRequestForEmployee<KPISetting>(effectiveOwner.employeeId);
+    return {
+      pendingPhase1: req?.stage === "pending_phase1_hricf",
+      phase1Approved: req?.stage === "phase1_approved",
+      phase2Pending:
+        req?.stage === "pending_ap1" ||
+        req?.stage === "pending_ap2" ||
+        req?.stage === "pending_gm" ||
+        req?.stage === "pending_validate",
+      selectedIds: req?.selectedKpiIds ?? [],
+      cat: req?.phase1Category ?? "",
+      reason: req?.phase1Reason ?? "",
+    };
+  };
+  const initTe = readTargetEditState();
   const [showTargetEditRequest, setShowTargetEditRequest] = useState(false);
   const [showTargetEditSuccess, setShowTargetEditSuccess] = useState(false);
-  const [pendingTargetEditRequest, setPendingTargetEditRequest] = useState(false);
-  const [targetEditApproved, setTargetEditApproved]     = useState(false);
-  const [monthlyTargetPending, setMonthlyTargetPending] = useState(false);
+  const [pendingTargetEditRequest, setPendingTargetEditRequest] = useState(initTe.pendingPhase1);
+  const [targetEditApproved, setTargetEditApproved]     = useState(initTe.phase1Approved);
+  const [monthlyTargetPending, setMonthlyTargetPending] = useState(initTe.phase2Pending);
   const [showMonthlyTargetEdit, setShowMonthlyTargetEdit] = useState(false);
-  const [selectedTargetKpis, setSelectedTargetKpis]     = useState<string[]>([]);
-  const [targetEditCategory, setTargetEditCategory]     = useState("");
-  const [targetEditReason, setTargetEditReason]         = useState("");
+  const [selectedTargetKpis, setSelectedTargetKpis]     = useState<string[]>(initTe.selectedIds);
+  const [targetEditCategory, setTargetEditCategory]     = useState(initTe.cat);
+  const [targetEditReason, setTargetEditReason]         = useState(initTe.reason);
 
   useEffect(() => {
     const init = readPersonalWorkflowState();
@@ -4633,6 +4753,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       setSubmitted(st.isSub);
       setKpiApproved(st.isApp);
       setWfRecState(st.rec);
+      const te = readTargetEditState();
+      setPendingTargetEditRequest(te.pendingPhase1);
+      setTargetEditApproved(te.phase1Approved);
+      setMonthlyTargetPending(te.phase2Pending);
+      setSelectedTargetKpis(te.selectedIds);
+      setTargetEditCategory(te.cat);
+      setTargetEditReason(te.reason);
       if (st.storedItems) {
         setItems_(st.storedItems);
       }
@@ -4645,11 +4772,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     };
     window.addEventListener("pa-auth-updated", onSync);
     window.addEventListener("appraisal-updated", onSync);
+    window.addEventListener(KPI_TARGET_EDIT_EVENT, onSync);
     window.addEventListener("pa-db-hydrated", onSync);
     window.addEventListener("storage", onSync);
     return () => {
       window.removeEventListener("pa-auth-updated", onSync);
       window.removeEventListener("appraisal-updated", onSync);
+      window.removeEventListener(KPI_TARGET_EDIT_EVENT, onSync);
       window.removeEventListener("pa-db-hydrated", onSync);
       window.removeEventListener("storage", onSync);
     };
@@ -4669,6 +4798,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     const n = parseFloat(item.bobot.replace("%", "")) || 0;
     return sum + n;
   }, 0);
+  const canSubmitPersonalBobot = items.length > 0 && Math.round(totalBobot * 100) === 10000;
 
   const handleConfirm = () => { setShowConfirm(false); setShowSuccess(true); };
   const handleSuccessClose = () => {
@@ -4678,7 +4808,17 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     const todayStr = formatTodayDDMMYYYY();
     persistKpiItemsToBackend(items, "Submitted");
     if (isCorporate) {
-      const statusRecord = { submitted: true, approved: false, submittedDate: todayStr, submittedBy: actorLabel };
+      const isUnitScope = effectiveScopeKey.startsWith("unit-") || effectiveScopeKey.startsWith("corporate-unit");
+      const statusRecord = {
+        submitted: true,
+        directorApproved: false,
+        approved: false,
+        stage: isUnitScope ? "pending_director" : "pending_validator",
+        companyUnit: effectiveOwner.company,
+        submittedDate: todayStr,
+        submittedBy: actorLabel,
+        submittedById: effectiveOwner.employeeId,
+      };
       try {
         const raw = safeGetLocalRaw("pa_kpi_business_status_v1");
         const map = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
@@ -4688,56 +4828,350 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         // ignore
       }
       void mergeKvMapRecord("pa_kpi_business_status_v1", effectiveScopeKey, statusRecord);
+      // Notifikasi ke Owner (GM / Director) & ke Approver (Director / HR ICF)
+      const allUsersPool = loadManagedUsers();
+      pushEmployeeNotification({
+        employeeIds: [effectiveOwner.employeeId],
+        title: `Pengajuan ${isUnitScope ? `KPI (Unit) — ${effectiveOwner.company}` : "KPI (Group)"} Berhasil Disubmit`,
+        summary: `Pengajuan ${isUnitScope ? `KPI (Unit) ${effectiveOwner.company}` : "KPI (Group)"} Anda telah berhasil disubmit pada ${todayStr} dan sedang menunggu ${isUnitScope ? "persetujuan Director" : "validasi HR ICF"}.`,
+        category: "Approval",
+        moduleName: "KPI",
+        approvalStatus: "Submitted",
+        ctaLabel: "Buka KPI Setting",
+        ctaRoute: "/setting/kpi",
+        senderName: actorLabel,
+      });
+      if (isUnitScope) {
+        const groupUnits = getGroupCompaniesForUnit(effectiveOwner.company);
+        const directorIds = allUsersPool
+          .filter((u) => u.status === "Active" && isDirectorRoleOrGrouping(u) && groupUnits.includes(u.company))
+          .map((u) => u.employeeId);
+        if (directorIds.length > 0) {
+          pushEmployeeNotification({
+            employeeIds: directorIds,
+            title: `Pengajuan KPI (Unit) ${effectiveOwner.company} Menunggu Approval Director`,
+            summary: `${actorLabel} telah mensubmit KPI (Unit) untuk ${effectiveOwner.company}. Silakan review & Approve di menu Approvals → KPI Business.`,
+            category: "Approval",
+            moduleName: "KPI Business",
+            approvalStatus: "Pending",
+            ctaLabel: "Approve KPI (Unit)",
+            ctaRoute: "/bod/settings/kpi/gm",
+            senderName: actorLabel,
+            senderRole: effectiveOwner.role,
+          });
+        }
+      } else {
+        const hrIcfIds = allUsersPool
+          .filter((u) => u.status === "Active" && (u.role === "HR ICF" || Boolean(u.isHrIcfValidator) || u.role === "Administrator"))
+          .map((u) => u.employeeId);
+        if (hrIcfIds.length > 0) {
+          pushEmployeeNotification({
+            employeeIds: hrIcfIds,
+            title: `Pengajuan KPI (Group) Menunggu Validasi HR ICF`,
+            summary: `${actorLabel} telah mensubmit KPI (Group). Silakan review & Validate di menu Approvals → KPI Business.`,
+            category: "Approval",
+            moduleName: "KPI Business",
+            approvalStatus: "Pending",
+            ctaLabel: "Validate KPI (Group)",
+            ctaRoute: "/hr/settings/kpi/group",
+            senderName: actorLabel,
+            senderRole: effectiveOwner.role,
+          });
+        }
+      }
+      window.dispatchEvent(new Event("appraisal-updated"));
     } else {
       submitWorkflowModule("KPI", "setting", todayStr, effectiveOwner.employeeId);
     }
     setWfRecState(readPersonalWorkflowState().rec);
   };
 
+  const isUnitWorkspace = isCorporate && (workspaceLabel?.includes("Unit") || effectiveScopeKey.startsWith("unit") || effectiveScopeKey.startsWith("corporate-unit"));
+
   const handleExport = () => {
-    if (isCorporate) {
-      const headers = ["No","Section","Perspektif","KPI","Satuan","Formula Setahun","Scope","Bobot","Definisi","Source","Polaritas","Detail Formula","Keterangan","Baseline 2025","Target 2026","Tracking Period","COO","GM Industry","GM Perkebunan","GM ASD","GM RSTM","GM GHS"];
-      const rows = items.map((i) => [i.no, `${i.section}. ${CORP_SECTION_META[i.section]?.label ?? i.section}`, i.perspektif, i.kpi, i.satuan, i.formula, i.scope ?? "", i.bobot, i.definisi, i.source, i.polaritas, i.detailFormula, i.keterangan ?? "", i.baseline2025, i.target2026, i.trackingPeriod ?? "", i.coo ?? "", i.gmVgmIndustry ?? "", i.gmVgmPerkebunan ?? "", i.gmAsd ?? "", i.gmRstm ?? "", i.gmGhs ?? ""]);
-      exportXLSX("KPI_Bisnis_RSUP_Group_2026.xlsx", headers, rows);
+    const isGroupTable = Boolean(isCorporate && !isUnitWorkspace);
+    const baseCols = isGroupTable
+      ? ["No","Perspektif","KPI","Satuan","Formula Setahun","Scope","Bobot","Definisi","Source","Baseline 2025","Target 2026","Polaritas","Detail Formula","Keterangan","Periode Tracking"]
+      : ["No","Perspektif","KPI","Satuan","Formula Setahun","Bobot","Definisi","Source","Baseline 2025","Target 2026","Polaritas","Detail Formula","Keterangan","Periode Tracking"];
+    const totalColCount = isGroupTable ? baseCols.length + 3 : baseCols.length;
+    const colWidths = isGroupTable
+      ? [7, 16, 34, 15, 16, 22, 10, 32, 22, 14, 14, 13, 32, 24, 16, 22, 22, 22]
+      : [7, 16, 34, 15, 16, 10, 32, 22, 14, 14, 13, 32, 24, 16];
+
+    const rowsOut: StyledExcelCell[][] = [];
+    const merges: StyledExcelMerge[] = [];
+    const rowHeights: Record<number, number> = {};
+
+    const hdrStyle = { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center" as const, vAlign: "center" as const, borderColor: "334155" };
+    const subHdrStyle = { bg: EXCEL_THEME.headerSubNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center" as const, vAlign: "center" as const, borderColor: "334155" };
+
+    if (isGroupTable) {
+      // Baris header 2 tingkat persis seperti CorporateKPITable (CASCADING -> FC | PC | CC)
+      const row0: StyledExcelCell[] = [
+        ...baseCols.map((lbl) => ({ value: lbl, style: hdrStyle })),
+        { value: "CASCADING (FC; PC; CC)", style: hdrStyle },
+        { value: "", style: hdrStyle },
+        { value: "", style: hdrStyle },
+      ];
+      const row1: StyledExcelCell[] = [
+        ...baseCols.map(() => ({ value: "", style: hdrStyle })),
+        { value: "FC", style: subHdrStyle },
+        { value: "PC", style: subHdrStyle },
+        { value: "CC", style: subHdrStyle },
+      ];
+      rowsOut.push(row0, row1);
+      rowHeights[0] = 24;
+      rowHeights[1] = 22;
+      baseCols.forEach((_, ci) => merges.push({ sRow: 0, sCol: ci, eRow: 1, eCol: ci }));
+      merges.push({ sRow: 0, sCol: baseCols.length, eRow: 0, eCol: baseCols.length + 2 });
     } else {
-      const headers = ["No","Section","Perspektif","KPI","Satuan","Formula","Bobot","Definisi","Source","Baseline 2025","Target 2026","Polaritas","Detail Formula","Keterangan"];
-      const rows = items.map((i) => [i.no, `Section ${i.section}`, i.perspektif, i.kpi, i.satuan, i.formula, i.bobot, i.definisi, i.source, i.baseline2025, i.target2026, i.polaritas, i.detailFormula, i.keterangan]);
-      exportXLSX("KPI_Setting_2026.xlsx", headers, rows);
+      rowsOut.push(baseCols.map((lbl) => ({ value: lbl, style: hdrStyle })));
+      rowHeights[0] = 28;
     }
+
+    const exportSource: KPISetting[] =
+      items.length > 0
+        ? items
+        : [
+            {
+              id: "tpl-1",
+              no: "1",
+              section: "A",
+              sectionLabel: isCorporate ? "Kinerja K3L Terintegrasi (SMK3/HSE)" : "Objective KPI",
+              sectionBobot: isCorporate ? "15%" : "20%",
+              perspektif: "Proses",
+              kpi: "",
+              satuan: "%/Bulan",
+              formula: "Rata-Rata",
+              scope: "",
+              bobot: "20%",
+              definisi: "",
+              source: "",
+              baseline2025: "",
+              target2026: "",
+              polaritas: "Maximize",
+              detailFormula: "",
+              keterangan: "",
+              trackingPeriod: "Bulan",
+            },
+          ];
+
+    const sections = Array.from(new Set(exportSource.map((k) => k.section || "A"))).sort();
+    const roleFields: Array<[keyof KPISetting, string]> = [
+      ["coo", "COO"],
+      ["gmVgmIndustry", "GM Industry"],
+      ["gmVgmPerkebunan", "GM Perkebunan"],
+      ["gmAsd", "GM ASD"],
+      ["gmRstm", "GM RSTM"],
+      ["gmGhs", "GM GHS"],
+    ];
+
+    const collectRolesForType = (it: KPISetting, code: "FC" | "PC" | "CC"): string => {
+      if (it.cascadingMap && Object.keys(it.cascadingMap).length > 0) {
+        return Object.entries(it.cascadingMap)
+          .filter(([, v]) => v === code)
+          .map(([k]) => k)
+          .join(", ");
+      }
+      return roleFields
+        .filter(([k]) => it[k] === code)
+        .map(([, lbl]) => lbl)
+        .join(", ");
+    };
+
+    sections.forEach((sec, sIdx) => {
+      const secRows = exportSource.filter((k) => (k.section || "A") === sec);
+      const first = secRows[0];
+      const staticMeta = CORP_SECTION_META[sec];
+      const secName = !isCorporate
+        ? resolvePersonalSectionLabel(first)
+        : (first?.sectionLabel || staticMeta?.label || `Section ${sec}`);
+      const secBobot = first?.sectionBobot || (isCorporate ? staticMeta?.bobot : (sec === "A" ? "20%" : sec === "B" ? "80%" : "")) || "";
+      const bannerBg = (isCorporate && staticMeta?.bg ? staticMeta.bg.replace("#", "") : EXCEL_THEME.sectionPalette[sIdx % EXCEL_THEME.sectionPalette.length]);
+      const bannerText = `${sec}. ${secName}${secBobot ? ` — Bobot ${secBobot}` : ""}`;
+
+      const bannerRowIdx = rowsOut.length;
+      const bannerRow: StyledExcelCell[] = Array.from({ length: totalColCount }, (_, ci) => ({
+        value: ci === 0 ? bannerText : "",
+        style: { bg: bannerBg, fg: EXCEL_THEME.white, bold: true, align: "left", vAlign: "center", borderColor: bannerBg },
+      }));
+      rowsOut.push(bannerRow);
+      rowHeights[bannerRowIdx] = 24;
+      merges.push({ sRow: bannerRowIdx, sCol: 0, eRow: bannerRowIdx, eCol: totalColCount - 1 });
+
+      secRows.forEach((it, rIdx) => {
+        const pTrack = derivePeriodeTrackingFromSatuan(it.satuan, it.trackingPeriod);
+        const vals = isGroupTable
+          ? [it.no, it.perspektif, it.kpi, it.satuan, it.formula, it.scope ?? "", it.bobot, it.definisi, it.source, it.baseline2025, it.target2026, it.polaritas, it.detailFormula, it.keterangan ?? "", pTrack]
+          : [it.no, it.perspektif, it.kpi, it.satuan, it.formula, it.bobot, it.definisi, it.source, it.baseline2025, it.target2026, it.polaritas, it.detailFormula, it.keterangan ?? "", pTrack];
+
+        const styledCells: StyledExcelCell[] = vals.map((v, ci) => ({
+          value: v ?? "",
+          style: inferSystemCellStyle(baseCols[ci], v ?? "", rIdx),
+        }));
+
+        if (isGroupTable) {
+          const fcStr = collectRolesForType(it, "FC");
+          const pcStr = collectRolesForType(it, "PC");
+          const ccStr = collectRolesForType(it, "CC");
+          const baseZebra = rIdx % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
+          styledCells.push(
+            { value: fcStr, style: fcStr ? { bg: EXCEL_THEME.cascading.FC.bg, fg: EXCEL_THEME.cascading.FC.fg, bold: true, align: "left" } : { bg: baseZebra, fg: EXCEL_THEME.textMuted } },
+            { value: pcStr, style: pcStr ? { bg: EXCEL_THEME.cascading.PC.bg, fg: EXCEL_THEME.cascading.PC.fg, bold: true, align: "left" } : { bg: baseZebra, fg: EXCEL_THEME.textMuted } },
+            { value: ccStr, style: ccStr ? { bg: EXCEL_THEME.cascading.CC.bg, fg: EXCEL_THEME.cascading.CC.fg, bold: true, align: "left" } : { bg: baseZebra, fg: EXCEL_THEME.textMuted } },
+          );
+        }
+        const curRowIdx = rowsOut.length;
+        rowsOut.push(styledCells);
+        rowHeights[curRowIdx] = 28;
+      });
+    });
+
+    const fname = isGroupTable
+      ? "KPI_Group_2026.xlsx"
+      : isUnitWorkspace
+      ? `KPI_Unit_${effectiveOwner.company.replace(/[^A-Za-z0-9]+/g, "_")}_2026.xlsx`
+      : `KPI_Personal_${effectiveOwner.employeeId}_2026.xlsx`;
+    exportStyledXLSX(fname, {
+      sheetName: isGroupTable ? "KPI (Group)" : isUnitWorkspace ? "KPI (Unit)" : "KPI (Personal)",
+      colWidths,
+      rowHeights,
+      rows: rowsOut,
+      merges,
+    });
   };
 
   const handleImport = async (file: File) => {
     try {
-      const { headers, rows } = await parseXLSX(file);
-      const col = (pat: RegExp) => headers.findIndex((h) => pat.test(h.trim()));
-      const noI = col(/^no$/i), sectionI = col(/section/i), perspektifI = col(/perspektif/i),
-        kpiI = col(/^kpi$/i), satuanI = col(/satuan/i), formulaI = col(/formula/i),
-        bobotI = col(/bobot/i), definisiI = col(/definisi/i), sourceI = col(/source/i),
-        baseI = col(/baseline/i), targetI = col(/target/i), polarI = col(/polaritas/i),
-        detailI = col(/detail/i), ketI = col(/keterangan/i);
-      const g = (r: string[], i: number) => (i >= 0 ? r[i] ?? "" : "");
-      const imported: KPISetting[] = rows.filter((r) => r.some((c) => c.trim())).map((r, idx) => ({
-        id: `imported-${Date.now()}-${idx}`,
-        no: g(r, noI) || String(idx + 1),
-        section: (g(r, sectionI).toUpperCase().match(/[A-Z]/)?.[0] as "A" | "B") ?? "B",
-        perspektif: g(r, perspektifI),
-        kpi: g(r, kpiI),
-        satuan: g(r, satuanI),
-        formula: g(r, formulaI),
-        bobot: g(r, bobotI),
-        definisi: g(r, definisiI),
-        source: g(r, sourceI),
-        baseline2025: g(r, baseI),
-        target2026: g(r, targetI),
-        polaritas: (g(r, polarI) as "Maximize" | "Minimize") || "Maximize",
-        detailFormula: g(r, detailI),
-        keterangan: g(r, ketI),
-        monthlyTargets: {},
-        colorIndicator: false,
-        indicatorMode: "numeric" as const,
-      }));
-      if (imported.length > 0) setItems(imported);
-    } catch { /* ignore parse errors */ }
+      const buf = await file.arrayBuffer();
+      const matrix = parseXLSXMatrix(buf);
+      if (matrix.length === 0) return;
+
+      const isGroupTable = Boolean(isCorporate && !isUnitWorkspace);
+      // Cari baris header utama yang memuat "No" & "KPI"
+      let hdrRowIdx = matrix.findIndex((r) => r.some((c) => /^no$/i.test(c.trim())) && r.some((c) => /^kpi$/i.test(c.trim())));
+      if (hdrRowIdx < 0) hdrRowIdx = 0;
+      const hdr0 = matrix[hdrRowIdx].map((h) => h.trim());
+      const hdr1 = (matrix[hdrRowIdx + 1] ?? []).map((h) => h.trim());
+      const hasTwoRowHeader = hdr1.some((h) => /^(fc|pc|cc)$/i.test(h)) && !hdr1[0];
+      const mergedHeaders = hdr0.map((h, idx) => (hasTwoRowHeader && hdr1[idx] ? hdr1[idx] : h));
+      const dataStartIdx = hdrRowIdx + (hasTwoRowHeader ? 2 : 1);
+
+      const col = (pat: RegExp) => mergedHeaders.findIndex((h) => pat.test(h));
+      const noI = col(/^no$/i);
+      const sectionColI = col(/^section$/i);
+      const perspektifI = col(/^perspektif$/i);
+      const kpiI = col(/^kpi$/i);
+      const satuanI = col(/^satuan$/i);
+      const formulaI = col(/^formula/i);
+      const scopeI = col(/^scope$/i);
+      const bobotI = col(/^bobot$/i);
+      const definisiI = col(/^definisi$/i);
+      const sourceI = col(/^source$/i);
+      const baseI = col(/^baseline/i);
+      const targetI = col(/^target/i);
+      const polarI = col(/^polaritas$/i);
+      const detailI = col(/^detail/i);
+      const ketI = col(/^keterangan$/i);
+      const trackI = col(/^(periode tracking|tracking period)$/i);
+      const fcI = col(/^fc$/i);
+      const pcI = col(/^pc$/i);
+      const ccI = col(/^cc$/i);
+
+      const g = (r: string[], idx: number) => (idx >= 0 ? String(r[idx] ?? "").trim() : "");
+
+      let curSec = "A";
+      let curSecLabel = isCorporate ? "Kinerja K3L Terintegrasi (SMK3/HSE)" : "Objective KPI";
+      let curSecBobot = isCorporate ? "15%" : "20%";
+      const imported: KPISetting[] = [];
+
+      for (let ri = dataStartIdx; ri < matrix.length; ri++) {
+        const r = matrix[ri];
+        const nonEmpty = r.filter((c) => String(c ?? "").trim() !== "");
+        if (nonEmpty.length === 0) continue;
+
+        // Deteksi baris Banner Section (mis. "A. Objective KPI — Bobot 20%" di sel pertama dan sel lainnya kosong)
+        const firstCell = String(r[0] ?? "").trim();
+        const otherCellsEmpty = r.slice(1).every((c) => String(c ?? "").trim() === "");
+        const bannerMatch = firstCell.match(/^([A-Z])\.\s*(.+?)(?:\s*[—\-]\s*Bobot\s*(\d+%?))?$/i);
+        if (otherCellsEmpty && bannerMatch) {
+          curSec = bannerMatch[1].toUpperCase();
+          curSecLabel = bannerMatch[2].trim();
+          curSecBobot = bannerMatch[3] ? (bannerMatch[3].endsWith("%") ? bannerMatch[3] : `${bannerMatch[3]}%`) : "";
+          continue;
+        }
+
+        const kpiText = g(r, kpiI);
+        const noText = g(r, noI);
+        if (!kpiText && !noText) continue;
+        // Abaikan baris template kosong tanpa nama KPI
+        if (!kpiText) continue;
+
+        let rowSec = curSec;
+        if (sectionColI >= 0 && g(r, sectionColI)) {
+          rowSec = g(r, sectionColI).toUpperCase().match(/[A-Z]/)?.[0] ?? curSec;
+        }
+        const satuanVal = g(r, satuanI) || "%/Bulan";
+        const trackVal = derivePeriodeTrackingFromSatuan(satuanVal, g(r, trackI) || "Bulan");
+
+        const item: KPISetting = {
+          id: `imp-${Date.now()}-${imported.length}`,
+          no: noText || String(imported.length + 1),
+          section: rowSec,
+          sectionAlphabet: `${rowSec}.`,
+          sectionLabel: sectionColI >= 0 ? undefined : curSecLabel,
+          sectionBobot: sectionColI >= 0 ? undefined : curSecBobot,
+          perspektif: g(r, perspektifI) || "Proses",
+          kpi: kpiText,
+          satuan: satuanVal,
+          formula: g(r, formulaI) || "Rata-Rata",
+          scope: isGroupTable ? g(r, scopeI) : "",
+          bobot: g(r, bobotI) || "0%",
+          definisi: g(r, definisiI),
+          source: g(r, sourceI),
+          baseline2025: g(r, baseI),
+          target2026: g(r, targetI),
+          polaritas: ((g(r, polarI) as Polaritas) || "Maximize"),
+          detailFormula: g(r, detailI),
+          keterangan: g(r, ketI),
+          trackingPeriod: trackVal,
+          monthlyTargets: {},
+          colorIndicator: false,
+          indicatorMode: "numeric",
+        };
+
+        if (isGroupTable && (fcI >= 0 || pcI >= 0 || ccI >= 0)) {
+          const cmap: Record<string, string> = {};
+          const applyRoleList = (rawList: string, code: "FC" | "PC" | "CC") => {
+            rawList.split(/[,;]/).map((x) => x.trim()).filter(Boolean).forEach((roleName) => {
+              cmap[roleName] = code;
+              const rl = roleName.toLowerCase();
+              if (rl === "coo") item.coo = code;
+              else if (rl.includes("industry")) item.gmVgmIndustry = code;
+              else if (rl.includes("perkebunan")) item.gmVgmPerkebunan = code;
+              else if (rl.includes("asd")) item.gmAsd = code;
+              else if (rl.includes("rstm")) item.gmRstm = code;
+              else if (rl.includes("ghs")) item.gmGhs = code;
+            });
+          };
+          applyRoleList(g(r, fcI), "FC");
+          applyRoleList(g(r, pcI), "PC");
+          applyRoleList(g(r, ccI), "CC");
+          if (Object.keys(cmap).length > 0) item.cascadingMap = cmap;
+        }
+
+        imported.push(item);
+      }
+
+      if (imported.length > 0) {
+        setItems(imported);
+        toast.success(`${imported.length} baris KPI berhasil di-import dan disimpan.`);
+      } else {
+        toast.error("Tidak ada baris KPI berisi data pada file Excel yang dipilih.");
+      }
+    } catch {
+      toast.error("Gagal membaca file Excel. Pastikan menggunakan format template yang sesuai.");
+    }
   };
 
   return (
@@ -4827,10 +5261,31 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 <Eye className="w-4 h-4" /> Preview
               </button>
               {canSubmit && (
-                <button onClick={() => setShowConfirm(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                  <Send className="w-4 h-4" /> Submit KPI
-                </button>
+                <Tooltip open={!canSubmitPersonalBobot && submitTipOpen} onOpenChange={setSubmitTipOpen}>
+                  <TooltipTrigger asChild>
+                    <span
+                      tabIndex={0}
+                      className="inline-flex"
+                      onClick={() => { if (!canSubmitPersonalBobot) setSubmitTipOpen(true); }}
+                    >
+                      <button
+                        type="button"
+                        disabled={!canSubmitPersonalBobot}
+                        onClick={() => setShowConfirm(true)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+                      >
+                        <Send className="w-4 h-4" /> Submit KPI
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="end" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                    <p className="text-xs font-semibold">
+                      {items.length === 0
+                        ? "Belum ada KPI. Tambahkan KPI terlebih dahulu hingga Total Bobot mencapai 100%."
+                        : `Total Bobot KPI saat ini ${totalBobot}% — wajib tepat 100% sebelum Submit KPI.`}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
               )}
             </>
           )}
@@ -4841,10 +5296,31 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 <Edit3 className="w-4 h-4" /> Back
               </button>
               {canSubmit && (
-                <button onClick={() => setShowConfirm(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-                  <Send className="w-4 h-4" /> Submit KPI
-                </button>
+                <Tooltip open={!canSubmitPersonalBobot && submitTipOpen} onOpenChange={setSubmitTipOpen}>
+                  <TooltipTrigger asChild>
+                    <span
+                      tabIndex={0}
+                      className="inline-flex"
+                      onClick={() => { if (!canSubmitPersonalBobot) setSubmitTipOpen(true); }}
+                    >
+                      <button
+                        type="button"
+                        disabled={!canSubmitPersonalBobot}
+                        onClick={() => setShowConfirm(true)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+                      >
+                        <Send className="w-4 h-4" /> Submit KPI
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="end" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                    <p className="text-xs font-semibold">
+                      {items.length === 0
+                        ? "Belum ada KPI. Tambahkan KPI terlebih dahulu hingga Total Bobot mencapai 100%."
+                        : `Total Bobot KPI saat ini ${totalBobot}% — wajib tepat 100% sebelum Submit KPI.`}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
               )}
             </>
           )}
@@ -4886,7 +5362,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
               <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Pending Approval
               </span>
-              <button onClick={() => setPendingTargetEditRequest(false)}
+              <button onClick={() => { cancelTargetEditPhase1(effectiveOwner.employeeId); setPendingTargetEditRequest(false); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors">
                 <X className="w-3.5 h-3.5" /> Cancel
               </button>
@@ -4938,6 +5414,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       {isCorporate ? (
         <CorporateKPITable
           items={items}
+          hideScope={isCorporate && (workspaceLabel?.includes("Unit") || effectiveScopeKey.startsWith("unit") || effectiveScopeKey.startsWith("corporate-unit"))}
           onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
           onDeleteItem={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
           onAddClick={canCreate ? () => setShowAddModal(true) : undefined}
@@ -5001,7 +5478,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       )}
 
       {showAddModal && isCorporate && (
-        <AddCorporateKPIModal existingItems={items} onAdd={(item) => setItems((p) => [...p, item])} onClose={() => setShowAddModal(false)} />
+        <AddCorporateKPIModal
+          existingItems={items}
+          sectionLabel={workspaceLabel?.includes("Unit") || effectiveScopeKey.startsWith("unit") || effectiveScopeKey.startsWith("corporate-unit") ? "KPI (Unit)" : "Business"}
+          hideScope={workspaceLabel?.includes("Unit") || effectiveScopeKey.startsWith("unit") || effectiveScopeKey.startsWith("corporate-unit")}
+          hideCascading={Boolean(hideCascading) || workspaceLabel?.includes("Unit") || effectiveScopeKey.startsWith("unit") || effectiveScopeKey.startsWith("corporate-unit")}
+          onAdd={(item) => setItems((p) => [...p, item])}
+          onClose={() => setShowAddModal(false)}
+        />
       )}
       {showAddModal && !isCorporate && (
         <AddKPIModal
@@ -5032,7 +5516,35 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         <EditTargetRequestModal
           items={items}
           onCancel={() => setShowTargetEditRequest(false)}
-          onConfirm={(cat, reason, _files, kpis) => {
+          onConfirm={async (cat, reason, files, kpis) => {
+            const phase1Attachments: TargetEditAttachment[] = [];
+            for (const f of files) {
+              let url = "";
+              try {
+                const up = await uploadEvidenceFileToSupabase(f, {
+                  employeeId: effectiveOwner.employeeId,
+                  employeeName: effectiveOwner.name,
+                  companyUnit: effectiveOwner.company,
+                  division: effectiveOwner.division || "-",
+                  department: effectiveOwner.department || "-",
+                  position: effectiveOwner.position || "-",
+                  moduleType: "KPI Edit Target Request (Fase 1)",
+                  period: "2026",
+                  month: "All",
+                });
+                url = up?.url || "";
+              } catch {
+                url = "";
+              }
+              phase1Attachments.push({ name: f.name, size: f.size, type: f.type || "application/octet-stream", url });
+            }
+            submitTargetEditPhase1({
+              owner: effectiveOwner,
+              category: cat,
+              reason,
+              selectedKpiIds: kpis,
+              files: phase1Attachments,
+            });
             setTargetEditCategory(cat);
             setTargetEditReason(reason);
             setSelectedTargetKpis(kpis);
@@ -5050,7 +5562,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           selectedKpiIds={selectedTargetKpis}
           phase1Category={targetEditCategory}
           phase1Reason={targetEditReason}
-          onSave={(updated) => setItems(updated)}
+          ownerUser={effectiveOwner}
           onClose={() => setShowMonthlyTargetEdit(false)}
           onSubmitted={() => {
             setShowMonthlyTargetEdit(false);
@@ -5357,9 +5869,10 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       {activeTab === "corporate-unit" && (
         <KPISection
           key={`corporate-unit-${isGmMode ? "gm" : pakAntonValidated ? "validated" : "pending"}-${pakAmirInitialItems.map(i => i.id).join("|")}`}
-          initialItems={isGmMode ? (usesDemoSampleData(activeUser) ? masterFormats.unit : []) : pakAmirInitialItems}
+          initialItems={[]}
           isPersonal={false}
           isCorporate={true}
+          hideCascading={true}
           useValidateTerms={false}
           businessScopeKey={isGmMode ? `unit-${activeUser.company}` : "corporate-unit-RSUP"}
           onTabStatusChange={setPakAmirTabStatus}
@@ -5380,7 +5893,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       {activeTab === "personal" && (
         <KPISection
           key="personal"
-          initialItems={(personalOnly || isDirectorMode || isGmMode) && usesDemoSampleData(activeUser) ? masterFormats.personal : []}
+          initialItems={[]}
           isPersonal={true}
           isCorporate={false}
           divisionApproved={personalOnly || isDirectorMode || isGmMode ? true : divisionApproved}
@@ -5563,11 +6076,9 @@ function DelegatedKPISettingTabsView({
           // DEMO: KPI (Group) tetap sebagai dasar KPI Utama; KPI (Unit)/(Personal) kosong untuk non-Administrator
           const ownerUsesDemo = usesDemoSampleData(current.owner);
           const initByKind =
-            current.kind === "personal"
-              ? ownerUsesDemo ? fmt.personal : []
-              : current.kind === "unit"
-              ? ownerUsesDemo ? fmt.unit : []
-              : fmt.group;
+            current.kind === "group"
+              ? fmt.group
+              : [];
           return (
         <KPISection
           key={current.id}

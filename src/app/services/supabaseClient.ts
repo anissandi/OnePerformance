@@ -922,6 +922,9 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
       kind === "users-replace" ||
       kind === "user-delete" ||
       kind === "workflow-delete" ||
+      kind === "interview-schedule" ||
+      kind === "mi-clear-all" ||
+      kind === "evidence-delete" ||
       (kind === "kv-state" && CRITICAL_AUTH_KV_KEYS.has(String(payload.stateKey ?? "")));
 
     // Path 0 (Vercel Serverless API with SUPABASE_SERVICE_ROLE_KEY — bypasses RLS & build-time env issues)
@@ -1032,6 +1035,24 @@ export function loadUploadedEvidenceList(): UploadedEvidenceRecord[] {
     safeSetLocalJson(EVIDENCE_LIST_KEY, cleaned);
   }
   return cleaned;
+}
+
+export async function deleteUploadedEvidenceById(id: string): Promise<void> {
+  const current = loadUploadedEvidenceList();
+  const target = current.find((r) => r.id === id);
+  const next = current.filter((r) => r.id !== id);
+  savePersistedState(EVIDENCE_LIST_KEY, next, {
+    kind: "evidence-delete",
+    evidenceId: id,
+    audit: {
+      action: "Delete",
+      module: target?.moduleType ?? "Evidence",
+      subModule: "Evidence",
+      description: `Deleted evidence file "${target?.fileName ?? id}" (${target?.employeeId ?? "-"})`,
+    },
+  });
+  await deleteBackendRecordFromSupabase("pa_evidence_files", "id", id);
+  window.dispatchEvent(new Event("pa-evidence-updated"));
 }
 
 function readActiveUserSnapshot(): Record<string, string> {
@@ -2257,7 +2278,15 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
 
     // 8. Hydrate normalized interview schedules if present
     const schedules = data.interviewSchedules as Array<Record<string, unknown>> | undefined;
-    if (Array.isArray(schedules) && schedules.length > 0) {
+    const miAlreadyCleared = seenBackendKvKeys.has("pa_mi_cleared_2026_v1");
+    if (!miAlreadyCleared) {
+      safeSetLocalJson("pa_mi_cleared_2026_v1", true);
+      safeSetLocalJson("pa_interview_schedules_v1", []);
+      safeSetLocalJson("pa_mi_supervisor_assessments_v1", {});
+      safeSetLocalJson("pa_mi_penilai1_scores_v1", {});
+      safeSetLocalJson("pa_mi_results_by_emp_v1", {});
+      void syncToSupabase({ kind: "mi-clear-all" });
+    } else if (Array.isArray(schedules) && schedules.length > 0) {
       const mappedSchedules = schedules.map((s) => ({
         id: String(s.id),
         companyUnit: String(s.company_unit ?? "PT. RSUP (Industri)"),

@@ -265,9 +265,10 @@ function StatusBadge({ status }: { status: ScheduleEntry["status"] }) {
     Cancelled: "bg-red-100 text-red-600",
     Done:      "bg-green-100 text-green-700",
   };
+  const label = status === "Cancelled" ? "Cancel" : status;
   return (
     <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${map[status]}`}>
-      {status}
+      {label}
     </span>
   );
 }

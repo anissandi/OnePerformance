@@ -510,7 +510,15 @@ function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
   const [openGoal, setOpenGoal] = useState<number | null>(null);
 
   const live = loadSubmittedGoals(employeeId);
-  const goals: SmartGoal[] = live && live.length > 0 ? live : SAMPLE_GOALS;
+  const goals: SmartGoal[] = live && live.length > 0 ? live : [];
+
+  if (goals.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-10 text-center text-xs text-gray-400">
+        Belum ada data SMART Goals yang disimpan oleh karyawan ini.
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -615,25 +623,66 @@ function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
 
 // ── KPI content ────────────────────────────��──────────────────────────────────
 
-type FullKPIItem = (typeof FULL_KPI_ITEMS)[number];
+interface StoredOwnerKpiItem {
+  id?: string;
+  no: string;
+  section: string;
+  sectionLabel?: string;
+  sectionBobot?: string;
+  perspektif: string;
+  kpi: string;
+  satuan: string;
+  formula: string;
+  bobot: string;
+  definisi: string;
+  source: string;
+  baseline2025: string;
+  target2026: string;
+  polaritas: string;
+  detailFormula: string;
+  keterangan?: string;
+  trackingPeriod?: string;
+}
+
+function derivePeriodeTrackingLabel(satuan?: string, trackingPeriod?: string): string {
+  const s = String(satuan ?? "");
+  const idx = s.indexOf("/");
+  if (idx >= 0) {
+    const raw = s.slice(idx + 1).trim();
+    if (raw) {
+      if (/^bulan$/i.test(raw)) return "Bulan";
+      if (/^tahun$/i.test(raw)) return "Tahun";
+      return raw;
+    }
+  }
+  return trackingPeriod || "Bulan";
+}
 
 function KPIContent({ employeeId }: { employeeId: string }) {
-  const kpiItems: FullKPIItem[] = (() => {
+  const kpiItems: StoredOwnerKpiItem[] = (() => {
     try {
       const normId = normalizeEmployeeId(employeeId);
       const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
-      const map = raw ? (JSON.parse(raw) as Record<string, FullKPIItem[]>) : {};
+      const map = raw ? (JSON.parse(raw) as Record<string, StoredOwnerKpiItem[]>) : {};
       const stored = map[normId] ?? map[employeeId];
       if (Array.isArray(stored) && stored.length > 0) return stored;
     } catch {
       // ignore
     }
-    return FULL_KPI_ITEMS;
+    return [];
   })();
-  const sectionA = kpiItems.filter((k) => k.section === "A");
-  const sectionB = kpiItems.filter((k) => k.section !== "A");
+  const sections = Array.from(new Set(kpiItems.map((k) => k.section || "A"))).sort();
+  const bgColors = ["#1565C0", "#1976D2", "#1E88E5", "#2196F3", "#00838F", "#6A1B9A"];
 
   const totalBobot = kpiItems.reduce((sum, k) => sum + (parseFloat(String(k.bobot).replace("%", "")) || 0), 0);
+
+  if (kpiItems.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-10 text-center text-xs text-gray-400">
+        Belum ada data KPI Setting yang disimpan oleh karyawan ini.
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -652,7 +701,7 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 120 }}>Perspektif</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 250 }}>KPI</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 110 }}>Satuan</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 90 }}>Formula</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 100 }}>Formula Setahun</th>
                 <th className="border border-[#1A284F]/30 py-3 px-2 font-semibold text-center" style={{ minWidth: 64 }}>Bobot</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 240 }}>Definisi</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 155 }}>Source</th>
@@ -661,56 +710,46 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 88 }}>Polaritas</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 250 }}>Detail Formula</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 180 }}>Keterangan</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 110 }}>Periode Tracking</th>
               </tr>
             </thead>
             <tbody>
-              {/* Section A */}
-              <tr>
-                <td colSpan={13} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: "#1565C0", borderColor: "#1565C0" }}>
-                  A. Objective KPI — Bobot 20%
-                </td>
-              </tr>
-              {sectionA.map((kpi, idx) => (
-                <tr key={kpi.no} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                  <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.no}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.perspektif}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 whitespace-pre-line">{kpi.kpi}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.satuan}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.formula}</td>
-                  <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.bobot}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs leading-relaxed">{kpi.definisi}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs">{kpi.source}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.baseline2025}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.target2026}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.polaritas}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.detailFormula}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.keterangan || "—"}</td>
-                </tr>
-              ))}
-
-              {/* Section B */}
-              <tr>
-                <td colSpan={13} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: "#1976D2", borderColor: "#1976D2" }}>
-                  B. Functional KPI — Bobot 80%
-                </td>
-              </tr>
-              {sectionB.map((kpi, idx) => (
-                <tr key={kpi.no} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                  <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.no}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.perspektif}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 whitespace-pre-line">{kpi.kpi}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.satuan}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.formula}</td>
-                  <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.bobot}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs leading-relaxed">{kpi.definisi}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs">{kpi.source}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.baseline2025}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.target2026}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.polaritas}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.detailFormula}</td>
-                  <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.keterangan || "—"}</td>
-                </tr>
-              ))}
+              {sections.map((sec, si) => {
+                const secRows = kpiItems.filter((k) => (k.section || "A") === sec);
+                const first = secRows[0];
+                const defLabel = sec === "A" ? "Objective KPI — Bobot 20%" : sec === "B" ? "Functional KPI — Bobot 80%" : `Section ${sec}`;
+                const secTitle = first?.sectionLabel
+                  ? `${sec}. ${first.sectionLabel}${first.sectionBobot ? ` — Bobot ${first.sectionBobot}` : ""}`
+                  : `${sec}. ${defLabel}`;
+                const bg = bgColors[si % bgColors.length];
+                return (
+                  <React.Fragment key={sec}>
+                    <tr>
+                      <td colSpan={14} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: bg, borderColor: bg }}>
+                        {secTitle}
+                      </td>
+                    </tr>
+                    {secRows.map((kpi, idx) => (
+                      <tr key={kpi.id ?? `${sec}-${kpi.no}-${idx}`} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                        <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.no}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.perspektif}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700 whitespace-pre-line">{kpi.kpi}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.satuan}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.formula}</td>
+                        <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.bobot}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs leading-relaxed">{kpi.definisi}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs">{kpi.source}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.baseline2025}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-center font-semibold text-[#1A284F]">{kpi.target2026}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.polaritas}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.detailFormula}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.keterangan || "—"}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-center text-gray-600 text-xs">{derivePeriodeTrackingLabel(kpi.satuan, kpi.trackingPeriod)}</td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
       </div>

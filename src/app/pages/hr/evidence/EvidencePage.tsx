@@ -1,9 +1,9 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Search, Download, Eye, ChevronDown, X, FileArchive,
-  TrendingUp, Lightbulb, MessageSquare, CheckCircle2, Clock, RotateCcw, RefreshCw,
+  TrendingUp, Lightbulb, MessageSquare, CheckCircle2, Clock, RotateCcw, RefreshCw, Trash2,
 } from "lucide-react";
-import { loadUploadedEvidenceList, UploadedEvidenceRecord } from "../../../services/supabaseClient";
+import { deleteUploadedEvidenceById, loadUploadedEvidenceList, UploadedEvidenceRecord } from "../../../services/supabaseClient";
 import { toast } from "sonner";
 import { useAuthStore } from "../../../store/authStore";
 import { EvidenceViewerModal } from "../../../components/EvidenceViewerModal";
@@ -17,6 +17,7 @@ type ApprovalStatus = "Approved" | "Pending" | "Revision" | "Closed";
 
 interface EvidenceRow {
   no: string;
+  evidenceId?: string;
   mimeType?: string;
   employeeId: string;
   fullName: string;
@@ -177,6 +178,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
   const showMonthFilter = type === "KPI Tracking";
   const [uploadedList, setUploadedList] = useState<UploadedEvidenceRecord[]>(() => loadUploadedEvidenceList());
   const [previewRow, setPreviewRow] = useState<EvidenceRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EvidenceRow | null>(null);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -194,6 +196,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
       .filter((u) => u.moduleType === type)
       .map((u, idx) => ({
         no: String(idx + 1),
+        evidenceId: u.id,
         mimeType: u.mimeType,
         employeeId: u.employeeId,
         fullName: u.fullName,
@@ -502,6 +505,14 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
                           >
                             <Download className="w-4 h-4" />
                           </button>
+                          <button
+                            type="button"
+                            title="Delete evidence"
+                            onClick={() => setDeleteTarget(row)}
+                            className="p-1.5 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-400">{row.no}</td>
@@ -551,6 +562,55 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
           subtitle={`${previewRow.employeeId} · ${previewRow.fullName} · ${previewRow.companyUnit} · ${previewRow.month} ${previewRow.year}`}
           onClose={() => setPreviewRow(null)}
         />
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={() => setDeleteTarget(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-600 shrink-0">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-gray-900">Hapus Evidence</h3>
+                <p className="text-xs text-gray-500">{type} · {deleteTarget.companyUnit}</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Hapus file evidence <strong>{deleteTarget.fileName || deleteTarget.kpi || deleteTarget.no}</strong> milik{" "}
+              <strong>{deleteTarget.fullName}</strong> ({deleteTarget.employeeId})? Data akan dihapus dari database.
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-xl border border-gray-200 px-4 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = deleteTarget;
+                  setDeleteTarget(null);
+                  if (target.evidenceId) {
+                    await deleteUploadedEvidenceById(target.evidenceId);
+                  }
+                  setUploadedList(loadUploadedEvidenceList());
+                  setSelected((prev) => {
+                    const n = new Set(prev);
+                    n.delete(target.no);
+                    return n;
+                  });
+                  toast.success(`Evidence milik ${target.fullName} berhasil dihapus.`);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

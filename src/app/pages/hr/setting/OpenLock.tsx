@@ -3,6 +3,7 @@ import { useRouteTab } from "../../../utils/useRouteTab";
 import { DatePickerID } from "../../../components/DatePickerID";
 import { X, CheckCircle2, XCircle, LockOpen, Lock, ChevronDown, Search, Clock, AlertCircle, Filter } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
+import { pushEmployeeNotification } from "../../../store/notificationStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -657,6 +658,19 @@ export function OpenLockPage() {
           description: `Approved Open Lock for ${changedReq.employeeName} (${changedReq.module} · ${changedReq.period}) until ${until}`,
         },
       } : undefined);
+      if (changedReq) {
+        pushEmployeeNotification({
+          employeeIds: [changedReq.employeeId],
+          title: `Open Lock ${changedReq.module} Disetujui`,
+          summary: `Permintaan Open Lock Anda untuk ${changedReq.module} (${changedReq.period}) telah disetujui hingga ${until}.`,
+          category: "Approval",
+          moduleName: changedReq.module,
+          approvalStatus: "Approved",
+          ctaLabel: "Buka KPI Tracking",
+          ctaRoute: "/measurement/kpi-tracking",
+          senderName: "HR ICF",
+        });
+      }
       return next;
     });
     setApproveTarget(null);
@@ -686,6 +700,19 @@ export function OpenLockPage() {
           description: `Rejected Open Lock for ${changedReq.employeeName} (${changedReq.module} · ${changedReq.period}): ${note}`,
         },
       } : undefined);
+      if (changedReq) {
+        pushEmployeeNotification({
+          employeeIds: [changedReq.employeeId],
+          title: `Open Lock ${changedReq.module} Ditolak`,
+          summary: `Permintaan Open Lock Anda untuk ${changedReq.module} (${changedReq.period}) ditolak. Alasan: ${note || "-"}`,
+          category: "Approval",
+          moduleName: changedReq.module,
+          approvalStatus: "Rejected",
+          ctaLabel: "Buka KPI Tracking",
+          ctaRoute: "/measurement/kpi-tracking",
+          senderName: "HR ICF",
+        });
+      }
       return next;
     });
     setApproveTarget(null);

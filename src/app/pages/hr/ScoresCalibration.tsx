@@ -1,6 +1,20 @@
-import { useState } from "react";
-import { Save, Plus, Trash2, Edit2, Building2, ChevronRight, ArrowLeft } from "lucide-react";
-import { saveUnitScoreWeights } from "../shared/scoringWeightStore";
+import { useEffect, useMemo, useState } from "react";
+import { Save, Plus, Trash2, Edit2, Building2, ChevronRight, ArrowLeft, Columns3, X, Sparkles } from "lucide-react";
+import { toast } from "sonner";
+import {
+  BUILTIN_WEIGHT_COLUMNS,
+  loadUnitCustomWeightColumns,
+  loadUnitScoreRanges,
+  loadUnitScoreWeights,
+  registerCustomGroupingInAccessSystem,
+  saveUnitCustomWeightColumns,
+  saveUnitScoreRanges,
+  saveUnitScoreWeights,
+  toCustomGroupingColumnKey,
+  type CustomScoreWeightColumn,
+} from "../shared/scoringWeightStore";
+import { loadAccessGroups } from "./settings/AccessManagement";
+import { loadManagedUsers, resolveEffectiveUserGrouping } from "../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -9,8 +23,14 @@ type ScoreRange = {
 };
 
 type KPIWeight = {
-  id: string; indikator: string; operasional: string;
-  kaWaKaSeksi: string; pengawasKepalaBagian: string; kepalaDepartement: string; kepalaDivisi: string;
+  id: string;
+  indikator: string;
+  operasional: string;
+  kaWaKaSeksi: string;
+  pengawasKepalaBagian: string;
+  kepalaDepartement: string;
+  kepalaDivisi: string;
+  [customColKey: string]: string;
 };
 
 type CalibrationGrade = { id: string; grade: string; proporsi: string; };
@@ -23,6 +43,7 @@ type CompanyUnit = {
   id: string; name: string; code: string; industry: string;
   scores: ScoreRange[];
   kpiWeights: KPIWeight[];
+  customColumns: CustomScoreWeightColumn[];
   calibrationGrades: CalibrationGrade[];
   divisionProportions: DivisionProportion[];
   departemenenProportions: DepartemenenProportion[];
@@ -136,17 +157,46 @@ const makeDefaultDepartemenenProportions = (): DepartemenenProportion[] =>
 const makeDefaultBagianProportions = (): BagianProportion[] =>
   BAGIAN_DEFS.map(([id, departemenenId, bagian]) => ({ id, departemenenId, bagian, hc: 0 }));
 
-const makeUnit = (id: string, name: string, code: string, industry: string): CompanyUnit => ({
-  id, name, code, industry,
-  scores: makeDefaultScores(),
-  kpiWeights: makeDefaultKPIWeights(),
-  calibrationGrades: makeDefaultCalibrationGrades(),
-  divisionProportions: makeDefaultDivisionProportions(),
-  departemenenProportions: makeDefaultDepartemenenProportions(),
-  bagianProportions: makeDefaultBagianProportions(),
-});
+function hydrateUnitKPIWeights(unitName: string, customCols: CustomScoreWeightColumn[]): KPIWeight[] {
+  const defaults = makeDefaultKPIWeights();
+  const saved = loadUnitScoreWeights(unitName);
+  return defaults.map((row) => {
+    const savedRow = saved[row.indikator] ?? {};
+    const merged: KPIWeight = {
+      ...row,
+      operasional: savedRow.operasional ?? row.operasional,
+      kaWaKaSeksi: savedRow.kaWaKaSeksi ?? row.kaWaKaSeksi,
+      pengawasKepalaBagian: savedRow.pengawasKepalaBagian ?? row.pengawasKepalaBagian,
+      kepalaDepartement: savedRow.kepalaDepartement ?? row.kepalaDepartement,
+      kepalaDivisi: savedRow.kepalaDivisi ?? row.kepalaDivisi,
+    };
+    for (const col of customCols) {
+      merged[col.key] = savedRow[col.key] ?? savedRow[col.groupName] ?? "-";
+    }
+    for (const [k, v] of Object.entries(savedRow)) {
+      if (k !== "id" && typeof v === "string" && merged[k] === undefined) {
+        merged[k] = v;
+      }
+    }
+    return merged;
+  });
+}
 
-const defaultCompanyUnits: CompanyUnit[] = [
+const makeUnit = (id: string, name: string, code: string, industry: string): CompanyUnit => {
+  const customCols = loadUnitCustomWeightColumns(name);
+  return {
+    id, name, code, industry,
+    scores: loadUnitScoreRanges(name, makeDefaultScores()),
+    customColumns: customCols,
+    kpiWeights: hydrateUnitKPIWeights(name, customCols),
+    calibrationGrades: makeDefaultCalibrationGrades(),
+    divisionProportions: makeDefaultDivisionProportions(),
+    departemenenProportions: makeDefaultDepartemenenProportions(),
+    bagianProportions: makeDefaultBagianProportions(),
+  };
+};
+
+const buildCompanyUnitsFromStore = (): CompanyUnit[] => [
   makeUnit("1", "PT RSUP (Industry)",          "RSUP-IND", "Industry"),
   makeUnit("2", "PT RSUP (Perkebunan)",        "RSUP-PKB", "Perkebunan"),
   makeUnit("3", "PT Pulau Sambu (Jakarta)",    "PS-JKT",   "Jakarta"),
@@ -159,39 +209,282 @@ const defaultCompanyUnits: CompanyUnit[] = [
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
+function normalizeWeightInputOnBlur(raw: string): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed || trimmed === "-" || trimmed === "—") return "-";
+  const num = parseFloat(trimmed.replace("%", "").trim());
+  if (!Number.isFinite(num) || num <= 0) return "-";
+  return `${num}%`;
+}
+
+function AddGroupingColumnModal({
+  existingColumnNames,
+  suggestedGroupings,
+  templateOptions,
+  kpiWeights,
+  onClose,
+  onAdd,
+}: {
+  existingColumnNames: string[];
+  suggestedGroupings: string[];
+  templateOptions: Array<{ key: string; label: string }>;
+  kpiWeights: KPIWeight[];
+  onClose: () => void;
+  onAdd: (payload: { groupName: string; templateKey: string; applyAllUnits: boolean }) => void;
+}) {
+  const [groupName, setGroupName] = useState(suggestedGroupings[0] ?? "");
+  const [templateKey, setTemplateKey] = useState<string>("operasional");
+  const [applyAllUnits, setApplyAllUnits] = useState(true);
+
+  const trimmed = groupName.trim();
+  const isDuplicate = trimmed.length > 0 && existingColumnNames.some((n) => n.trim().toLowerCase() === trimmed.toLowerCase());
+
+  const previewRows = useMemo(() => {
+    return kpiWeights.map((w) => ({
+      indikator: w.indikator,
+      val:
+        w.indikator === "Inter-Departement Feedback"
+          ? "-"
+          : templateKey === "__empty__"
+          ? "-"
+          : w[templateKey] ?? "-",
+    }));
+  }, [kpiWeights, templateKey]);
+
+  const previewTotal = useMemo(() => {
+    return previewRows.reduce((sum, r) => {
+      const num = parseFloat(String(r.val).replace("%", "").trim());
+      return sum + (Number.isFinite(num) ? num : 0);
+    }, 0);
+  }, [previewRows]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs p-4">
+      <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-lg overflow-hidden">
+        <div className="px-6 py-4 bg-[#1A284F] text-white flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <Columns3 className="w-5 h-5 text-sky-300" />
+            <div>
+              <h3 className="font-semibold text-base">Tambah Kolom Grouping Baru</h3>
+              <p className="text-xs text-white/75">Kolom baru otomatis terhubung ke perhitungan nilai seluruh modul PA</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          {suggestedGroupings.length > 0 && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-2">
+                Pilih Cepat dari Grouping yang Sudah Dibuat
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {suggestedGroupings.map((sg) => {
+                  const active = groupName.trim().toLowerCase() === sg.toLowerCase();
+                  return (
+                    <button
+                      key={sg}
+                      type="button"
+                      onClick={() => setGroupName(sg)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                        active
+                          ? "bg-[#1A284F] text-white border-[#1A284F]"
+                          : "bg-slate-50 text-slate-700 border-slate-200 hover:border-[#1A284F]/40"
+                      }`}
+                    >
+                      {sg}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+              Nama Grouping <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder="Contoh: Specialist, Management Trainee, Koordinator..."
+              className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]"
+            />
+            {isDuplicate && (
+              <p className="text-xs text-red-600 mt-1">Kolom untuk grouping &ldquo;{trimmed}&rdquo; sudah ada pada tabel ini.</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+              Salin Bobot Awal Dari
+            </label>
+            <select
+              value={templateKey}
+              onChange={(e) => setTemplateKey(e.target.value)}
+              className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]"
+            >
+              {templateOptions.map((opt) => (
+                <option key={opt.key} value={opt.key}>{opt.label}</option>
+              ))}
+              <option value="__empty__">Kosong (-) — isi manual dari 0%</option>
+            </select>
+          </div>
+
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-slate-600">Pratinjau Bobot Awal</span>
+              <span className="text-xs font-bold text-[#1A284F]">Total: {previewTotal}%</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {previewRows.map((r) => (
+                <div key={r.indikator} className="flex items-center justify-between py-0.5 border-b border-slate-100 last:border-b-0">
+                  <span className="text-slate-600 truncate pr-2">{r.indikator}</span>
+                  <span className="font-semibold text-slate-900">{r.val}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <label className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl bg-blue-50/60 border border-blue-100 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={applyAllUnits}
+              onChange={(e) => setApplyAllUnits(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 accent-[#1A284F]"
+            />
+            <span className="text-xs text-slate-700 leading-relaxed">
+              <strong className="text-[#1A284F]">Terapkan kolom ini ke seluruh Company Unit</strong> agar semua unit memiliki struktur kolom grouping yang konsisten (nilai bobot per unit tetap dapat diubah masing-masing).
+            </span>
+          </label>
+        </div>
+
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            disabled={!trimmed || isDuplicate}
+            onClick={() => onAdd({ groupName: trimmed, templateKey, applyAllUnits })}
+            className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Tambah Kolom
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Score sub-panel ──────────────────────────────────────────────────────────
 
 function ScorePanel({
-  scores, kpiWeights, editMode,
+  scores, kpiWeights, customColumns, unmappedGroupings, editMode,
   onUpdateScore, onAddScore, onDeleteScore, onUpdateKPIWeight,
+  onOpenAddColumn, onQuickAddGrouping, onDeleteCustomColumn,
 }: {
   scores: ScoreRange[];
   kpiWeights: KPIWeight[];
+  customColumns: CustomScoreWeightColumn[];
+  unmappedGroupings: string[];
   editMode: boolean;
   onUpdateScore: (id: string, field: keyof ScoreRange, value: any) => void;
   onAddScore: () => void;
   onDeleteScore: (id: string) => void;
-  onUpdateKPIWeight: (id: string, field: keyof KPIWeight, value: string) => void;
+  onUpdateKPIWeight: (id: string, field: string, value: string) => void;
+  onOpenAddColumn: () => void;
+  onQuickAddGrouping: (groupName: string) => void;
+  onDeleteCustomColumn: (colKey: string, label: string) => void;
 }) {
+  const allColumns = useMemo(
+    () => [
+      ...BUILTIN_WEIGHT_COLUMNS.map((c) => ({ key: c.key, label: c.label, groupName: c.groupName, isCustom: false })),
+      ...customColumns.map((c) => ({ key: c.key, label: c.label, groupName: c.groupName, isCustom: true })),
+    ],
+    [customColumns],
+  );
+
   return (
     <>
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-900">Bobot Penilaian KPI</h3>
-          <p className="text-sm text-gray-500 mt-1">KPI assessment weights by position level</p>
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="font-semibold text-gray-900">Bobot Penilaian KPI</h3>
+            <p className="text-sm text-gray-500 mt-1">
+              KPI assessment weights by position level &amp; custom user groupings
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenAddColumn}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F] hover:text-white transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Tambah Kolom Grouping
+          </button>
         </div>
+
+        {unmappedGroupings.length > 0 && (
+          <div className="mx-6 mt-5 px-4 py-3 rounded-xl bg-indigo-50/70 border border-indigo-100 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-xs text-indigo-900">
+              <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+              <span>
+                Grouping baru terdeteksi dan belum memiliki kolom bobot khusus (klik untuk menambahkan):
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {unmappedGroupings.map((gName) => (
+                <button
+                  key={gName}
+                  type="button"
+                  onClick={() => onQuickAddGrouping(gName)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-indigo-200 text-xs font-semibold text-[#1A284F] hover:bg-[#1A284F] hover:text-white hover:border-[#1A284F] transition-colors shadow-2xs"
+                >
+                  <Plus className="w-3 h-3" />
+                  {gName}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="p-6 overflow-x-auto">
           <table className="w-full border-collapse">
             <thead>
               <tr className="bg-[#1A284F] text-white">
                 <th className="border border-gray-300 px-4 py-3 text-center font-semibold">No</th>
                 <th className="border border-gray-300 px-4 py-3 text-left font-semibold">Indikator</th>
-                <th className="border border-gray-300 px-4 py-3 text-center font-semibold">Operasional</th>
-                <th className="border border-gray-300 px-4 py-3 text-center font-semibold">Ka. / Wa. Ka. Seksi</th>
-                <th className="border border-gray-300 px-4 py-3 text-center font-semibold">Ka. / Wa. Ka. Bagian</th>
-                <th className="border border-gray-300 px-4 py-3 text-center font-semibold">Ka. / Wa. Ka. Dept</th>
-                <th className="border border-gray-300 px-4 py-3 text-center font-semibold">Ka. / Wa. Ka. Div ke atas</th>
+                {allColumns.map((col) => (
+                  <th key={col.key} className="border border-gray-300 px-4 py-3 text-center font-semibold whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span>{col.label}</span>
+                      {col.isCustom && (
+                        <span className="px-1.5 py-0.5 rounded bg-sky-400/20 text-sky-200 text-[10px] font-semibold">
+                          Custom
+                        </span>
+                      )}
+                      {col.isCustom && editMode && (
+                        <button
+                          type="button"
+                          title={`Hapus kolom ${col.label}`}
+                          onClick={() => onDeleteCustomColumn(col.key, col.label)}
+                          className="ml-1 p-1 rounded hover:bg-red-500/30 text-red-200 hover:text-white transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -199,22 +492,28 @@ function ScorePanel({
                 <tr key={w.id} className="hover:bg-gray-50">
                   <td className="border border-gray-300 px-4 py-3 text-center font-medium text-gray-900">{idx + 1}</td>
                   <td className="border border-gray-300 px-4 py-3 text-gray-900">{w.indikator}</td>
-                  {(["operasional", "kaWaKaSeksi", "pengawasKepalaBagian", "kepalaDepartement", "kepalaDivisi"] as const).map(f => (
-                    <td key={f} className="border border-gray-300 px-4 py-3 text-center">
-                      {editMode
-                        ? <input type="text" value={w[f] ?? "-"} onChange={e => onUpdateKPIWeight(w.id, f, e.target.value)}
-                            className="w-20 px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 text-center" />
-                        : <span className="text-gray-900">{w[f] ?? "-"}</span>}
+                  {allColumns.map((col) => (
+                    <td key={col.key} className={`border border-gray-300 px-4 py-3 text-center ${col.isCustom ? "bg-sky-50/25" : ""}`}>
+                      {editMode && w.indikator !== "Inter-Departement Feedback" ? (
+                        <input
+                          type="text"
+                          value={w[col.key] ?? "-"}
+                          onChange={(e) => onUpdateKPIWeight(w.id, col.key, e.target.value)}
+                          onBlur={(e) => onUpdateKPIWeight(w.id, col.key, normalizeWeightInputOnBlur(e.target.value))}
+                          className="w-20 px-2 py-1 border border-gray-200 rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 text-center"
+                        />
+                      ) : (
+                        <span className="text-gray-900">{w[col.key] ?? "-"}</span>
+                      )}
                     </td>
                   ))}
                 </tr>
               ))}
               {(() => {
-                const fields = ["operasional", "kaWaKaSeksi", "pengawasKepalaBagian", "kepalaDepartement", "kepalaDivisi"] as const;
-                const totals = fields.map(f =>
+                const totals = allColumns.map((col) =>
                   kpiWeights.reduce((sum, w) => {
-                    const val = w[f] ?? "-";
-                    const num = parseFloat(val.replace("%", "").trim());
+                    const val = w[col.key] ?? "-";
+                    const num = parseFloat(String(val).replace("%", "").trim());
                     return sum + (isNaN(num) ? 0 : num);
                   }, 0)
                 );
@@ -222,7 +521,12 @@ function ScorePanel({
                   <tr className="bg-[#1A284F] text-white font-semibold">
                     <td colSpan={2} className="border border-gray-300 px-4 py-3 text-center">Total</td>
                     {totals.map((t, i) => (
-                      <td key={i} className="border border-gray-300 px-4 py-3 text-center">
+                      <td
+                        key={allColumns[i]?.key ?? i}
+                        className={`border border-gray-300 px-4 py-3 text-center ${
+                          editMode && t !== 100 ? "text-amber-300" : ""
+                        }`}
+                      >
                         {t > 0 ? `${t}%` : "0%"}
                       </td>
                     ))}
@@ -308,12 +612,78 @@ type PropRow = {
 
 // ─── Unit detail view ─────────────────────────────────────────────────────────
 
-function UnitDetail({ unit, onBack, onUpdate }: {
-  unit: CompanyUnit; onBack: () => void; onUpdate: (u: CompanyUnit) => void;
+function UnitDetail({
+  unit,
+  allSystemGroupings,
+  onBack,
+  onUpdate,
+  onAddGroupingColumn,
+  onRemoveGroupingColumn,
+}: {
+  unit: CompanyUnit;
+  allSystemGroupings: string[];
+  onBack: () => void;
+  onUpdate: (u: CompanyUnit) => void;
+  onAddGroupingColumn: (payload: { groupName: string; templateKey: string; applyAllUnits: boolean }) => void;
+  onRemoveGroupingColumn: (colKey: string, label: string) => void;
 }) {
   const [editMode, setEditMode] = useState(false);
+  const [showAddColModal, setShowAddColModal] = useState(false);
+  const [prefillGroup, setPrefillGroup] = useState<string | null>(null);
 
   const upd = (patch: Partial<CompanyUnit>) => onUpdate({ ...unit, ...patch });
+
+  const existingColumnNames = useMemo(
+    () => [
+      ...BUILTIN_WEIGHT_COLUMNS.map((c) => c.groupName),
+      ...BUILTIN_WEIGHT_COLUMNS.map((c) => c.label),
+      ...unit.customColumns.flatMap((c) => [c.groupName, c.label]),
+    ],
+    [unit.customColumns],
+  );
+
+  const unmappedGroupings = useMemo(() => {
+    const builtinStandard = new Set([
+      "operasional",
+      "ka./wa.ka.seksi",
+      "ka. / wa. ka. seksi",
+      "ka./wa.ka.bagian",
+      "ka. / wa. ka. bagian",
+      "ka./wa.ka.dept",
+      "ka. / wa. ka. dept",
+      "ka./wa.ka.div ke atas",
+      "ka. / wa. ka. div ke atas",
+      "direktur / director",
+      "team_div",
+    ]);
+    const mappedCustom = new Set(
+      unit.customColumns.flatMap((c) => [c.groupName.trim().toLowerCase(), c.label.trim().toLowerCase()]),
+    );
+    return allSystemGroupings.filter((g) => {
+      const low = g.trim().toLowerCase();
+      return Boolean(low) && !builtinStandard.has(low) && !mappedCustom.has(low);
+    });
+  }, [allSystemGroupings, unit.customColumns]);
+
+  const suggestedForModal = useMemo(() => {
+    const list = [...unmappedGroupings];
+    const dirMapped = unit.customColumns.some((c) => c.groupName.trim().toLowerCase() === "direktur / director");
+    if (!dirMapped && !list.some((x) => x.toLowerCase() === "direktur / director")) {
+      list.push("Direktur / Director");
+    }
+    if (prefillGroup && !list.includes(prefillGroup)) {
+      return [prefillGroup, ...list];
+    }
+    return list;
+  }, [unmappedGroupings, unit.customColumns, prefillGroup]);
+
+  const templateOptions = useMemo(
+    () => [
+      ...BUILTIN_WEIGHT_COLUMNS.map((c) => ({ key: c.key, label: c.label })),
+      ...unit.customColumns.map((c) => ({ key: c.key, label: `${c.label} (Custom)` })),
+    ],
+    [unit.customColumns],
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -329,7 +699,15 @@ function UnitDetail({ unit, onBack, onUpdate }: {
               Cancel
             </button>
           )}
-          <button onClick={editMode ? () => setEditMode(false) : () => setEditMode(true)}
+          <button
+            onClick={() => {
+              if (editMode) {
+                setEditMode(false);
+                toast.success(`Pengaturan bobot & skoring ${unit.name} berhasil disimpan.`);
+              } else {
+                setEditMode(true);
+              }
+            }}
             className="flex items-center gap-2 bg-[#1A284F] text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm">
             {editMode ? <><Save className="w-4 h-4" />Save Changes</> : <><Edit2 className="w-4 h-4" />Edit Settings</>}
           </button>
@@ -352,12 +730,44 @@ function UnitDetail({ unit, onBack, onUpdate }: {
       <ScorePanel
         scores={unit.scores}
         kpiWeights={unit.kpiWeights}
+        customColumns={unit.customColumns}
+        unmappedGroupings={unmappedGroupings}
         editMode={editMode}
         onUpdateScore={(id, field, value) => upd({ scores: unit.scores.map(s => s.id === id ? { ...s, [field]: value } : s) })}
         onAddScore={() => upd({ scores: [...unit.scores, { id: Date.now().toString(), min: 0, max: 0, grade: "", label: "", color: "#6B7280" }] })}
         onDeleteScore={(id) => upd({ scores: unit.scores.filter(s => s.id !== id) })}
         onUpdateKPIWeight={(id, field, value) => upd({ kpiWeights: unit.kpiWeights.map(w => w.id === id ? { ...w, [field]: value } : w) })}
+        onOpenAddColumn={() => {
+          setPrefillGroup(null);
+          setShowAddColModal(true);
+        }}
+        onQuickAddGrouping={(groupName) => {
+          setPrefillGroup(groupName);
+          setShowAddColModal(true);
+        }}
+        onDeleteCustomColumn={(colKey, label) => {
+          onRemoveGroupingColumn(colKey, label);
+        }}
       />
+
+      {showAddColModal && (
+        <AddGroupingColumnModal
+          existingColumnNames={existingColumnNames}
+          suggestedGroupings={suggestedForModal}
+          templateOptions={templateOptions}
+          kpiWeights={unit.kpiWeights}
+          onClose={() => {
+            setShowAddColModal(false);
+            setPrefillGroup(null);
+          }}
+          onAdd={(payload) => {
+            onAddGroupingColumn(payload);
+            setShowAddColModal(false);
+            setPrefillGroup(null);
+            setEditMode(true);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -365,12 +775,103 @@ function UnitDetail({ unit, onBack, onUpdate }: {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function ScoresCalibration() {
-  const [companyUnits, setCompanyUnits] = useState<CompanyUnit[]>(defaultCompanyUnits);
+  const [companyUnits, setCompanyUnits] = useState<CompanyUnit[]>(() => buildCompanyUnitsFromStore());
   const [selectedUnit, setSelectedUnit] = useState<CompanyUnit | null>(null);
+  const [allSystemGroupings, setAllSystemGroupings] = useState<string[]>(() => {
+    const fromAccess = loadAccessGroups();
+    const fromUsers = loadManagedUsers()
+      .flatMap((u) => [String(u.groupings ?? "").trim(), String(resolveEffectiveUserGrouping(u) ?? "").trim()])
+      .filter(Boolean);
+    return Array.from(new Set([...fromAccess, ...fromUsers]));
+  });
+
+  useEffect(() => {
+    const refreshGroupings = () => {
+      const fromAccess = loadAccessGroups();
+      const fromUsers = loadManagedUsers()
+        .flatMap((u) => [String(u.groupings ?? "").trim(), String(resolveEffectiveUserGrouping(u) ?? "").trim()])
+        .filter(Boolean);
+      setAllSystemGroupings(Array.from(new Set([...fromAccess, ...fromUsers])));
+    };
+    const refreshUnits = () => {
+      setCompanyUnits(buildCompanyUnitsFromStore());
+      refreshGroupings();
+    };
+    window.addEventListener("pa-db-hydrated", refreshUnits);
+    window.addEventListener("pa-access-updated", refreshGroupings);
+    window.addEventListener("pa-auth-updated", refreshGroupings);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", refreshUnits);
+      window.removeEventListener("pa-access-updated", refreshGroupings);
+      window.removeEventListener("pa-auth-updated", refreshGroupings);
+    };
+  }, []);
 
   const updateUnit = (updated: CompanyUnit) => {
     setCompanyUnits(prev => prev.map(u => u.id === updated.id ? updated : u));
+    saveUnitCustomWeightColumns(updated.name, updated.customColumns);
     saveUnitScoreWeights(updated.name, updated.kpiWeights);
+    saveUnitScoreRanges(updated.name, updated.scores);
+  };
+
+  const handleAddGroupingColumn = (
+    targetUnitId: string,
+    { groupName, templateKey, applyAllUnits }: { groupName: string; templateKey: string; applyAllUnits: boolean },
+  ) => {
+    const trimmed = groupName.trim();
+    if (!trimmed) return;
+    const colKey = toCustomGroupingColumnKey(trimmed);
+    const newCol: CustomScoreWeightColumn = { key: colKey, label: trimmed, groupName: trimmed };
+
+    registerCustomGroupingInAccessSystem(trimmed);
+    setAllSystemGroupings((prev) => (prev.some((g) => g.toLowerCase() === trimmed.toLowerCase()) ? prev : [...prev, trimmed]));
+
+    setCompanyUnits((prev) =>
+      prev.map((u) => {
+        if (!applyAllUnits && u.id !== targetUnitId) return u;
+        const alreadyHas = u.customColumns.some(
+          (c) => c.key === colKey || c.groupName.trim().toLowerCase() === trimmed.toLowerCase(),
+        );
+        const nextCols = alreadyHas ? u.customColumns : [...u.customColumns, newCol];
+        const nextWeights = u.kpiWeights.map((w) => {
+          if (w[colKey] !== undefined && alreadyHas) return w;
+          const copied =
+            w.indikator === "Inter-Departement Feedback"
+              ? "-"
+              : templateKey === "__empty__"
+              ? "-"
+              : w[templateKey] ?? "-";
+          return { ...w, [colKey]: copied };
+        });
+        saveUnitCustomWeightColumns(u.name, nextCols);
+        saveUnitScoreWeights(u.name, nextWeights);
+        return { ...u, customColumns: nextCols, kpiWeights: nextWeights };
+      }),
+    );
+
+    toast.success(
+      applyAllUnits
+        ? `Kolom grouping "${trimmed}" berhasil ditambahkan ke seluruh Company Unit.`
+        : `Kolom grouping "${trimmed}" berhasil ditambahkan.`,
+    );
+  };
+
+  const handleRemoveGroupingColumn = (targetUnitId: string, colKey: string, label: string) => {
+    setCompanyUnits((prev) =>
+      prev.map((u) => {
+        if (u.id !== targetUnitId) return u;
+        const nextCols = u.customColumns.filter((c) => c.key !== colKey);
+        const nextWeights = u.kpiWeights.map((w) => {
+          const copy = { ...w };
+          delete copy[colKey];
+          return copy;
+        });
+        saveUnitCustomWeightColumns(u.name, nextCols);
+        saveUnitScoreWeights(u.name, nextWeights);
+        return { ...u, customColumns: nextCols, kpiWeights: nextWeights };
+      }),
+    );
+    toast.success(`Kolom grouping "${label}" dihapus dari unit usaha ini.`);
   };
 
   const TabBar = ({ onTabClick }: { onTabClick?: () => void }) => (
@@ -393,7 +894,14 @@ export function ScoresCalibration() {
           <p className="text-sm text-gray-500">Configure performance score ranges and calibration settings</p>
         </div>
         <TabBar onTabClick={() => setSelectedUnit(null)} />
-        <UnitDetail unit={liveUnit} onBack={() => setSelectedUnit(null)} onUpdate={updateUnit} />
+        <UnitDetail
+          unit={liveUnit}
+          allSystemGroupings={allSystemGroupings}
+          onBack={() => setSelectedUnit(null)}
+          onUpdate={updateUnit}
+          onAddGroupingColumn={(payload) => handleAddGroupingColumn(liveUnit.id, payload)}
+          onRemoveGroupingColumn={(colKey, label) => handleRemoveGroupingColumn(liveUnit.id, colKey, label)}
+        />
       </div>
     );
   }

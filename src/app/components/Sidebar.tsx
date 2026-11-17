@@ -498,7 +498,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
       const approvalSubs: NavSubLink[] = [
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-          ? [{ to: "/bod/settings/kpi", label: "KPI Business", icon: TrendingUp }]
+          ? [{ to: "/bod/settings/kpi/gm", label: "KPI Business", icon: TrendingUp }]
           : []),
         ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),

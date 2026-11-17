@@ -9,7 +9,7 @@ import {
 } from "../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 import { dateToSortableKey, normalizeDateDDMMYYYY } from "../utils/dateFormat";
-import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
+import { loadUnitScoreWeights, weightColumnFromGrouping } from "../pages/shared/scoringWeightStore";
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../pages/shared/appraisalFormStore";
 import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
 import { loadAllIcfProjectsByEmployee } from "../store/projectStore";
@@ -258,16 +258,7 @@ export function getLiveTransactionalEmployees(): Employee[] {
         (!allowedMods.includes("Managerial Skill") || isTwoStepDone("Managerial Skill"));
 
       const unitWeights = loadUnitScoreWeights(u.company);
-      const weightCol: ScoreWeightColumn =
-        grouping === "Ka./Wa.Ka.Div ke atas"
-          ? "kepalaDivisi"
-          : grouping === "Ka./Wa.Ka.Dept"
-          ? "kepalaDepartement"
-          : grouping === "Ka./Wa.Ka.Bagian"
-          ? "pengawasKepalaBagian"
-          : grouping === "Ka./Wa.Ka.Seksi"
-          ? "kaWaKaSeksi"
-          : "operasional";
+      const weightCol = weightColumnFromGrouping(grouping, u.company);
       const parseWeightPct = (indikator: string, fallback: number): number => {
         const raw = unitWeights[indikator]?.[weightCol];
         if (!raw || raw === "-") return 0;

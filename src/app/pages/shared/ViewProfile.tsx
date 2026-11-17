@@ -29,7 +29,7 @@ import {
   type AppraisalModuleName,
 } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
-import { loadUnitScoreWeights, SCORE_WEIGHT_EVENT, type ScoreWeightColumn } from "./scoringWeightStore";
+import { loadUnitScoreWeights, SCORE_WEIGHT_EVENT, weightColumnFromGrouping } from "./scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
 import { getApproverNotesHistory, getRecordDecisionLog, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { loadAllAppraisalApprovers } from "./appraisalFormStore";
@@ -372,16 +372,7 @@ export function ViewProfile() {
     const allowed = resolveUserAllowedModules(activeUser);
     const grouping = resolveEffectiveUserGrouping(activeUser);
     const unitWeights = loadUnitScoreWeights(activeUser.company);
-    const weightCol: ScoreWeightColumn =
-      grouping === "Ka./Wa.Ka.Div ke atas" || grouping === "Direktur / Director"
-        ? "kepalaDivisi"
-        : grouping === "Ka./Wa.Ka.Dept"
-        ? "kepalaDepartement"
-        : grouping === "Ka./Wa.Ka.Bagian"
-        ? "pengawasKepalaBagian"
-        : grouping === "Ka./Wa.Ka.Seksi"
-        ? "kaWaKaSeksi"
-        : "operasional";
+    const weightCol = weightColumnFromGrouping(grouping, activeUser.company);
 
     const resolveWeight = (indicatorKey?: string, fallback = 0): number => {
       if (!indicatorKey) return 0;

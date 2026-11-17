@@ -59,12 +59,15 @@ export function GradeBellCurveModal({
   subtitle,
   rows,
   mode,
+  calibrationStatusBadge,
   onClose,
 }: {
   title: string;
   subtitle?: string;
   rows: BellCurveRow[];
   mode: "single" | "compare";
+  /** Status kurva Calibration ("Current" kuning lembut jika belum Approved, "Final" hijau lembut jika sudah Approved). */
+  calibrationStatusBadge?: { label: "Current" | "Final"; tone: "current" | "final" };
   onClose: () => void;
 }) {
   const data = rows.map((r) => ({
@@ -100,9 +103,27 @@ export function GradeBellCurveModal({
 
         <div className="space-y-6 overflow-y-auto p-6">
           <div>
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">
-              {mode === "compare" ? "Kurva Aktual vs Calibration" : "Grade Distribution (Bell Curve)"}
-            </p>
+            <div className="mb-2 flex items-center gap-2 flex-wrap">
+              <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
+                {mode === "compare" ? "Kurva Aktual vs Calibration" : "Grade Distribution (Bell Curve)"}
+              </p>
+              {mode === "compare" && calibrationStatusBadge && (
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${
+                    calibrationStatusBadge.tone === "final"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      calibrationStatusBadge.tone === "final" ? "bg-emerald-500" : "bg-amber-400"
+                    }`}
+                  />
+                  Calibration: {calibrationStatusBadge.label}
+                </span>
+              )}
+            </div>
             <div className="h-[280px] w-full rounded-xl border border-gray-100 bg-white p-3">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={data} margin={{ top: 12, right: 18, left: -10, bottom: 0 }} barSize={30}>

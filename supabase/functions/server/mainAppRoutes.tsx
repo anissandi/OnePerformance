@@ -532,6 +532,16 @@ mainAppRoutes.post("/sync", async (c) => {
         status: s.status ?? "Scheduled",
         updated_at: now,
       });
+    } else if (kind === "mi-clear-all") {
+      await client.from("pa_interview_schedules").delete().neq("id", "__NONE__");
+      await client.from("pa_interview_assessments").delete().neq("employee_id", "__NONE__");
+      for (const rk of ["pa_interview_schedules_v1", "pa_mi_supervisor_assessments_v1", "pa_mi_penilai1_scores_v1", "pa_mi_results_by_emp_v1"]) {
+        try { await kv.del(`${KV_PREFIX}${rk}`); } catch { /* ignore */ }
+        try { await client.from("pa_kv_state").delete().eq("state_key", rk); } catch { /* ignore */ }
+      }
+      await writeBackendKv(client, "pa_mi_cleared_2026_v1", true, now);
+    } else if (kind === "evidence-delete" && body.evidenceId) {
+      await client.from("pa_evidence_files").delete().eq("id", String(body.evidenceId));
     } else if (kind === "kv-state" && body.stateKey) {
       const stateKey = String(body.stateKey);
       if (stateKey === "pa_user_password_security_v1" && body.stateValue && typeof body.stateValue === "object") {

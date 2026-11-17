@@ -563,6 +563,82 @@ function MultiSelectDropdown({
 
 // ─── Module Card ──────────────────────────────────────────────────────────────
 
+const MODULE_SOFT_THEMES: Record<string, {
+  cardBorder: string;
+  headerBg: string;
+  iconBg: string;
+  iconText: string;
+  topBar: string;
+  bodyTint: string;
+}> = {
+  "kpi-setting": {
+    cardBorder: "border-blue-100/90 hover:border-blue-200",
+    headerBg: "bg-gradient-to-r from-blue-50/90 via-indigo-50/40 to-white",
+    iconBg: "bg-blue-600",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-blue-500 to-indigo-500",
+    bodyTint: "bg-gradient-to-b from-white to-blue-50/20",
+  },
+  "smart-goals-setting": {
+    cardBorder: "border-amber-100/90 hover:border-amber-200",
+    headerBg: "bg-gradient-to-r from-amber-50/90 via-orange-50/35 to-white",
+    iconBg: "bg-amber-500",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-amber-400 to-orange-400",
+    bodyTint: "bg-gradient-to-b from-white to-amber-50/20",
+  },
+  "kpi-measurement": {
+    cardBorder: "border-sky-100/90 hover:border-sky-200",
+    headerBg: "bg-gradient-to-r from-sky-50/90 via-cyan-50/40 to-white",
+    iconBg: "bg-sky-600",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-sky-500 to-cyan-500",
+    bodyTint: "bg-gradient-to-b from-white to-sky-50/20",
+  },
+  "smart-goals-measurement": {
+    cardBorder: "border-emerald-100/90 hover:border-emerald-200",
+    headerBg: "bg-gradient-to-r from-emerald-50/90 via-teal-50/40 to-white",
+    iconBg: "bg-emerald-600",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-emerald-500 to-teal-500",
+    bodyTint: "bg-gradient-to-b from-white to-emerald-50/20",
+  },
+  "appraisal-form": {
+    cardBorder: "border-violet-100/90 hover:border-violet-200",
+    headerBg: "bg-gradient-to-r from-violet-50/90 via-purple-50/40 to-white",
+    iconBg: "bg-violet-600",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-violet-500 to-purple-500",
+    bodyTint: "bg-gradient-to-b from-white to-violet-50/20",
+  },
+  "managerial-skill": {
+    cardBorder: "border-rose-100/90 hover:border-rose-200",
+    headerBg: "bg-gradient-to-r from-rose-50/85 via-pink-50/35 to-white",
+    iconBg: "bg-rose-600",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-rose-500 to-pink-500",
+    bodyTint: "bg-gradient-to-b from-white to-rose-50/20",
+  },
+  "project-ojs": {
+    cardBorder: "border-teal-100/90 hover:border-teal-200",
+    headerBg: "bg-gradient-to-r from-teal-50/90 via-emerald-50/35 to-white",
+    iconBg: "bg-teal-600",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-teal-500 to-cyan-500",
+    bodyTint: "bg-gradient-to-b from-white to-teal-50/20",
+  },
+  "inter-department-feedback": {
+    cardBorder: "border-indigo-100/90 hover:border-indigo-200",
+    headerBg: "bg-gradient-to-r from-indigo-50/90 via-slate-50/50 to-white",
+    iconBg: "bg-indigo-600",
+    iconText: "text-white",
+    topBar: "bg-gradient-to-r from-indigo-500 to-blue-500",
+    bodyTint: "bg-gradient-to-b from-white to-indigo-50/20",
+  },
+};
+
+const DEFAULT_MODULE_THEME = MODULE_SOFT_THEMES["kpi-setting"];
+
 function ModuleCard({
   module,
   onChange,
@@ -578,14 +654,16 @@ function ModuleCard({
   const feedbackDateError = module.id === "inter-department-feedback"
     ? feedbackActivationError({ active: module.active, startDate: module.startDate, endDate: module.endDate })
     : "";
+  const theme = MODULE_SOFT_THEMES[module.id] ?? DEFAULT_MODULE_THEME;
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div className={`rounded-2xl shadow-sm border transition-all duration-200 overflow-hidden ${module.active ? `${theme.cardBorder} ${theme.bodyTint}` : "border-slate-200/80 bg-slate-50/40"}`}>
+      <div className={`h-1 w-full ${module.active ? theme.topBar : "bg-slate-200"}`} />
       {/* Card header */}
-      <div className={`flex items-center justify-between px-6 py-4 border-b border-gray-100 ${module.active ? "bg-white" : "bg-gray-50/60"}`}>
+      <div className={`flex items-center justify-between px-6 py-4 border-b border-gray-100/80 ${module.active ? theme.headerBg : "bg-slate-100/60"}`}>
         <div className="flex items-center gap-3">
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${module.active ? "bg-[#1A284F]" : "bg-gray-200"}`}>
-            <Icon className={`w-4.5 h-4.5 ${module.active ? "text-white" : "text-gray-400"}`} style={{ width: 18, height: 18 }} />
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${module.active ? theme.iconBg : "bg-slate-200"}`}>
+            <Icon className={`w-4.5 h-4.5 ${module.active ? theme.iconText : "text-slate-400"}`} style={{ width: 18, height: 18 }} />
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -831,17 +909,18 @@ export function HRModuleActivation() {
   return (
     <div className="w-full flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex items-center justify-between gap-4 flex-wrap rounded-2xl border border-indigo-100/80 bg-gradient-to-r from-indigo-50/70 via-white to-sky-50/60 px-6 py-5 shadow-sm">
         <div>
           <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">Module Activation</h1>
           <p className="text-gray-500 text-sm">Control module access, activation period, and eligible positions</p>
         </div>
         <div className="flex items-center gap-3">
           {/* Summary pill */}
-          <div className="flex items-center gap-2 px-4 py-2 bg-[#1A284F]/5 rounded-xl">
-            <span className="text-xs font-bold text-[#1A284F] uppercase tracking-wide">Active</span>
-            <span className="text-lg font-bold text-[#1A284F]">{activeCount}</span>
-            <span className="text-xs text-gray-400">/ {modules.length}</span>
+          <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50/90 border border-emerald-200/80 rounded-xl shadow-xs">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="text-xs font-bold text-emerald-800 uppercase tracking-wide">Active</span>
+            <span className="text-lg font-bold text-emerald-700">{activeCount}</span>
+            <span className="text-xs text-emerald-600/70">/ {modules.length}</span>
           </div>
           {/* Year selector */}
           <div className="flex items-center gap-2 bg-[#1A284F] text-white rounded-xl px-4 py-2.5 shadow-sm">
@@ -871,8 +950,9 @@ export function HRModuleActivation() {
       </div>
 
       {/* ── Bagian IV & V: Checklist Validasi Berjenjang & Mode Paralel KPI ── */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-[#1A284F]/[0.04] to-transparent flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
+        <div className="h-1 w-full bg-gradient-to-r from-[#1A284F] via-indigo-500 to-emerald-500" />
+        <div className="px-6 py-4 border-b border-indigo-100/70 bg-gradient-to-r from-indigo-50/80 via-sky-50/40 to-emerald-50/50 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#1A284F] text-white flex items-center justify-center shrink-0">
               <Layers className="w-5 h-5" />
@@ -923,10 +1003,17 @@ export function HRModuleActivation() {
               parallelKey: "allowParallelKpiDepartmentBelow" as const,
               parallelLabel: "Izinkan Pembuatan KPI Level Departemen ke Bawah Paralel",
             },
-          ].map((item) => (
+          ].map((item, stepIdx) => {
+            const stepPalettes = [
+              "border-blue-100 bg-gradient-to-br from-blue-50/65 via-white to-indigo-50/30",
+              "border-emerald-100 bg-gradient-to-br from-emerald-50/65 via-white to-teal-50/30",
+              "border-violet-100 bg-gradient-to-br from-violet-50/65 via-white to-purple-50/30",
+              "border-amber-100 bg-gradient-to-br from-amber-50/65 via-white to-orange-50/30",
+            ];
+            return (
             <div
               key={item.step}
-              className="rounded-xl border border-gray-200 p-4 bg-slate-50/50 flex flex-col justify-between gap-3"
+              className={`rounded-xl border p-4 flex flex-col justify-between gap-3 shadow-xs transition-all hover:shadow-sm ${stepPalettes[stepIdx % stepPalettes.length]}`}
             >
               <div>
                 <h3 className="text-sm font-bold text-[#1A284F]">{item.step}</h3>
@@ -953,7 +1040,8 @@ export function HRModuleActivation() {
                 </label>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

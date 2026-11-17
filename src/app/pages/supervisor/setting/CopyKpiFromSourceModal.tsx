@@ -20,6 +20,13 @@ export interface CopyableKpiRow {
   detailFormula: string;
   keterangan: string;
   trackingPeriod?: string;
+  coo?: string;
+  gmVgmIndustry?: string;
+  gmVgmPerkebunan?: string;
+  gmAsd?: string;
+  gmRstm?: string;
+  gmGhs?: string;
+  cascadingMap?: Record<string, string>;
 }
 
 const SECTION_TONES = ["#1565C0", "#2E7D32", "#6A1B9A", "#EF6C00", "#00838F", "#AD1457", "#4E342E", "#283593"];
@@ -72,8 +79,27 @@ export function CopyKpiFromSourceModal<T extends CopyableKpiRow>({
     });
   };
   const selectedRows = sourceItems.filter((i) => selected.has(i.id));
+  const showCascading = sourceLabel === "KPI (Group)";
   const th = "border border-[#1A284F]/25 px-2 py-2 text-center text-[11px] font-semibold whitespace-nowrap";
   const td = "border border-gray-200 px-2 py-1.5 align-top text-[11px] text-gray-700";
+  const formatCascadingSummary = (r: T): string => {
+    if (r.cascadingMap && Object.keys(r.cascadingMap).length > 0) {
+      return Object.entries(r.cascadingMap)
+        .filter(([, v]) => Boolean(v))
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ") || "—";
+    }
+    const pairs: Array<[string, string | undefined]> = [
+      ["COO", r.coo],
+      ["GM Ind", r.gmVgmIndustry],
+      ["GM Pkb", r.gmVgmPerkebunan],
+      ["GM ASD", r.gmAsd],
+      ["GM RSTM", r.gmRstm],
+      ["GM GHS", r.gmGhs],
+    ];
+    const active = pairs.filter(([, v]) => Boolean(v)).map(([k, v]) => `${k}: ${v}`);
+    return active.length > 0 ? active.join(", ") : "—";
+  };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/45 px-4 py-8" onClick={onClose}>
@@ -114,7 +140,7 @@ export function CopyKpiFromSourceModal<T extends CopyableKpiRow>({
                       aria-label="Pilih semua"
                     />
                   </th>
-                  {["No", "Perspektif", "KPI", "Satuan", "Formula Setahun", "Scope", "Bobot", "Baseline 2025", "Target 2026", "Polaritas", "Detail Formula", "Keterangan", "Tracking Period"].map((h) => (
+                  {["No", "Perspektif", "KPI", "Satuan", "Formula Setahun", "Scope", "Bobot", "Baseline 2025", "Target 2026", "Polaritas", "Detail Formula", "Keterangan", "Periode Tracking", ...(showCascading ? ["CASCADING (FC; PC; CC)"] : [])].map((h) => (
                     <th key={h} className={th}>{h}</th>
                   ))}
                 </tr>
@@ -127,7 +153,7 @@ export function CopyKpiFromSourceModal<T extends CopyableKpiRow>({
                   return (
                     <React.Fragment key={sec}>
                       <tr>
-                        <td colSpan={14} className="border px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-white" style={{ background: tone, borderColor: tone }}>
+                        <td colSpan={showCascading ? 15 : 14} className="border px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-white" style={{ background: tone, borderColor: tone }}>
                           <label className="flex cursor-pointer items-center gap-2">
                             <input type="checkbox" checked={secAll} onChange={() => toggleSection(sec)} className="h-3.5 w-3.5 accent-white" />
                             {sec}. {resolveSectionLabel(rows[0])}
@@ -167,6 +193,11 @@ export function CopyKpiFromSourceModal<T extends CopyableKpiRow>({
                             <td className={`${td} min-w-[200px] whitespace-pre-line`}>{r.detailFormula || "—"}</td>
                             <td className={`${td} min-w-[160px] whitespace-pre-line`}>{r.keterangan || "—"}</td>
                             <td className={`${td} text-center`}>{r.trackingPeriod || "—"}</td>
+                            {showCascading && (
+                              <td className={`${td} min-w-[180px] text-[10px] font-medium text-indigo-700`}>
+                                {formatCascadingSummary(r)}
+                              </td>
+                            )}
                           </tr>
                         );
                       })}

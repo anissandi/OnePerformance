@@ -31,7 +31,7 @@ import {
   type ManagedUser,
   type WorkflowStageRole,
 } from "../store/authStore";
-import { loadUnitScoreWeights, type ScoreWeightColumn } from "../pages/shared/scoringWeightStore";
+import { loadUnitScoreWeights, weightColumnFromGrouping } from "../pages/shared/scoringWeightStore";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1071,7 +1071,7 @@ function SmartGoalsApproverReview({
 }) {
   const [previewEvidenceFile, setPreviewEvidenceFile] = useState<StoredSmartGoalEvidenceFile | null>(null);
   const live = loadSubmittedGoals(employeeId);
-  const goals = live && live.length > 0 ? live : SAMPLE_GOALS;
+  const goals = live && live.length > 0 ? live : [];
   const ownerCheckInEntries = loadCheckInEntries(employeeId);
 
   // Bangun status Action Plan, catatan, evidence, dan Target vs Actual murni dari data owner (karyawan pemilik)
@@ -1177,16 +1177,7 @@ function SmartGoalsApproverReview({
     const owner = allUsers.find((u) => normalizeEmployeeId(u.employeeId) === normEmpId);
     const unit = owner?.company || companyUnit || "PT RSUP (Industry)";
     const grp = owner ? resolveEffectiveUserGrouping(owner) : "";
-    const col: ScoreWeightColumn =
-      grp === "Ka./Wa.Ka.Div ke atas" || grp === "Direktur / Director"
-        ? "kepalaDivisi"
-        : grp === "Ka./Wa.Ka.Dept"
-        ? "kepalaDepartement"
-        : grp === "Ka./Wa.Ka.Bagian"
-        ? "pengawasKepalaBagian"
-        : grp === "Ka./Wa.Ka.Seksi"
-        ? "kaWaKaSeksi"
-        : "operasional";
+    const col = weightColumnFromGrouping(grp, unit);
     const rawW = loadUnitScoreWeights(unit)["SMART Goals"]?.[col];
     const parsed = rawW && rawW !== "-" ? parseFloat(String(rawW).replace("%", "").trim()) : NaN;
     return Number.isFinite(parsed) ? parsed : (position ? getBobotByPosition(position) : 20);

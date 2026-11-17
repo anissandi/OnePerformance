@@ -264,7 +264,7 @@ export function AuditTrailPage() {
   const todayStr = new Date().toISOString().slice(0, 10);
 
   return (
-    <div className="p-6 max-w-screen-xl mx-auto space-y-4">
+    <div className="p-6 w-full space-y-4">
       {/* Header */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-6 py-4 flex items-center justify-between">
         <div>

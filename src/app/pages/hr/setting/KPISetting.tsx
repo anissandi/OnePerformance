@@ -2,12 +2,15 @@ import React, { useState, useEffect } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { CheckCircle2, X, RotateCcw, Download, FileSearch, Copy, UserCheck, ShieldCheck, Layers } from "lucide-react";
 import { toast } from "sonner";
-import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
+import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
+import { loadPersistedState, mergeKvMapRecord, safeSetLocalJson, savePersistedState } from "../../../services/supabaseClient";
+import { pushEmployeeNotification } from "../../../store/notificationStore";
 import {
   getActiveUser,
   getGroupCompaniesForUnit,
   isAdminOrHrIcfRole,
   isDirectorRoleOrGrouping,
+  isSameCompanyUnit,
   loadManagedUsers,
   RSUP_GROUP_COMPANIES,
 } from "../../../store/authStore";
@@ -267,7 +270,7 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
     { label: "Keterangan",      w: 180 },
     { label: "Baseline 2025",   w: 100 },
     { label: "Target 2026",     w: 100 },
-    { label: "Tracking Period", w: 90  },
+    { label: "Periode Tracking", w: 90  },
   ];
   const CASC_TYPE_COLS = [
     { label: "FC", type: "FC", w: 150, bg: CASCADING_CELL_BG_BIZ.FC, border: CASCADING_CELL_BORDER_BIZ.FC, color: CASCADING_CELL_COLOR_BIZ.FC },
@@ -333,9 +336,6 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-600">{item.formula || "—"}</span>
-                        </td>
-                        <td className="border border-gray-200 py-2 px-1.5">
-                          <span className="text-[11px] text-gray-500 italic">{item.scope || "—"}</span>
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{item.bobot}</span>
@@ -405,7 +405,6 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
     { label: "KPI",             w: 260 },
     { label: "Satuan",          w: 120 },
     { label: "Formula Setahun", w: 110 },
-    { label: "Scope",           w: 150 },
     { label: "Bobot",           w: 60  },
     { label: "Definisi",        w: 240 },
     { label: "Source",          w: 180 },
@@ -414,7 +413,7 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
     { label: "Keterangan",      w: 220 },
     { label: "Baseline 2025",   w: 100 },
     { label: "Target 2026",     w: 100 },
-    { label: "Tracking Period", w: 90  },
+    { label: "Periode Tracking", w: 90  },
   ];
   const totalWidth = COLS.reduce((s, c) => s + c.w, 0);
 
@@ -572,96 +571,143 @@ export function HRSettingKPIPage() {
       })),
     }),
   );
-  const [validationMap, setValidationMap] = useState<Record<string, ApprovalStatus>>(() =>
-    loadPersistedState<Record<string, ApprovalStatus>>("pa_kpi_business_validation_2026", {
-      "group::PT RSUP (Industry)": "approved",
-      "gm::PT RSUP (Industry)": "approved",
-    }),
-  );
+  const [, setBizRefreshTick] = useState(0);
+  const [validationMap, setValidationMap] = useState<Record<string, ApprovalStatus>>({});
 
   useEffect(() => {
-    const onSync = () => setChecklist(loadKpiValidationChecklist(String(selectedYear)));
+    const onSync = () => {
+      setChecklist(loadKpiValidationChecklist(String(selectedYear)));
+      setBizRefreshTick((t) => t + 1);
+    };
     window.addEventListener("pa-module-activation-updated", onSync);
     window.addEventListener("pa-db-hydrated", onSync);
+    window.addEventListener("appraisal-updated", onSync);
+    window.addEventListener("storage", onSync);
     return () => {
       window.removeEventListener("pa-module-activation-updated", onSync);
       window.removeEventListener("pa-db-hydrated", onSync);
+      window.removeEventListener("appraisal-updated", onSync);
+      window.removeEventListener("storage", onSync);
     };
   }, [selectedYear]);
+
+  // Jika di tab KPI (Unit) unit terpilih belum memiliki pengajuan tetapi unit lain sudah submit, arahkan otomatis ke unit tsb
+  useEffect(() => {
+    if (routeKpiTab !== "gm") return;
+    const bizStatus = loadPersistedState<Record<string, { submitted?: boolean }>>("pa_kpi_business_status_v1", {});
+    if (bizStatus[`unit-${companyUnit}`]?.submitted) return;
+    const firstSubmittedUnit = allowedUnits.find((u) => Boolean(bizStatus[`unit-${u}`]?.submitted));
+    if (firstSubmittedUnit && firstSubmittedUnit !== companyUnit) {
+      setCompanyUnit(firstSubmittedUnit);
+    }
+  }, [routeKpiTab, allowedUnits, companyUnit]);
 
   const handleCompanyUnitChange = (unit: string) => {
     setCompanyUnit(unit);
     if (isDirector || unit !== "PT RSUP (Industry)") setKpiTab("gm");
   };
   const currentKey = `${kpiTab}::${companyUnit}`;
-  const approvalStatus: ApprovalStatus = validationMap[currentKey] ?? "pending";
-  const setApprovalStatus = (status: ApprovalStatus) => {
-    setValidationMap((prev) => {
-      const next = { ...prev, [currentKey]: status };
-      savePersistedState("pa_kpi_business_validation_2026", next, {
-        kind: "kv-state",
-        stateKey: "pa_kpi_business_validation_2026",
-        stateValue: next,
-      });
-      return next;
+  const scopeKey = kpiTab === "group" ? "corporate-RSUP Group" : `unit-${companyUnit}`;
+  const bizStatusMapLive = loadPersistedState<Record<string, { submitted?: boolean; directorApproved?: boolean; approved?: boolean; stage?: string; submittedBy?: string; submittedById?: string }>>("pa_kpi_business_status_v1", {});
+  const bizItemsMapLive = loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_business_by_scope_v1", {});
+  const currentScopeStatus = bizStatusMapLive[scopeKey];
+  const submittedItems = bizItemsMapLive[scopeKey] ?? [];
+  const hasSubmittedData = Boolean(currentScopeStatus?.submitted && submittedItems.length > 0);
+
+  const approvalStatus: ApprovalStatus = currentScopeStatus?.approved
+    ? "approved"
+    : currentScopeStatus?.stage === "revision"
+    ? "revision"
+    : currentScopeStatus?.directorApproved || currentScopeStatus?.stage === "pending_validator"
+    ? (kpiTab === "gm" ? "director_approved" : "pending")
+    : validationMap[currentKey] ?? "pending";
+
+  const persistScopeStatus = (patch: Record<string, unknown>, auditAction: string, auditDesc: string) => {
+    const prevAll = loadPersistedState<Record<string, Record<string, unknown>>>("pa_kpi_business_status_v1", {});
+    const mergedEntry = { ...(prevAll[scopeKey] ?? {}), ...patch };
+    const nextAll = { ...prevAll, [scopeKey]: mergedEntry };
+    safeSetLocalJson("pa_kpi_business_status_v1", nextAll);
+    void mergeKvMapRecord("pa_kpi_business_status_v1", scopeKey, mergedEntry);
+    savePersistedState("pa_kpi_business_status_v1", nextAll, {
+      audit: {
+        userId: activeUser.employeeId,
+        userName: activeUser.name,
+        role: activeUser.role,
+        action: auditAction,
+        module: "KPI Business",
+        subModule: kpiTab === "group" ? "KPI (Group)" : "KPI (Unit)",
+        description: auditDesc,
+      },
     });
+    setBizRefreshTick((t) => t + 1);
+    window.dispatchEvent(new Event("appraisal-updated"));
   };
+
   const [pendingAction, setPendingAction] = useState<"approve" | "revision" | null>(null);
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [showCancelValidate, setShowCancelValidate] = useState(false);
 
-  const currentUnitItems = unitKpiByCompany[companyUnit] ?? GM_KPI;
+  const currentUnitItems = hasSubmittedData ? submittedItems : [];
   const isRsupGroupUnit = (RSUP_GROUP_COMPANIES as readonly string[]).includes(companyUnit);
   const canCreateOrEditKpiUnit = checklist.kpiGroupValidated || checklist.allowParallelKpiUnit;
 
-  const handleAdoptFromKpiGroup = () => {
-    if (!canCreateOrEditKpiUnit) {
-      toast.error("KPI Unit belum dapat dibuat karena KPI Group belum berstatus Validated dan mode paralel di /hr/modules tidak aktif.");
-      return;
-    }
-    const adopted = CORPORATE_KPI.map((k, idx) => ({
-      ...k,
-      id: `${companyUnit}-adopted-${k.id}`,
-      no: String(idx + 1),
-      scope: companyUnit,
-    }));
-    setUnitKpiByCompany((prev) => {
-      const next = { ...prev, [companyUnit]: adopted };
-      savePersistedState("pa_kpi_unit_by_company_2026", next, {
-        kind: "kv-state",
-        stateKey: "pa_kpi_unit_by_company_2026",
-        stateValue: next,
-        audit: {
-          action: "Update",
-          module: "KPI Business",
-          subModule: "KPI Unit",
-          description: `GM ${companyUnit} mengambil dan menyesuaikan ${adopted.length} indikator dari KPI Group`,
-        },
-      });
-      return next;
-    });
-    toast.success(`${adopted.length} indikator KPI Group berhasil diambil ke KPI Unit ${companyUnit} untuk disesuaikan oleh GM.`);
+  const findOwnerAndValidators = () => {
+    const users = loadManagedUsers();
+    const gmIds = users
+      .filter((u) => u.status === "Active" && u.role === "GM" && isSameCompanyUnit(u.company, companyUnit))
+      .map((u) => u.employeeId);
+    const dirIds = users
+      .filter((u) => u.status === "Active" && isDirectorRoleOrGrouping(u) && getGroupCompaniesForUnit(u.company).includes(companyUnit))
+      .map((u) => u.employeeId);
+    const hrIcfIds = users
+      .filter((u) => u.status === "Active" && (u.role === "HR ICF" || Boolean(u.isHrIcfValidator) || u.role === "Administrator"))
+      .map((u) => u.employeeId);
+    const ownerIds = currentScopeStatus?.submittedById
+      ? [currentScopeStatus.submittedById]
+      : kpiTab === "group"
+      ? dirIds
+      : gmIds;
+    return { ownerIds, gmIds, dirIds, hrIcfIds };
   };
 
   const handleDirectorApprove = () => {
-    setApprovalStatus("director_approved");
+    persistScopeStatus(
+      { submitted: true, directorApproved: true, approved: false, stage: "pending_validator", directorApprovedBy: activeUser.name },
+      "Approve",
+      `Director ${activeUser.name} approved KPI (Unit) for ${companyUnit} -> awaiting HR ICF Validate`,
+    );
+    const { ownerIds, hrIcfIds } = findOwnerAndValidators();
+    if (ownerIds.length > 0) {
+      pushEmployeeNotification({
+        employeeIds: ownerIds,
+        title: `KPI (Unit) ${companyUnit} Disetujui Director`,
+        summary: `KPI (Unit) ${companyUnit} Anda telah disetujui oleh Director (${activeUser.name}) dan kini diteruskan ke HR ICF untuk tahap Validate.`,
+        category: "Approval",
+        moduleName: "KPI",
+        approvalStatus: "Approved",
+        ctaLabel: "Lihat KPI (Unit)",
+        ctaRoute: "/setting/kpi/corporate-unit",
+        senderName: activeUser.name,
+        senderRole: "Director",
+      });
+    }
+    if (hrIcfIds.length > 0) {
+      pushEmployeeNotification({
+        employeeIds: hrIcfIds,
+        title: `KPI (Unit) ${companyUnit} Menunggu Validasi HR ICF`,
+        summary: `Director (${activeUser.name}) telah menyetujui KPI (Unit) ${companyUnit}. Silakan lakukan Validate di Approvals → KPI Business.`,
+        category: "Approval",
+        moduleName: "KPI Business",
+        approvalStatus: "Pending",
+        ctaLabel: "Validate KPI (Unit)",
+        ctaRoute: "/hr/settings/kpi/gm",
+        senderName: activeUser.name,
+        senderRole: "Director",
+      });
+    }
     setPendingAction(null);
-    void savePersistedState("pa_kpi_business_validation_2026", {
-      ...validationMap,
-      [currentKey]: "director_approved",
-    }, {
-      kind: "kv-state",
-      stateKey: "pa_kpi_business_validation_2026",
-      stateValue: { ...validationMap, [currentKey]: "director_approved" },
-      audit: {
-        action: "Approve",
-        module: "KPI Business",
-        subModule: "KPI (Unit)",
-        description: `Director ${activeUser.name} approved KPI (Unit) for ${companyUnit} (awaiting HR ICF Validate)`,
-      },
-    });
     setSuccessMessage(
       `KPI (Unit) (${companyUnit}) telah disetujui oleh Director (Approved by Director) dan diteruskan ke HR ICF untuk tahap Validate.`,
     );
@@ -669,73 +715,143 @@ export function HRSettingKPIPage() {
   };
 
   const handleValidate = () => {
-    setApprovalStatus("approved");
+    persistScopeStatus(
+      { submitted: true, directorApproved: true, approved: true, stage: "validated", validatedBy: activeUser.name },
+      "Approve",
+      `HR ICF ${activeUser.name} validated ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`} & auto-created in Measurement -> KPI Tracking`,
+    );
     if (kpiTab === "group") {
       const nextChecklist = { ...checklist, kpiGroupValidated: true };
       setChecklist(nextChecklist);
       saveKpiValidationChecklist(String(selectedYear), nextChecklist);
     }
-    // Bagian IV Poin 10: KPI dengan status Validated otomatis ter-create di Measurement -> KPI Tracking
-    const sourceItems = kpiTab === "group" ? items : currentUnitItems;
-    const existingTracking = loadPersistedState<Record<string, unknown>>("pa_validated_kpi_tracking_items_2026", {});
-    const nextTracking = {
-      ...existingTracking,
-      [currentKey]: {
-        type: kpiTab === "group" ? "KPI Group" : "KPI Unit",
-        companyUnit,
-        year: selectedYear,
-        validatedAt: new Date().toISOString(),
-        cascadingEnabled: true,
-        items: sourceItems,
-      },
-    };
-    savePersistedState("pa_validated_kpi_tracking_items_2026", nextTracking, {
-      kind: "kv-state",
-      stateKey: "pa_validated_kpi_tracking_items_2026",
-      stateValue: nextTracking,
-      audit: {
-        action: "Validate",
-        module: "KPI Business",
-        subModule: kpiTab === "group" ? "KPI Group" : "KPI Unit",
-        description: `Validated ${kpiTab === "group" ? "KPI Group" : "KPI Unit"} (${companyUnit}) & auto-created in Measurement -> KPI Tracking`,
-      },
-    });
+    const { ownerIds } = findOwnerAndValidators();
+    if (ownerIds.length > 0) {
+      pushEmployeeNotification({
+        employeeIds: ownerIds,
+        title: `${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) — ${companyUnit}`} Telah Validated (HR ICF)`,
+        summary: `Pengajuan ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`} Anda telah divalidasi oleh HR ICF (${activeUser.name}) dan otomatis aktif di Measurement → KPI Tracking.`,
+        category: "Approval",
+        moduleName: "KPI",
+        approvalStatus: "Validated",
+        ctaLabel: "Buka KPI Tracking",
+        ctaRoute: "/measurement/kpi-tracking",
+        senderName: activeUser.name,
+        senderRole: "HR ICF",
+      });
+    }
     setPendingAction(null);
     setSuccessMessage(
-      `KPI ${kpiTab === "group" ? "Group" : "Unit"} (${companyUnit}) berhasil berstatus Validated dan otomatis ter-create di Measurement -> KPI Tracking.`,
+      `KPI ${kpiTab === "group" ? "(Group)" : `(Unit) ${companyUnit}`} berhasil berstatus Validated dan otomatis ter-create di Measurement → KPI Tracking.`,
     );
     setShowSuccess(true);
   };
 
   const handleCancelValidate = () => {
-    setApprovalStatus(isDirector ? "pending" : kpiTab === "gm" ? "director_approved" : "pending");
+    if (isDirector) {
+      persistScopeStatus(
+        { submitted: true, directorApproved: false, approved: false, stage: "pending_director" },
+        "Update",
+        `Director ${activeUser.name} cancelled approval for KPI (Unit) ${companyUnit}`,
+      );
+    } else {
+      persistScopeStatus(
+        { submitted: true, directorApproved: kpiTab === "gm", approved: false, stage: "pending_validator" },
+        "Update",
+        `HR ICF ${activeUser.name} cancelled validation for ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`}`,
+      );
+    }
     setShowCancelValidate(false);
     setSuccessMessage(
       isDirector
-        ? `Approval Director telah dibatalkan. KPI (Unit) kembali ke status Pending Approval.`
-        : `Validation has been cancelled. KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"} is back to Pending Validation.`,
+        ? "Approval Director telah dibatalkan. KPI (Unit) kembali ke status Pending Approval."
+        : `Validation dibatalkan. KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"} kembali ke status Pending Validation.`,
     );
     setShowSuccess(true);
   };
 
   const handleRevision = (note: string) => {
-    setApprovalStatus("revision");
+    persistScopeStatus(
+      { submitted: false, directorApproved: false, approved: false, stage: "revision", revisionNote: note, revisionBy: activeUser.name },
+      "Reject",
+      `${activeUser.name} requested revision on ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`}: ${note}`,
+    );
+    const { ownerIds } = findOwnerAndValidators();
+    if (ownerIds.length > 0) {
+      pushEmployeeNotification({
+        employeeIds: ownerIds,
+        title: `Revisi Diminta pada ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) — ${companyUnit}`}`,
+        summary: `${activeUser.name} meminta revisi pada pengajuan ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`}.${note ? ` Catatan: ${note}` : ""}`,
+        category: "Approval",
+        moduleName: "KPI",
+        approvalStatus: "Revision",
+        ctaLabel: "Perbaiki KPI Setting",
+        ctaRoute: kpiTab === "group" ? "/setting/kpi/corporate" : "/setting/kpi/corporate-unit",
+        senderName: activeUser.name,
+      });
+    }
     setShowRevisionModal(false);
-    setSuccessMessage(`Revision request sent for KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"}.`);
+    setSuccessMessage(`Permintaan revisi telah dikirim ke penyusun KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"}.`);
     setShowSuccess(true);
   };
 
   const handleExport = () => {
-    const headers = ["No","Section","Perspektif","KPI","Satuan","Formula Setahun","Scope","Bobot","Definisi","Source","Polaritas","Detail Formula","Baseline 2025","Target 2026","Tracking Period","COO","GM Industry","GM Perkebunan","GM ASD","GM RSTM","GM GHS"];
-    const rows = items.map((i) => [i.no, `${i.section}. ${CORP_SECTION_META_BIZ[i.section]?.label ?? i.section}`, i.perspektif, i.kpi, i.satuan, i.formula, i.scope ?? "", i.bobot, i.definisi, i.source, i.polaritas, i.detailFormula, i.baseline2025, i.target2026, i.trackingPeriod ?? "", i.coo ?? "", i.gmVgmIndustry ?? "", i.gmVgmPerkebunan ?? "", i.gmAsd ?? "", i.gmRstm ?? "", i.gmGhs ?? ""]);
-    const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = "KPI_Business_RSUP_Group_2026.csv";
-    a.click();
+    const exportSource = hasSubmittedData ? submittedItems : [];
+    const headers = ["No","Perspektif","KPI","Satuan","Formula Setahun","Scope","Bobot","Definisi","Source","Polaritas","Detail Formula","Keterangan","Baseline 2025","Target 2026","Periode Tracking","COO","GM Industry","GM Perkebunan","GM ASD","GM RSTM","GM GHS"];
+    const colWidths = [7, 16, 30, 14, 16, 22, 10, 34, 22, 12, 34, 22, 14, 14, 16, 10, 13, 15, 11, 11, 11];
+    const rowsOut: StyledExcelCell[][] = [
+      headers.map((h) => ({
+        value: h,
+        style: { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center", borderColor: "334155" },
+      })),
+    ];
+    const merges: StyledExcelMerge[] = [];
+    const rowHeights: Record<number, number> = { 0: 28 };
+    const sections = Array.from(new Set(exportSource.map((i) => i.section)));
+    let flatIdx = 0;
+    sections.forEach((sec) => {
+      const meta = (kpiTab === "group" ? CORP_SECTION_META_BIZ[sec] : CORP_SECTION_META_GM[sec]) ?? CORP_SECTION_META_BIZ[sec] ?? { label: sec, bobot: "—", bg: "#1565C0" };
+      const bannerRow = rowsOut.length;
+      rowsOut.push(
+        headers.map((_, ci) => ({
+          value: ci === 0 ? `${sec}. ${meta.label} — Bobot ${meta.bobot}` : "",
+          style: { bg: meta.bg, fg: EXCEL_THEME.white, bold: true, align: "left", borderColor: meta.bg },
+        })),
+      );
+      rowHeights[bannerRow] = 24;
+      merges.push({ sRow: bannerRow, sCol: 0, eRow: bannerRow, eCol: headers.length - 1 });
+      exportSource.filter((k) => k.section === sec).forEach((i) => {
+        const vals = [i.no, i.perspektif, i.kpi, i.satuan, i.formula, i.scope ?? "", i.bobot, i.definisi, i.source, i.polaritas, i.detailFormula, i.keterangan ?? "", i.baseline2025, i.target2026, i.trackingPeriod ?? "", i.coo ?? "", i.gmVgmIndustry ?? "", i.gmVgmPerkebunan ?? "", i.gmAsd ?? "", i.gmRstm ?? "", i.gmGhs ?? ""];
+        rowsOut.push(
+          vals.map((val, ci) => {
+            if (ci >= 15 && EXCEL_THEME.cascading[String(val)]) {
+              const casc = EXCEL_THEME.cascading[String(val)];
+              return { value: val, style: { bg: casc.bg, fg: casc.fg, bold: true, align: "center" } };
+            }
+            return { value: val, style: inferSystemCellStyle(headers[ci], val, flatIdx) };
+          }),
+        );
+        rowHeights[rowsOut.length - 1] = 28;
+        flatIdx++;
+      });
+    });
+    const fileTag = kpiTab === "group" ? "RSUP_Group" : companyUnit.replace(/[^a-zA-Z0-9]+/g, "_");
+    exportStyledXLSX(`KPI_Business_${fileTag}_${selectedYear}.xlsx`, {
+      sheetName: kpiTab === "group" ? "KPI Group" : "KPI Unit",
+      colWidths,
+      rowHeights,
+      rows: rowsOut,
+      merges,
+    });
   };
 
   const statusBadge = () => {
+    if (!hasSubmittedData) {
+      if (currentScopeStatus?.stage === "revision") {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-bold"><RotateCcw className="w-3.5 h-3.5" />Revision Requested</span>;
+      }
+      return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-100 text-gray-500 text-xs font-bold">Belum Ada Pengajuan</span>;
+    }
     if (approvalStatus === "approved") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Validated (HR ICF)</span>;
     if (approvalStatus === "director_approved") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Approved by Director · Pending HR ICF Validate</span>;
     if (approvalStatus === "revision") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-bold"><RotateCcw className="w-3.5 h-3.5" />Revision Requested</span>;
@@ -752,11 +868,7 @@ export function HRSettingKPIPage() {
         <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">KPI Business — Approval &amp; Validation</h1>
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-gray-500 text-sm">2026 Performance Appraisal — KPI Configuration &amp; Approval</p>
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-[#1A284F] border border-indigo-200">
-            {kpiTab === "group"
-              ? "Alur Approval KPI (Group): Director Submit → HR ICF Validate"
-              : "Alur Approval KPI (Unit): GM Submit → Director Approve → HR ICF Validate"}
-          </span>
+
         </div>
       </div>
 
@@ -820,7 +932,7 @@ export function HRSettingKPIPage() {
             <div className="flex items-center gap-2 px-3 py-1.5 bg-[#1A284F]/5 rounded-lg">
               <span className="text-xs font-bold text-[#1A284F]">Total KPI:</span>
               <span className="text-sm font-bold text-[#1A284F]">
-                {kpiTab === "group" ? items.length : currentUnitItems.length}
+                {hasSubmittedData ? submittedItems.length : 0}
               </span>
             </div>
             <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs text-[#1A284F]">
@@ -834,17 +946,8 @@ export function HRSettingKPIPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {kpiTab === "gm" && isRsupGroupUnit && (
-              <button
-                type="button"
-                onClick={handleAdoptFromKpiGroup}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border border-blue-200 bg-blue-50 text-[#1A284F] hover:bg-blue-100 transition-colors"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                Ambil Indikator dari KPI Group
-              </button>
-            )}
-            {isDirector ? (
+
+            {!hasSubmittedData ? null : isDirector ? (
               // Untuk Role Director pada tab KPI (Unit): bertindak sebagai Approver (bukan Validator)
               approvalStatus === "approved" ? null : approvalStatus === "director_approved" ? (
                 <button
@@ -879,7 +982,7 @@ export function HRSettingKPIPage() {
                 </button>
               )
             ) : (
-              isValidator && (
+              isValidator && (kpiTab === "group" || approvalStatus === "director_approved") && (
                 <>
                   <button
                     onClick={() => setShowRevisionModal(true)}
@@ -903,46 +1006,45 @@ export function HRSettingKPIPage() {
           </div>
         </div>
 
-        {kpiTab === "group" && companyUnit === "PT RSUP (Industry)" && selectedYear === CURRENT_YEAR ? (
-          <>
-            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
-              <div className="flex items-center gap-2">
-                <Layers className="w-4 h-4 shrink-0 text-amber-600" />
-                <span>
-                  <strong>RSUP Group:</strong> PT RSUP (Industry), PT RSUP (Perkebunan), PT RSTM, PT GHS, dan PT RSUP ASD. Nilai Tracking KPI Group mendukung <strong>Cascading</strong> otomatis dari indikator turunan KPI Unit.
-                </span>
-              </div>
-              <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                Status Validated otomatis ter-create ke Measurement → KPI Tracking
-              </span>
-            </div>
-            <BusinessKPITable items={items} />
-          </>
-        ) : kpiTab === "gm" && isRsupGroupUnit && selectedYear === CURRENT_YEAR ? (
-          canCreateOrEditKpiUnit ? (
-            <>
-              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-blue-50/70 border border-blue-200 rounded-lg text-xs text-[#1A284F]">
-                <span>
-                  <strong>KPI Unit ({companyUnit}):</strong> Disusun oleh GM {companyUnit}, dapat mengambil indikator dari KPI Group dan disesuaikan dengan target unit usaha.
-                </span>
-                <span className="font-semibold text-emerald-700">
-                  {checklist.kpiGroupValidated ? "KPI Group: Validated" : "Mode Paralel Aktif (/hr/modules)"}
-                </span>
-              </div>
-              <GMKPITable items={currentUnitItems} />
-            </>
+        {kpiTab === "group" && companyUnit === "PT RSUP (Industry)" && selectedYear === CURRENT_YEAR ? (() => {
+          const bizStatusMap = loadPersistedState<Record<string, { submitted?: boolean; approved?: boolean }>>("pa_kpi_business_status_v1", {});
+          const bizItemsMap = loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_business_by_scope_v1", {});
+          const groupSubmitted = Boolean(bizStatusMap["corporate-RSUP Group"]?.submitted);
+          const groupItems = bizItemsMap["corporate-RSUP Group"] ?? [];
+          return groupSubmitted && groupItems.length > 0 ? (
+            <BusinessKPITable items={groupItems} />
           ) : (
-            <div className="flex flex-col items-center justify-center gap-3 py-16 rounded-xl border border-amber-200 bg-amber-50/50 text-center px-6">
-              <p className="text-sm font-bold text-amber-900">
-                KPI Unit {companyUnit} Belum Dapat Dibuat
-              </p>
-              <p className="text-xs text-amber-800 max-w-lg">
-                Sesuai aturan Bagian IV Poin 6, KPI Unit hanya bisa dibuat jika KPI Group sudah berstatus Validated atau Checklist Mode Paralel diaktifkan di menu <strong>/hr/modules</strong>.
-              </p>
+            <div className="flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 text-center px-6">
+              <p className="text-sm font-bold text-gray-500">Belum ada pengajuan KPI (Group)</p>
+              <p className="text-xs text-gray-400">Data KPI (Group) akan tampil di sini setelah Director melakukan Submit KPI (Group).</p>
             </div>
-          )
-        ) : (
+          );
+        })() : kpiTab === "gm" && isRsupGroupUnit && selectedYear === CURRENT_YEAR ? (() => {
+          const bizStatusMap = loadPersistedState<Record<string, { submitted?: boolean; approved?: boolean }>>("pa_kpi_business_status_v1", {});
+          const bizItemsMap = loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_business_by_scope_v1", {});
+          const unitSubmitted = Boolean(bizStatusMap[`unit-${companyUnit}`]?.submitted);
+          const unitItems = bizItemsMap[`unit-${companyUnit}`] ?? [];
+          if (!canCreateOrEditKpiUnit) {
+            return (
+              <div className="flex flex-col items-center justify-center gap-3 py-16 rounded-xl border border-amber-200 bg-amber-50/50 text-center px-6">
+                <p className="text-sm font-bold text-amber-900">
+                  KPI Unit {companyUnit} Belum Dapat Dibuat
+                </p>
+                <p className="text-xs text-amber-800 max-w-lg">
+                  Sesuai aturan Bagian IV Poin 6, KPI Unit hanya bisa dibuat jika KPI Group sudah berstatus Validated atau Checklist Mode Paralel diaktifkan di menu <strong>/hr/modules</strong>.
+                </p>
+              </div>
+            );
+          }
+          return unitSubmitted && unitItems.length > 0 ? (
+            <GMKPITable items={unitItems} />
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 text-center px-6">
+              <p className="text-sm font-bold text-gray-500">Belum ada pengajuan KPI (Unit) — {companyUnit}</p>
+              <p className="text-xs text-gray-400">Data KPI (Unit) akan tampil di sini setelah GM {companyUnit} melakukan Submit KPI (Unit).</p>
+            </div>
+          );
+        })() : (
           <div className="flex flex-col items-center justify-center gap-3 py-20 rounded-xl border border-dashed border-gray-200 bg-gray-50/50">
             <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
               <FileSearch className="w-6 h-6 text-gray-400" />

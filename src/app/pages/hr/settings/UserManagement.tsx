@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { archiveUsers } from "../../../store/archiveStore";
 import { useRouteTab } from "../../../utils/useRouteTab";
-import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT } from "../../shared/scoringWeightStore";
+import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT, weightColumnFromGrouping } from "../../shared/scoringWeightStore";
 import { loadLocalAuditLogs } from "../../../services/supabaseClient";
 import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw } from "lucide-react";
 import {
@@ -651,8 +651,10 @@ const SCORE_INDICATOR_BY_MODULE: Record<Exclude<AppraisalModule, "Inter-Departem
   "Managerial Skill": "Managerial Skill",
   "Management Interview": "Management Interview",
 };
-function moduleWeight(module: AppraisalModule, group: string, weights = DEFAULT_SCORE_WEIGHTS) {
-  return module === "Inter-Departement Feedback" ? "Tidak berbobot" : weights[SCORE_INDICATOR_BY_MODULE[module]]?.[GROUP_WEIGHT_COLUMNS[group] ?? "operasional"] ?? "-";
+function moduleWeight(module: AppraisalModule, group: string, weights = DEFAULT_SCORE_WEIGHTS, companyName?: string) {
+  if (module === "Inter-Departement Feedback") return "Tidak berbobot";
+  const col = GROUP_WEIGHT_COLUMNS[group] ?? weightColumnFromGrouping(group, companyName);
+  return weights[SCORE_INDICATOR_BY_MODULE[module]]?.[col] ?? "-";
 }
 
 function normalizeAllowedModules(value: unknown): AppraisalModule[] {
@@ -788,7 +790,7 @@ function GroupRuleModal({ rule, companyName, availableGroups, weights, onClose, 
                   <input type="checkbox" checked={allowedModules.includes(module)} onChange={() => toggleModule(module)}
                     className="h-4 w-4 rounded border-gray-300 accent-[#1A284F]" />
                   <span className="flex-1">{module}</span>
-                  <span className={`text-xs font-semibold ${moduleWeight(module, form.group, weights) === "-" ? "text-gray-400" : "text-[#1A284F]"}`}>{moduleWeight(module, form.group, weights)}</span>
+                  <span className={`text-xs font-semibold ${moduleWeight(module, form.group, weights, companyName) === "-" ? "text-gray-400" : "text-[#1A284F]"}`}>{moduleWeight(module, form.group, weights, companyName)}</span>
                 </label>
               ))}
             </div>

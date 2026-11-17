@@ -1287,6 +1287,28 @@ export function triggerApprovalTransactionNotification(params: {
             targetEmployeeIds: checkers.map((c) => c.employeeId),
             channels: ["Notifikasi Sistem"],
           });
+        } else {
+          const fallbackAp = resolveApprover1Recipients();
+          const finalRecipients = fallbackAp.length > 0 ? fallbackAp : findHrIcfValidators();
+          if (finalRecipients.length > 0) {
+            const fbTitle = `Pengajuan ${canonicalMod} Menunggu Persetujuan Anda`;
+            const fbBody = `Terdapat pengajuan ${canonicalMod} baru dari ${targetUser.name} (${targetUser.company}) yang menunggu pemeriksaan/persetujuan Anda di menu Approvals.`;
+            createAndBroadcastNotification({
+              title: fbTitle,
+              summary: fbBody,
+              body: [fbBody],
+              category: "Approval",
+              senderName: targetUser.name,
+              senderRole: targetUser.role || "Employee",
+              moduleName: canonicalMod,
+              approvalStatus: "Pending Approval",
+              ctaLabel: "Buka Menu Approvals",
+              ctaRoute: approvalRoute,
+              targetAll: false,
+              targetEmployeeIds: finalRecipients.map((u) => u.employeeId),
+              channels: ["Notifikasi Sistem"],
+            });
+          }
         }
       } else {
         // Untuk Appraisal Form, Managerial Skill, Project, Feedback (atau KPI/SMART Goals milik HR Unit yang bypass check):

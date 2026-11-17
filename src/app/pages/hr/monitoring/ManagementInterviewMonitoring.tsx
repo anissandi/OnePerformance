@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Search, MessageSquare, CheckCircle2, AlertCircle, Filter, Calendar } from "lucide-react";
+import { Search, MessageSquare, CheckCircle2, AlertCircle, Filter, Calendar, XCircle } from "lucide-react";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 import { getPenilai1Score, subscribeScores } from "../../supervisor/managementInterviewScoreStore";
 import { getEntries, subscribe as subscribeSchedules } from "../../supervisor/interviewScheduleStore";
@@ -12,7 +12,7 @@ interface MIRecord {
   employeeId:    string;
   scheduledDate: string | null;
   interviewers:  [string, string, string, string];
-  status:        "Selesai" | "Dijadwalkan" | "Belum Dijadwalkan";
+  status:        "Selesai" | "Dijadwalkan" | "Cancel" | "Belum Dijadwalkan";
   penilaiScores: [number | null, number | null, number | null, number | null];
   notes:         string;
 }
@@ -70,6 +70,7 @@ const _UNUSED_MI_DATA: MIRecord[] = [
 const STATUS_STYLE = {
   Selesai:             { bg: "bg-green-100 text-green-700", icon: CheckCircle2 },
   Dijadwalkan:         { bg: "bg-blue-100 text-blue-700",   icon: Calendar     },
+  Cancel:              { bg: "bg-red-100 text-red-700",     icon: XCircle      },
   "Belum Dijadwalkan": { bg: "bg-gray-100 text-gray-500",   icon: AlertCircle  },
 };
 
@@ -153,7 +154,16 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
         ((s.addedUserIds ?? []).some((id) => id.trim().toLowerCase() === emp.id.trim().toLowerCase()) ||
           s.addedUsers.some((nm) => nm.trim().toLowerCase() === emp.name.trim().toLowerCase())),
     );
-    const schedIntvs = schedForEmp?.interviewers ?? [];
+    const cancelledForEmp = !schedForEmp
+      ? liveSchedules.find(
+          (s) =>
+            s.status === "Cancelled" &&
+            ((s.addedUserIds ?? []).some((id) => id.trim().toLowerCase() === emp.id.trim().toLowerCase()) ||
+              s.addedUsers.some((nm) => nm.trim().toLowerCase() === emp.name.trim().toLowerCase())),
+        )
+      : undefined;
+    const refSched = schedForEmp ?? cancelledForEmp;
+    const schedIntvs = refSched?.interviewers ?? [];
     const tupleIntvs: [string, string, string, string] = [
       schedIntvs[0] || INTERVIEWERS[0],
       schedIntvs[1] || "",
@@ -162,9 +172,9 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
     ];
     const mi: MIRecord = found ?? {
       employeeId: emp.id,
-      scheduledDate: schedForEmp?.scheduledDate ?? null,
-      interviewers: schedForEmp ? tupleIntvs : INTERVIEWERS,
-      status: live !== null ? "Selesai" : schedForEmp ? "Dijadwalkan" : "Belum Dijadwalkan",
+      scheduledDate: refSched?.scheduledDate ?? null,
+      interviewers: refSched ? tupleIntvs : INTERVIEWERS,
+      status: live !== null ? "Selesai" : schedForEmp ? "Dijadwalkan" : cancelledForEmp ? "Cancel" : "Belum Dijadwalkan",
       penilaiScores: [live, null, null, null],
       notes: "",
     };
@@ -260,7 +270,7 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
         </div>
         <div className="flex items-center gap-2">
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-sm outline-none bg-transparent text-gray-600 cursor-pointer">
-            {["Semua Status", "Selesai", "Dijadwalkan", "Belum Dijadwalkan"].map((s) => <option key={s}>{s}</option>)}
+            {["Semua Status", "Selesai", "Dijadwalkan", "Cancel", "Belum Dijadwalkan"].map((s) => <option key={s}>{s}</option>)}
           </select>
         </div>
         {hasActiveFilters && (

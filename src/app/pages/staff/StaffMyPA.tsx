@@ -33,7 +33,7 @@ import { STAFF_PROFILE } from "../../store/profileStore";
 import { getActiveUser, resolveEffectiveUserGrouping, useAuthStore } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
-import { loadUnitScoreWeights, type ScoreWeightColumn } from "../shared/scoringWeightStore";
+import { loadUnitScoreWeights, weightColumnFromGrouping } from "../shared/scoringWeightStore";
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
@@ -1587,16 +1587,7 @@ function ScoreSummaryBanner({ year }: { year: string }) {
   );
   const grouping = resolveEffectiveUserGrouping(activeUser);
   const unitWeights = loadUnitScoreWeights(activeUser.company);
-  const weightCol: ScoreWeightColumn =
-    grouping === "Ka./Wa.Ka.Div ke atas" || grouping === "Direktur / Director"
-      ? "kepalaDivisi"
-      : grouping === "Ka./Wa.Ka.Dept"
-      ? "kepalaDepartement"
-      : grouping === "Ka./Wa.Ka.Bagian"
-      ? "pengawasKepalaBagian"
-      : grouping === "Ka./Wa.Ka.Seksi"
-      ? "kaWaKaSeksi"
-      : "operasional";
+  const weightCol = weightColumnFromGrouping(grouping, activeUser.company);
   const getWeightNum = (indikator: string, fallback: number): number => {
     const raw = unitWeights[indikator]?.[weightCol];
     if (!raw || raw === "-") return 0;

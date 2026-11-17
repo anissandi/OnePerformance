@@ -291,6 +291,67 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: del.ok, status: del.status });
       }
 
+      if (kind === "interview-schedule" && body.schedule) {
+        const s = body.schedule;
+        const up = await pgRest(cfg, "pa_interview_schedules?on_conflict=id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            id: String(s.id ?? ""),
+            company_unit: canonicalizeUnitName(s.companyUnit || "PT RSUP (Industry)"),
+            added_users: Array.isArray(s.addedUsers) ? s.addedUsers : [],
+            interviewers: Array.isArray(s.interviewers) ? s.interviewers : [],
+            other_users: Array.isArray(s.otherUsers) ? s.otherUsers : [],
+            scheduled_date: String(s.scheduledDate ?? ""),
+            scheduled_time: String(s.scheduledTime ?? ""),
+            location: String(s.location ?? ""),
+            text_notifikasi: String(s.textNotifikasi ?? ""),
+            text_lampiran: String(s.textLampiran ?? ""),
+            status: String(s.status ?? "Scheduled"),
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: up.ok, status: up.status });
+      }
+
+      if (kind === "mi-clear-all") {
+        await pgRest(cfg, "pa_interview_schedules?id=neq.__NONE__", { method: "DELETE" });
+        await pgRest(cfg, "pa_interview_assessments?employee_id=neq.__NONE__", { method: "DELETE" });
+        await pgRest(
+          cfg,
+          "pa_kv_state?state_key=in.(pa_interview_schedules_v1,pa_mi_supervisor_assessments_v1,pa_mi_penilai1_scores_v1,pa_mi_results_by_emp_v1)",
+          { method: "DELETE" },
+        );
+        await pgRest(cfg, "pa_kv_state?on_conflict=state_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ state_key: "pa_mi_cleared_2026_v1", state_value: true, updated_at: now }),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      if (kind === "evidence-delete" && body.evidenceId) {
+        const del = await pgRest(
+          cfg,
+          `pa_evidence_files?id=eq.${encodeURIComponent(String(body.evidenceId).trim())}`,
+          { method: "DELETE" },
+        );
+        return res.status(200).json({ ok: del.ok, status: del.status });
+      }
+
+      if (kind === "score-weights" && body.companyUnit) {
+        const up = await pgRest(cfg, "pa_score_weights?on_conflict=company_unit", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            company_unit: String(body.companyUnit),
+            weights: body.weights ?? {},
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: up.ok, status: up.status });
+      }
+
       if (kind === "workflow-document" && body.doc) {
         const d = body.doc;
         const up = await pgRest(cfg, "pa_workflow_documents?on_conflict=doc_key", {

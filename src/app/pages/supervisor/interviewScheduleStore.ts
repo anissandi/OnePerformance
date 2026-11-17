@@ -1,4 +1,4 @@
-import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { loadPersistedState, safeGetLocalRaw, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
 
 export interface ScheduleEntry {
   id: string;
@@ -30,15 +30,39 @@ export interface InterviewSchedule {
 }
 
 const SCHEDULES_STORAGE_KEY = "pa_interview_schedules_v1";
+const MI_CLEARED_FLAG_KEY = "pa_mi_cleared_2026_v1";
 
 const SEED_ENTRIES: ScheduleEntry[] = [];
-let _entries: ScheduleEntry[] = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, SEED_ENTRIES);
+
+function ensureMiInitialCleanState(): ScheduleEntry[] {
+  try {
+    if (!safeGetLocalRaw(MI_CLEARED_FLAG_KEY)) {
+      safeSetLocalJson(MI_CLEARED_FLAG_KEY, true);
+      safeSetLocalJson(SCHEDULES_STORAGE_KEY, []);
+      safeSetLocalJson("pa_mi_supervisor_assessments_v1", {});
+      safeSetLocalJson("pa_mi_penilai1_scores_v1", {});
+      safeSetLocalJson("pa_mi_results_by_emp_v1", {});
+      return [];
+    }
+  } catch {
+    // ignore
+  }
+  const loaded = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, SEED_ENTRIES);
+  return Array.isArray(loaded) ? loaded : [];
+}
+
+let _entries: ScheduleEntry[] = ensureMiInitialCleanState();
 const _listeners: (() => void)[] = [];
 
 if (typeof window !== "undefined") {
   window.addEventListener("pa-db-hydrated", () => {
+    if (!safeGetLocalRaw(MI_CLEARED_FLAG_KEY)) {
+      _entries = ensureMiInitialCleanState();
+      _listeners.forEach((fn) => fn());
+      return;
+    }
     const hydrated = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, _entries);
-    if (Array.isArray(hydrated) && hydrated.length > 0) {
+    if (Array.isArray(hydrated)) {
       _entries = hydrated;
       _listeners.forEach((fn) => fn());
     }
@@ -46,8 +70,12 @@ if (typeof window !== "undefined") {
 }
 
 export function getEntries(): ScheduleEntry[] {
+  if (!safeGetLocalRaw(MI_CLEARED_FLAG_KEY)) {
+    _entries = ensureMiInitialCleanState();
+    return [];
+  }
   const persisted = loadPersistedState<ScheduleEntry[]>(SCHEDULES_STORAGE_KEY, _entries);
-  if (Array.isArray(persisted) && persisted.length > 0) {
+  if (Array.isArray(persisted)) {
     _entries = persisted;
   }
   return [..._entries];
@@ -83,7 +111,19 @@ export function updateEntry(id: string, patch: Partial<ScheduleEntry>): void {
     savePersistedState(SCHEDULES_STORAGE_KEY, _entries, {
       kind: "interview-schedule",
       schedule: updated,
+      audit: {
+        action: patch.status === "Cancelled" ? "Reject" : "Update",
+        module: "Management Interview",
+        subModule: "Schedule",
+        description:
+          patch.status === "Cancelled"
+            ? `Cancelled Management Interview schedule for ${updated.companyUnit} (${updated.scheduledDate} ${updated.scheduledTime})`
+            : `Updated Management Interview schedule for ${updated.companyUnit}`,
+      },
     });
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("appraisal-updated"));
   }
 }
 

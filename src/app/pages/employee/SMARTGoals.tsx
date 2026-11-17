@@ -9,7 +9,8 @@ import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWor
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import ExportImportButton from "../../components/ExportImportButton";
-import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
+import { EXCEL_THEME, exportStyledXLSX, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
+import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -812,39 +813,225 @@ function SMARTGoalsWorkspace({
   }, [ownerUser.employeeId, isViewOnly]);
 
   const handleExport = () => {
-    const headers = ["No","Goals","Specific","Measurable","Attainable","Relevant","Timely","Bukti","Target","Action Plans"];
-    const rows = goals.map((g, i) => [
-      String(i + 1), g.label, g.specific, g.measurable, g.attainable, g.relevant, g.timely, g.bukti, g.target,
-      g.actionPlans.map((ap, j) => `${j+1}. ${ap.description}`).join("; "),
+    const exportGoals: SmartGoal[] =
+      goals.length > 0
+        ? goals
+        : [1, 2, 3].map((n) => ({
+            id: n,
+            label: `Goals ${n}`,
+            specific: "",
+            measurable: "",
+            attainable: "",
+            relevant: "",
+            timely: "",
+            bukti: "",
+            target: "",
+            actionPlans: [{ id: n * 100 + 1, description: "" }],
+          }));
+
+    const colCount = 1 + exportGoals.length;
+    const colWidths = [30, ...exportGoals.map(() => 36)];
+    const rowsOut: StyledExcelCell[][] = [];
+    const merges: StyledExcelMerge[] = [];
+    const rowHeights: Record<number, number> = { 0: 28 };
+
+    // Header utama persis tabel SMART Goals di layar: SMART Goals | Goals 1 | Goals 2 | ...
+    rowsOut.push([
+      { value: "SMART Goals", style: { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "left", borderColor: "334155" } },
+      ...exportGoals.map((g, gi): StyledExcelCell => ({
+        value: g.label || `Goals ${gi + 1}`,
+        style: { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center", borderColor: "334155" },
+      })),
     ]);
-    exportXLSX(`SMART_Goals_2026_${ownerUser.employeeId}.xlsx`, headers, rows);
+
+    // Baris kriteria S, M, A, R, T, Target (persis ROWS di layar)
+    ROWS.forEach((rowDef, ri) => {
+      const zebra = ri % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
+      const rIdx = rowsOut.length;
+      rowsOut.push([
+        {
+          value: `${rowDef.title}\n(${rowDef.desc})`,
+          style: { bg: "EEF2FF", fg: EXCEL_THEME.headerNavyBg, bold: true, align: "left", vAlign: "top" },
+        },
+        ...exportGoals.map((g): StyledExcelCell => ({
+          value: String(g[rowDef.key] ?? ""),
+          style: { bg: zebra, fg: EXCEL_THEME.textDark, align: "left", vAlign: "top" },
+        })),
+      ]);
+      rowHeights[rIdx] = 44;
+    });
+
+    // Baris pemisah kosong
+    rowsOut.push(Array.from({ length: colCount }, () => ({ value: "" })));
+
+    // Section Banner ACTION PLANS berwarna biru persis UI
+    const apBannerIdx = rowsOut.length;
+    rowsOut.push(
+      Array.from({ length: colCount }, (_, ci) => ({
+        value: ci === 0 ? "ACTION PLANS" : "",
+        style: { bg: "1565C0", fg: EXCEL_THEME.white, bold: true, align: "left", borderColor: "1565C0" },
+      })),
+    );
+    rowHeights[apBannerIdx] = 24;
+    merges.push({ sRow: apBannerIdx, sCol: 0, eRow: apBannerIdx, eCol: colCount - 1 });
+
+    const maxApCount = Math.max(1, ...exportGoals.map((g) => g.actionPlans.length));
+    for (let ai = 0; ai < maxApCount; ai++) {
+      const zebra = ai % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
+      const rIdx = rowsOut.length;
+      rowsOut.push([
+        {
+          value: `Action Plan ${ai + 1}`,
+          style: { bg: "F1F5F9", fg: EXCEL_THEME.headerNavyBg, bold: true, align: "left" },
+        },
+        ...exportGoals.map((g): StyledExcelCell => ({
+          value: g.actionPlans[ai]?.description ?? "",
+          style: { bg: zebra, fg: EXCEL_THEME.textDark, align: "left" },
+        })),
+      ]);
+      rowHeights[rIdx] = 26;
+    }
+
+    exportStyledXLSX(`SMART_Goals_2026_${ownerUser.employeeId}.xlsx`, {
+      sheetName: "SMART Goals",
+      colWidths,
+      rowHeights,
+      rows: rowsOut,
+      merges,
+    });
   };
 
   const handleImport = async (file: File) => {
     try {
-      const { headers, rows } = await parseXLSX(file);
-      const goalsIdx = headers.findIndex((h) => /goals/i.test(h.trim()));
-      const specificIdx = headers.findIndex((h) => /specific/i.test(h.trim()));
-      const measurableIdx = headers.findIndex((h) => /measurable/i.test(h.trim()));
-      const attainableIdx = headers.findIndex((h) => /attainable/i.test(h.trim()));
-      const relevantIdx = headers.findIndex((h) => /relevant/i.test(h.trim()));
-      const timelyIdx = headers.findIndex((h) => /timely/i.test(h.trim()));
-      const buktiIdx = headers.findIndex((h) => /bukti/i.test(h.trim()));
-      const targetIdx = headers.findIndex((h) => /target/i.test(h.trim()));
-      const imported: SmartGoal[] = rows.filter((r) => r.some((c) => c.trim())).map((r, i) => ({
-        id: Date.now() + i,
-        label: goalsIdx >= 0 ? r[goalsIdx] ?? "" : `Goal ${i + 1}`,
-        specific: specificIdx >= 0 ? r[specificIdx] ?? "" : "",
-        measurable: measurableIdx >= 0 ? r[measurableIdx] ?? "" : "",
-        attainable: attainableIdx >= 0 ? r[attainableIdx] ?? "" : "",
-        relevant: relevantIdx >= 0 ? r[relevantIdx] ?? "" : "",
-        timely: timelyIdx >= 0 ? r[timelyIdx] ?? "" : "",
-        bukti: buktiIdx >= 0 ? r[buktiIdx] ?? "" : "",
-        target: targetIdx >= 0 ? r[targetIdx] ?? "" : "",
-        actionPlans: [],
-      }));
-      if (imported.length > 0) updateGoalsAndPersist(imported);
-    } catch { /* ignore parse errors */ }
+      const buf = await file.arrayBuffer();
+      const matrix = parseXLSXMatrix(buf);
+      if (matrix.length === 0) return;
+
+      // Mode 1: Format Matriks (kolom 0 = "SMART Goals", kolom 1..N = "Goals 1", "Goals 2", dst.)
+      const matrixHdrIdx = matrix.findIndex((r) => /^smart\s*goals$/i.test(String(r[0] ?? "").trim()));
+      if (matrixHdrIdx >= 0) {
+        const hdr = matrix[matrixHdrIdx];
+        const goalLabels = hdr.slice(1).map((c, idx) => String(c ?? "").trim() || `Goals ${idx + 1}`);
+        if (goalLabels.length === 0) return;
+
+        const imported: SmartGoal[] = goalLabels.map((lbl, idx) => ({
+          id: Date.now() + idx,
+          label: lbl,
+          specific: "",
+          measurable: "",
+          attainable: "",
+          relevant: "",
+          timely: "",
+          bukti: "",
+          target: "",
+          actionPlans: [],
+        }));
+
+        let inActionPlans = false;
+        for (let ri = matrixHdrIdx + 1; ri < matrix.length; ri++) {
+          const r = matrix[ri];
+          const col0 = String(r[0] ?? "").trim();
+          if (!col0 && r.slice(1).every((c) => !String(c ?? "").trim())) continue;
+          if (/^action\s*plans?$/i.test(col0)) {
+            inActionPlans = true;
+            continue;
+          }
+          if (!inActionPlans) {
+            const keyLower = col0.split("\n")[0].toLowerCase();
+            let fieldKey: keyof SmartGoal | null = null;
+            if (keyLower.includes("specific")) fieldKey = "specific";
+            else if (keyLower.includes("measurable")) fieldKey = "measurable";
+            else if (keyLower.includes("attainable")) fieldKey = "attainable";
+            else if (keyLower.includes("relevant")) fieldKey = "relevant";
+            else if (keyLower.includes("time-bound") || keyLower.includes("timely")) fieldKey = "timely";
+            else if (keyLower.includes("target")) fieldKey = "target";
+            else if (keyLower.includes("bukti")) fieldKey = "bukti";
+
+            if (fieldKey) {
+              imported.forEach((gObj, gi) => {
+                (gObj[fieldKey!] as unknown as string) = String(r[gi + 1] ?? "").trim();
+              });
+            }
+          } else if (/^action\s*plan/i.test(col0) || col0) {
+            imported.forEach((gObj, gi) => {
+              const desc = String(r[gi + 1] ?? "").trim();
+              if (desc) {
+                gObj.actionPlans.push({
+                  id: Date.now() + gi * 100 + gObj.actionPlans.length + 1,
+                  description: desc,
+                });
+              }
+            });
+          }
+        }
+
+        // Pastikan setiap goal minimal memiliki 1 slot action plan agar form rapi
+        imported.forEach((gObj, gi) => {
+          if (gObj.actionPlans.length === 0) {
+            gObj.actionPlans.push({ id: Date.now() + gi * 100 + 99, description: "" });
+          }
+        });
+
+        const nonEmptyGoals = imported.filter(
+          (g) => g.specific || g.measurable || g.attainable || g.relevant || g.timely || g.target || g.actionPlans.some((ap) => ap.description),
+        );
+        if (nonEmptyGoals.length > 0) {
+          updateGoalsAndPersist(nonEmptyGoals.map((g, idx) => ({ ...g, label: `Goals ${idx + 1}` })));
+          toast.success(`${nonEmptyGoals.length} SMART Goals beserta Action Plan berhasil di-import.`);
+        } else {
+          toast.error("File Excel belum berisi data SMART Goals.");
+        }
+        return;
+      }
+
+      // Mode 2: Fallback format baris-per-goal
+      const hdrIdx = matrix.findIndex((r) => r.some((c) => /specific/i.test(c)));
+      if (hdrIdx < 0) {
+        toast.error("Format file Excel SMART Goals tidak dikenali.");
+        return;
+      }
+      const headers = matrix[hdrIdx];
+      const rows = matrix.slice(hdrIdx + 1);
+      const findC = (pat: RegExp) => headers.findIndex((h) => pat.test(h.trim()));
+      const goalsIdx = findC(/goals/i);
+      const specificIdx = findC(/specific/i);
+      const measurableIdx = findC(/measurable/i);
+      const attainableIdx = findC(/attainable/i);
+      const relevantIdx = findC(/relevant/i);
+      const timelyIdx = findC(/time/i);
+      const buktiIdx = findC(/bukti/i);
+      const targetIdx = findC(/target/i);
+      const apIdx = findC(/action/i);
+
+      const imported: SmartGoal[] = rows
+        .filter((r) => r.some((c) => c.trim()))
+        .map((r, idx) => {
+          const rawAps = apIdx >= 0 ? String(r[apIdx] ?? "") : "";
+          const parsedAps = rawAps
+            .split(/[;\n]+/)
+            .map((s) => s.replace(/^\d+\.\s*/, "").trim())
+            .filter(Boolean)
+            .map((description, j) => ({ id: Date.now() + idx * 100 + j, description }));
+          return {
+            id: Date.now() + idx,
+            label: (goalsIdx >= 0 && r[goalsIdx]?.trim()) || `Goals ${idx + 1}`,
+            specific: specificIdx >= 0 ? r[specificIdx] ?? "" : "",
+            measurable: measurableIdx >= 0 ? r[measurableIdx] ?? "" : "",
+            attainable: attainableIdx >= 0 ? r[attainableIdx] ?? "" : "",
+            relevant: relevantIdx >= 0 ? r[relevantIdx] ?? "" : "",
+            timely: timelyIdx >= 0 ? r[timelyIdx] ?? "" : "",
+            bukti: buktiIdx >= 0 ? r[buktiIdx] ?? "" : "",
+            target: targetIdx >= 0 ? r[targetIdx] ?? "" : "",
+            actionPlans: parsedAps.length > 0 ? parsedAps : [{ id: Date.now() + idx * 100 + 1, description: "" }],
+          };
+        });
+      if (imported.length > 0) {
+        updateGoalsAndPersist(imported);
+        toast.success(`${imported.length} SMART Goals berhasil di-import.`);
+      }
+    } catch {
+      toast.error("Gagal membaca file Excel SMART Goals.");
+    }
   };
 
   const handleConfirm = () => {

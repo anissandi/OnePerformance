@@ -831,6 +831,11 @@ export function BODCalibrationApproval() {
             mode="compare"
             title={`Grade Distribution (Bell Curve) — ${unit.name}`}
             subtitle="Kurva Aktual (hasil PA) vs Calibration (setelah penyesuaian HR) beserta proporsi per grade."
+            calibrationStatusBadge={
+              status === "approved"
+                ? { label: "Final", tone: "final" }
+                : { label: "Current", tone: "current" }
+            }
             rows={gradeDist.map((g) => ({
               grade: g.grade,
               color: g.color,
