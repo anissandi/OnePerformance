@@ -338,7 +338,6 @@ export function DataSyncPage() {
             existingUsers.push(userRecord);
           }
           importedCount++;
-          void syncToSupabase({ kind: "user-upsert", user: userRecord });
         });
 
         if (importedCount === 0) {

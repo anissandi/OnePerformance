@@ -26,7 +26,7 @@ export function HRApprovalManagement() {
           </button>
         ))}
       </div>
-      {activeTab === "monitoring" ? <ApproverMonitoringTable /> : <DelegationTable />}
+      {activeTab === "monitoring" ? <ApproverMonitoringTable /> : <DelegationTable mode="settings" />}
     </div>
   );
 }
@@ -39,7 +39,7 @@ export function ApprovalsDelegationPage() {
         <h1 className="text-2xl font-bold text-[#1A284F]">Delegation</h1>
         <p className="mt-1 text-sm text-gray-500">Delegasikan tugas approval Anda (KPI Setting, KPI Tracking, SMART Goals Setting) kepada karyawan lain.</p>
       </div>
-      <DelegationTable />
+      <DelegationTable mode="approvals" />
     </div>
   );
 }

@@ -34,7 +34,7 @@ const DEPT_DEFS: [string, string, string][] = [
 ];
 
 const filterOptions = {
-  year:        ["2026", "2025", "2024", "2023"],
+  year:        ["2026"],
   companyUnit: [
     "All Units",
     "PT RSUP (Industry)", "PT RSUP (Perkebunan)",
@@ -93,7 +93,7 @@ function DetailDrawer({ employee, liveMIScore, onClose }: {
   liveMIScore?: ScoreGrade | null;
   onClose: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<"2026" | "2025">("2026");
+  const [activeTab, setActiveTab] = useState<"2026">("2026");
 
   // ── 2026 data ──────────────────────────────────────────────────────────────
   const modules2026 = mergeFormModules(
@@ -141,7 +141,7 @@ function DetailDrawer({ employee, liveMIScore, onClose }: {
         {/* Year tabs */}
         <div className="px-7 pt-4 pb-0 border-b border-gray-100 shrink-0 bg-white">
           <div className="flex gap-1">
-            {(["2026", "2025"] as const).map(yr => (
+            {(["2026"] as const).map(yr => (
               <button
                 key={yr}
                 onClick={() => setActiveTab(yr)}
@@ -395,6 +395,11 @@ function ModuleCell({ data, settingValidated, isYtd }: { data: ScoreGrade | null
           </span>
         )}
       </div>
+      {typeof data.weightedScore === "number" && typeof data.weightPct === "number" && (
+        <span className="text-[9px] font-semibold text-indigo-700 whitespace-nowrap">
+          ×{data.weightPct}% = {data.weightedScore.toFixed(2)}
+        </span>
+      )}
       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${gradeColor(data.grade)}`}>{data.grade}</span>
     </div>
   );
@@ -426,12 +431,17 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   // Live Management Interview scores from BOD assessment
   const buildMIScores = useCallback((): Record<string, ScoreGrade> => {
     const result: Record<string, ScoreGrade> = {};
-    Object.entries(MI_EMPLOYEE_STORE_MAP).forEach(([empId, storeId]) => {
-      const pct = getPenilai1ScoreAsPercent(storeId);
-      if (pct !== null) {
-        result[empId] = { score: parseFloat(pct.toFixed(1)), grade: gradeFromScore(pct).grade };
+    for (const emp of getLiveTransactionalEmployees()) {
+      if (emp.managementInterview && emp.managementInterview.score > 0) {
+        result[emp.id] = emp.managementInterview;
+      } else {
+        const storeId = MI_EMPLOYEE_STORE_MAP[emp.id] ?? emp.id;
+        const pct = getPenilai1ScoreAsPercent(storeId, emp.fullName);
+        if (pct !== null && pct > 0) {
+          result[emp.id] = { score: parseFloat(pct.toFixed(2)), grade: gradeFromScore(pct).grade };
+        }
       }
-    });
+    }
     return result;
   }, []);
   const [liveMI, setLiveMI] = useState<Record<string, ScoreGrade>>(buildMIScores);

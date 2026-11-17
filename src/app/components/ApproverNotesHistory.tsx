@@ -60,17 +60,14 @@ export function ApproverNotesHistory({
 
   void tick;
   const rawEntries = employeeId ? getApproverNotesHistory(employeeId, module, phase) : [];
-  // Pada fase Measurement (KPI & SMART Goals), catatan Validator & Checker hanya ditampilkan
-  // jika berasal dari permintaan revisi yang memiliki catatan (note).
-  const entries =
-    phase === "measurement"
-      ? rawEntries.filter((e) => {
-          if (e.stage === "checker" || e.stage === "validator") {
-            return /revision/i.test(e.status) && Boolean(e.note?.trim());
-          }
-          return true;
-        })
-      : rawEntries;
+  // Tahap Checker & Validator tidak memiliki field komentar penilaian biasa;
+  // hanya ditampilkan pada Catatan dari Approver apabila keputusannya berupa Revision (revisi).
+  const entries = rawEntries.filter((e) => {
+    if (e.stage === "checker" || e.stage === "validator") {
+      return /revision/i.test(e.status);
+    }
+    return true;
+  });
   const monthsWithEntries = monthly
     ? KPI_MONTH_LABELS_2026.filter((m) => entries.some((e) => e.months?.includes(m)))
     : [];

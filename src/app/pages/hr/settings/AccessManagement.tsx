@@ -323,6 +323,7 @@ export const MENU_STRUCTURE: MenuItem[] = [
       { id: "approvals_pa_measurement",  label: "Performance Appraisal Measurement" },
       { id: "approvals_feedback",        label: "Inter-Department Feedback Approvals" },
       { id: "approvals_mgmt_interview",  label: "Management Interview" },
+      { id: "approvals_delegation",      label: "Delegation" },
       {
         id: "approvals_calibration", label: "Calibration",
         children: [
@@ -1093,6 +1094,8 @@ const DEFAULT_GM: RolePermissions = {
 // - Calibration Approval SOY/EOY: mengikuti hak akses Calibration Approval masing-masing role
 function applyNewMenuDefaults(role: BuiltinRole, perms: RolePermissions): RolePermissions {
   const isHrAdmin = role === "Administrator" || role === "HR ICF";
+  const isDefaultDelegationRole =
+    isHrAdmin || role === "BOD" || role === "Director" || role === "GM";
   const calib = perms.approvals_calibration ?? N;
   return {
     ...perms,
@@ -1100,6 +1103,7 @@ function applyNewMenuDefaults(role: BuiltinRole, perms: RolePermissions): RolePe
     feedback_form: perms.feedback_form ?? VCE,
     feedback_followup: perms.feedback_followup ?? (isHrAdmin ? T : N),
     setting_archive: perms.setting_archive ?? (isHrAdmin ? T : N),
+    approvals_delegation: perms.approvals_delegation ?? (isDefaultDelegationRole ? (isHrAdmin ? T : VCEA) : N),
     approvals_calibration_soy: perms.approvals_calibration_soy ?? calib,
     approvals_calibration_eoy: perms.approvals_calibration_eoy ?? calib,
   };

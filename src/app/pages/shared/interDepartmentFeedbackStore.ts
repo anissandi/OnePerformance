@@ -149,6 +149,17 @@ const APPROVAL_ROUTE = "/approvals/measurement/inter-department-feedback"
 
 // In-memory backend-hydrated cache (disinkronkan penuh ke tabel pa_inter_dept_feedbacks di Supabase)
 let _idfBackendCache: FeedbackSubmission[] | null = null
+let _idfListenersBound = false
+
+function ensureIdfCacheInvalidationBound() {
+  if (_idfListenersBound || typeof window === "undefined") return
+  _idfListenersBound = true
+  const invalidate = () => {
+    _idfBackendCache = null
+  }
+  window.addEventListener("pa-db-hydrated", invalidate)
+  window.addEventListener("storage", invalidate)
+}
 if (typeof window !== "undefined") {
   window.addEventListener("pa-db-hydrated", () => {
     _idfBackendCache = null
@@ -182,7 +193,8 @@ function normalize(record: FeedbackSubmission): FeedbackSubmission {
 }
 
 export function loadFeedbackSubmissions(): FeedbackSubmission[] {
-  if (_idfBackendCache) {
+  ensureIdfCacheInvalidationBound()
+  if (_idfBackendCache && _idfBackendCache.length > 0) {
     return _idfBackendCache
   }
   const current = safeRead(KEY).map(normalize)
@@ -191,8 +203,11 @@ export function loadFeedbackSubmissions(): FeedbackSubmission[] {
     return _idfBackendCache
   }
   const legacy = safeRead(LEGACY_KEY).map(normalize)
-  _idfBackendCache = legacy.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
-  return _idfBackendCache
+  const filteredLegacy = legacy.filter((c) => !c.row.no.startsWith("IDF-EXAMPLE-"))
+  if (filteredLegacy.length > 0) {
+    _idfBackendCache = filteredLegacy
+  }
+  return filteredLegacy
 }
 
 function writeLocal(submission: FeedbackSubmission) {

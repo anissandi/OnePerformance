@@ -514,7 +514,7 @@ const COMPANY_UNITS_BIZ = [
 ];
 
 const CURRENT_YEAR = 2026;
-const YEAR_OPTIONS = [2024, 2025, 2026, 2027];
+const YEAR_OPTIONS = [2026];
 
 export function HRSettingKPIPage() {
   const activeUser = getActiveUser();
@@ -566,16 +566,6 @@ export function HRSettingKPIPage() {
         no: String(idx + 1),
         scope: "ASD",
       })),
-    }),
-  );
-  const [trackingAssigneeByKey, setTrackingAssigneeByKey] = useState<Record<string, string>>(() =>
-    loadPersistedState<Record<string, string>>("pa_kpi_business_tracking_pic_2026", {
-      "group::PT RSUP (Industry)": "E013 · Anis Sandi (HR Strategic Specialist)",
-      "gm::PT RSUP (Industry)": "E014 · Ananta Nirmala (HR Unit)",
-      "gm::PT RSUP (Perkebunan)": "E006 · Fajar Hidayat",
-      "gm::PT RSTM": "E003 · Budi Santoso",
-      "gm::PT GHS": "E010 · Joko Susanto",
-      "gm::ASD": "E018 · Wahyu Nugroho",
     }),
   );
   const [validationMap, setValidationMap] = useState<Record<string, ApprovalStatus>>(() =>
@@ -691,7 +681,6 @@ export function HRSettingKPIPage() {
         companyUnit,
         year: selectedYear,
         validatedAt: new Date().toISOString(),
-        trackingPic: trackingAssigneeByKey[currentKey] ?? "",
         cascadingEnabled: true,
         items: sourceItems,
       },
@@ -838,28 +827,6 @@ export function HRSettingKPIPage() {
                   ? "Direktur Operasional — PT RSUP (Industry)"
                   : `General Manager (GM) — ${companyUnit}`}
               </span>
-            </div>
-            <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 border border-gray-200 rounded-lg text-xs">
-              <span className="font-semibold text-gray-600">PIC Tracking (Allowed by Admin/HR ICF):</span>
-              <select
-                value={trackingAssigneeByKey[currentKey] ?? ""}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setTrackingAssigneeByKey((prev) => {
-                    const next = { ...prev, [currentKey]: val };
-                    savePersistedState("pa_kpi_business_tracking_pic_2026", next);
-                    return next;
-                  });
-                }}
-                className="bg-transparent font-medium text-[#1A284F] focus:outline-none"
-              >
-                <option value="">— Pilih PIC Tracking —</option>
-                {loadManagedUsers().map((u) => (
-                  <option key={u.employeeId} value={`${u.employeeId} · ${u.name} (${u.position})`}>
-                    {u.employeeId} · {u.name} ({u.company})
-                  </option>
-                ))}
-              </select>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">

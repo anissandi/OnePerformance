@@ -1,6 +1,6 @@
 // @refresh reset
 import { useState, useRef, useEffect } from "react";
-import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
+import { feedbackApprovalRows, refreshFeedbackSubmissionsFromBackend } from "../shared/interDepartmentFeedbackStore";
 import { projectApprovalRows } from "../../store/projectStore";
 import { useLocation, useParams } from "react-router";
 import { ModuleRouteNav } from "../../components/ModuleRouteNav";
@@ -9,6 +9,7 @@ import { Search, Eye, Check, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRi
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
+import { FeedbackApprovalDrawer } from "../../components/FeedbackApprovalDrawer";
 import { SettingApprovalDrawer } from "../../components/SettingApprovalDrawer";
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
 import { applyOverrides, resolveDynamicApprovalRowsForUser, saveOverride } from "../shared/approvalsStore";
@@ -27,15 +28,15 @@ const MONTH_NUM: Record<string,string> = Object.fromEntries(MONTHS.map((m, i) =>
 
 const filterOptionsCheckin = {
   companyUnit: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
-  year: ["2026", "2025", "2024"],
+  year: ["2026"],
   month: MONTHS,
   division: ["Divisi Produksi & Operasional", "Divisi Sumber Daya Manusia", "Divisi Keuangan & Akuntansi", "Divisi Teknologi Informasi", "Divisi Pemasaran & Penjualan"],
   department: ["Produksi", "SDM", "Keuangan", "TI", "Pemasaran"],
-  approvalType: ["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "Project", "RCA", "Inter-Department Feedback"],
+  approvalType: ["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "Project", "Inter-Department Feedback"],
 };
 const filterOptionsSetting = {
   companyUnit: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
-  year: ["2026", "2025", "2024"],
+  year: ["2026"],
   month: MONTHS,
   division: ["Divisi Produksi & Operasional", "Divisi Sumber Daya Manusia", "Divisi Keuangan & Akuntansi", "Divisi Pemasaran & Penjualan"],
   department: ["Produksi", "SDM", "Keuangan", "Pemasaran"],
@@ -45,8 +46,8 @@ const filterOptionsSetting = {
 const PAGE_SIZE = 8;
 type MainTab = "checkin" | "setting";
 
-const PENDING_STATUSES = new Set(["Pending", "Edit Request"]);
-const HISTORY_STATUSES = new Set(["Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Checked", "Approved", "Validated", "Assessed-Approver 1", "Assessed-Approver 2", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
+const PENDING_STATUSES = new Set(["Pending", "Pending-Hasil Tindak Lanjut", "Edit Request"]);
+const HISTORY_STATUSES = new Set(["Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Checked", "Approved", "Approved-Hasil Tindak Lanjut", "Validated", "Assessed-Approver 1", "Assessed-Approver 2", "Revision", "Revision-Hasil Tindak Lanjut", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
 
 export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const location = useLocation();
@@ -101,6 +102,9 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
       }
     };
     refresh();
+    if (mainTab === "checkin") {
+      void refreshFeedbackSubmissionsFromBackend();
+    }
     window.addEventListener("feedback-updated", refresh);
     window.addEventListener("appraisal-updated", refresh);
     window.addEventListener("pa-auth-updated", refresh);
@@ -264,10 +268,24 @@ function HistoryTag({ status, type }: { status: string; type?: string }) {
       </span>
     );
   }
+  if (status === "Approved-Hasil Tindak Lanjut") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300">
+        <CheckCircle2 className="w-3 h-3" /> Approved (Hasil TL)
+      </span>
+    );
+  }
   if (status === "Revision") {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-300">
         <RotateCcw className="w-3 h-3" /> Revision
+      </span>
+    );
+  }
+  if (status === "Revision-Hasil Tindak Lanjut") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-300">
+        <RotateCcw className="w-3 h-3" /> Revision (Hasil TL)
       </span>
     );
   }
@@ -534,7 +552,7 @@ function ApprovalsTable({
               <tr key={row.no} className={`border-b border-gray-50/50 hover:bg-gray-50/50 ${idx === 0 ? "bg-[#FDF9F1]" : ""}`}>
                 <td className="py-4 px-4">
                   <div className="flex items-center gap-2 flex-wrap">
-                    {activeTab === "Pending" && row.status === "Pending" && (
+                    {activeTab === "Pending" && (row.status === "Pending" || row.status === "Pending-Hasil Tindak Lanjut") && (
                       <button
                         onClick={() => { setReviewRow(row); setReviewFromHistory(false); }}
                         className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-[#1A284F] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg"
@@ -590,7 +608,16 @@ function ApprovalsTable({
         <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} className="p-2 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 disabled:opacity-40"><ChevronsRight className="w-4 h-4" /></button>
       </div>
 
-      {reviewRow && !isSetting && (
+      {reviewRow && !isSetting && reviewRow.type === "Inter-Department Feedback" && (
+        <FeedbackApprovalDrawer
+          key={reviewRow.no}
+          row={reviewRow}
+          reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole}
+          onClose={() => setReviewRow(null)}
+          onUpdated={() => window.dispatchEvent(new Event("feedback-updated"))}
+        />
+      )}
+      {reviewRow && !isSetting && reviewRow.type !== "Inter-Department Feedback" && (
         <ReviewDrawer row={reviewRow} reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole} onClose={() => setReviewRow(null)} onApprove={(note) => handleApprove(reviewRow, note)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={(note) => handleAssessed(reviewRow, note)} readOnly={reviewFromHistory} />
       )}
       {reviewRow && isSetting && (

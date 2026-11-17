@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { MessageSquare, CheckCircle2, Calendar, X, Eye, Building2, ClipboardEdit, Save, AlertCircle, Info } from "lucide-react";
-import { getEntries, subscribe, type ScheduleEntry } from "../interviewScheduleStore";
+import { getEntries, subscribe, updateEntry, type ScheduleEntry } from "../interviewScheduleStore";
 import { NAME_TO_EMP_ID, setPenilai1Score } from "../managementInterviewScoreStore";
-import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
-import { getActiveUser, loadManagedUsers, type ManagedUser } from "../../../store/authStore";
+import { setMIPenilaiResult } from "../managementInterviewResultStore";
+import { loadPersistedState, mergeKvMapRecord, savePersistedState } from "../../../services/supabaseClient";
+import { getActiveUser, loadManagedUsers, resolveEffectiveUserGrouping, type ManagedUser } from "../../../store/authStore";
+import { getModuleWeightFraction } from "../../shared/scoringWeightStore";
 import { getLiveTransactionalEmployees, type Employee } from "../../../data/mockEmployees";
 import { Award, Sparkles } from "lucide-react";
 
@@ -72,6 +74,7 @@ const ASPECTS = [
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ParticipantScore {
   name: string;
+  employeeId?: string;
   aspectScores: (number | null)[];  // 3 elements, each 1–5 or null
   comment: string;
 }
@@ -83,10 +86,30 @@ const PARTICIPANT_META: Record<string, { position: string; division: string }> =
 
 // ── Persistent assessment store (synced to Supabase backend) ──────────────────
 const MI_SUP_ASSESSMENTS_KEY = "pa_mi_supervisor_assessments_v1";
-const savedAssessments: Record<string, ParticipantScore[]> = loadPersistedState(
-  MI_SUP_ASSESSMENTS_KEY,
-  {},
-);
+function loadSavedAssessmentsMap(): Record<string, ParticipantScore[]> {
+  return loadPersistedState<Record<string, ParticipantScore[]>>(MI_SUP_ASSESSMENTS_KEY, {});
+}
+
+function resolveParticipantUser(name: string, companyHint?: string, empIdHint?: string): ManagedUser | undefined {
+  const users = loadManagedUsers();
+  if (empIdHint) {
+    const byId = users.find((u) => u.employeeId.trim().toLowerCase() === empIdHint.trim().toLowerCase());
+    if (byId) return byId;
+  }
+  const lcName = name.trim().toLowerCase();
+  return (
+    users.find((u) => u.name.trim().toLowerCase() === lcName && (!companyHint || u.company === companyHint)) ??
+    users.find((u) => u.name.trim().toLowerCase() === lcName)
+  );
+}
+
+function getParticipantMIWeightFraction(name: string, companyUnit: string, empIdHint?: string): number {
+  const user = resolveParticipantUser(name, companyUnit, empIdHint);
+  const company = user?.company || companyUnit || "PT RSUP (Industry)";
+  const grouping = user ? resolveEffectiveUserGrouping(user) : "Ka./Wa.Ka.Div ke atas";
+  const w = getModuleWeightFraction(company, grouping, "Management Interview", 0.1);
+  return w > 0 ? w : 0.1;
+}
 
 // ── Warna skor & tag PA Score ─────────────────────────────────────────────────
 const SCORE_TONE: Record<number, string> = {
@@ -237,21 +260,27 @@ function ConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCance
 
 // ── Per-participant aspect table ───────────────────────────────────────────────
 function ParticipantTable({
-  ps, pIdx, isSubmitted,
+  ps, pIdx, isSubmitted, companyUnit,
   onScoreChange, onCommentChange,
 }: {
   ps: ParticipantScore;
   pIdx: number;
   isSubmitted: boolean;
+  companyUnit: string;
   onScoreChange: (pIdx: number, aIdx: number, val: number) => void;
   onCommentChange: (pIdx: number, val: string) => void;
 }) {
   const [indicatorAspect, setIndicatorAspect] = useState<typeof ASPECTS[number] | null>(null);
+  const matchedUser = resolveParticipantUser(ps.name, companyUnit, ps.employeeId);
+  const weightFraction = getParticipantMIWeightFraction(ps.name, companyUnit, ps.employeeId);
+  const weightPctLabel = Math.round(weightFraction * 100);
 
   const filledScores = ps.aspectScores.filter(s => s !== null) as number[];
   const avg = filledScores.length > 0
     ? filledScores.reduce((a, b) => a + b, 0) / filledScores.length
     : null;
+  const scorePercent = avg !== null ? (avg / 5) * 100 : null;
+  const weightedFinalScore = scorePercent !== null ? scorePercent * weightFraction : null;
   const allAspectsFilled = filledScores.length === ASPECTS.length;
 
   const scoreColor = (v: number | null) => {
@@ -276,19 +305,24 @@ function ParticipantTable({
                 {ps.name}
                 <PAScoreTag name={ps.name} />
               </p>
-              {PARTICIPANT_META[ps.name] && (
+              {(matchedUser || PARTICIPANT_META[ps.name]) && (
                 <p className="text-[11px] text-gray-400 leading-tight">
-                  {PARTICIPANT_META[ps.name].position}
+                  {matchedUser?.position ?? PARTICIPANT_META[ps.name]?.position}
                   <span className="mx-1 text-gray-300">·</span>
-                  {PARTICIPANT_META[ps.name].division}
+                  {matchedUser?.division ?? PARTICIPANT_META[ps.name]?.division}
                 </p>
               )}
             </div>
           </div>
           {avg !== null && (
-            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${scoreColor(avg)}`}>
-              Avg {avg.toFixed(2)}
-            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${scoreColor(avg)}`}>
+                Avg {avg.toFixed(2)} · {scorePercent?.toFixed(2)}%
+              </span>
+              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#1A284F] text-white">
+                Skor Akhir (×{weightPctLabel}%): {weightedFinalScore?.toFixed(2)}
+              </span>
+            </div>
           )}
         </div>
 
@@ -359,13 +393,19 @@ function ParticipantTable({
               {/* Nilai Rata-Rata row */}
               <tr className="border-t-2 border-[#1A284F]/20 bg-[#1A284F]/5">
                 <td colSpan={3} className="px-5 py-3 text-center text-sm font-bold text-[#1A284F] border-r border-[#1A284F]/10">
-                  Nilai Rata-Rata
+                  Nilai Assessment (Konversi % &amp; × Bobot Management Interview {weightPctLabel}%)
                 </td>
                 <td colSpan={5} className="px-5 py-3 text-center">
                   {avg !== null ? (
-                    <span className={`inline-block text-sm font-bold px-5 py-1.5 rounded-full ${allAspectsFilled ? scoreColor(avg) : "bg-amber-100 text-amber-700"}`}>
-                      {avg.toFixed(2)}{!allAspectsFilled && <span className="ml-1 font-normal text-xs">(parsial)</span>}
-                    </span>
+                    <div className="inline-flex flex-wrap items-center justify-center gap-2">
+                      <span className={`inline-block text-xs font-bold px-3.5 py-1 rounded-full ${allAspectsFilled ? scoreColor(avg) : "bg-amber-100 text-amber-700"}`}>
+                        Rata-rata {avg.toFixed(2)} / 5.00 → {scorePercent?.toFixed(2)}%
+                        {!allAspectsFilled && <span className="ml-1 font-normal">(parsial)</span>}
+                      </span>
+                      <span className="inline-block text-xs font-bold px-3.5 py-1 rounded-full bg-emerald-600 text-white">
+                        {scorePercent?.toFixed(2)}% × {weightPctLabel}% = {weightedFinalScore?.toFixed(2)}
+                      </span>
+                    </div>
                   ) : (
                     <span className="text-gray-400 text-sm italic">—</span>
                   )}
@@ -399,28 +439,43 @@ function ParticipantTable({
 }
 
 // ── Assessment modal ───────────────────────────────────────────────────────────
-function AssessmentModal({ entry, readOnly = false, onClose }: { entry: ScheduleEntry; readOnly?: boolean; onClose: () => void }) {
+function AssessmentModal({
+  entry,
+  readOnly = false,
+  onSubmitted,
+  onClose,
+}: {
+  entry: ScheduleEntry;
+  readOnly?: boolean;
+  onSubmitted?: () => void;
+  onClose: () => void;
+}) {
   // Peserta yang dinilai hanya karyawan pada field Employee (Other User bukan peserta assessment)
   const allParticipants = [...entry.addedUsers];
+  const initialSavedMap = loadSavedAssessmentsMap();
 
   const [scores, setScores] = useState<ParticipantScore[]>(() => {
-    const existing = savedAssessments[entry.id];
-    return allParticipants.map((name) => {
+    const existing = initialSavedMap[entry.id];
+    return allParticipants.map((name, idx) => {
+      const empIdHint = entry.addedUserIds?.[idx];
+      const u = resolveParticipantUser(name, entry.companyUnit, empIdHint);
       const prev = existing?.find((s) => s.name === name);
-      return prev ? { ...prev, aspectScores: [...prev.aspectScores] } : { name, aspectScores: [null, null, null], comment: "" };
+      return prev
+        ? { ...prev, employeeId: prev.employeeId ?? u?.employeeId ?? empIdHint, aspectScores: [...prev.aspectScores] }
+        : { name, employeeId: u?.employeeId ?? empIdHint, aspectScores: [null, null, null], comment: "" };
     });
   });
 
   // per-participant saved flags (saved ≠ submitted — saved means locally confirmed per tab)
   const [savedFlags, setSavedFlags] = useState<boolean[]>(() => {
-    const existing = savedAssessments[entry.id];
+    const existing = initialSavedMap[entry.id];
     return allParticipants.map((name) =>
       existing?.find((s) => s.name === name)?.aspectScores.every((v) => v !== null) ?? false
     );
   });
 
   const [activeTab, setActiveTab]   = useState(0);
-  const [isSubmitted, setIsSubmitted] = useState(() => !!savedAssessments[entry.id]);
+  const [isSubmitted, setIsSubmitted] = useState(() => Boolean(initialSavedMap[entry.id]));
   const [showConfirm, setShowConfirm] = useState(false);
   const effectiveReadOnly = isSubmitted || readOnly;
 
@@ -450,11 +505,19 @@ function AssessmentModal({ entry, readOnly = false, onClose }: { entry: Schedule
   }
 
   function handleConfirm() {
-    savedAssessments[entry.id] = scores.map(s => ({ ...s, aspectScores: [...s.aspectScores] }));
-    savePersistedState(MI_SUP_ASSESSMENTS_KEY, savedAssessments, {
+    const managedUsers = loadManagedUsers();
+    const normalizedScores: ParticipantScore[] = scores.map((s, idx) => {
+      const matchedUser =
+        resolveParticipantUser(s.name, entry.companyUnit, s.employeeId ?? entry.addedUserIds?.[idx]) ??
+        managedUsers.find((u) => u.name.toLowerCase() === s.name.toLowerCase());
+      const resolvedId = matchedUser?.employeeId ?? s.employeeId ?? entry.addedUserIds?.[idx] ?? NAME_TO_EMP_ID[s.name];
+      return { ...s, employeeId: resolvedId, aspectScores: [...s.aspectScores] };
+    });
+    const latestMap = { ...loadSavedAssessmentsMap(), [entry.id]: normalizedScores };
+    savePersistedState(MI_SUP_ASSESSMENTS_KEY, latestMap, {
       kind: "kv-state",
       stateKey: MI_SUP_ASSESSMENTS_KEY,
-      stateValue: savedAssessments,
+      stateValue: latestMap,
       audit: {
         action: "Update",
         module: "Management Interview",
@@ -462,19 +525,26 @@ function AssessmentModal({ entry, readOnly = false, onClose }: { entry: Schedule
         description: `Submitted Management Interview assessment for schedule ${entry.id}`,
       },
     });
-    const managedUsers = loadManagedUsers();
+    void mergeKvMapRecord(MI_SUP_ASSESSMENTS_KEY, entry.id, normalizedScores);
     // Write Score Penilai 1 to shared store for each participant
-    scores.forEach(ps => {
-      const matchedUser = managedUsers.find((u) => u.name.toLowerCase() === ps.name.toLowerCase());
-      const empId = matchedUser?.employeeId ?? NAME_TO_EMP_ID[ps.name];
+    normalizedScores.forEach(ps => {
+      const empId = ps.employeeId ?? NAME_TO_EMP_ID[ps.name];
       if (!empId) return;
       const filled = ps.aspectScores.filter((s): s is number => s !== null);
       if (filled.length === 0) return;
       const avg = filled.reduce((a, b) => a + b, 0) / filled.length;
       setPenilai1Score(empId, avg);
+      const criterionMap: Record<number, number> = {};
+      ps.aspectScores.forEach((sc, idx) => {
+        if (sc !== null) criterionMap[idx + 1] = sc;
+      });
+      setMIPenilaiResult(empId, 1, criterionMap, "", ps.comment);
     });
+    updateEntry(entry.id, { status: "Done" });
     setIsSubmitted(true);
     setShowConfirm(false);
+    onSubmitted?.();
+    window.dispatchEvent(new Event("appraisal-updated"));
   }
 
   const allParticipantsSaved = savedFlags.every(Boolean) && scores.every(ps => ps.aspectScores.every(s => s !== null));
@@ -587,6 +657,7 @@ function AssessmentModal({ entry, readOnly = false, onClose }: { entry: Schedule
                     ps={ps}
                     pIdx={activeTab}
                     isSubmitted={effectiveReadOnly}
+                    companyUnit={entry.companyUnit}
                     onScoreChange={handleScoreChange}
                     onCommentChange={handleCommentChange}
                   />
@@ -705,10 +776,26 @@ function ScheduleDetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose
 export function SupervisorMonitoringManagementInterview({ hideAssess = false }: { hideAssess?: boolean } = {}) {
   const activeUser = getActiveUser();
   const [schedEntries, setSchedEntries] = useState<ScheduleEntry[]>(getEntries);
+  const [assessmentsMap, setAssessmentsMap] = useState<Record<string, ParticipantScore[]>>(() =>
+    loadSavedAssessmentsMap(),
+  );
   const [viewEntry, setViewEntry]       = useState<ScheduleEntry | null>(null);
   const [assessEntry, setAssessEntry]   = useState<{ entry: ScheduleEntry; readOnly: boolean } | null>(null);
 
-  useEffect(() => subscribe(() => setSchedEntries(getEntries())), []);
+  useEffect(() => {
+    const refreshAll = () => {
+      setSchedEntries(getEntries());
+      setAssessmentsMap(loadSavedAssessmentsMap());
+    };
+    const unsub = subscribe(refreshAll);
+    window.addEventListener("pa-db-hydrated", refreshAll);
+    window.addEventListener("appraisal-updated", refreshAll);
+    return () => {
+      unsub();
+      window.removeEventListener("pa-db-hydrated", refreshAll);
+      window.removeEventListener("appraisal-updated", refreshAll);
+    };
+  }, []);
 
   return (
     <div className="w-full flex flex-col gap-6">
@@ -764,7 +851,8 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
                 {schedEntries.map((entry, i) => {
                   const ss = SCHED_STATUS_STYLE[entry.status];
                   const participants = [...entry.addedUsers, ...entry.otherUsers];
-                  const isAssessed = !!savedAssessments[entry.id];
+                  const entryAssessments = assessmentsMap[entry.id];
+                  const isAssessed = Boolean(entryAssessments && entryAssessments.length > 0);
                   const isAppointedInterviewer = isUserAppointedInterviewer(activeUser, entry.interviewers);
                   return (
                     <tr key={entry.id} className={`border-b border-gray-100 hover:bg-gray-50/50 transition-colors ${i % 2 !== 0 ? "bg-gray-50/30" : ""}`}>
@@ -825,17 +913,38 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
                           <span className="text-gray-300">—</span>
                         ) : (
                           <div className="flex flex-wrap gap-1">
-                            {participants.map(p => (
-                              <span key={p} className="px-1.5 py-0.5 bg-teal-50 text-teal-700 rounded text-[10px] font-medium whitespace-nowrap">{p}</span>
-                            ))}
+                            {participants.map((p) => {
+                              const assessedItem = entryAssessments?.find((a) => a.name.trim().toLowerCase() === p.trim().toLowerCase());
+                              const valid = (assessedItem?.aspectScores ?? []).filter((v): v is number => typeof v === "number");
+                              const avgVal = valid.length > 0 ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+                              const pctVal = avgVal !== null ? (avgVal / 5) * 100 : null;
+                              const wFrac = avgVal !== null ? getParticipantMIWeightFraction(p, entry.companyUnit, assessedItem?.employeeId) : 0;
+                              const weightedVal = pctVal !== null ? pctVal * wFrac : null;
+                              return (
+                                <span key={p} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-teal-50 text-teal-700 rounded text-[10px] font-medium whitespace-nowrap">
+                                  <span>{p}</span>
+                                  {pctVal !== null && weightedVal !== null && (
+                                    <span className="px-1 py-0.2 rounded bg-emerald-600 text-white font-bold text-[9px]">
+                                      {pctVal.toFixed(1)}% · ×{Math.round(wFrac * 100)}%={weightedVal.toFixed(2)}
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            })}
                           </div>
                         )}
                       </td>
                       <td className="px-4 py-3 text-gray-600 whitespace-nowrap max-w-[140px] truncate">{entry.location || "—"}</td>
                       <td className="px-4 py-3 text-center">
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${ss.bg}`}>
-                          <ss.icon className="w-3 h-3" />{entry.status}
-                        </span>
+                        {isAssessed ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">
+                            <CheckCircle2 className="w-3 h-3" />Assessed
+                          </span>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${ss.bg}`}>
+                            <ss.icon className="w-3 h-3" />{entry.status}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -847,7 +956,17 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
       </div>
 
       {viewEntry   && <ScheduleDetailModal entry={viewEntry}   onClose={() => setViewEntry(null)} />}
-      {assessEntry && <AssessmentModal     entry={assessEntry.entry} readOnly={assessEntry.readOnly} onClose={() => setAssessEntry(null)} />}
+      {assessEntry && (
+        <AssessmentModal
+          entry={assessEntry.entry}
+          readOnly={assessEntry.readOnly}
+          onSubmitted={() => {
+            setSchedEntries(getEntries());
+            setAssessmentsMap(loadSavedAssessmentsMap());
+          }}
+          onClose={() => setAssessEntry(null)}
+        />
+      )}
     </div>
   );
 }

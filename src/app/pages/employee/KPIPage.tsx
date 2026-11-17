@@ -1,6 +1,6 @@
 // @refresh reset
 import React, { useState, useRef } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { DatePickerID } from "../../components/DatePickerID";
 import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info } from "lucide-react";
 import { loadAllKPIComments, loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
@@ -28,6 +28,7 @@ import {
 import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type KpiMonthState } from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
+import { UnifiedRCADetailTable } from "../../components/UnifiedRCADetailTable";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -84,7 +85,7 @@ function buildStoredRCAStatusMap(subs: StoredRCASubmission[]): Record<string, RC
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Polaritas = "Maximize" | "Minimize";
+export type Polaritas = "Maximize" | "Minimize" | "Stabilize";
 type PageView = "input" | "preview";
 
 type ComputeSpec =
@@ -193,7 +194,9 @@ function newRCAAction(): RCAActionPlan {
 }
 
 interface PendingRCA {
+  rcaKey: string;
   kpiNo: string;
+  subIdx?: number;
   monthId: string;
   monthLabel: string;
   kpiName: string;
@@ -228,35 +231,177 @@ function formatPct(n: number): string {
   return n.toFixed(1) + "%";
 }
 
+/**
+ * Perhitungan persentase pencapaian sesuai Polaritas indikator (Maximize / Minimize / Stabilize)
+ * agar tidak pernah memicu RCA yang salah:
+ * - Minimize: actual <= target => 100%, actual > target => (target / actual) * 100
+ * - Maximize: (actual / target) * 100 (bila target === 0: actual >= 0 => 100%, else 0%)
+ * - Stabilize: mendukung target rentang "min - max" (100% selama di dalam rentang) maupun nilai tunggal T
+ *   (100% bila tepat T; menurun proporsional bila deviasi di bawah maupun di atas T).
+ */
+export function computePolaritasAchievementPct(
+  actual: number,
+  targetRaw: string,
+  targetNum: number,
+  polaritas: Polaritas = "Maximize",
+  specMinimize?: boolean,
+): number {
+  const effectivePol: Polaritas = specMinimize ? "Minimize" : polaritas;
+  if (effectivePol === "Stabilize") {
+    const rangeMatch = String(targetRaw ?? "")
+      .replace(/,/g, "")
+      .match(/^\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (rangeMatch) {
+      const a = parseFloat(rangeMatch[1]);
+      const b = parseFloat(rangeMatch[2]);
+      const lo = Math.min(a, b);
+      const hi = Math.max(a, b);
+      if (actual >= lo && actual <= hi) return 100;
+      if (actual < lo) return lo === 0 ? 0 : Math.max(0, (actual / lo) * 100);
+      return actual === 0 ? 0 : Math.max(0, (hi / actual) * 100);
+    }
+    if (targetNum === 0) return actual === 0 ? 100 : 0;
+    if (actual === targetNum) return 100;
+    if (actual < targetNum) return Math.max(0, (actual / targetNum) * 100);
+    return actual === 0 ? 0 : Math.max(0, (targetNum / actual) * 100);
+  }
+  if (effectivePol === "Minimize") {
+    if (targetNum === 0) return actual <= 0 ? 100 : 0;
+    return actual <= targetNum ? 100 : Math.max(0, (targetNum / actual) * 100);
+  }
+  if (targetNum === 0) return actual >= 0 ? 100 : 0;
+  return Math.max(0, (actual / targetNum) * 100);
+}
+
+/**
+ * Metadata spesifik sub-item untuk KPI yang memiliki lebih dari 1 item dalam 1 baris perspektif/KPI
+ * (contoh: KPI 3 memiliki Biaya Listrik & Biaya Steam; KPI 4a memiliki 4 item; KPI 4b memiliki 2 item).
+ */
+export function getKpiSubItemMeta(
+  kpi: KPIItem,
+  subIdx: number,
+  monthId: string,
+): {
+  isMultiItem: boolean;
+  rcaKey: string;
+  legacyRcaKey: string;
+  itemKpiName: string;
+  subItemShortLabel: string;
+  itemBaseline: string;
+  itemTargetYearly: string;
+} {
+  const baseTitle = kpi.kpi.split("\n")[0].replace(/:\s*$/, "").trim();
+  const legacyRcaKey = `${kpi.no}__${monthId}`;
+  const nonAvgComputed = kpi.subRows
+    .map((s, idx) => ({ s, idx }))
+    .filter(({ s }) => Boolean(s.compute && s.compute.type !== "avg"));
+  const isMultiItem = nonAvgComputed.length > 1;
+  const sub = kpi.subRows[subIdx];
+  const spec = sub?.compute;
+  if (!isMultiItem || !spec) {
+    return {
+      isMultiItem: false,
+      rcaKey: legacyRcaKey,
+      legacyRcaKey,
+      itemKpiName: kpi.kpi.split("\n")[0].trim(),
+      subItemShortLabel: baseTitle,
+      itemBaseline: kpi.baseline2025,
+      itemTargetYearly: kpi.target2026,
+    };
+  }
+  let actualLabel = sub.label.replace(/^%\s*Pencapaian\s*/i, "").trim();
+  let targetRowIdx = -1;
+  if (spec.type === "ratio") {
+    actualLabel = kpi.subRows[spec.actualIdx]?.label ?? actualLabel;
+    targetRowIdx = spec.targetIdx;
+  }
+  const cleanSubLabel = actualLabel.replace(/^Actual\s+/i, "").trim();
+  const itemKpiName = `${baseTitle} — ${actualLabel}`;
+  // Coba baca baseline spesifik sub-item dari kolom keterangan bila tersedia (mis. "Listrik: 1,799.77")
+  let itemBaseline = kpi.baseline2025;
+  if (kpi.keterangan) {
+    const lines = kpi.keterangan.split("\n");
+    const token = cleanSubLabel.replace(/^Biaya\s+/i, "").replace(/^(Eff|IP)\s+/i, "").trim().toLowerCase();
+    const matchedLine = lines.find((ln) => token && ln.toLowerCase().includes(`${token}:`));
+    if (matchedLine) {
+      const extracted = matchedLine.split(":").slice(1).join(":").trim();
+      if (extracted && extracted !== "—") itemBaseline = extracted;
+    }
+  }
+  const itemTargetYearly =
+    (targetRowIdx >= 0 && kpi.subRowTargets?.[targetRowIdx]) || kpi.target2026;
+  return {
+    isMultiItem: true,
+    rcaKey: `${kpi.no}__sub${subIdx}__${monthId}`,
+    legacyRcaKey,
+    itemKpiName,
+    subItemShortLabel: actualLabel,
+    itemBaseline,
+    itemTargetYearly,
+  };
+}
+
+export function findMatchingRcaForSubItem(
+  submissions: StoredRCASubmission[],
+  kpi: KPIItem,
+  subIdx: number,
+  month: { id: string; label: string },
+): StoredRCASubmission | undefined {
+  const meta = getKpiSubItemMeta(kpi, subIdx, month.id);
+  const shortEn = month.label.replace(/-\d{2}$/, "").toLowerCase();
+  const shortId = toIdShortPeriode(month.label).toLowerCase();
+  const exactByKey = submissions.find((s) => s.key === meta.rcaKey);
+  if (exactByKey) return exactByKey;
+  const targetNameLc = meta.itemKpiName.trim().toLowerCase();
+  const shortSubLc = meta.subItemShortLabel.trim().toLowerCase();
+  const byNameAndMonth = submissions.find((s) => {
+    const sMonthOk =
+      (s.monthLabel ?? "").toLowerCase() === month.label.toLowerCase() ||
+      s.periode.toLowerCase() === shortEn ||
+      s.periode.toLowerCase() === shortId;
+    if (!sMonthOk) return false;
+    const ind = s.kpiIndicator.trim().toLowerCase();
+    if (ind === targetNameLc) return true;
+    if (meta.isMultiItem) {
+      return Boolean(shortSubLc && ind === shortSubLc);
+    }
+    return ind === kpi.kpi.split("\n")[0].trim().toLowerCase();
+  });
+  if (byNameAndMonth) return byNameAndMonth;
+  // Fallback ke key tanpa subIdx hanya untuk KPI single-item
+  if (!meta.isMultiItem) {
+    return submissions.find((s) => s.key === meta.legacyRcaKey);
+  }
+  return undefined;
+}
+
 // Compute a single cell value given sub-row specs and a value-getter
 function computeCell(
   subRows: SubRow[],
   getRaw: (idx: number) => string,
-  subIdx: number
+  subIdx: number,
+  polaritas: Polaritas = "Maximize"
 ): string {
   const sub = subRows[subIdx];
   if (!sub.compute) return "";
 
   const getVal = (idx: number): string => {
     const s = subRows[idx];
-    if (s.compute) return computeCell(subRows, getRaw, idx);
+    if (s.compute) return computeCell(subRows, getRaw, idx, polaritas);
     return getRaw(idx);
   };
 
   const spec = sub.compute;
 
   if (spec.type === "ratio") {
-    const target = parseNum(getRaw(spec.targetIdx));
-    if (target === null) return "—";            // target belum diisi → tidak dapat dihitung
+    const rawTarget = getRaw(spec.targetIdx);
+    const target = parseNum(rawTarget);
+    const isRangeStabilize =
+      polaritas === "Stabilize" && /^\s*-?\d+(?:\.\d+)?\s*[-–]\s*-?\d+(?:\.\d+)?\s*$/.test(rawTarget.replace(/,/g, ""));
+    if (target === null && !isRangeStabilize) return "—"; // target belum diisi → tidak dapat dihitung
     const actual = parseNum(getRaw(spec.actualIdx));
     if (actual === null) return "0%";           // actual belum diisi → 0%
-    if (target === 0) return actual === 0 ? "100%" : "0%";
-    let pct: number;
-    if (spec.minimize) {
-      pct = actual <= target ? 100 : (target / actual) * 100;
-    } else {
-      pct = (actual / target) * 100;
-    }
+    const pct = computePolaritasAchievementPct(actual, rawTarget, target ?? 0, polaritas, spec.minimize);
     return formatPct(pct);
   }
 
@@ -325,26 +470,14 @@ export function computeTotal2026(
           ytdActual = actuals.reduce((s, v) => s + v, 0) / actuals.length;
           ytdTarget = monthData.reduce((s, v) => s + v.target, 0) / monthData.length;
         }
-        if (ytdTarget === 0) return ytdActual === 0 ? "100%" : "0%";
-        let pct: number;
-        if (spec.minimize) {
-          pct = ytdActual <= ytdTarget ? 100 : (ytdTarget / ytdActual) * 100;
-        } else {
-          pct = (ytdActual / ytdTarget) * 100;
-        }
+        const pct = computePolaritasAchievementPct(ytdActual, String(ytdTarget), ytdTarget, kpi.polaritas, spec.minimize);
         return formatPct(pct);
       }
 
       // Complex KPI: sum actuals / sum targets
       const totalActual = actuals.reduce((s, v) => s + v, 0);
       const totalTarget = monthData.reduce((s, v) => s + v.target, 0);
-      if (totalTarget === 0) return totalActual === 0 ? "100%" : "0%";
-      let pct: number;
-      if (spec.minimize) {
-        pct = totalActual <= totalTarget ? 100 : (totalTarget / totalActual) * 100;
-      } else {
-        pct = (totalActual / totalTarget) * 100;
-      }
+      const pct = computePolaritasAchievementPct(totalActual, String(totalTarget), totalTarget, kpi.polaritas, spec.minimize);
       return formatPct(pct);
     }
 
@@ -458,19 +591,29 @@ function loadSubmitState(employeeId?: string): { submitted: boolean; submittedDa
         (r.employeeId === normId || r.employeeId.toLowerCase() === targetEmpId.toLowerCase()),
     );
     if (wfRec) {
+      const evalState = evaluateEmployeeKPITracking(targetEmpId);
+      // Jika belum ada bulan aktual yang diisi sama sekali atau belum ada submittedDate yang sah, jangan pernah anggap Submitted
+      if (!evalState.hasAnyTrackingData || !wfRec.submittedDate || wfRec.submittedDate === "-" || wfRec.submittedDate === "—") {
+        return { submitted: false, submittedDate: "" };
+      }
       const isRev = Object.values(wfRec.decisions).some((d) => d?.status === "Revision");
       const isValidated = wfRec.decisions.validator?.status === "Validated";
       const hasUnvalidatedMonth =
         isValidated &&
         Array.isArray(wfRec.validatedMonths) &&
         readTrackedKpiMonthLabels(targetEmpId).some((m) => !wfRec.validatedMonths!.includes(m));
-      if (isRev || hasUnvalidatedMonth) {
+      const hasUnsubmittedNewMonth =
+        !isValidated &&
+        Array.isArray(wfRec.submittedMonths) &&
+        wfRec.submittedMonths.length > 0 &&
+        readTrackedKpiMonthLabels(targetEmpId).some(
+          (m) => !wfRec.submittedMonths!.includes(m) && !(wfRec.validatedMonths ?? []).includes(m),
+        );
+      if (isRev || hasUnvalidatedMonth || hasUnsubmittedNewMonth) {
         return { submitted: false, submittedDate: wfRec.submittedDate || "" };
       }
       return { submitted: true, submittedDate: wfRec.submittedDate || "" };
     }
-    const raw = localStorage.getItem(`${KPI_SUBMIT_KEY}_${normId}`);
-    if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return { submitted: false, submittedDate: "" };
 }
@@ -639,10 +782,10 @@ const mkSimple = (minimize = false): SubRow[] => [
 const SUB_KPI3: SubRow[] = [
   { label: "Biaya Listrik" },
   { label: "Target Biaya" },
-  { label: "% Pencapaian HPP Listrik", bold: true, compute: { type: "ratio", actualIdx: 0, targetIdx: 1 } },
+  { label: "% Pencapaian HPP Listrik", bold: true, compute: { type: "ratio", actualIdx: 0, targetIdx: 1, minimize: true } },
   { label: "Biaya Steam" },
   { label: "Target Biaya (Steam)" },
-  { label: "% Pencapaian HPP Steam", bold: true, compute: { type: "ratio", actualIdx: 3, targetIdx: 4 } },
+  { label: "% Pencapaian HPP Steam", bold: true, compute: { type: "ratio", actualIdx: 3, targetIdx: 4, minimize: true } },
   { label: "% Pencapaian Total", bold: true, compute: { type: "avg", sourceIdxs: [2, 5] } },
 ];
 
@@ -1037,7 +1180,7 @@ function AddMonthModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
-      <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-2xl">
+      <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-5xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <h3 className="font-bold text-[#1A284F] text-lg">Add Monthly Tracking Data</h3>
           <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
@@ -1133,6 +1276,49 @@ function AddMonthModal({
               </p>
               {KPI_ITEMS.filter((k) => k.section === sec).map((kpi) => {
                 const kpiMissing = attempted ? (missingByKpi[kpi.no] ?? 0) : 0;
+                const getDraftRaw = (idx: number) => cells[ck(kpi.no, idx)] ?? "";
+                // Kelompokkan setiap pasangan Target + Actual (+ % Pencapaian) dalam 1 baris (1 line) agar jelas bagi karyawan
+                type ModalRowGroup =
+                  | { kind: "pair"; targetIdx: number; actualIdx: number; computeIdx?: number }
+                  | { kind: "ratio_score"; targetIdx: number; negIdx: number; posIdx: number; computeIdx: number }
+                  | { kind: "single"; subIdx: number };
+                const usedIndices = new Set<number>();
+                const rowGroups: ModalRowGroup[] = [];
+                kpi.subRows.forEach((sub, si) => {
+                  if (!sub.compute) return;
+                  if (sub.compute.type === "ratio") {
+                    usedIndices.add(sub.compute.targetIdx);
+                    usedIndices.add(sub.compute.actualIdx);
+                    usedIndices.add(si);
+                    rowGroups.push({
+                      kind: "pair",
+                      targetIdx: sub.compute.targetIdx,
+                      actualIdx: sub.compute.actualIdx,
+                      computeIdx: si,
+                    });
+                  } else if (sub.compute.type === "ratio_score") {
+                    const tIdx = kpi.subRows.findIndex((s, idx) => !s.compute && !usedIndices.has(idx) && s.label.toLowerCase().startsWith("target"));
+                    if (tIdx >= 0) usedIndices.add(tIdx);
+                    usedIndices.add(sub.compute.negIdx);
+                    usedIndices.add(sub.compute.posIdx);
+                    usedIndices.add(si);
+                    rowGroups.push({
+                      kind: "ratio_score",
+                      targetIdx: tIdx,
+                      negIdx: sub.compute.negIdx,
+                      posIdx: sub.compute.posIdx,
+                      computeIdx: si,
+                    });
+                  } else if (sub.compute.type === "avg" || sub.compute.type === "ref") {
+                    usedIndices.add(si);
+                  }
+                });
+                kpi.subRows.forEach((_sub, si) => {
+                  if (!usedIndices.has(si)) {
+                    rowGroups.push({ kind: "single", subIdx: si });
+                  }
+                });
+
                 return (
                   <div key={kpi.no} className="mb-4">
                     <div className={`flex items-center gap-2 mb-2 rounded-lg px-3 py-2 ${kpiMissing > 0 ? "bg-red-50 border border-red-200" : "bg-gray-50"}`}>
@@ -1140,7 +1326,11 @@ function AddMonthModal({
                         {kpi.no}. {kpi.kpi.split("\n")[0]}
                         <span className="ml-2 text-gray-400 font-normal">({kpi.satuan})</span>
                         <span className={`ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                          kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : "bg-orange-50 text-orange-700"
+                          kpi.polaritas === "Maximize"
+                            ? "bg-blue-50 text-blue-700"
+                            : kpi.polaritas === "Stabilize"
+                            ? "bg-violet-50 text-violet-700"
+                            : "bg-orange-50 text-orange-700"
                         }`}>{kpi.polaritas}</span>
                       </p>
                       {kpiMissing > 0 && (
@@ -1150,8 +1340,136 @@ function AddMonthModal({
                         </span>
                       )}
                     </div>
-                    <div className="grid grid-cols-2 gap-2 pl-2">
-                      {kpi.subRows.map((sub, si) => {
+                    <div className="flex flex-col gap-2.5 pl-2">
+                      {rowGroups.map((grp, gi) => {
+                        if (grp.kind === "pair") {
+                          const targetSub = kpi.subRows[grp.targetIdx];
+                          const actualSub = kpi.subRows[grp.actualIdx];
+                          const computeSub = grp.computeIdx !== undefined ? kpi.subRows[grp.computeIdx] : undefined;
+                          const empty = isFieldEmpty(kpi.no, grp.actualIdx);
+                          const sepErr = separatorErrors[ck(kpi.no, grp.actualIdx)];
+                          const livePct =
+                            grp.computeIdx !== undefined && (cells[ck(kpi.no, grp.actualIdx)] ?? "").trim()
+                              ? computeCell(kpi.subRows, getDraftRaw, grp.computeIdx, kpi.polaritas)
+                              : "—";
+                          const liveNum = parseNum(livePct);
+                          return (
+                            <div
+                              key={`pair-${gi}`}
+                              data-empty={empty ? "true" : undefined}
+                              className="grid grid-cols-1 md:grid-cols-[1fr_1.2fr_170px] gap-3 items-start rounded-xl border border-gray-100 bg-gray-50/40 p-2.5"
+                            >
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                                  {targetSub.label}
+                                </label>
+                                <div className="flex items-center justify-between gap-1 text-xs border border-sky-200 bg-sky-50 rounded-lg px-3 py-2">
+                                  <span className="font-semibold text-sky-800">{cells[ck(kpi.no, grp.targetIdx)] || "—"}</span>
+                                  <Lock className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className={`text-[10px] uppercase tracking-wide ${empty ? "font-bold text-red-600" : "font-semibold text-gray-700"}`}>
+                                  {actualSub.label}
+                                  {empty && <span className="ml-1 text-[9px] text-red-500 normal-case font-normal">— wajib diisi</span>}
+                                </label>
+                                <input
+                                  type="text"
+                                  value={cells[ck(kpi.no, grp.actualIdx)] ?? ""}
+                                  onChange={(e) => setVal(ck(kpi.no, grp.actualIdx), e.target.value)}
+                                  placeholder="Masukkan nilai aktual"
+                                  className={`text-xs border rounded-lg px-3 py-2 outline-none transition-colors bg-white ${
+                                    empty || sepErr
+                                      ? "border-red-400 bg-red-50 focus:border-red-500 placeholder-red-300"
+                                      : "border-gray-200 focus:border-[#1A284F]"
+                                  }`}
+                                />
+                                {sepErr && (
+                                  <span className="flex items-start gap-1 text-[10px] font-medium text-red-600">
+                                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                                    {sepErr}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-bold uppercase tracking-wide text-[#1A284F] truncate" title={computeSub?.label ?? "% Pencapaian"}>
+                                  {computeSub?.label ?? "% Pencapaian"} <span className="text-[9px] text-emerald-600 font-normal">(auto)</span>
+                                </label>
+                                <div
+                                  className={`text-xs border rounded-lg px-3 py-2 font-bold text-center ${
+                                    liveNum === null
+                                      ? "border-gray-200 bg-gray-100 text-gray-400"
+                                      : liveNum >= 100
+                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                      : "border-rose-200 bg-rose-50 text-rose-700"
+                                  }`}
+                                >
+                                  {livePct}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+                        if (grp.kind === "ratio_score") {
+                          const negSub = kpi.subRows[grp.negIdx];
+                          const posSub = kpi.subRows[grp.posIdx];
+                          const compSub = kpi.subRows[grp.computeIdx];
+                          const negEmpty = isFieldEmpty(kpi.no, grp.negIdx);
+                          const posEmpty = isFieldEmpty(kpi.no, grp.posIdx);
+                          const livePct =
+                            (cells[ck(kpi.no, grp.negIdx)] ?? "").trim()
+                              ? computeCell(kpi.subRows, getDraftRaw, grp.computeIdx, kpi.polaritas)
+                              : "—";
+                          return (
+                            <div key={`rs-${gi}`} className="grid grid-cols-1 md:grid-cols-4 gap-3 items-start rounded-xl border border-gray-100 bg-gray-50/40 p-2.5">
+                              {grp.targetIdx >= 0 && (
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                                    {kpi.subRows[grp.targetIdx].label}
+                                  </label>
+                                  <div className="flex items-center justify-between gap-1 text-xs border border-sky-200 bg-sky-50 rounded-lg px-3 py-2">
+                                    <span className="font-semibold text-sky-800">{cells[ck(kpi.no, grp.targetIdx)] || "—"}</span>
+                                    <Lock className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                  </div>
+                                </div>
+                              )}
+                              <div className="flex flex-col gap-1" data-empty={negEmpty ? "true" : undefined}>
+                                <label className={`text-[10px] uppercase tracking-wide ${negEmpty ? "font-bold text-red-600" : "font-semibold text-gray-700"}`}>
+                                  {negSub.label}
+                                </label>
+                                <input
+                                  type="text"
+                                  value={cells[ck(kpi.no, grp.negIdx)] ?? ""}
+                                  onChange={(e) => setVal(ck(kpi.no, grp.negIdx), e.target.value)}
+                                  placeholder="Masukkan nilai aktual"
+                                  className={`text-xs border rounded-lg px-3 py-2 outline-none bg-white ${negEmpty ? "border-red-400 bg-red-50" : "border-gray-200 focus:border-[#1A284F]"}`}
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1" data-empty={posEmpty ? "true" : undefined}>
+                                <label className={`text-[10px] uppercase tracking-wide ${posEmpty ? "font-bold text-red-600" : "font-semibold text-gray-700"}`}>
+                                  {posSub.label}
+                                </label>
+                                <input
+                                  type="text"
+                                  value={cells[ck(kpi.no, grp.posIdx)] ?? ""}
+                                  onChange={(e) => setVal(ck(kpi.no, grp.posIdx), e.target.value)}
+                                  placeholder="Masukkan nilai aktual"
+                                  className={`text-xs border rounded-lg px-3 py-2 outline-none bg-white ${posEmpty ? "border-red-400 bg-red-50" : "border-gray-200 focus:border-[#1A284F]"}`}
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-bold uppercase tracking-wide text-[#1A284F]">
+                                  {compSub.label} <span className="text-[9px] text-emerald-600 font-normal">(auto)</span>
+                                </label>
+                                <div className="text-xs border border-emerald-200 bg-emerald-50 rounded-lg px-3 py-2 text-emerald-700 font-bold text-center">
+                                  {livePct}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+                        const si = grp.subIdx;
+                        const sub = kpi.subRows[si];
                         const empty = isFieldEmpty(kpi.no, si);
                         return (
                           <div key={si} className="flex flex-col gap-0.5" data-empty={empty ? "true" : undefined}>
@@ -1273,7 +1591,7 @@ function getLowestAchievement(
   kpi.subRows.forEach((sub, si) => {
     if (!sub.compute) return;
     const getRaw = (idx: number) => cells[monthId]?.[ck(kpi.no, idx)] ?? "";
-    const val = computeCell(kpi.subRows, getRaw, si);
+    const val = computeCell(kpi.subRows, getRaw, si, kpi.polaritas);
     const n = parseNum(val);
     if (n !== null && (lowest === null || n < lowest)) lowest = n;
   });
@@ -1300,10 +1618,11 @@ function RCAListEditor({ items: rawItems, onChange }: { items: string[] | string
       ))}
       <div className="flex items-center gap-1 mt-0.5">
         <input value={draft} onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
           placeholder="Tambah…"
           className="flex-1 text-[10px] border border-dashed border-amber-300 rounded px-1.5 py-1 outline-none focus:border-amber-500 bg-amber-50/30 min-w-0" />
-        <button onClick={commit} className="text-[10px] font-bold text-amber-600 hover:bg-amber-100 px-1.5 py-1 rounded transition-colors">+</button>
+        <button type="button" onClick={commit} className="text-[10px] font-bold text-amber-600 hover:bg-amber-100 px-1.5 py-1 rounded transition-colors">+</button>
       </div>
     </div>
   );
@@ -1481,7 +1800,7 @@ function RCAModal({
 
   const canAddBlock = () => blocks.length === 0 || isBlockComplete(blocks[blocks.length - 1]);
 
-  const key = `${pending.kpiNo}__${pending.monthId}`;
+  const key = pending.rcaKey || `${pending.kpiNo}__${pending.monthId}`;
   const canSave = blocks.length > 0 && blocks.every(isBlockComplete);
   const [confirmSubmitRca, setConfirmSubmitRca] = useState(false);
 
@@ -2163,7 +2482,7 @@ function KPITable({
     const sub = kpi.subRows[subIdx];
     if (sub.compute) {
       const getRaw = (idx: number) => cells[monthId]?.[ck(kpi.no, idx)] ?? "";
-      return computeCell(kpi.subRows, getRaw, subIdx);
+      return computeCell(kpi.subRows, getRaw, subIdx, kpi.polaritas);
     }
     return cells[monthId]?.[ck(kpi.no, subIdx)] ?? "";
   };
@@ -2302,17 +2621,26 @@ function KPITable({
                       <span className={`font-bold ${getPctColor(val)}`}>{val || "—"}</span>
                       {(() => {
                         const n = parseNum(val);
-                        const rcaKey = `${kpi.no}__${m.id}`;
                         // Hide RCA tag on "% Pencapaian Total" (avg of multiple sub-rows)
                         if (sub.compute?.type === "avg") return null;
                         if (n !== null && n < 100) {
+                          const subMeta = getKpiSubItemMeta(kpi, si, m.id);
+                          const rcaKey = subMeta.rcaKey;
                           // Derive status: inline rcaMap entry (proper status check), then stored, then none
-                          const inlineEntry = rcaMap?.[rcaKey];
-                          const secondaryKey = `${kpi.kpi.split("\n")[0]}__${displayMonth(m.label)}`;
-                          const secondaryKeyId = `${kpi.kpi.split("\n")[0]}__${toIdShortPeriode(m.label)}`;
+                          const inlineEntry = rcaMap?.[rcaKey] ?? (!subMeta.isMultiItem ? rcaMap?.[subMeta.legacyRcaKey] : undefined);
+                          const secondaryKey = `${subMeta.itemKpiName}__${displayMonth(m.label)}`;
+                          const secondaryKeyId = `${subMeta.itemKpiName}__${toIdShortPeriode(m.label)}`;
+                          const legacyNameKeyEn = !subMeta.isMultiItem ? `${kpi.kpi.split("\n")[0]}__${displayMonth(m.label)}` : "";
+                          const legacyNameKeyId = !subMeta.isMultiItem ? `${kpi.kpi.split("\n")[0]}__${toIdShortPeriode(m.label)}` : "";
                           const status: RCAStatus = inlineEntry
                             ? inlineEntryToStatus(inlineEntry)
-                            : (storedRCAStatus?.[rcaKey] ?? storedRCAStatus?.[secondaryKey] ?? storedRCAStatus?.[secondaryKeyId] ?? "none");
+                            : (storedRCAStatus?.[rcaKey] ??
+                                (!subMeta.isMultiItem ? storedRCAStatus?.[subMeta.legacyRcaKey] : undefined) ??
+                                storedRCAStatus?.[secondaryKey] ??
+                                storedRCAStatus?.[secondaryKeyId] ??
+                                (legacyNameKeyEn ? storedRCAStatus?.[legacyNameKeyEn] : undefined) ??
+                                (legacyNameKeyId ? storedRCAStatus?.[legacyNameKeyId] : undefined) ??
+                                "none");
 
                           // Tag only shows color change when RCA has been filled (status ≠ "none")
                           const isFilled = status !== "none";
@@ -2325,7 +2653,7 @@ function KPITable({
 
                           // Filled tag → view-only; unfilled tag → open create form
                           const handleTagClick = isFilled
-                            ? () => onViewRCA?.(rcaKey, secondaryKey, kpi.kpi.split("\n")[0], displayMonth(m.label))
+                            ? () => onViewRCA?.(rcaKey, secondaryKeyId || secondaryKey, subMeta.itemKpiName, displayMonth(m.label))
                             : () => onOpenRCA?.(kpi, m.id, si);
 
                           const canInteract = isFilled ? !!onViewRCA : !!onOpenRCA;
@@ -3233,6 +3561,14 @@ function KPIWorkspace({
   workspaceLabel?: string;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const portalBase = React.useMemo(() => {
+    const firstSeg = location.pathname.split("/").filter(Boolean)[0];
+    if (firstSeg === "hr" || firstSeg === "bod" || firstSeg === "supervisor" || firstSeg === "employee") {
+      return `/${firstSeg}`;
+    }
+    return "/employee";
+  }, [location.pathname]);
   const actorUser = getActiveUser();
   const activeUser = ownerOverride ?? actorUser;
   const canCreate = !delegationAccess || Boolean(delegationAccess.create);
@@ -3400,6 +3736,9 @@ function KPIWorkspace({
     const month = months.find((m) => m.id === monthId);
     const mCells = { ...(month?.cells ?? {}), ...(cellsMap[monthId] ?? {}) };
     const getRaw = (idx: number) => mCells[ck(kpi.no, idx)] ?? "";
+    const effectiveSubIdx =
+      subIdx ?? kpi.subRows.findIndex((s) => Boolean(s.compute && s.compute.type !== "avg"));
+    const subMeta = getKpiSubItemMeta(kpi, Math.max(0, effectiveSubIdx), monthId);
 
     let target: string;
     let actual: string;
@@ -3409,7 +3748,7 @@ function KPIWorkspace({
       // Clicked from a specific % Pencapaian row — use that sub-row's actual/target
       const computeSub = kpi.subRows[subIdx];
       const spec = computeSub?.compute;
-      const val = computeCell(kpi.subRows, getRaw, subIdx);
+      const val = computeCell(kpi.subRows, getRaw, subIdx, kpi.polaritas);
       const n = parseNum(val);
       achievementPct = n !== null ? Math.min(n, 100) : 0;
       if (achievementPct >= 100) return;
@@ -3446,15 +3785,17 @@ function KPIWorkspace({
     }
 
     setPendingRCA({
+      rcaKey: subMeta.rcaKey,
       kpiNo: kpi.no,
+      subIdx: effectiveSubIdx >= 0 ? effectiveSubIdx : undefined,
       monthId,
       monthLabel: month?.label ?? monthId,
-      kpiName: kpi.kpi.split("\n")[0],
+      kpiName: subMeta.itemKpiName,
       achievementPct,
       satuan: kpi.satuan,
-      baseline: kpi.baseline2025,
+      baseline: subMeta.itemBaseline,
       target,
-      targetYearly: kpi.target2026,
+      targetYearly: subMeta.itemTargetYearly,
       actual,
     });
   };
@@ -3485,7 +3826,7 @@ function KPIWorkspace({
           const sub_ = kpi.subRows[si];
           if (sub_.compute) {
             const getRaw = (idx: number) => cellsMap[m.id]?.[ck(kpi.no, idx)] ?? "";
-            return computeCell(kpi.subRows, getRaw, si);
+            return computeCell(kpi.subRows, getRaw, si, kpi.polaritas);
           }
           return cellsMap[m.id]?.[ck(kpi.no, si)] ?? "";
         });
@@ -3587,23 +3928,26 @@ function KPIWorkspace({
     for (const m of months) {
       if (validatedMonthLabels.has(m.label)) continue;
       for (const kpi of KPI_ITEMS) {
-        const kpiName = kpi.kpi.split("\n")[0];
-        const rcaKey = `${kpi.no}__${m.id}`;
-        const inlineEntry = rcaMap[rcaKey];
-        const status: RCAStatus = inlineEntry
-          ? inlineEntryToStatus(inlineEntry)
-          : storedRCAStatus[rcaKey] ??
-            storedRCAStatus[`${kpiName}__${displayMonth(m.label)}`] ??
-            storedRCAStatus[`${kpiName}__${toIdShortPeriode(m.label)}`] ??
-            "none";
-        if (status !== "none") continue;
-        const needsRca = kpi.subRows.some((sub, si) => {
-          if (!sub.compute || sub.compute.type === "avg") return false;
+        kpi.subRows.forEach((sub, si) => {
+          if (!sub.compute || sub.compute.type === "avg") return;
           const getRaw = (idx: number) => cellsMap[m.id]?.[ck(kpi.no, idx)] ?? "";
-          const n = parseNum(computeCell(kpi.subRows, getRaw, si));
-          return n !== null && n < 100;
+          const n = parseNum(computeCell(kpi.subRows, getRaw, si, kpi.polaritas));
+          if (n === null || n >= 100) return;
+          const subMeta = getKpiSubItemMeta(kpi, si, m.id);
+          const inlineEntry = rcaMap[subMeta.rcaKey] ?? (!subMeta.isMultiItem ? rcaMap[subMeta.legacyRcaKey] : undefined);
+          const status: RCAStatus = inlineEntry
+            ? inlineEntryToStatus(inlineEntry)
+            : storedRCAStatus[subMeta.rcaKey] ??
+              (!subMeta.isMultiItem ? storedRCAStatus[subMeta.legacyRcaKey] : undefined) ??
+              storedRCAStatus[`${subMeta.itemKpiName}__${displayMonth(m.label)}`] ??
+              storedRCAStatus[`${subMeta.itemKpiName}__${toIdShortPeriode(m.label)}`] ??
+              (!subMeta.isMultiItem ? storedRCAStatus[`${kpi.kpi.split("\n")[0]}__${displayMonth(m.label)}`] : undefined) ??
+              (!subMeta.isMultiItem ? storedRCAStatus[`${kpi.kpi.split("\n")[0]}__${toIdShortPeriode(m.label)}`] : undefined) ??
+              "none";
+          if (status === "none") {
+            out.push({ kpiNo: kpi.no, monthId: m.id, monthLabel: m.label, kpiName: subMeta.itemKpiName });
+          }
         });
-        if (needsRca) out.push({ kpiNo: kpi.no, monthId: m.id, monthLabel: m.label, kpiName });
       }
     }
     return out;
@@ -4189,6 +4533,16 @@ function KPIWorkspace({
       />
       )}
 
+      {/* Tabel RCA terintegrasi di bawah tabel KPI dan di atas Evidence Documents */}
+      {!isBusinessWorkspace && (
+        <UnifiedRCADetailTable
+          submissions={loadRCASubmissions(activeUser.employeeId)}
+          title="Root Cause Analysis (RCA) — Terintegrasi dengan KPI Tracking"
+          subtitle="Seluruh RCA yang telah diisi disertakan otomatis bersama pengajuan approval KPI Tracking bulanan."
+          onOpenRcaSubmenu={!isViewOnly ? () => navigate(`${portalBase}/measurement/rca`) : undefined}
+        />
+      )}
+
       <EvidenceUploadSection
         files={evidenceFiles}
         onAdd={addEvidence}
@@ -4213,7 +4567,7 @@ function KPIWorkspace({
       {pendingRCA && (
         <RCAModal
           pending={pendingRCA}
-          existing={rcaMap[`${pendingRCA.kpiNo}__${pendingRCA.monthId}`]}
+          existing={rcaMap[pendingRCA.rcaKey] ?? rcaMap[`${pendingRCA.kpiNo}__${pendingRCA.monthId}`]}
           onSave={(key, entry, blocks) => {
             setRcaMap((p) => ({ ...p, [key]: entry }));
             const ml = pendingRCA!.monthLabel;
@@ -4264,7 +4618,7 @@ function KPIWorkspace({
           monthLabel={viewingRCA.monthLabel}
           ownerEmployeeId={activeUser.employeeId}
           onClose={() => setViewingRCA(null)}
-          onNavigate={() => { setViewingRCA(null); navigate("/measurement/rca"); }}
+          onNavigate={() => { setViewingRCA(null); navigate(`${portalBase}/measurement/rca`); }}
         />
       )}
       {showConfirm && (
@@ -4509,11 +4863,12 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
         const sub = kpi.subRows[si];
         if (!sub.compute || sub.compute.type === "avg") continue;
         const getRaw = (idx: number) => mCells[ck(kpi.no, idx)] ?? "";
-        const val = computeCell(kpi.subRows, getRaw, si);
+        const val = computeCell(kpi.subRows, getRaw, si, kpi.polaritas);
         const n = parseNum(val);
         if (n === null || n >= 100) continue;
 
-        const rcaKey = `${kpi.no}__${m.id}`;
+        const subMeta = getKpiSubItemMeta(kpi, si, m.id);
+        const rcaKey = subMeta.rcaKey;
         if (seen.has(rcaKey)) continue;
         seen.add(rcaKey);
 
@@ -4548,11 +4903,11 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
           monthId: m.id,
           monthLabel: m.label,
           periode: toIdShortPeriode(m.label),
-          kpi: kpi.kpi.split("\n")[0],
+          kpi: subMeta.itemKpiName,
           satuan: kpi.satuan,
-          baseline: kpi.baseline2025,
+          baseline: subMeta.itemBaseline,
           target: targetVal,
-          targetYearly: kpi.target2026,
+          targetYearly: subMeta.itemTargetYearly,
           actual: actualVal,
           score: Math.round(n * 10) / 10,
         });

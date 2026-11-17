@@ -792,9 +792,6 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
   }
   if (allowed.includes("KPI (Setting/Measurement)")) {
     list.push(buildFourStep("KPI (Tracking)", "KPI", "measurement"));
-    if (records.some((r) => r.module === "RCA" && r.phase === "measurement")) {
-      list.push(buildFourStep("RCA", "RCA", "measurement"));
-    }
   }
   if (allowed.includes("SMART Goals (Setting/Measurement)")) {
     list.push(buildFourStep("SMART Goals (Tracking)", "SMART Goals", "measurement"));

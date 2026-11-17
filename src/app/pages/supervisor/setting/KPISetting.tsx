@@ -121,7 +121,7 @@ function computeRatioSumDisplay(mt: Record<string, string>): { totalP: number; t
 
 type Polaritas = "Maximize" | "Minimize" | "Stabilize";
 type PageView = "input" | "preview";
-type KPITab = "personal" | "department" | "division" | "corporate" | "pak-anton" | "pak-amir";
+type KPITab = "personal" | "department" | "division" | "corporate" | "pak-anton" | "corporate-unit";
 
 interface KPISetting {
   id: string;
@@ -2066,7 +2066,21 @@ const PERSONAL_SECTION_OPTIONS = [
   { value: "B", label: "B — Functional KPI", bobot: "80%" },
 ];
 
-function AddKPIModal({ existingItems, onAdd, onClose, forDivision, onSectionCascade }: { existingItems: KPISetting[]; onAdd: (item: KPISetting) => void; onClose: () => void; forDivision?: boolean; onSectionCascade?: (section: string, type: string) => void }) {
+function AddKPIModal({
+  existingItems,
+  onAdd,
+  onClose,
+  forDivision,
+  hideCascading,
+  onSectionCascade,
+}: {
+  existingItems: KPISetting[];
+  onAdd: (item: KPISetting) => void;
+  onClose: () => void;
+  forDivision?: boolean;
+  hideCascading?: boolean;
+  onSectionCascade?: (section: string, type: string) => void;
+}) {
   const master = useMasterKpi();
   const [tab, setTab] = useState<"section" | "subsection">("section");
   const [form, setForm] = useState<Omit<KPISetting, "id">>({
@@ -2126,7 +2140,7 @@ function AddKPIModal({ existingItems, onAdd, onClose, forDivision, onSectionCasc
         conflictItems: existingItems.filter((i) => i.section === form.section).map((i) => ({ no: i.no, label: i.kpi.split("\n")[0], bobot: i.bobot })) });
       return;
     }
-    if (sectionCascadeType) onSectionCascade?.(form.section, sectionCascadeType);
+    if (!hideCascading && sectionCascadeType) onSectionCascade?.(form.section, sectionCascadeType);
     onAdd({ ...form, id: `kpi-${Date.now()}` }); onClose();
   };
 
@@ -2198,6 +2212,7 @@ function AddKPIModal({ existingItems, onAdd, onClose, forDivision, onSectionCasc
               </Field>
 
               {/* Cascading */}
+              {!hideCascading && (
               <Field label="Cascading">
                 <select
                   value={sectionCascadeType}
@@ -2220,6 +2235,7 @@ function AddKPIModal({ existingItems, onAdd, onClose, forDivision, onSectionCasc
                   {sectionCascadeType === "CC" && <><span className="font-bold text-teal-700">CC — Contributing Cascading:</span> Level di bawah dapat mengubah Section Bobot dan Section Name.</>}
                 </div>
               </Field>
+              )}
 
               <div className="flex items-center justify-between pt-2">
                 {!form.sectionBobot && (
@@ -4630,7 +4646,18 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         <AddCorporateKPIModal existingItems={items} onAdd={(item) => setItems((p) => [...p, item])} onClose={() => setShowAddModal(false)} />
       )}
       {showAddModal && !isCorporate && (
-        <AddKPIModal existingItems={items} onAdd={(item) => setItems((p) => [...p, item])} onClose={() => setShowAddModal(false)} onSectionCascade={onSectionCascadeChange} />
+        <AddKPIModal
+          existingItems={items}
+          onAdd={(item) => setItems((p) => [...p, item])}
+          onClose={() => setShowAddModal(false)}
+          hideCascading={
+            Boolean(hideCascading) ||
+            ["Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Seksi", "Operasional"].includes(
+              String(resolveEffectiveUserGrouping(effectiveOwner) ?? "").trim(),
+            )
+          }
+          onSectionCascade={onSectionCascadeChange}
+        />
       )}
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} validateMode={useValidateTerms} />}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} validateMode={useValidateTerms} />}
@@ -4712,9 +4739,9 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
   const defaultFirstTab: KPITab = personalOnly
     ? "personal"
     : isGmMode
-    ? "pak-amir"
+    ? "corporate-unit"
     : "corporate";
-  const [routeKpiTab, setActiveTab]         = useRouteTab<KPITab>(["corporate", "pak-anton", "pak-amir", "division", "department", "personal"], defaultFirstTab);
+  const [routeKpiTab, setActiveTab]         = useRouteTab<KPITab>(["corporate", "pak-anton", "corporate-unit", "division", "department", "personal"], defaultFirstTab);
   const activeTab: KPITab                   = personalOnly ? "personal" : routeKpiTab;
   const [personalTabStatus, setPersonalTabStatus]   = useState<TabStatus>("idle");
   const [divisionTabStatus, setDivisionTabStatus]   = useState<TabStatus>("approved");
@@ -4748,7 +4775,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
     division:    divisionTabStatus,
     corporate:   corporateTabStatus,
     "pak-anton": pakAntonTabStatus,
-    "pak-amir":  pakAmirTabStatus,
+    "corporate-unit": pakAmirTabStatus,
   };
 
   // ── Locking logic ────────────────────────────────────────────────────────────
@@ -4837,7 +4864,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
   const tabLocked: Record<KPITab, boolean> = {
     corporate:   false,
     "pak-anton": !corpValidated,
-    "pak-amir":  isGmMode ? false : (!corpValidated || !pakAntonValidated),
+    "corporate-unit": isGmMode ? false : (!corpValidated || !pakAntonValidated),
     division:    !corpValidated || !pakAntonValidated || !pakAmirApproved,
     personal:    isDirectorMode || isGmMode ? false : (!corpValidated || !pakAntonValidated || !pakAmirApproved || !divisionApproved),
     department:  false,
@@ -4846,7 +4873,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
   // validate-mode tabs (Business + Pak Anton) use "Validated" terminology
   const useValidateMap: Record<KPITab, boolean> = {
     corporate: !isDirectorMode, "pak-anton": true,
-    "pak-amir": false, division: false, personal: false, department: false,
+    "corporate-unit": false, division: false, personal: false, department: false,
   };
 
   const handleTabClick = (id: KPITab) => {
@@ -4856,8 +4883,12 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
   // A locked tab opened directly by URL falls back to the first (always open) tab.
   const activeTabLocked = tabLocked[activeTab];
   useEffect(() => {
-    if (!personalOnly && activeTabLocked) setActiveTab(isGmMode ? "pak-amir" : "corporate");
-    if (isGmMode && activeTab !== "pak-amir" && activeTab !== "personal") setActiveTab("pak-amir");
+    if (typeof window !== "undefined" && window.location.pathname.endsWith("/setting/kpi/pak-amir")) {
+      setActiveTab("corporate-unit");
+      return;
+    }
+    if (!personalOnly && activeTabLocked) setActiveTab(isGmMode ? "corporate-unit" : "corporate");
+    if (isGmMode && activeTab !== "corporate-unit" && activeTab !== "personal") setActiveTab("corporate-unit");
     if (isDirectorMode && activeTab !== "corporate" && activeTab !== "personal") setActiveTab("corporate");
   }, [personalOnly, activeTabLocked, activeTab, isGmMode, isDirectorMode, setActiveTab]);
 
@@ -4868,7 +4899,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       ]
     : isGmMode
     ? [
-        { id: "pak-amir", label: "KPI (Unit)" },
+        { id: "corporate-unit", label: "KPI (Unit)" },
         { id: "personal", label: "KPI (Personal)" },
       ]
     : TAB_DEFS;
@@ -4879,16 +4910,6 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
         <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">KPI Setting</h1>
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-gray-500 text-sm">2026 Performance Appraisal — KPI Configuration</p>
-          {isDirectorMode && (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-              Role Director ({getGroupNameForUnit(activeUser.company)}) — 2 Tab: KPI (Group) [Director Submit → HR ICF Validate] &amp; KPI (Personal)
-            </span>
-          )}
-          {isGmMode && (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
-              Role GM ({activeUser.company}) — 2 Tab: KPI (Unit) [GM Submit → Director Approve → HR ICF Validate] &amp; KPI (Personal)
-            </span>
-          )}
         </div>
       </div>
 
@@ -4953,9 +4974,9 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
           onSectionBobotChange={(sec, val) => setPakAntonSectionBobots((prev) => ({ ...prev, [sec]: val }))}
         />
       )}
-      {activeTab === "pak-amir" && (
+      {activeTab === "corporate-unit" && (
         <KPISection
-          key={`pak-amir-${isGmMode ? "gm" : pakAntonValidated ? "validated" : "pending"}-${pakAmirInitialItems.map(i => i.id).join("|")}`}
+          key={`corporate-unit-${isGmMode ? "gm" : pakAntonValidated ? "validated" : "pending"}-${pakAmirInitialItems.map(i => i.id).join("|")}`}
           initialItems={isGmMode ? CORPORATE_KPI : pakAmirInitialItems}
           isPersonal={false}
           isCorporate={true}

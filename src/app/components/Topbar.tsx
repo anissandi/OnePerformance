@@ -341,6 +341,17 @@ export function Topbar({
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [pwdError, setPwdError] = useState("");
   const [pwdSuccessPopupOpen, setPwdSuccessPopupOpen] = useState(false);
+  const [, setPhotoTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setPhotoTick((t) => t + 1);
+    window.addEventListener(PROFILE_PHOTO_EVENT, bump);
+    window.addEventListener("pa-db-hydrated", bump);
+    return () => {
+      window.removeEventListener(PROFILE_PHOTO_EVENT, bump);
+      window.removeEventListener("pa-db-hydrated", bump);
+    };
+  }, []);
+  const avatarPhotoUrl = getUserProfilePhoto(activeUser.employeeId);
 
   const dropRef = useRef<HTMLDivElement>(null);
   const bellRef = useRef<HTMLDivElement>(null);
@@ -577,10 +588,14 @@ export function Topbar({
                 {activeUser.position || "—"} · {activeUser.department || "—"}
               </p>
             </div>
-            <div className="w-9 h-9 rounded-full bg-[#1A284F] flex items-center justify-center shrink-0">
-              <span className="text-xs font-bold text-white tracking-wide">
-                {displayInitials}
-              </span>
+            <div className="w-9 h-9 rounded-full bg-[#1A284F] flex items-center justify-center shrink-0 overflow-hidden border border-gray-200">
+              {avatarPhotoUrl ? (
+                <img src={avatarPhotoUrl} alt={activeUser.name} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-xs font-bold text-white tracking-wide">
+                  {displayInitials}
+                </span>
+              )}
             </div>
             <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${dropOpen ? "rotate-180" : ""}`} />
           </button>
@@ -786,3 +801,4 @@ export function Topbar({
     </div>
   );
 }
+import { getUserProfilePhoto, PROFILE_PHOTO_EVENT } from "../store/profileStore";

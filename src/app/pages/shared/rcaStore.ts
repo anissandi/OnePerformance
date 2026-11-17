@@ -1,6 +1,6 @@
 import { deleteBackendRecordFromSupabase, safeGetLocalRaw, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
-import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 const KEY = "kpi_rca_submissions";
@@ -80,9 +80,17 @@ function loadAll(): StoredRCASubmission[] {
   }
 }
 
-function saveAll(rows: StoredRCASubmission[]): void {
+function isAllActionPlansCompleted(sub: Pick<StoredRCASubmission, "masalahBlocks" | "actionPlans">): boolean {
+  const aps = sub.masalahBlocks && sub.masalahBlocks.length > 0
+    ? sub.masalahBlocks.flatMap((b) => b.actionPlans)
+    : sub.actionPlans ?? [];
+  const active = aps.filter((ap) => ap.status !== "Dibatalkan");
+  return active.length > 0 && active.every((ap) => ap.status === "Selesai");
+}
+
+function saveAll(rows: StoredRCASubmission[], changedSubmission?: StoredRCASubmission): void {
   try {
-    const latest = rows[rows.length - 1];
+    const latest = changedSubmission ?? rows[rows.length - 1];
     savePersistedState(KEY, rows, latest ? {
       kind: "rca-submission",
       submission: latest,
@@ -124,11 +132,18 @@ export function saveRCASubmission(row: StoredRCASubmission, opts: { submitNow?: 
   const effectiveDate = normalizeDateDDMMYYYY(row.submittedDate);
   const finalDate = effectiveDate === "—" ? formatTodayDDMMYYYY() : effectiveDate;
   const submitNow = opts.submitNow ?? isKpiMonthAlreadySubmitted(empId, row.monthLabel);
+  const autoClosed = isAllActionPlansCompleted(row);
   row = {
     ...row,
     employeeId: normEmpId,
     submittedDate: finalDate,
-    approvalStatus: submitNow ? row.approvalStatus || "Pending-Check" : RCA_DRAFT_STATUS,
+    approvalStatus: autoClosed
+      ? "Closed"
+      : submitNow
+      ? row.approvalStatus && row.approvalStatus !== RCA_DRAFT_STATUS
+        ? row.approvalStatus
+        : "Pending-Check"
+      : RCA_DRAFT_STATUS,
   };
   const all = loadAll();
   const idx = all.findIndex(
@@ -139,32 +154,39 @@ export function saveRCASubmission(row: StoredRCASubmission, opts: { submitNow?: 
   } else {
     all.push(row);
   }
-  saveAll(all);
-  if (submitNow) {
-    submitWorkflowModule("RCA", "measurement", finalDate, empId, [row.monthLabel]);
-  }
+  saveAll(all, row);
+  window.dispatchEvent(new Event("appraisal-updated"));
 }
 
 /**
  * Dipanggil saat Submit KPI Tracking: seluruh RCA Draft/Revisi pada bulan yang diajukan ikut terkirim ke approver
- * (Checker → Approver 1 → Approver 2 → Validator). Mengembalikan jumlah RCA yang diajukan.
+ * menyatu dengan KPI Tracking bulanan (Checker → Approver 1 → Approver 2 → Validator).
  */
 export function submitRCAsForMonths(employeeId: string, monthLabels: string[]): number {
   const normEmpId = normalizeEmployeeId(employeeId);
   const months = new Set(monthLabels);
   const all = loadAll();
   let count = 0;
+  let lastModified: StoredRCASubmission | undefined;
   const today = formatTodayDDMMYYYY();
   const next = all.map((r) => {
     const owned = !r.employeeId || normalizeEmployeeId(r.employeeId) === normEmpId;
     if (!owned || !months.has(r.monthLabel)) return r;
+    if (isAllActionPlansCompleted(r)) {
+      const closedRow = { ...r, employeeId: normEmpId, approvalStatus: "Closed", submittedDate: today };
+      lastModified = closedRow;
+      count++;
+      return closedRow;
+    }
     if (r.approvalStatus === "Closed" || r.approvalStatus === "Validated") return r;
     count++;
-    return { ...r, employeeId: normEmpId, approvalStatus: "Pending-Check", submittedDate: today };
+    const updatedRow = { ...r, employeeId: normEmpId, approvalStatus: "Pending-Check", submittedDate: today };
+    lastModified = updatedRow;
+    return updatedRow;
   });
   if (count > 0) {
-    saveAll(next);
-    submitWorkflowModule("RCA", "measurement", today, employeeId, monthLabels);
+    saveAll(next, lastModified);
+    window.dispatchEvent(new Event("appraisal-updated"));
   }
   return count;
 }
@@ -194,9 +216,32 @@ export function updateRCASubmissionStatus(
   patch: Pick<StoredRCASubmission, "masalahBlocks" | "actionPlans" | "approvalStatus">
 ): void {
   const all = loadAll();
-  const idx = all.findIndex((r) => r.key === key);
+  const idx = all.findIndex((r) => r.key === key || r.id === key);
   if (idx >= 0) {
-    all[idx] = { ...all[idx], ...patch };
-    saveAll(all);
+    const merged: StoredRCASubmission = {
+      ...all[idx],
+      ...patch,
+      masalahBlocks: (patch.masalahBlocks ?? all[idx].masalahBlocks ?? []).map((b) => ({
+        ...b,
+        actionPlans: b.actionPlans.map((ap) => ({
+          ...ap,
+          keterangan: Array.isArray(ap.keterangan) ? [...ap.keterangan] : [],
+          output: Array.isArray(ap.output) ? [...ap.output] : [],
+          evidence: Array.isArray(ap.evidence) ? [...ap.evidence] : [],
+        })),
+      })),
+      actionPlans: (patch.actionPlans ?? all[idx].actionPlans ?? []).map((ap) => ({
+        ...ap,
+        keterangan: Array.isArray(ap.keterangan) ? [...ap.keterangan] : [],
+        output: Array.isArray(ap.output) ? [...ap.output] : [],
+        evidence: Array.isArray(ap.evidence) ? [...ap.evidence] : [],
+      })),
+    };
+    if (isAllActionPlansCompleted(merged)) {
+      merged.approvalStatus = "Closed";
+    }
+    all[idx] = merged;
+    saveAll(all, merged);
+    window.dispatchEvent(new Event("appraisal-updated"));
   }
 }

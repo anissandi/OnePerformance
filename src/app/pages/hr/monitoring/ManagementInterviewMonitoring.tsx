@@ -2,6 +2,9 @@ import { useState, useEffect } from "react";
 import { Search, MessageSquare, CheckCircle2, AlertCircle, Filter, Calendar } from "lucide-react";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 import { getPenilai1Score, subscribeScores } from "../../supervisor/managementInterviewScoreStore";
+import { getEntries, subscribe as subscribeSchedules } from "../../supervisor/interviewScheduleStore";
+import { getModuleWeightFraction } from "../../shared/scoringWeightStore";
+import { loadManagedUsers, resolveEffectiveUserGrouping } from "../../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -111,6 +114,20 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
   const [, forceUpdate] = useState(0);
 
   useEffect(() => subscribeScores(() => forceUpdate(n => n + 1)), []);
+  useEffect(() => {
+    const bump = () => forceUpdate((n) => n + 1);
+    const unsub = subscribeSchedules(bump);
+    window.addEventListener("pa-db-hydrated", bump);
+    window.addEventListener("appraisal-updated", bump);
+    return () => {
+      unsub();
+      window.removeEventListener("pa-db-hydrated", bump);
+      window.removeEventListener("appraisal-updated", bump);
+    };
+  }, []);
+
+  const liveSchedules = getEntries();
+  const managedUsers = loadManagedUsers();
 
   const filteredEmployees = filterMonitoringByModuleAccess(
     lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
@@ -128,12 +145,28 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
   });
 
   const allRows = filteredEmployees.map((emp) => {
-    const live = getPenilai1Score(emp.id);
+    const live = getPenilai1Score(emp.id, emp.name);
     const found = mergedMI.find((k) => k.employeeId === emp.id);
+    const schedForEmp = liveSchedules.find(
+      (s) =>
+        s.status !== "Cancelled" &&
+        ((s.addedUserIds ?? []).some((id) => id.trim().toLowerCase() === emp.id.trim().toLowerCase()) ||
+          s.addedUsers.some((nm) => nm.trim().toLowerCase() === emp.name.trim().toLowerCase())),
+    );
+    const schedIntvs = schedForEmp?.interviewers ?? [];
+    const tupleIntvs: [string, string, string, string] = [
+      schedIntvs[0] || INTERVIEWERS[0],
+      schedIntvs[1] || "",
+      schedIntvs[2] || "",
+      schedIntvs[3] || "",
+    ];
     const mi: MIRecord = found ?? {
       employeeId: emp.id,
-      status: live !== null ? "Selesai" : "Belum Dijadwalkan",
+      scheduledDate: schedForEmp?.scheduledDate ?? null,
+      interviewers: schedForEmp ? tupleIntvs : INTERVIEWERS,
+      status: live !== null ? "Selesai" : schedForEmp ? "Dijadwalkan" : "Belum Dijadwalkan",
       penilaiScores: [live, null, null, null],
+      notes: "",
     };
     return { emp, mi };
   });
@@ -255,7 +288,9 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
                 <th className="py-3 px-3 text-center">Score Penilai 2</th>
                 <th className="py-3 px-3 text-center">Score Penilai 3</th>
                 <th className="py-3 px-3 text-center">Score Penilai 4</th>
-                <th className="py-3 px-4 text-center">Final Score</th>
+                <th className="py-3 px-4 text-center">Score (%)</th>
+                <th className="py-3 px-4 text-center">Bobot MI</th>
+                <th className="py-3 px-4 text-center">Nilai Akhir (× Bobot)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -263,6 +298,10 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
                 const st          = STATUS_STYLE[mi.status];
                 const Icon        = st.icon;
                 const finalScore  = computeFinalScore(mi.penilaiScores);
+                const matchedManaged = managedUsers.find((u) => u.employeeId.toLowerCase() === emp.id.toLowerCase());
+                const effGrouping = matchedManaged ? resolveEffectiveUserGrouping(matchedManaged) : "Ka./Wa.Ka.Div ke atas";
+                const wFrac = getModuleWeightFraction(emp.unit, effGrouping, "Management Interview", 0.1) || 0.1;
+                const weightedScore = finalScore !== null ? parseFloat((finalScore * wFrac).toFixed(2)) : null;
                 return (
                   <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
                     <td className="py-3 px-3 text-center text-xs font-semibold text-gray-400">{no}</td>
@@ -301,7 +340,7 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
                     <td className="py-3 px-4">
                       {mi.status !== "Belum Dijadwalkan" ? (
                         <span className="text-[10px] font-medium text-indigo-700">
-                          {mi.interviewers.join(", ")}
+                          {mi.interviewers.filter(Boolean).join(", ")}
                         </span>
                       ) : (
                         <span className="text-gray-300 text-xs">—</span>
@@ -314,6 +353,18 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
                     ))}
                     <td className="py-3 px-4 text-center">
                       <FinalScoreBadge score={finalScore} />
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      <span className="text-xs font-semibold text-gray-600">{Math.round(wFrac * 100)}%</span>
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      {weightedScore !== null ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#1A284F] text-white">
+                          {weightedScore.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
                     </td>
                   </tr>
                 );

@@ -48,7 +48,7 @@ export function FeedbackApprovalsPage({
     >
       <ModuleRouteNav
         base={moduleBase}
-        modules={["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "RCA", "Inter-Department Feedback"]}
+        modules={["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "Project", "Inter-Department Feedback"]}
         label="Modul approval"
       />
       <div>

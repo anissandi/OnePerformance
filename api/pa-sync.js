@@ -174,6 +174,15 @@ export default async function handler(req, res) {
       if ((kind === "users-batch" || kind === "users-replace") && Array.isArray(body.users)) {
         if (kind === "users-replace") {
           await pgRest(cfg, "pa_users?employee_id=neq.__NONE__", { method: "DELETE" });
+          if (Array.isArray(body.resetKeys) && body.resetKeys.length > 0) {
+            const cleanReset = body.resetKeys
+              .map((k) => encodeURIComponent(String(k).trim()))
+              .filter(Boolean)
+              .join(",");
+            if (cleanReset) {
+              await pgRest(cfg, `pa_kv_state?state_key=in.(${cleanReset})`, { method: "DELETE" });
+            }
+          }
         }
         const validUsers = body.users.filter((u) => u && String(u.employeeId ?? u.employee_id ?? "").trim());
         if (validUsers.length > 0) {
@@ -216,6 +225,15 @@ export default async function handler(req, res) {
           });
         }
         return res.status(200).json({ ok: up.ok, status: up.status });
+      }
+
+      if (kind === "user-delete" && body.employeeId) {
+        const del = await pgRest(
+          cfg,
+          `pa_users?employee_id=eq.${encodeURIComponent(String(body.employeeId).trim())}`,
+          { method: "DELETE" },
+        );
+        return res.status(200).json({ ok: del.ok, status: del.status });
       }
 
       return res.status(200).json({ ok: false, reason: "UNHANDLED_KIND" });

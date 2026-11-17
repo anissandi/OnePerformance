@@ -1211,19 +1211,35 @@ export async function notifyLoginToSupabase(user: {
   }
 }
 
-export async function fetchBootstrapFromSupabase(): Promise<Record<string, unknown> | null> {
+async function fetchEdgeJsonFast(url: string, init?: RequestInit, timeoutMs = 1500): Promise<Record<string, unknown> | null> {
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   try {
-    // Jalankan pembacaan PostgREST DAN Edge Function /bootstrap secara paralel agar data dari
-    // pa_kv_state, pa_users, maupun kv_store_74dadec6 selalu terambil di browser/perangkat baru.
-    const vercelPromise = callVercelSyncApi({ method: "GET" });
-    const edgePromise = fetch(`${PA_APP_API_BASE}/bootstrap`, {
+    const res = await fetch(url, {
+      ...init,
+      signal: ctrl?.signal,
       headers: {
         apikey: SUPABASE_ANON_KEY,
         Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        ...(init?.headers ?? {}),
       },
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .catch(() => null);
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function fetchBootstrapFromSupabase(): Promise<Record<string, unknown> | null> {
+  try {
+    // Utamakan jalur cepat langsung ke Supabase PostgREST + Vercel Serverless API (/api/pa-sync).
+    // Edge Function /bootstrap hanya dipanggil sebagai fallback apabila kedua jalur cepat kosong/gagal,
+    // sehingga startup tidak pernah tertahan cold-start Edge Function.
+    const vercelPromise = callVercelSyncApi({ method: "GET" });
 
     const [
       users,
@@ -1246,7 +1262,6 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       kpiSettings,
       kpiBusinesses,
       smartGoalRows,
-      edgeData,
       vercelData,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
@@ -1269,12 +1284,19 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_kpi_settings", "select=*&order=updated_at.desc"),
       restSelect("pa_kpi_business", "select=*&order=updated_at.desc"),
       restSelect("pa_smart_goals", "select=*&order=updated_at.desc"),
-      edgePromise,
       vercelPromise,
     ]);
 
-    const edgeOk = Boolean(edgeData && typeof edgeData === "object" && edgeData.ok);
     const vercelOk = Boolean(vercelData && typeof vercelData === "object" && vercelData.ok);
+    const hasDirectData =
+      vercelOk ||
+      users.length > 0 ||
+      kvStates.length > 0 ||
+      workflowDocs.length > 0 ||
+      kpiSettings.length > 0 ||
+      smartGoalRows.length > 0;
+    const edgeData = hasDirectData ? null : await fetchEdgeJsonFast(`${PA_APP_API_BASE}/bootstrap`, undefined, 2000);
+    const edgeOk = Boolean(edgeData && typeof edgeData === "object" && edgeData.ok);
     const mergedKvByKey = new Map<string, unknown>();
     for (const row of kvStates as Array<{ state_key?: string; state_value?: unknown }>) {
       if (row?.state_key && row.state_value !== undefined) {
@@ -1380,10 +1402,42 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
 
 let initialHydrationPromise: Promise<void> | null = null;
 
+/** Bernilai true bila browser sudah memiliki cache daftar akun yang valid untuk render instan tanpa layar tunggu. */
+export function hasWarmLocalAuthCache(): boolean {
+  try {
+    const raw = safeGetLocalRaw("pa_managed_users_v1");
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Promise hidrasi awal (dipakai gate App & Login agar browser/perangkat baru membaca data backend terlebih dahulu). */
 export function waitForInitialHydration(timeoutMs = 12000): Promise<void> {
   if (!initialHydrationPromise) initialHydrationPromise = hydrateAllStoresFromSupabase();
   return Promise.race([
+    initialHydrationPromise.catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+/**
+ * Fast-boot untuk App startup:
+ * - Selalu menjalankan hidrasi penuh modul-modul di background secara real-time.
+ * - Jika cache auth lokal sudah hangat, langsung selesai seketika (0 ms blocking).
+ * - Jika browser/device baru kosong (incognito), hanya menunggu state login kritikal (~200-400 ms) agar siap login tanpa layar berat.
+ */
+export function waitForFastAuthBoot(timeoutMs = 2500): Promise<void> {
+  if (!initialHydrationPromise) {
+    initialHydrationPromise = hydrateAllStoresFromSupabase();
+  }
+  if (hasWarmLocalAuthCache()) {
+    return Promise.resolve();
+  }
+  return Promise.race([
+    refreshLoginCriticalStateFromBackend().catch(() => undefined),
     initialHydrationPromise.catch(() => undefined),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
@@ -1399,23 +1453,18 @@ export async function refreshKvKeysFromBackend(keys: string[]): Promise<Record<s
 
   // PENTING: koma pemisah PostgREST `in.(k1,k2)` TIDAK BOLEH di-encode menjadi %2C!
   const cleanInList = keys.map((k) => encodeURIComponent(k.trim())).join(",");
-  const edgeKvPromise = fetch(`${PA_APP_API_BASE}/kv?keys=${encodeURIComponent(keys.join(","))}`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-    },
-  })
-    .then((res) => (res.ok ? res.json() : null))
-    .catch(() => null);
 
-  const [pgRows, edgeResp, vercelResp] = await Promise.all([
+  const [pgRows, vercelResp] = await Promise.all([
     restSelect<{ state_key: string; state_value: unknown }>(
       "pa_kv_state",
       `select=state_key,state_value&state_key=in.(${cleanInList})`,
     ),
-    edgeKvPromise,
     callVercelSyncApi({ method: "GET" }, `?keys=${encodeURIComponent(keys.join(","))}`),
   ]);
+  const edgeResp =
+    pgRows.length > 0 || Boolean(vercelResp?.ok)
+      ? null
+      : await fetchEdgeJsonFast(`${PA_APP_API_BASE}/kv?keys=${encodeURIComponent(keys.join(","))}`);
 
   const pgMap: Record<string, unknown> = {};
   for (const row of pgRows) {
@@ -1667,16 +1716,15 @@ export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
     "pa_archived_users_v1",
     "pa_trial_mode_clean_v1",
   ];
-  const [kvOut, pgUsers, edgeResp, vercelResp] = await Promise.all([
+  const [kvOut, pgUsers, vercelResp] = await Promise.all([
     refreshKvKeysFromBackend(keys),
     restSelect<Record<string, unknown>>("pa_users", "select=*&order=employee_id.asc"),
-    fetch(`${PA_APP_API_BASE}/kv?keys=pa_managed_users_v1`, {
-      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null),
     callVercelSyncApi({ method: "GET" }, "?keys=pa_managed_users_v1"),
   ]);
+  const edgeResp =
+    pgUsers.length > 0 || Boolean(vercelResp?.ok) || Array.isArray(kvOut.pa_managed_users_v1)
+      ? null
+      : await fetchEdgeJsonFast(`${PA_APP_API_BASE}/kv?keys=pa_managed_users_v1`);
   const vercelUsers = vercelResp && Array.isArray(vercelResp.users) ? (vercelResp.users as Array<Record<string, unknown>>) : [];
   const dbUsers =
     vercelUsers.length >= pgUsers.length && vercelUsers.length > 0
@@ -2486,12 +2534,13 @@ export async function replaceAllBackendUsersAndResetForTrial(
         Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
       },
     });
-    for (const u of importedUsers) {
-      await syncDirectToPostgrest({ kind: "user-upsert", user: u });
+    if (importedUsers.length > 0) {
+      await syncDirectToPostgrest({ kind: "users-batch", users: importedUsers });
     }
     if (resetTransactions) {
-      for (const key of TRANSACTIONAL_KEYS) {
-        await fetch(`${SUPABASE_REST_BASE}/pa_kv_state?state_key=eq.${encodeURIComponent(key)}`, {
+      const cleanResetList = TRANSACTIONAL_KEYS.map((k) => encodeURIComponent(k)).join(",");
+      if (cleanResetList) {
+        await fetch(`${SUPABASE_REST_BASE}/pa_kv_state?state_key=in.(${cleanResetList})`, {
           method: "DELETE",
           headers: {
             apikey: SUPABASE_ANON_KEY,

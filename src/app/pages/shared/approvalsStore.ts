@@ -3,6 +3,7 @@ import { registerWorkflowRows, workflowAlias, loadWorkflowRecords, saveWorkflowA
 import { saveAppraisalApprover } from "./appraisalFormStore";
 import { saveMSApproverEntry } from "./msStore";
 import { upsertApprovalDecision } from "./smartGoalsStore";
+import { feedbackRowStatusFor, loadFeedbackSubmissions } from "./interDepartmentFeedbackStore";
 import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 import { resolveActingApproverLabel } from "../../store/delegationStore";
 import {
@@ -186,8 +187,8 @@ export function applyOverrides(
   const expanded = [...baseRows];
   for (const record of loadWorkflowRecords()) {
     if (record.phase !== phase || record.year !== "2026") continue;
-    // Jangan duplikasi modul Project & Inter-Department Feedback karena sudah di-generate oleh projectApprovalRows & feedbackApprovalRows
-    if (record.module === "Project" || record.module === "Inter-Department Feedback") continue;
+    // Jangan duplikasi modul Project & Inter-Department Feedback; RCA sudah menyatu dalam approval KPI Tracking bulanan
+    if (record.module === "Project" || record.module === "Inter-Department Feedback" || record.module === "RCA") continue;
     if (expanded.some((row) => normalizeEmployeeId(row.employeeId) === record.employeeId && row.type === record.module)) continue;
     const existingRow = rows.find((row) => normalizeEmployeeId(row.employeeId) === record.employeeId);
     const managedUser = managedUsers.find(
@@ -246,6 +247,7 @@ export function resolveDynamicApprovalRowsForUser(
 ): ApprovalRow[] {
   const workflows = loadWorkflowRecords();
   const overrides = loadOverrides();
+  const feedbackSubs = phase === "measurement" ? loadFeedbackSubmissions() : [];
   const seenKeys = new Set<string>();
   const result: ApprovalRow[] = [];
 
@@ -324,6 +326,29 @@ export function resolveDynamicApprovalRowsForUser(
       workflowStageForRow: stageForRow,
     };
     registerWorkflowRows([rowWithCanonicalNo], roleForRow);
+    if (row.type === "Inter-Department Feedback") {
+      const sub = feedbackSubs.find(
+        (s) =>
+          s.row.no === canonicalNo ||
+          normalizeEmployeeId(s.row.employeeId) === normEmpId,
+      );
+      if (sub) {
+        const fbState = feedbackRowStatusFor(sub, roleForRow);
+        // Jika masih menunggu Approver 1 selesai terlebih dahulu, jangan tampilkan di antrean Approver 2
+        if (fbState.stage === "waiting" && roleForRow === "approver2") {
+          continue;
+        }
+        result.push({
+          ...rowWithCanonicalNo,
+          no: sub.row.no,
+          status: fbState.status,
+          approvalDate: sub.row.approvalDate || "-",
+          reviewerRoleForRow: roleForRow,
+          workflowStageForRow: stageForRow,
+        });
+        continue;
+      }
+    }
     const shared = workflowRowStatus(rowWithCanonicalNo, roleForRow);
     const ov = overrides.find((o) => o.no === canonicalNo);
     const resolvedRow: ApprovalRow = shared

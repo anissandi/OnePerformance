@@ -1,12 +1,15 @@
 import React from "react";
 import {
   computeKPIAchievement,
+  computePolaritasAchievementPct,
   computeTotal2026,
+  findMatchingRcaForSubItem,
   parseBobotDecimal,
   type KPIItem,
 } from "../pages/employee/KPIPage";
 import type { MonthEntry } from "../pages/employee/KPIPage";
 import type { StoredRCASubmission } from "../pages/shared/rcaStore";
+import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
 
 interface KPITableViewProps {
   kpiItems: KPIItem[];
@@ -54,17 +57,14 @@ export function KPITableView({
     if (spec.type === "ratio") {
       const actualKey = `${kpi.no}__${spec.actualIdx}`;
       const targetKey = `${kpi.no}__${spec.targetIdx}`;
-      const target = parseNum(cells[monthId]?.[targetKey] ?? "");
-      if (target === null) return "—";
+      const rawTarget = cells[monthId]?.[targetKey] ?? "";
+      const target = parseNum(rawTarget);
+      const isRangeStabilize =
+        kpi.polaritas === "Stabilize" && /^\s*-?\d+(?:\.\d+)?\s*[-–]\s*-?\d+(?:\.\d+)?\s*$/.test(rawTarget.replace(/,/g, ""));
+      if (target === null && !isRangeStabilize) return "—";
       const actual = parseNum(cells[monthId]?.[actualKey] ?? "");
       if (actual === null) return "0%";
-      if (target === 0) return actual === 0 ? "100%" : "0%";
-      let pct: number;
-      if (spec.minimize) {
-        pct = actual <= target ? 100 : (target / actual) * 100;
-      } else {
-        pct = (actual / target) * 100;
-      }
+      const pct = computePolaritasAchievementPct(actual, rawTarget, target ?? 0, kpi.polaritas, spec.minimize);
       return pct.toFixed(1) + "%";
     }
     
@@ -93,27 +93,7 @@ export function KPITableView({
     return "—";
   };
 
-  const findMatchingRCA = (kpi: KPIItem, m: MonthEntry): StoredRCASubmission | undefined => {
-    const primaryKey = `${kpi.no}__${m.id}`;
-    const shortMonth = m.label.replace(/-\d{2}$/, "");
-    const kpiTitle = kpi.kpi.split("\n")[0].trim().toLowerCase();
-    return rcaSubmissions.find(
-      (s) =>
-        s.key === primaryKey ||
-        (s.kpiIndicator.trim().toLowerCase() === kpiTitle &&
-          (s.periode.toLowerCase() === shortMonth.toLowerCase() ||
-            (s.monthLabel ?? "").toLowerCase() === m.label.toLowerCase())),
-    );
-  };
-
-  const isRcaClosed = (sub: StoredRCASubmission): boolean => {
-    if (sub.approvalStatus === "Closed") return true;
-    const aps = sub.masalahBlocks?.length
-      ? sub.masalahBlocks.flatMap((b) => b.actionPlans)
-      : sub.actionPlans;
-    const active = aps.filter((ap) => ap.status !== "Dibatalkan");
-    return active.length > 0 && active.every((ap) => ap.status === "Selesai");
-  };
+  const isRcaClosed = (sub: StoredRCASubmission): boolean => isStoredRcaSubmissionClosed(sub);
 
   const totalNilai = kpiItems.reduce((sum, k) => {
     const ach = computeKPIAchievement(k, cells, months);
@@ -166,7 +146,8 @@ export function KPITableView({
             return kpi.subRows.map((sub, subIdx) => {
               const isFirst = subIdx === 0;
               const isComputed = !!sub.compute;
-              const isFinalComputed = Boolean(sub.compute && sub.bold);
+              // Tag RCA hanya muncul pada item KPI spesifik (bukan baris rata-rata total "% Pencapaian Total")
+              const isItemComputed = Boolean(sub.compute && sub.compute.type !== "avg");
               const isTargetRow = !sub.compute && sub.label.toLowerCase().startsWith("target");
               
               const totalVal = computeTotal2026(kpi, subIdx, cells, months);
@@ -236,8 +217,14 @@ export function KPITableView({
                       const val = getCellValue(kpi, m.id, subIdx);
                       const cellColorCls = isComputed ? getPctColor(val) : "";
                       const numVal = isComputed ? parseNum(val) : null;
-                      const matchedRCA = isFinalComputed ? findMatchingRCA(kpi, m) : undefined;
-                      const showRcaTrigger = isFinalComputed && (matchedRCA || (numVal !== null && numVal < 100));
+                      const matchedRCA =
+                        isItemComputed && numVal !== null && numVal < 100
+                          ? findMatchingRcaForSubItem(rcaSubmissions, kpi, subIdx, m)
+                          : isItemComputed
+                          ? findMatchingRcaForSubItem(rcaSubmissions, kpi, subIdx, m)
+                          : undefined;
+                      const showRcaTrigger =
+                        isItemComputed && ((numVal !== null && numVal < 100) || Boolean(matchedRCA));
 
                       return (
                         <td key={m.id} className={`border border-gray-200 text-center py-1.5 px-1.5 ${

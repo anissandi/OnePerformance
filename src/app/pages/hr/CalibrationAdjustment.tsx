@@ -1410,9 +1410,13 @@ function EmployeeAdjustmentSection({
   };
   const buildMIScores = useCallback(() => {
     const result: Record<string, number | null> = {};
-    Object.entries(MI_EMP_MAP).forEach(([empId, monId]) => {
-      result[empId] = getPenilai1ScoreAsPercent(monId);
-    });
+    for (const emp of ALL_EMPLOYEES) {
+      const mapped = MI_EMP_MAP[emp.id] ?? emp.employeeId;
+      const pct = getPenilai1ScoreAsPercent(mapped, emp.name);
+      if (pct !== null) {
+        result[emp.id] = pct;
+      }
+    }
     return result;
   }, []);
   const [miScores, setMIScores] = useState<Record<string, number | null>>(buildMIScores);

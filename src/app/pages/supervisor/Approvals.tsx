@@ -7,11 +7,12 @@ import { Search, Eye, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Ch
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
+import { FeedbackApprovalDrawer } from "../../components/FeedbackApprovalDrawer";
 import { SettingApprovalDrawer } from "../../components/SettingApprovalDrawer";
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
 import { applyOverrides, resolveDynamicApprovalRowsForUser, saveOverride } from "../shared/approvalsStore";
 import { saveRCAApprovalDecision } from "../shared/rcaApprovalStore";
-import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
+import { feedbackApprovalRows, refreshFeedbackSubmissionsFromBackend } from "../shared/interDepartmentFeedbackStore";
 import { projectApprovalRows } from "../../store/projectStore";
 import {
   getAllowedApprovalTypesForUser,
@@ -31,16 +32,16 @@ const MONTHS = ["January","February","March","April","May","June","July","August
 const MONTH_NUM: Record<string,string> = Object.fromEntries(MONTHS.map((m, i) => [m, String(i + 1).padStart(2, "0")]));
 
 const CHECKIN_FILTER_OPTIONS = {
-  companyUnit: [TEAM_UNIT], year: ["2026", "2025", "2024"], month: MONTHS, division: [TEAM_DIV],
-  department: ["SDM"], approvalType: ["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "Project", "RCA", "Inter-Department Feedback"],
+  companyUnit: [TEAM_UNIT], year: ["2026"], month: MONTHS, division: [TEAM_DIV],
+  department: ["SDM"], approvalType: ["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "Project", "Inter-Department Feedback"],
 };
 const SETTING_FILTER_OPTIONS = {
-  companyUnit: [TEAM_UNIT], year: ["2026", "2025", "2024"], month: MONTHS, division: [TEAM_DIV],
+  companyUnit: [TEAM_UNIT], year: ["2026"], month: MONTHS, division: [TEAM_DIV],
   department: ["SDM"], approvalType: ["KPI", "SMART Goals"],
 };
 
-const PENDING_STATUSES  = new Set(["Pending", "Edit Request"]);
-const HISTORY_STATUSES  = new Set(["Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Checked", "Assessed-Approver 1", "Assessed-Approver 2", "Approved", "Validated", "Revision", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
+const PENDING_STATUSES  = new Set(["Pending", "Pending-Hasil Tindak Lanjut", "Edit Request"]);
+const HISTORY_STATUSES  = new Set(["Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Checked", "Assessed-Approver 1", "Assessed-Approver 2", "Approved", "Approved-Hasil Tindak Lanjut", "Validated", "Revision", "Revision-Hasil Tindak Lanjut", "EditRequest-PendingA2", "EditRequest-AcceptedA2", "EditRequest-Rejected"]);
 
 type MainTab = "checkin" | "setting";
 
@@ -105,6 +106,9 @@ export function SupervisorApprovals() {
       }
     };
     refresh();
+    if (mainTab === "checkin") {
+      void refreshFeedbackSubmissionsFromBackend();
+    }
     window.addEventListener("feedback-updated", refresh);
     window.addEventListener("appraisal-updated", refresh);
     window.addEventListener("pa-auth-updated", refresh);
@@ -257,6 +261,13 @@ function HistoryTag({ status, type }: { status: string; type?: string }) {
       </span>
     );
   }
+  if (status === "Approved-Hasil Tindak Lanjut") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300">
+        <CheckCircle2 className="w-3 h-3" /> Approved (Hasil TL)
+      </span>
+    );
+  }
   if (status === "Assessed-Approver 2") {
     const tagText = type === "Project" ? "Approved" : "Assessed";
     return (
@@ -269,6 +280,13 @@ function HistoryTag({ status, type }: { status: string; type?: string }) {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-300">
         <RotateCcw className="w-3 h-3" /> Revision
+      </span>
+    );
+  }
+  if (status === "Revision-Hasil Tindak Lanjut") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-300">
+        <RotateCcw className="w-3 h-3" /> Revision (Hasil TL)
       </span>
     );
   }
@@ -571,7 +589,7 @@ function ApprovalsTable({
                 <td className="py-4 px-4">
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* Pending tab */}
-                    {activeTab === "Pending" && row.status === "Pending" && (() => {
+                    {activeTab === "Pending" && (row.status === "Pending" || row.status === "Pending-Hasil Tindak Lanjut") && (() => {
                       const rel = getDirectApprovalRoleForTarget(activeUser, row.employeeId);
                       const isDirectApprover = rel === "ap1" || rel === "ap2" || rel === "checker" || rel === "validator";
                       return isDirectApprover ? (
@@ -641,7 +659,16 @@ function ApprovalsTable({
         <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} className="p-2 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 disabled:opacity-40"><ChevronsRight className="w-4 h-4" /></button>
       </div>
 
-      {reviewRow && !isSetting && (
+      {reviewRow && !isSetting && reviewRow.type === "Inter-Department Feedback" && (
+        <FeedbackApprovalDrawer
+          key={reviewRow.no}
+          row={reviewRow}
+          reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole}
+          onClose={() => setReviewRow(null)}
+          onUpdated={() => window.dispatchEvent(new Event("feedback-updated"))}
+        />
+      )}
+      {reviewRow && !isSetting && reviewRow.type !== "Inter-Department Feedback" && (
         <ReviewDrawer row={reviewRow} reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole} onClose={() => setReviewRow(null)} onApprove={(note) => handleApprove(reviewRow, note)} onRevision={(note) => handleRevision(reviewRow, note)} onAssessed={(note) => handleAssessed(reviewRow, note)} readOnly={reviewFromHistory} />
       )}
       {reviewRow && isSetting && (

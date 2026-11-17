@@ -99,12 +99,11 @@ function isoToMonthSlot(iso: string, baseYear: number): number | null {
 }
 
 export function loadLiveModuleActivationList(selectedYear = "2026"): Module[] {
-  let saved: Record<string, Partial<Module>> = {};
-  try {
-    saved = JSON.parse(localStorage.getItem(`pa_module_activation_${selectedYear}`) ?? "{}");
-  } catch {
-    saved = {};
-  }
+  const saved = loadPersistedState<Record<string, Partial<Module>>>(
+    `pa_module_activation_${selectedYear}`,
+    {},
+  );
+  const validMonths = new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]);
   return INITIAL_MODULES.map((module) => ({
     ...module,
     ...saved[module.id],
@@ -112,7 +111,13 @@ export function loadLiveModuleActivationList(selectedYear = "2026"): Module[] {
     ...(module.id === "kpi-measurement"
       ? {
           backlogMonths: Array.isArray(saved[module.id]?.backlogMonths)
-            ? saved[module.id]!.backlogMonths!.filter((month) => ["1", "2", "3", "4"].includes(month))
+            ? Array.from(
+                new Set(
+                  saved[module.id]!.backlogMonths!
+                    .map((m) => String(m).trim())
+                    .filter((month) => validMonths.has(month)),
+                ),
+              ).sort((a, b) => Number(a) - Number(b))
             : [],
           dateLockPerMonth: /^(?:[1-9]|1[0-9]|2[0-8])$/.test(saved[module.id]?.dateLockPerMonth ?? "")
             ? saved[module.id]!.dateLockPerMonth
@@ -280,7 +285,7 @@ const POSITION_OPTIONS = [
   "All",
 ];
 
-const YEARS = ["2026", "2025", "2024"];
+const YEARS = ["2026"];
 
 interface Module {
   id: string;
@@ -711,24 +716,12 @@ function ModuleCard({
           </div>
         )}
 
-        {/* Activation for */}
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-semibold text-gray-600">Activation for:</label>
-          <MultiSelectDropdown
-            selected={module.activationFor}
-            onChange={(val) => onChange(module.id, { activationFor: val })}
-            disabled={!module.active}
-          />
-        </div>
-
         {/* Access window info */}
         {module.active && module.startDate && module.endDate && (
           <div className="flex items-center gap-2 px-4 py-3 bg-[#F8F7F4] rounded-xl text-xs text-[#8C7B5D]">
             <Lock className="w-3.5 h-3.5 shrink-0" />
             <span>
-              {module.activationFor.length === 0
-                ? "No positions selected — please choose who can access this module."
-                : `${module.activationFor.includes("All") ? "All positions" : module.activationFor.join(", ")} can access this module from ${module.startDate} to ${module.endDate}.`}
+              Modul aktif mulai {module.startDate} s/d {module.endDate}.
             </span>
           </div>
         )}
@@ -747,8 +740,17 @@ export function HRModuleActivation() {
     loadKpiValidationChecklist("2026"),
   );
   useEffect(() => {
-    setModules(loadModules(year));
-    setKpiChecklist(loadKpiValidationChecklist(year));
+    const refresh = () => {
+      setModules(loadModules(year));
+      setKpiChecklist(loadKpiValidationChecklist(year));
+    };
+    refresh();
+    window.addEventListener("pa-db-hydrated", refresh);
+    window.addEventListener("pa-module-activation-updated", refresh);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", refresh);
+      window.removeEventListener("pa-module-activation-updated", refresh);
+    };
   }, [year]);
 
   const [pendingId, setPendingId] = useState<string | null>(null);

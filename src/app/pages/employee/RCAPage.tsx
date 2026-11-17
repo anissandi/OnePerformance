@@ -93,7 +93,7 @@ interface KPICatalogItem {
 
 const MONTHS_ID = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
 const MONTHS_EN = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const YEARS = ["2026","2025","2024"];
+const YEARS = ["2026"];
 const STATUS_OPTIONS: StatusPerbaikan[] = ["Belum dilaksanakan","Sedang dilaksanakan","Selesai","Ditunda","Dibatalkan"];
 const STATUS_PERBAIKAN_STYLE: Record<StatusPerbaikan, string> = {
   "Belum dilaksanakan": "bg-red-50 text-red-700",
@@ -325,11 +325,12 @@ function ListEditor({ items, onChange, lockCount = 0 }: {
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
           placeholder="Tambah…"
           className="flex-1 text-[10px] border border-dashed border-amber-300 rounded px-1.5 py-1 outline-none focus:border-amber-500 bg-amber-50/30 min-w-0"
         />
-        <button onClick={commit} className="text-[10px] font-bold text-amber-600 hover:bg-amber-100 px-1.5 py-1 rounded transition-colors">+</button>
+        <button type="button" onClick={commit} className="text-[10px] font-bold text-amber-600 hover:bg-amber-100 px-1.5 py-1 rounded transition-colors">+</button>
       </div>
     </div>
   );
@@ -1070,14 +1071,21 @@ function DetailDrawer({ row, onClose, onSubmit }: {
         kenapaA: b.kenapaA,
         kenapaB: b.kenapaB,
         kenapaC: b.kenapaC,
-        actionPlans: b.actionPlans as StoredRCAActionPlan[],
+        actionPlans: b.actionPlans.map((ap) => ({
+          ...ap,
+          keterangan: [...ap.keterangan],
+          output: [...ap.output],
+          evidence: [...ap.evidence],
+        })) as StoredRCAActionPlan[],
       }))
     );
     const flatAPs: StoredRCAActionPlan[] = storedBlocks.flatMap((b) => b.actionPlans);
+    const activeAPs = flatAPs.filter((ap) => ap.status !== "Dibatalkan");
+    const allDone = activeAPs.length > 0 && activeAPs.every((ap) => ap.status === "Selesai");
     updateRCASubmissionStatus(storeKey, {
       masalahBlocks: storedBlocks,
       actionPlans: flatAPs,
-      approvalStatus,
+      approvalStatus: allDone ? "Closed" : approvalStatus,
     });
   };
 
@@ -1499,7 +1507,7 @@ export function RCAPage() {
     const wfRec = loadWorkflowRecords().find(
       (r) =>
         r.year === "2026" &&
-        r.module === "RCA" &&
+        r.module === "KPI" &&
         r.phase === "measurement" &&
         (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
     );
@@ -1560,7 +1568,9 @@ export function RCAPage() {
               actionPlans: s.actionPlans as ActionPlan[],
             }],
       };
-      const rawSt = (s.approvalStatus as ApprovalStatus) || "Pending-Check";
+      const allAps = rcaItem.masalahBlocks.flatMap((b) => b.actionPlans).filter((ap) => ap.status !== "Dibatalkan");
+      const isAllCompleted = allAps.length > 0 && allAps.every((ap) => ap.status === "Selesai");
+      const rawSt: ApprovalStatus = isAllCompleted ? "Closed" : ((s.approvalStatus as ApprovalStatus) || "Pending-Check");
       // Status workflow RCA berlaku untuk bulan yang diajukan pada siklus submit aktif
       const inActiveCycle = !wfRec?.submittedMonths?.length || wfRec.submittedMonths.includes(s.monthLabel);
       const status: ApprovalStatus =
@@ -1717,7 +1727,7 @@ export function RCAPage() {
 
       <ApproverNotesHistory
         employeeId={getActiveUser().employeeId}
-        module="RCA"
+        module="KPI"
         phase="measurement"
         title="History Catatan Approver"
       />
@@ -1748,7 +1758,7 @@ export function AppraisalRCASection() {
       const wfRec = loadWorkflowRecords().find(
         (r) =>
           r.year === "2026" &&
-          r.module === "RCA" &&
+          r.module === "KPI" &&
           r.phase === "measurement" &&
           (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
       );
@@ -1870,7 +1880,7 @@ export function AppraisalRCASection() {
       )}
       <ApproverNotesHistory
         employeeId={getActiveUser().employeeId}
-        module="RCA"
+        module="KPI"
         phase="measurement"
         title="History Catatan Approver"
       />

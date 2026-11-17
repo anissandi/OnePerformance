@@ -118,17 +118,20 @@ export function ModuleApprovalStatusBar({
   const isValDone = isFourStep
     ? Boolean(valDec?.status === "Validated" || a2Dec?.status === "Validated")
     : isA2Done;
+  // Untuk KPI Measurement, submittedOverride === false berarti bulan aktif masih Draft / belum pernah disubmit.
+  const hasEffectiveSubmission =
+    submittedOverride !== undefined ? Boolean(submittedOverride) : Boolean(wfRec);
+  const isSubmitted = Boolean(hasEffectiveSubmission && !isRev);
   const isChkDone = isFourStep
     ? Boolean(
-        bypassCheck ||
-          isA1Done ||
-          isA2Done ||
-          isValDone ||
-          (chkDec && chkDec.status !== "Revision"),
+        (isSubmitted || isRev) &&
+          (bypassCheck ||
+            isA1Done ||
+            isA2Done ||
+            isValDone ||
+            (chkDec && chkDec.status !== "Revision")),
       )
     : true;
-
-  const isSubmitted = Boolean((wfRec || submittedOverride) && !isRev);
   const isFullApproved = isFourStep ? isValDone : isA2Done;
 
   const ap1User = resolveUserByRef(allUsers, activeUser.regNoAp1);

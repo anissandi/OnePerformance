@@ -1,18 +1,25 @@
 // @refresh reset
 import { getKpiMonthVisuals, lastFullyApprovedMonth, monthNameId } from "../../components/KpiMonthlyApprovalBar";
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
 import {
   Briefcase, Building2, MapPin, Mail, Phone, Calendar,
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
   ChevronRight, Award,
   BarChart2, Star, Activity, MessageSquare, Clock, CheckCircle2, ChevronDown, Users,
-  StickyNote, UserCheck, Target, ClipboardCheck, Sparkles,
+  StickyNote, UserCheck, Target, ClipboardCheck, Sparkles, Camera, Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
 } from "../employee/KPIPage";
-import { SUPERVISOR_PROFILE } from "../../store/profileStore";
+import {
+  getUserProfilePhoto,
+  PROFILE_PHOTO_EVENT,
+  removeUserProfilePhoto,
+  SUPERVISOR_PROFILE,
+  uploadAndSaveUserProfilePhoto,
+} from "../../store/profileStore";
 import {
   getActiveUser,
   loadManagedUsers,
@@ -232,7 +239,7 @@ const KPI_SUMMARY = [
 // ─── Year-based data ──────────────────────────────────────────────────────────
 
 const CURRENT_YEAR = 2026;
-const AVAILABLE_YEARS = [2026, 2025, 2024];
+const AVAILABLE_YEARS = [2026];
 
 interface SummaryNote {
   approver: string;
@@ -324,6 +331,15 @@ export function ViewProfile() {
   const [yearOpen, setYearOpen] = useState(false);
   const [tick, setTick] = useState(0);
   const [summaryNoteOpen, setSummaryNoteOpen] = useState(true);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | undefined>(() =>
+    getUserProfilePhoto(activeUser.employeeId),
+  );
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  useEffect(() => {
+    setProfilePhotoUrl(getUserProfilePhoto(activeUser.employeeId));
+  }, [activeUser.employeeId, tick]);
 
   useEffect(() => {
     const onRefresh = () => setTick((v) => v + 1);
@@ -333,6 +349,7 @@ export function ViewProfile() {
     window.addEventListener("feedback-updated", onRefresh);
     window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
     window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+    window.addEventListener(PROFILE_PHOTO_EVENT, onRefresh);
     window.addEventListener("storage", onRefresh);
     return () => {
       window.removeEventListener("appraisal-updated", onRefresh);
@@ -341,6 +358,7 @@ export function ViewProfile() {
       window.removeEventListener("feedback-updated", onRefresh);
       window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);
       window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+      window.removeEventListener(PROFILE_PHOTO_EVENT, onRefresh);
       window.removeEventListener("storage", onRefresh);
     };
   }, []);
@@ -541,6 +559,22 @@ export function ViewProfile() {
     );
 
     for (const rec of wfRecords) {
+      // Khusus KPI Measurement (KPI Tracking), ditangani terpusat dengan format "KPI Tracking ({{date}})" di bawah agar tidak double
+      if (rec.module === "KPI" && rec.phase === "measurement") {
+        for (const rev of rec.revisionHistory ?? []) {
+          if (rev.role === "Approver 1" || rev.role === "Approver 2") {
+            pushNote({
+              approver: rev.approverName || (rev.role === "Approver 1" ? ap1User?.name || "Approver 1" : ap2User?.name || "Approver 2"),
+              role: rev.role,
+              positionLabel: rev.role === "Approver 1" ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
+              module: `KPI Tracking (${rev.date || "-"})`,
+              date: rev.date || "-",
+              note: rev.note,
+            });
+          }
+        }
+        continue;
+      }
       const modDisplay = formatModDisplay(rec.module, rec.phase);
 
       const a1Comment =
@@ -594,6 +628,7 @@ export function ViewProfile() {
       const assList: StoredAssessment[] = rawAss ? JSON.parse(rawAss) : [];
       for (const item of assList) {
         if (!item.rowNo.includes(`-${normId}-`)) continue;
+        if (item.type === "KPI" && !item.rowNo.includes("ST-")) continue;
         const commentTxt = item.comments?.["0"] ?? "";
         if (!commentTxt.trim()) continue;
         const isA1 = item.approverRole === "approver1";
@@ -610,39 +645,67 @@ export function ViewProfile() {
       // ignore
     }
 
-    // 3. KPI Tracking Comments & Monthly Notes
-    const kpiComments = loadKPICommentsForEmployee(activeUser.employeeId);
-    if (kpiComments.approver1?.text?.trim()) {
-      pushNote({
-        approver: kpiComments.approver1.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
-        role: "Approver 1",
-        positionLabel: ap1User?.position || "Atasan Langsung (AP1)",
-        module: "KPI Tracking",
-        date: kpiComments.approver1.date || "-",
-        note: kpiComments.approver1.text,
-      });
-    }
-    if (kpiComments.approver2?.text?.trim()) {
-      pushNote({
-        approver: kpiComments.approver2.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
-        role: "Approver 2",
-        positionLabel: ap2User?.position || "Atasan Langsung (AP2)",
-        module: "KPI Tracking",
-        date: kpiComments.approver2.date || "-",
-        note: kpiComments.approver2.text,
-      });
-    }
-    // Catatan bulanan KPI Tracking dari log keputusan milik karyawan ini sendiri
-    for (const entry of getApproverNotesHistory(activeUser.employeeId, "KPI", "measurement")) {
-      if (!entry.note?.trim() || (entry.stage !== "approver1" && entry.stage !== "approver2")) continue;
+    // 3. KPI Tracking — hanya tampilkan format "KPI Tracking ({{date}})" agar tidak double
+    const kpiLogNotes = getApproverNotesHistory(activeUser.employeeId, "KPI", "measurement").filter(
+      (entry) => Boolean(entry.note?.trim()) && (entry.stage === "approver1" || entry.stage === "approver2"),
+    );
+    const seenKpiRoleNotes = new Set<string>();
+    for (const entry of kpiLogNotes) {
       const isA1 = entry.stage === "approver1";
+      const roleLbl: "Approver 1" | "Approver 2" = isA1 ? "Approver 1" : "Approver 2";
+      const displayDate = entry.date && entry.date !== "-" ? entry.date : entry.months?.join(", ") || "-";
+      seenKpiRoleNotes.add(`${roleLbl}:${entry.note!.trim().toLowerCase()}`);
       pushNote({
         approver: entry.approverName || entry.stageLabel,
-        role: isA1 ? "Approver 1" : "Approver 2",
+        role: roleLbl,
         positionLabel: isA1 ? ap1User?.position || "Atasan Langsung (AP1)" : ap2User?.position || "Atasan Langsung (AP2)",
-        module: `KPI Tracking${entry.months?.length ? ` (${entry.months.join(", ")})` : ""}`,
+        module: `KPI Tracking (${displayDate})`,
         date: entry.date || "-",
-        note: entry.note,
+        note: entry.note!,
+      });
+    }
+    const kpiComments = loadKPICommentsForEmployee(activeUser.employeeId);
+    const kpiMeasRec = wfRecords.find((r) => r.module === "KPI" && r.phase === "measurement");
+    const fallbackA1Note =
+      kpiComments.approver1?.text?.trim() ||
+      kpiMeasRec?.assessments.approver1?.comments?.["0"]?.trim() ||
+      kpiMeasRec?.decisions.approver1?.note?.trim() ||
+      "";
+    if (fallbackA1Note && !seenKpiRoleNotes.has(`Approver 1:${fallbackA1Note.toLowerCase()}`)) {
+      const a1Date =
+        kpiComments.approver1?.date ||
+        kpiMeasRec?.decisions.approver1?.date ||
+        kpiMeasRec?.assessments.approver1?.date ||
+        kpiMeasRec?.submittedDate ||
+        "-";
+      pushNote({
+        approver: kpiComments.approver1?.approverName || kpiMeasRec?.decisions.approver1?.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+        role: "Approver 1",
+        positionLabel: ap1User?.position || "Atasan Langsung (AP1)",
+        module: `KPI Tracking (${a1Date})`,
+        date: a1Date,
+        note: fallbackA1Note,
+      });
+    }
+    const fallbackA2Note =
+      kpiComments.approver2?.text?.trim() ||
+      kpiMeasRec?.assessments.approver2?.comments?.["0"]?.trim() ||
+      kpiMeasRec?.decisions.approver2?.note?.trim() ||
+      "";
+    if (fallbackA2Note && !seenKpiRoleNotes.has(`Approver 2:${fallbackA2Note.toLowerCase()}`)) {
+      const a2Date =
+        kpiComments.approver2?.date ||
+        kpiMeasRec?.decisions.approver2?.date ||
+        kpiMeasRec?.assessments.approver2?.date ||
+        kpiMeasRec?.submittedDate ||
+        "-";
+      pushNote({
+        approver: kpiComments.approver2?.approverName || kpiMeasRec?.decisions.approver2?.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+        role: "Approver 2",
+        positionLabel: ap2User?.position || "Atasan Langsung (AP2)",
+        module: `KPI Tracking (${a2Date})`,
+        date: a2Date,
+        note: fallbackA2Note,
       });
     }
 
@@ -825,14 +888,77 @@ export function ViewProfile() {
         </div>
         <div className="px-8 pb-6">
           <div className="flex items-end gap-5 -mt-10 mb-4 flex-wrap">
-            <div className="w-20 h-20 rounded-2xl bg-[#1A284F] border-4 border-white flex items-center justify-center shadow-md shrink-0">
-              <span className="text-2xl font-bold text-white tracking-wider">{profileInitials}</span>
+            <div className="relative group/avatar shrink-0">
+              <div className="w-20 h-20 rounded-2xl bg-[#1A284F] border-4 border-white flex items-center justify-center shadow-md overflow-hidden">
+                {profilePhotoUrl ? (
+                  <img
+                    src={profilePhotoUrl}
+                    alt={activeUser.name || USER.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-2xl font-bold text-white tracking-wider">{profileInitials}</span>
+                )}
+              </div>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  if (!file.type.startsWith("image/")) {
+                    toast.error("Pilih file gambar (JPG, PNG, atau WEBP).");
+                    return;
+                  }
+                  setUploadingPhoto(true);
+                  void uploadAndSaveUserProfilePhoto(file, activeUser)
+                    .then((url) => {
+                      if (url) {
+                        setProfilePhotoUrl(url);
+                        toast.success("Foto profil berhasil diperbarui dan tersimpan ke database.");
+                      } else {
+                        toast.error("Gagal mengunggah foto profil.");
+                      }
+                    })
+                    .finally(() => setUploadingPhoto(false));
+                }}
+              />
+              <button
+                type="button"
+                disabled={uploadingPhoto}
+                onClick={() => photoInputRef.current?.click()}
+                title="Ubah Foto Profil"
+                className="absolute -bottom-1.5 -right-1.5 w-8 h-8 rounded-xl bg-white border border-gray-200 shadow-md flex items-center justify-center text-[#1A284F] hover:bg-[#1A284F] hover:text-white transition-colors disabled:opacity-50"
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+              {profilePhotoUrl && !uploadingPhoto && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    removeUserProfilePhoto(activeUser.employeeId);
+                    setProfilePhotoUrl(undefined);
+                    toast.success("Foto profil dihapus.");
+                  }}
+                  title="Hapus Foto Profil"
+                  className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-red-600 hover:border-red-200 opacity-0 group-hover/avatar:opacity-100 transition-opacity"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              )}
             </div>
             <div className="flex-1 min-w-0 pt-12">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   <h1 className="text-xl font-bold text-gray-900">{activeUser.name || USER.name}</h1>
-                  <p className="text-sm text-gray-500">{activeUser.position || USER.position}</p>
+                  <p className="text-sm text-gray-500">
+                    <span className="font-semibold text-[#1A284F]">{activeUser.employeeId || USER.employeeId}</span>
+                    {" | "}
+                    {activeUser.position || USER.position}
+                  </p>
                   <div className="flex items-center gap-2 mt-1.5">
                     <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${gradeColor(displayGrade)}`}>
                       Grade {displayGrade}

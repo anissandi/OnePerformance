@@ -2684,7 +2684,7 @@ function _LegacyInterDeptFeedbackTabUnused() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-const YEARS = ["2026", "2025", "2024", "2023"];
+const YEARS = ["2026"];
 
 export function SupervisorMyPerformanceAppraisal() {
   const revision = useAppraisalRevision();

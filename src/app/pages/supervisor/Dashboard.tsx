@@ -91,7 +91,7 @@ const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
   "Project":                   "/supervisor/approvals/measurement/project",
   "Managerial Skill":          "/supervisor/approvals/measurement/managerial-skill",
   "Inter-Department Feedback": "/supervisor/approvals/measurement/inter-department-feedback",
-  "RCA":                       "/supervisor/approvals/measurement/rca",
+  "RCA":                       "/supervisor/approvals/measurement/kpi",
 };
 
 const MODULE_SETTING_APPROVAL_ROUTE: Partial<Record<Module, string>> = {

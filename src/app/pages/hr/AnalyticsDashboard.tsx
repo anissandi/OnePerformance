@@ -283,6 +283,76 @@ const MODULE_CARD_ICON: Record<string, React.ReactNode> = {
   "Inter-Department Feedback": <MessageSquare className="w-4 h-4" />,
 };
 
+// Palet warna soft profesional terkurasi untuk ke-9 card Module Completion Overview
+const MODULE_SOFT_CARD_THEME: Record<
+  string,
+  { surface: string; border: string; activeBorder: string; iconBg: string; iconText: string }
+> = {
+  "KPI (Setting)": {
+    surface: "bg-gradient-to-br from-sky-50/90 via-white to-blue-50/45",
+    border: "border-sky-200/75 hover:border-sky-300",
+    activeBorder: "border-sky-500 ring-2 ring-sky-500/15",
+    iconBg: "bg-sky-100/90 group-hover:bg-sky-200/80",
+    iconText: "text-sky-700",
+  },
+  "SMART Goals (Setting)": {
+    surface: "bg-gradient-to-br from-amber-50/90 via-white to-orange-50/40",
+    border: "border-amber-200/75 hover:border-amber-300",
+    activeBorder: "border-amber-500 ring-2 ring-amber-500/15",
+    iconBg: "bg-amber-100/90 group-hover:bg-amber-200/80",
+    iconText: "text-amber-700",
+  },
+  "Appraisal Form": {
+    surface: "bg-gradient-to-br from-emerald-50/90 via-white to-teal-50/40",
+    border: "border-emerald-200/75 hover:border-emerald-300",
+    activeBorder: "border-emerald-500 ring-2 ring-emerald-500/15",
+    iconBg: "bg-emerald-100/90 group-hover:bg-emerald-200/80",
+    iconText: "text-emerald-700",
+  },
+  "KPI (Tracking)": {
+    surface: "bg-gradient-to-br from-indigo-50/90 via-white to-slate-50/50",
+    border: "border-indigo-200/75 hover:border-indigo-300",
+    activeBorder: "border-indigo-500 ring-2 ring-indigo-500/15",
+    iconBg: "bg-indigo-100/90 group-hover:bg-indigo-200/80",
+    iconText: "text-indigo-700",
+  },
+  "SMART Goals (Tracking)": {
+    surface: "bg-gradient-to-br from-violet-50/90 via-white to-purple-50/40",
+    border: "border-violet-200/75 hover:border-violet-300",
+    activeBorder: "border-violet-500 ring-2 ring-violet-500/15",
+    iconBg: "bg-violet-100/90 group-hover:bg-violet-200/80",
+    iconText: "text-violet-700",
+  },
+  "Project OJS": {
+    surface: "bg-gradient-to-br from-teal-50/90 via-white to-cyan-50/40",
+    border: "border-teal-200/75 hover:border-teal-300",
+    activeBorder: "border-teal-500 ring-2 ring-teal-500/15",
+    iconBg: "bg-teal-100/90 group-hover:bg-teal-200/80",
+    iconText: "text-teal-700",
+  },
+  "Managerial Skill": {
+    surface: "bg-gradient-to-br from-blue-50/90 via-white to-indigo-50/35",
+    border: "border-blue-200/75 hover:border-blue-300",
+    activeBorder: "border-blue-500 ring-2 ring-blue-500/15",
+    iconBg: "bg-blue-100/90 group-hover:bg-blue-200/80",
+    iconText: "text-blue-700",
+  },
+  "Management Interview": {
+    surface: "bg-gradient-to-br from-rose-50/85 via-white to-pink-50/35",
+    border: "border-rose-200/75 hover:border-rose-300",
+    activeBorder: "border-rose-500 ring-2 ring-rose-500/15",
+    iconBg: "bg-rose-100/90 group-hover:bg-rose-200/80",
+    iconText: "text-rose-700",
+  },
+  "Inter-Department Feedback": {
+    surface: "bg-gradient-to-br from-fuchsia-50/80 via-white to-purple-50/35",
+    border: "border-fuchsia-200/75 hover:border-fuchsia-300",
+    activeBorder: "border-fuchsia-500 ring-2 ring-fuchsia-500/15",
+    iconBg: "bg-fuchsia-100/90 group-hover:bg-fuchsia-200/80",
+    iconText: "text-fuchsia-700",
+  },
+};
+
 function ModuleCompletionOverview({
   companyUnit,
   module,
@@ -358,23 +428,30 @@ function ModuleCompletionOverview({
                     { name: "Not Started", value: pending, color: "#E5E7EB" },
                   ].filter((s) => s.value > 0)
                 : [{ name: "Not Started", value: Math.max(total, 1), color: "#E5E7EB" }];
+            const theme = MODULE_SOFT_CARD_THEME[mod] ?? {
+              surface: "bg-slate-50/70",
+              border: "border-gray-200",
+              activeBorder: "border-[#1A284F]/40 ring-2 ring-[#1A284F]/15",
+              iconBg: "bg-slate-100",
+              iconText: "text-[#1A284F]",
+            };
 
             return (
               <div
                 key={mod}
                 onClick={() => onSelectModule(isActive ? "All Modules" : mod)}
                 style={{ animationDelay: `${cardIdx * 45}ms` }}
-                className={`group cursor-pointer rounded-2xl border p-5 bg-white pa-card-motion ${
+                className={`group cursor-pointer rounded-2xl border p-5 ${theme.surface} pa-card-motion ${
                   isActive
-                    ? "border-[#1A284F]/40 ring-2 ring-[#1A284F]/15 shadow-md"
+                    ? `${theme.activeBorder} shadow-md`
                     : isDimmed
-                    ? "border-gray-100 opacity-45 hover:opacity-90"
-                    : "border-gray-100 shadow-xs hover:shadow-md hover:border-gray-200"
+                    ? `${theme.border} opacity-45 hover:opacity-90`
+                    : `${theme.border} shadow-xs hover:shadow-md`
                 }`}
               >
                 {/* Card top header */}
                 <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-full bg-slate-100/90 text-[#1A284F] flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110 group-hover:bg-[#1A284F]/10">
+                  <div className={`w-9 h-9 rounded-full ${theme.iconBg} ${theme.iconText} flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110 shadow-2xs`}>
                     {MODULE_CARD_ICON[mod] ?? <Layers className="w-4 h-4" />}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -1365,7 +1442,7 @@ function ScoreGradeDistributionDashboard({
 const filterOptions = {
   companyUnit: ["All Units", "PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
   module: ["All Modules", "KPI (Setting)", "SMART Goals (Setting)", "Appraisal Form", "KPI (Tracking)", "SMART Goals (Tracking)", "Project OJS", "Managerial Skill", "Management Interview", "Inter-Department Feedback"],
-  year: ["2026", "2025", "2024", "2023"],
+  year: ["2026"],
   month: ["All Months", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
 };
 
@@ -1767,20 +1844,9 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         module={module}
       />
 
-      {/* ── 2. Module Completion Overview (9 Pie/Donut Cards — 3 per Line) ── */}
-      <ModuleCompletionOverview
-        companyUnit={companyUnit}
-        module={module}
-        onSelectModule={setModule}
-        scopedUsers={scopedUsers}
-        workflows={workflows}
-        year={year}
-        motionKey={refreshMotionKey}
-      />
-
-      {/* ── 3. One-Line Row: PA Cycle Timeline | Multi-Module & Division | Approval Tracking & Bottleneck ── */}
+      {/* ── 2. One-Line Row: PA Cycle Timeline | Multi-Module & Division | Approval Tracking & Bottleneck ── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 items-stretch">
-        {/* 3A. PA Cycle Timeline */}
+        {/* 2A. PA Cycle Timeline */}
         <motion.div layout transition={{ layout: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } }} className={cardSpan("timeline")}>
         <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex flex-col h-full pa-infographic-surface">
           <button
@@ -1959,6 +2025,16 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         </motion.div>
       </div>
 
+      {/* ── 3. Module Completion Overview (9 Pie/Donut Cards — 3 per Line) ── */}
+      <ModuleCompletionOverview
+        companyUnit={companyUnit}
+        module={module}
+        onSelectModule={setModule}
+        scopedUsers={scopedUsers}
+        workflows={workflows}
+        year={year}
+        motionKey={refreshMotionKey}
+      />
 
     </div>
   );

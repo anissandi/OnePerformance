@@ -14,9 +14,10 @@ import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../pages/shared/ap
 import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
 import { loadAllIcfProjectsByEmployee } from "../store/projectStore";
 import { evaluateEmployeeKPITracking } from "../pages/employee/KPIPage";
+import { getPenilai1ScoreAsPercent } from "../pages/supervisor/managementInterviewScoreStore";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-export interface ScoreGrade { score: number; grade: string; }
+export interface ScoreGrade { score: number; grade: string; weightedScore?: number; weightPct?: number; }
 export interface ModuleScore { name: string; icon: React.ReactNode; score: number; grade: string; weight: number; }
 export interface Employee {
   id: string; fullName: string; position: string; department: string;
@@ -173,7 +174,13 @@ export function getLiveTransactionalEmployees(): Employee[] {
       const sgScore = extractAssessmentScore("SMART Goals");
       let afScore = extractAssessmentScore("Appraisal Form");
       let msScore = extractAssessmentScore("Managerial Skill");
-      const miScore = extractAssessmentScore("Management Interview");
+      let miScore = extractAssessmentScore("Management Interview");
+      if (miScore === 0) {
+        const liveMiPct = getPenilai1ScoreAsPercent(u.employeeId, u.name);
+        if (liveMiPct !== null && liveMiPct > 0) {
+          miScore = parseFloat(liveMiPct.toFixed(2));
+        }
+      }
 
       // Evaluasi KPI Tracking per karyawan (bulan terisi 0..12 & skor berjalan YTD) untuk seluruh karyawan
       const evalKpi = evaluateEmployeeKPITracking(u.employeeId);
@@ -222,7 +229,7 @@ export function getLiveTransactionalEmployees(): Employee[] {
       const grouping = resolveEffectiveUserGrouping(u);
       const allowedMods = resolveUserAllowedModules(u);
       const hasManagerial = allowedMods.includes("Managerial Skill");
-      const hasInterview = allowedMods.includes("Management Interview");
+      const hasInterview = allowedMods.includes("Management Interview") || miScore > 0;
 
       // Cek kesiapan kalibrasi: seluruh modul Measurement yang wajib pada User Grouping karyawan harus Validated / Approved penuh
       const isTwoStepDone = (modName: string): boolean => {
@@ -273,7 +280,9 @@ export function getLiveTransactionalEmployees(): Employee[] {
       const wAf  = allowedMods.includes("Appraisals Form") ? parseWeightPct("Appraisal Form", 0.15) : 0;
       const wPrj = allowedMods.includes("Project Outside Job Scope") ? parseWeightPct("Project Outside Job Scope", 0.15) : 0;
       const wMs  = hasManagerial ? parseWeightPct("Managerial Skill", 0.15) : 0;
-      const wMi  = hasInterview ? parseWeightPct("Management Interview", 0.1) : 0;
+      const configuredMiWeight = parseWeightPct("Management Interview", 0.1);
+      const wMi  = hasInterview ? (configuredMiWeight > 0 ? configuredMiWeight : 0.1) : 0;
+      const miWeightedScore = parseFloat((miScore * wMi).toFixed(2));
 
       const adjOverride = calAdjScores[u.employeeId]?.total ?? calAdjScores[normId]?.total;
       const computedScore = parseFloat(
@@ -337,7 +346,14 @@ export function getLiveTransactionalEmployees(): Employee[] {
         formC: { score: afScore, grade: afScore > 0 ? gradeFromScore(afScore).grade : "—" },
         project: { score: prjScore, grade: prjScore > 0 ? gradeFromScore(prjScore).grade : "—" },
         managerialSkill: hasManagerial ? { score: msScore, grade: msScore > 0 ? gradeFromScore(msScore).grade : "—" } : null,
-        managementInterview: hasInterview ? { score: miScore, grade: miScore > 0 ? gradeFromScore(miScore).grade : "—" } : null,
+        managementInterview: hasInterview
+          ? {
+              score: miScore,
+              grade: miScore > 0 ? gradeFromScore(miScore).grade : "—",
+              weightedScore: miScore > 0 ? miWeightedScore : undefined,
+              weightPct: Math.round(wMi * 100),
+            }
+          : null,
         kpiIsYtd,
         kpiTrackedMonths: evalKpi.trackedMonthsCount,
         kpiFullyValidated,

@@ -344,6 +344,40 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
   return "operational";
 }
 
+/**
+ * Hanya karyawan dengan grouping Ka./Wa.Ka.Bagian ke atas yang boleh memberi maupun menerima delegasi
+ * (groupings Operasional & Ka./Wa.Ka.Seksi dikecualikan).
+ */
+export function isUserEligibleForDelegation(user: ManagedUser): boolean {
+  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director" || user.role === "GM") {
+    return true;
+  }
+  const grp = String(resolveEffectiveUserGrouping(user) ?? "").trim();
+  if (!grp || grp === "Operasional" || grp === "Ka./Wa.Ka.Seksi") {
+    return false;
+  }
+  const level = resolveUserAuthorityLevel(user);
+  return level !== "operational" && level !== "seksi";
+}
+
+/**
+ * Secara default hanya groupings Ka./Wa.Ka.Div ke atas yang diizinkan mengakses /approvals/delegation,
+ * kecuali role Administrator & HR ICF atau role lain yang secara eksplisit diberi akses di Access Management.
+ */
+export function canUserAccessApprovalsDelegation(
+  user: ManagedUser,
+  hasExplicitRoleMenuView?: boolean,
+): boolean {
+  if (isAdminOrHrIcfRole(user.role)) return true;
+  if (hasExplicitRoleMenuView) return true;
+  const grp = String(resolveEffectiveUserGrouping(user) ?? "").trim();
+  if (grp === "Ka./Wa.Ka.Div ke atas" || grp === "Direktur / Director") {
+    return true;
+  }
+  const level = resolveUserAuthorityLevel(user);
+  return level === "division" || level === "gm_unit" || level === "director_group" || level === "bod";
+}
+
 function normOrgName(val?: string): string {
   return (val ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -982,6 +1016,12 @@ export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser
         kind: "user-delete",
         employeeId: deletedId,
       });
+    } else if (users.length > 0) {
+      // Operasi massal (Import Excel mode Gabung / sinkronisasi grouping): pastikan tabel pa_users juga langsung ter-upsert secara batch
+      void syncToSupabase({
+        kind: "users-batch",
+        users,
+      });
     }
   } catch {
     // ignore storage errors
@@ -1114,7 +1154,6 @@ export function getAllowedApprovalTypesForUser(
     "Appraisal Form",
     "Managerial Skill",
     "Project",
-    "RCA",
     "Inter-Department Feedback",
   ];
   const allSetting = [
@@ -1140,7 +1179,7 @@ export function getAllowedApprovalTypesForUser(
     if (effectiveGrouping === "Operasional") {
       return mode === "setting"
         ? ["KPI", "SMART Goals"]
-        : ["KPI", "SMART Goals", "RCA", "Inter-Department Feedback"];
+        : ["KPI", "SMART Goals", "Inter-Department Feedback"];
     }
     return baseList;
   }

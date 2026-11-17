@@ -1,4 +1,4 @@
-import { savePersistedState } from "../../services/supabaseClient";
+import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 
 export type ScoreWeightColumn = "operasional" | "kaWaKaSeksi" | "pengawasKepalaBagian" | "kepalaDepartement" | "kepalaDivisi";
 export type ScoreWeightRow = { indikator: string } & Record<ScoreWeightColumn, string>;
@@ -18,17 +18,40 @@ export const DEFAULT_SCORE_WEIGHTS: UnitScoreWeights = {
 
 export function loadUnitScoreWeights(companyName: string): UnitScoreWeights {
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? "{}") as Record<string, UnitScoreWeights>;
+    const saved = JSON.parse(safeGetLocalRaw(KEY) ?? "{}") as Record<string, UnitScoreWeights>;
     return saved[companyName] ?? DEFAULT_SCORE_WEIGHTS;
   } catch {
     return DEFAULT_SCORE_WEIGHTS;
   }
 }
 
+export function weightColumnFromGrouping(grouping?: string): ScoreWeightColumn {
+  const g = String(grouping ?? "").trim();
+  if (g === "Ka./Wa.Ka.Div ke atas" || g === "Direktur / Director" || g === "TEAM_DIV") return "kepalaDivisi";
+  if (g === "Ka./Wa.Ka.Dept") return "kepalaDepartement";
+  if (g === "Ka./Wa.Ka.Bagian") return "pengawasKepalaBagian";
+  if (g === "Ka./Wa.Ka.Seksi") return "kaWaKaSeksi";
+  return "operasional";
+}
+
+export function getModuleWeightFraction(
+  companyName: string,
+  grouping: string | undefined,
+  indikator: string,
+  fallback = 0,
+): number {
+  const unitWeights = loadUnitScoreWeights(companyName);
+  const col = weightColumnFromGrouping(grouping);
+  const raw = unitWeights[indikator]?.[col];
+  if (!raw || raw === "-") return fallback;
+  const num = parseFloat(String(raw).replace("%", "").trim());
+  return Number.isFinite(num) ? num / 100 : fallback;
+}
+
 export function saveUnitScoreWeights(companyName: string, rows: readonly ScoreWeightRow[]) {
   const weights: UnitScoreWeights = Object.fromEntries(rows.map(({ indikator, ...values }) => [indikator, values]));
   let saved: Record<string, UnitScoreWeights> = {};
-  try { saved = JSON.parse(localStorage.getItem(KEY) ?? "{}"); } catch {}
+  try { saved = JSON.parse(safeGetLocalRaw(KEY) ?? "{}"); } catch {}
   const next = { ...saved, [companyName]: weights };
   savePersistedState(KEY, next, {
     kind: "score-weights",

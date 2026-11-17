@@ -22,6 +22,7 @@ import { loadRCASubmissions, type StoredRCASubmission } from "../pages/shared/rc
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../utils/dateFormat";
 import { MS_ITEMS, type MSItem } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPITableView } from "./KPITableView";
+import { UnifiedRCADetailTable } from "./UnifiedRCADetailTable";
 import { FeedbackApprovalDrawer } from "./FeedbackApprovalDrawer";
 import {
   getActiveUser,
@@ -407,8 +408,22 @@ function KPIReview({ row }: { row: ApprovalRow }) {
   const { months: ownerMonths, cellsMap: ownerCellsMap } = loadKPITracking(row.employeeId);
   const evidenceFiles: StoredEvidenceFile[] = loadEvidenceFiles(row.employeeId);
   const rcaSubmissions = loadRCASubmissions(row.employeeId);
-  const [previewRCA, setPreviewRCA] = useState<StoredRCASubmission | null>(null);
+  const [highlightedRcaKey, setHighlightedRcaKey] = useState<string | null>(null);
+  const [showRcaTable, setShowRcaTable] = useState<boolean>(true);
   const [previewEvFile, setPreviewEvFile] = useState<StoredEvidenceFile | null>(null);
+
+  const handleClickRcaTag = (sub: StoredRCASubmission) => {
+    setShowRcaTable(true);
+    setHighlightedRcaKey(sub.key);
+    window.setTimeout(() => {
+      const rowEl = document.querySelector(`[data-rca-row-key="${CSS.escape(sub.key)}"]`);
+      const containerEl = document.getElementById("approver-unified-rca-table");
+      (rowEl ?? containerEl)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 60);
+    window.setTimeout(() => {
+      setHighlightedRcaKey((curr) => (curr === sub.key ? null : curr));
+    }, 5000);
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -428,8 +443,19 @@ function KPIReview({ row }: { row: ApprovalRow }) {
         months={ownerMonths}
         cells={ownerCellsMap}
         rcaSubmissions={rcaSubmissions}
-        onPreviewRCA={(sub) => setPreviewRCA(sub)}
+        onPreviewRCA={handleClickRcaTag}
       />
+
+      {/* ── Unified RCA Table (semua bulan termasuk bulan-bulan sebelumnya dalam 1 tabel) ── */}
+      {rcaSubmissions.length > 0 && showRcaTable && (
+        <UnifiedRCADetailTable
+          containerId="approver-unified-rca-table"
+          submissions={rcaSubmissions}
+          highlightedKey={highlightedRcaKey}
+          title="Root Cause Analysis (RCA) — Semua Bulan (Riwayat & Bulan Berjalan)"
+          subtitle="Menampilkan pembaruan terakhir dari karyawan untuk bulan berjalan maupun bulan-bulan sebelumnya. Baris berstatus Close ditandai hijau lembut."
+        />
+      )}
 
       {/* ── Evidence Documents Section ───────────────────────────────────────── */}
       <div className="border-t border-gray-200 pt-5 flex flex-col gap-3 mt-2">
@@ -493,108 +519,6 @@ function KPIReview({ row }: { row: ApprovalRow }) {
           </div>
         )}
       </div>
-
-      {/* Modal Preview RCA dari Tag RCA pada Tabel KPI Tracking */}
-      {previewRCA && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setPreviewRCA(null)}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 py-4 bg-[#1A284F] text-white flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-bold">{previewRCA.kpiIndicator}</h4>
-                <p className="text-[11px] text-white/70">
-                  Detail Root Cause Analysis (RCA) — Periode {previewRCA.monthLabel || previewRCA.periode}
-                </p>
-              </div>
-              <button type="button" onClick={() => setPreviewRCA(null)} className="text-white/70 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-6 overflow-y-auto space-y-4 text-xs">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
-                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Periode</span>
-                  <span className="font-semibold text-gray-800">{previewRCA.monthLabel || `${previewRCA.periode} ${previewRCA.year}`}</span>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
-                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Target</span>
-                  <span className="font-semibold text-gray-800">{previewRCA.targetMonthly || "—"}</span>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
-                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Actual</span>
-                  <span className="font-semibold text-gray-800">{previewRCA.actual || "—"}</span>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
-                  <span className="text-[10px] text-gray-400 uppercase font-bold block">Capaian</span>
-                  <span className="font-bold text-rose-600">{previewRCA.achievementPct}%</span>
-                </div>
-              </div>
-              {(previewRCA.masalahBlocks && previewRCA.masalahBlocks.length > 0
-                ? previewRCA.masalahBlocks
-                : [
-                    {
-                      id: "b0",
-                      masalahUtama: (previewRCA.masalahUtama ?? []).join(", "),
-                      kenapaA: previewRCA.kenapaA,
-                      kenapaB: previewRCA.kenapaB,
-                      kenapaC: previewRCA.kenapaC,
-                      actionPlans: previewRCA.actionPlans,
-                    },
-                  ]
-              ).map((blk, bi) => (
-                <div key={blk.id || bi} className="border border-gray-200 rounded-xl overflow-hidden">
-                  <div className="bg-gray-50 px-4 py-2 font-bold text-[#1A284F] border-b border-gray-200">
-                    Masalah Utama #{bi + 1}: {blk.masalahUtama || "—"}
-                  </div>
-                  <div className="p-4 space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      <div className="bg-slate-50 rounded p-2 border border-slate-100">
-                        <span className="text-[10px] font-bold text-gray-400 block">Kenapa A?</span>
-                        <span className="text-gray-700">{blk.kenapaA || "—"}</span>
-                      </div>
-                      <div className="bg-slate-50 rounded p-2 border border-slate-100">
-                        <span className="text-[10px] font-bold text-gray-400 block">Kenapa B?</span>
-                        <span className="text-gray-700">{blk.kenapaB || "—"}</span>
-                      </div>
-                      <div className="bg-slate-50 rounded p-2 border border-slate-100">
-                        <span className="text-[10px] font-bold text-gray-400 block">Kenapa C?</span>
-                        <span className="text-gray-700">{blk.kenapaC || "—"}</span>
-                      </div>
-                    </div>
-                    {blk.actionPlans?.length > 0 && (
-                      <table className="w-full border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 text-[10px] uppercase text-gray-500">
-                            <th className="border border-gray-200 px-2.5 py-1.5 text-left">Action Plan</th>
-                            <th className="border border-gray-200 px-2.5 py-1.5 text-center">Target Date</th>
-                            <th className="border border-gray-200 px-2.5 py-1.5 text-left">PIC</th>
-                            <th className="border border-gray-200 px-2.5 py-1.5 text-center">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {blk.actionPlans.map((ap, ai) => (
-                            <tr key={ai}>
-                              <td className="border border-gray-200 px-2.5 py-1.5">{ap.action || "—"}</td>
-                              <td className="border border-gray-200 px-2.5 py-1.5 text-center">{normalizeDateDDMMYYYY(ap.targetDate)}</td>
-                              <td className="border border-gray-200 px-2.5 py-1.5">{ap.pic || "—"}</td>
-                              <td className="border border-gray-200 px-2.5 py-1.5 text-center font-semibold">{ap.status || "—"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Modal Preview Evidence KPI */}
       {previewEvFile && (
@@ -2302,6 +2226,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
     return false;
   });
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+  const [submitTooltipPinned, setSubmitTooltipPinned] = useState(false);
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
   const [showRevisionConfirm, setShowRevisionConfirm] = useState(false);
   const [indicatorItem, setIndicatorItem]   = useState<FormItem | MSItem | null>(null);
@@ -2358,6 +2283,28 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
     return acc;
   }, {});
 
+  // Rincian alasan mengapa tombol Submit Assessment belum bisa disubmit (muncul di tooltip saat hover maupun klik)
+  const missingSubmitAssessmentReasons = (() => {
+    if (!hasAssessment || isCheckerStage || isValidatorStage) return [] as string[];
+    const reasons: string[] = [];
+    if (row.type === "Appraisal Form") {
+      for (const f of FORMS) {
+        const missingCount = f.items.filter((item) => assessorRatings[`${f.id}-${item.no}`] == null).length;
+        if (missingCount > 0) {
+          reasons.push(`${f.tab}: ${missingCount} item evaluasi belum dinilai`);
+        }
+      }
+    } else if (row.type === "Managerial Skill") {
+      const missingCount = MS_ITEMS.filter((item) => assessorRatings[`ms-${item.no}`] == null).length;
+      if (missingCount > 0) {
+        reasons.push(`${missingCount} item kompetensi manajerial belum dinilai`);
+      }
+    }
+    if (!isApproverCommentFilled) {
+      reasons.push("Komentar & Catatan Approver belum diisi (wajib)");
+    }
+    return reasons;
+  })();
 
 
   const renderContent = () => {
@@ -2628,14 +2575,63 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
               <div className="flex items-center gap-3">
                 {/* Appraisal Form / Managerial Skill — only Submit Assessment, no Approve/Revision */}
                 {hasAssessment && (
-                  <button
-                    disabled={!allFilled}
-                    onClick={() => setShowSubmitConfirm(true)}
-                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  <div
+                    className="relative group/submit-assess"
+                    onMouseLeave={() => setSubmitTooltipPinned(false)}
                   >
-                    <Send className="w-4 h-4" />
-                    Submit Assessment
-                  </button>
+                    <button
+                      type="button"
+                      aria-disabled={!allFilled}
+                      onClick={() => {
+                        if (allFilled) {
+                          setSubmitTooltipPinned(false);
+                          setShowSubmitConfirm(true);
+                          return;
+                        }
+                        setSubmitTooltipPinned(true);
+                        if (row.type === "Appraisal Form") {
+                          const firstIncompleteForm = FORMS.find((f) => !formCompletion[f.id]);
+                          if (firstIncompleteForm) {
+                            setActiveForm(firstIncompleteForm.id as "A" | "B" | "C");
+                          } else if (!isApproverCommentFilled) {
+                            document
+                              .querySelector<HTMLTextAreaElement>('textarea[placeholder*="Wajib diisi"]')
+                              ?.focus();
+                          }
+                        } else if (!isApproverCommentFilled) {
+                          document
+                            .querySelector<HTMLTextAreaElement>('textarea[placeholder*="Wajib diisi"]')
+                            ?.focus();
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#1A284F] text-white text-sm font-semibold transition-colors ${
+                        allFilled ? "hover:bg-[#131d3b]" : "opacity-50 cursor-not-allowed"
+                      }`}
+                    >
+                      <Send className="w-4 h-4" />
+                      Submit Assessment
+                    </button>
+                    {!allFilled && missingSubmitAssessmentReasons.length > 0 && (
+                      <div
+                        role="tooltip"
+                        className={`pointer-events-none absolute bottom-full right-0 z-50 mb-2.5 w-80 rounded-xl bg-[#1A284F] p-3.5 text-left text-xs text-white shadow-2xl transition-all ${
+                          submitTooltipPinned
+                            ? "visible opacity-100 translate-y-0"
+                            : "invisible opacity-0 translate-y-1 group-hover/submit-assess:visible group-hover/submit-assess:opacity-100 group-hover/submit-assess:translate-y-0 group-focus-within/submit-assess:visible group-focus-within/submit-assess:opacity-100"
+                        }`}
+                      >
+                        <p className="font-bold text-amber-300 mb-1.5 flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          Belum dapat Submit Assessment:
+                        </p>
+                        <ul className="list-disc pl-4 space-y-1 text-[11px] text-white/90 leading-relaxed">
+                          {missingSubmitAssessmentReasons.map((reason, idx) => (
+                            <li key={idx}>{reason}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {/* Approve / Revision only for non-assessment types (KPI, SMART Goals, Project) */}

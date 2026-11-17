@@ -506,7 +506,7 @@ export function resolveModuleShortcutSubpath(
     if (lower.includes("kpi business")) return "/settings/kpi";
     if (lower === "kpi measurement") return "/approvals/measurement/kpi";
     if (lower === "smart measurement") return "/approvals/measurement/smart-goals";
-    if (lower === "rca") return "/approvals/measurement/rca";
+    if (lower === "rca") return "/approvals/measurement/kpi";
     if (lower === "appraisal form") return "/approvals/measurement/appraisal-form";
     if (lower === "managerial skill") return "/approvals/measurement/managerial-skill";
     if (lower === "project outside job scope") return "/approvals/measurement/project";

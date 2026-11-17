@@ -267,7 +267,7 @@ function CycleCard({ cycle, role }: { cycle: CycleData; role: Role }) {
   );
 }
 
-const YEAR_FILTERS = ["All", "2025", "2024", "2023"] as const;
+const YEAR_FILTERS = ["All", "2026"] as const;
 
 export function CycleHistory({ role = "employee" }: { role?: Role }) {
   const [yearFilter, setYearFilter] = useState<string>("All");

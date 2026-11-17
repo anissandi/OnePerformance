@@ -2,17 +2,17 @@ import { useEffect, useState } from "react";
 import { RouterProvider } from "react-router";
 import { Toaster } from "sonner";
 import { router } from "./routes";
-import { waitForInitialHydration } from "./services/supabaseClient";
+import { hasWarmLocalAuthCache, waitForFastAuthBoot } from "./services/supabaseClient";
 
 export default function App() {
-  // Tunggu data backend (Supabase) dimuat terlebih dahulu agar browser / perangkat / mode incognito baru
-  // tidak memakai cache kosong (penyebab gagal login lintas perangkat & data tertimpa nilai default).
-  const [ready, setReady] = useState(false);
+  // Jika cache akun lokal sudah tersedia, langsung tampilkan UI secara instan sambil menyegarkan data dari Supabase di background.
+  // Pada browser / perangkat / incognito baru yang kosong, muat state autentikasi inti secara cepat terlebih dahulu.
+  const [ready, setReady] = useState(() => hasWarmLocalAuthCache());
 
   useEffect(() => {
     document.title = "Performance Appraisal System";
     let alive = true;
-    void waitForInitialHydration().then(() => {
+    void waitForFastAuthBoot().then(() => {
       if (alive) setReady(true);
     });
     return () => {
