@@ -91,7 +91,7 @@ export const COMPANY_UNIT_LOCATIONS = [
   { code: "PSKE",  unitId: "KEN",  company: "PT Pulau Sambu (Kuala Enok)", fullName: "PT. Pulau Sambu (Kuala Enok)" },
   { code: "RSTM",  unitId: "RSTM", company: "PT RSTM",                     fullName: "PT. Riau Sakti Transmandiri" },
   { code: "GHS",   unitId: "GHS",  company: "PT GHS",                      fullName: "PT. Guntung Hasratmakmur" },
-  { code: "ASD",   unitId: "ASD",  company: "ASD",                         fullName: "Agronomi Service Division" },
+  { code: "RSUP ASD", unitId: "ASD", company: "PT RSUP ASD",               fullName: "Agronomi Service Division" },
 ] as const;
 
 export const RSUP_GROUP_COMPANIES = [
@@ -99,8 +99,62 @@ export const RSUP_GROUP_COMPANIES = [
   "PT RSUP (Perkebunan)",
   "PT RSTM",
   "PT GHS",
-  "ASD",
+  "PT RSUP ASD",
 ] as const;
+
+/** Normalisasi nama Unit Usaha (mengubah legacy "ASD" / "RSUP ASD" menjadi nama resmi sistem "PT RSUP ASD"). */
+export function canonicalizeCompanyUnitName(raw?: string | null): string {
+  const s = String(raw ?? "").trim();
+  const u = s.toUpperCase().replace(/\s+/g, " ");
+  if (u === "ASD" || u === "RSUP ASD" || u === "PT. RSUP ASD" || u === "PT RSUP (ASD)" || u === "PT RSUP ASD") {
+    return "PT RSUP ASD";
+  }
+  return s;
+}
+
+/**
+ * Aturan Approver 1 & Approver 2 per karyawan (berlaku pada Upload Excel maupun Add/Edit User):
+ * - Jika salah satu dari Reg No AP1 atau Reg No AP2 kosong, maka field yang memiliki Reg No
+ *   otomatis menjadi Approver 1 sekaligus Approver 2.
+ * - Jika keduanya kosong, berarti karyawan belum memiliki approver (`hasApprover: false`).
+ */
+export function normalizeApproverPair(
+  rawAp1?: string | null,
+  rawAp2?: string | null,
+): { regNoAp1: string; regNoAp2: string; hasApprover: boolean } {
+  const clean = (val?: string | null): string => {
+    const s = String(val ?? "").trim();
+    if (!s) return "";
+    const u = s.toUpperCase();
+    if (u === "-" || u === "—" || u === "N/A" || u === "NA" || u === "NULL" || u === "UNDEFINED") {
+      return "";
+    }
+    return s;
+  };
+  const a1 = clean(rawAp1);
+  const a2 = clean(rawAp2);
+  if (a1 && !a2) return { regNoAp1: a1, regNoAp2: a1, hasApprover: true };
+  if (!a1 && a2) return { regNoAp1: a2, regNoAp2: a2, hasApprover: true };
+  if (a1 && a2) return { regNoAp1: a1, regNoAp2: a2, hasApprover: true };
+  return { regNoAp1: "", regNoAp2: "", hasApprover: false };
+}
+
+function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
+  const company = canonicalizeCompanyUnitName(user.company);
+  const { regNoAp1, regNoAp2 } = normalizeApproverPair(user.regNoAp1, user.regNoAp2);
+  const managedUnits = Array.isArray(user.managedUnits)
+    ? Array.from(new Set(user.managedUnits.map((x) => canonicalizeCompanyUnitName(x)).filter(Boolean)))
+    : user.managedUnits;
+  let calibrationRoleByUnit = user.calibrationRoleByUnit;
+  if (calibrationRoleByUnit && typeof calibrationRoleByUnit === "object") {
+    const nextCal: Record<string, "approver" | "mengetahui" | ""> = {};
+    for (const [k, v] of Object.entries(calibrationRoleByUnit)) {
+      nextCal[canonicalizeCompanyUnitName(k)] = v;
+    }
+    calibrationRoleByUnit = nextCal;
+  }
+  return { ...user, company, regNoAp1, regNoAp2, managedUnits, calibrationRoleByUnit };
+}
 
 export const SAMBU_GROUP_COMPANIES = [
   "PT Pulau Sambu (Jakarta)",
@@ -123,7 +177,7 @@ export function getRoleAllowedCompanyUnits(role?: string): string[] {
   if (!role) return [];
   const meta = getRoleMetadata(role);
   return Array.isArray(meta.allowedCompanyUnits)
-    ? meta.allowedCompanyUnits.filter(Boolean)
+    ? Array.from(new Set(meta.allowedCompanyUnits.map((u) => canonicalizeCompanyUnitName(u)).filter(Boolean)))
     : [];
 }
 
@@ -212,6 +266,14 @@ export function inferGroupingFromPosition(position: string): UserGrouping {
     return "Ka./Wa.Ka.Seksi";
   }
   return "Operasional";
+}
+
+/**
+ * DEMO: Data contoh (sample) KPI & SMART Goals hanya ditampilkan untuk Role Administrator.
+ * Karyawan dengan role lain yang belum pernah bertransaksi melihat format tabel dengan data kosong.
+ */
+export function usesDemoSampleData(user?: { role?: AppUserRole } | null): boolean {
+  return String(user?.role ?? "") === "Administrator";
 }
 
 export function isAdminOrHrIcfRole(role: AppUserRole): boolean {
@@ -656,7 +718,8 @@ export function resolveWorkflowStageForTarget(
   }
   if (isAp1) return "approver1";
   if (isAp2) return "approver2";
-  if (isHrIcfValidator) {
+  // Hanya izinkan override bila karyawan memang sudah memiliki approver terdaftar
+  if (isHrIcfValidator && (ap1 || ap2)) {
     return a1Done ? "approver2" : "approver1";
   }
   return null;
@@ -837,6 +900,8 @@ export function defaultAllowedModulesForGrouping(group: string): AppraisalModule
 
 const USERS_KEY = "pa_managed_users_v1";
 const ACTIVE_USER_KEY = "pa_active_user_v1";
+/** Akun asli yang melakukan login (dipertahankan saat Pindah Akun) untuk menentukan hak fitur Pindah Akun / Cancel Transaction. */
+const LOGIN_ORIGIN_USER_KEY = "pa_login_origin_user_v1";
 const GROUP_RULES_BY_UNIT_KEY = "pa_group_rules_by_unit_v1";
 export const AUTH_SESSION_KEY = "pa_auth_session_v1";
 export const SESSION_EXPIRED_NOTICE_KEY = "pa_session_expired_notice_v1";
@@ -891,6 +956,7 @@ export function logoutCurrentUser(reason: "manual" | "expired" = "manual"): void
   try {
     localStorage.removeItem(AUTH_SESSION_KEY);
     localStorage.removeItem(ACTIVE_USER_KEY);
+    localStorage.removeItem(LOGIN_ORIGIN_USER_KEY);
     if (reason === "expired") {
       sessionStorage.setItem(SESSION_EXPIRED_NOTICE_KEY, "1");
     } else {
@@ -987,7 +1053,9 @@ export function loadManagedUsers(): ManagedUser[] {
     const raw = safeGetLocalRaw(USERS_KEY);
     if (!raw) return DEFAULT_MANAGED_USERS;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_MANAGED_USERS;
+    return Array.isArray(parsed) && parsed.length > 0
+      ? (parsed as ManagedUser[]).map(normalizeManagedUserUnits)
+      : DEFAULT_MANAGED_USERS;
   } catch {
     return DEFAULT_MANAGED_USERS;
   }
@@ -995,6 +1063,10 @@ export function loadManagedUsers(): ManagedUser[] {
 
 export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser, deletedId?: string): void {
   try {
+    const normalizedUsers = users.map(normalizeManagedUserUnits);
+    const normalizedChanged = changedUser ? normalizeManagedUserUnits(changedUser) : undefined;
+    users = normalizedUsers;
+    changedUser = normalizedChanged;
     savePersistedState(USERS_KEY, users);
     window.dispatchEvent(new Event("pa-auth-updated"));
     if (changedUser) {
@@ -1033,7 +1105,8 @@ export function loadUnitGroupRules(company: string, fallback: ManagedGroupRule[]
     const raw = safeGetLocalRaw(GROUP_RULES_BY_UNIT_KEY);
     if (!raw) return fallback;
     const map = JSON.parse(raw) as Record<string, ManagedGroupRule[]>;
-    return map[company] ?? fallback;
+    const canon = canonicalizeCompanyUnitName(company);
+    return map[canon] ?? (canon === "PT RSUP ASD" ? map["ASD"] : undefined) ?? map[company] ?? fallback;
   } catch {
     return fallback;
   }
@@ -1043,11 +1116,13 @@ export function saveUnitGroupRules(company: string, rules: ManagedGroupRule[]): 
   try {
     const raw = safeGetLocalRaw(GROUP_RULES_BY_UNIT_KEY);
     const map = raw ? (JSON.parse(raw) as Record<string, ManagedGroupRule[]>) : {};
-    map[company] = rules;
+    const canon = canonicalizeCompanyUnitName(company);
+    if (canon === "PT RSUP ASD") delete map["ASD"];
+    map[canon] = rules;
     window.dispatchEvent(new Event("pa-auth-updated"));
     savePersistedState(GROUP_RULES_BY_UNIT_KEY, map, {
       kind: "group-rules",
-      company,
+      company: canon,
       rules,
     });
   } catch {
@@ -1063,7 +1138,7 @@ export function getActiveUser(): ManagedUser {
       const parsed = JSON.parse(raw) as ManagedUser;
       const latest = users.find((u) => u.employeeId.toUpperCase() === parsed.employeeId.toUpperCase());
       if (latest) return latest;
-      return parsed;
+      return normalizeManagedUserUnits(parsed);
     }
   } catch {
     // fallback
@@ -1271,11 +1346,14 @@ function normalizeCompanyKey(name: string): string {
 
 /** Bandingkan Company Unit karyawan dengan Company Unit terpilih di halaman login (toleran variasi penulisan). */
 export function isSameCompanyUnit(userCompany: string, selectedCompany: string): boolean {
-  const a = normalizeCompanyKey(userCompany);
-  const b = normalizeCompanyKey(selectedCompany);
+  const canonUser = canonicalizeCompanyUnitName(userCompany);
+  const canonSelected = canonicalizeCompanyUnitName(selectedCompany);
+  if (canonUser && canonSelected && canonUser === canonSelected) return true;
+  const a = normalizeCompanyKey(canonUser);
+  const b = normalizeCompanyKey(canonSelected);
   if (!a || !b) return false;
   if (a === b) return true;
-  const loc = COMPANY_UNIT_LOCATIONS.find((l) => normalizeCompanyKey(l.company) === b);
+  const loc = COMPANY_UNIT_LOCATIONS.find((l) => normalizeCompanyKey(l.company) === b || l.company === canonSelected);
   if (!loc) return false;
   return [loc.company, loc.fullName, loc.code, loc.unitId].some((v) => normalizeCompanyKey(v) === a);
 }
@@ -1375,6 +1453,7 @@ export function loginWithCompanyAndEmployeeId(
   const updatedList = users.map((u) => (u.id === matched.id ? updatedUser : u));
   safeSetLocalJson(USERS_KEY, updatedList);
   safeSetLocalJson(ACTIVE_USER_KEY, updatedUser);
+  safeSetLocalJson(LOGIN_ORIGIN_USER_KEY, { employeeId: updatedUser.employeeId });
   startOrRefreshAuthSession(updatedUser.employeeId);
   window.dispatchEvent(new Event("pa-auth-updated"));
   void notifyLoginToSupabase({
@@ -1392,10 +1471,49 @@ export function switchActiveUserByEmployeeId(employeeId: string): ManagedUser | 
   const users = loadManagedUsers();
   const found = users.find((u) => u.employeeId.toUpperCase() === employeeId.toUpperCase());
   if (!found) return null;
+  // Pertahankan akun asli yang login (jika belum tercatat, akun aktif saat ini adalah akun asli)
+  try {
+    if (!safeGetLocalRaw(LOGIN_ORIGIN_USER_KEY)) {
+      const current = getActiveUser();
+      if (current?.employeeId) safeSetLocalJson(LOGIN_ORIGIN_USER_KEY, { employeeId: current.employeeId });
+    }
+  } catch {
+    // ignore
+  }
   safeSetLocalJson(ACTIVE_USER_KEY, found);
   startOrRefreshAuthSession(found.employeeId);
   window.dispatchEvent(new Event("pa-auth-updated"));
   return found;
+}
+
+/** Akun asli yang login pada sesi ini (bukan akun hasil Pindah Akun). */
+export function getLoginOriginUser(): ManagedUser {
+  const active = getActiveUser();
+  try {
+    const raw = safeGetLocalRaw(LOGIN_ORIGIN_USER_KEY);
+    const parsed = raw ? (JSON.parse(raw) as { employeeId?: string }) : null;
+    if (parsed?.employeeId) {
+      const found = loadManagedUsers().find(
+        (u) => u.employeeId.toUpperCase() === String(parsed.employeeId).toUpperCase(),
+      );
+      if (found) return found;
+    }
+  } catch {
+    // ignore
+  }
+  return active;
+}
+
+/** Pindah Akun (User Management) hanya untuk Role Administrator & HR ICF (berdasarkan akun asli yang login). */
+export function canSwitchAccount(): boolean {
+  const origin = getLoginOriginUser();
+  const r = String(origin.role);
+  return r === "Administrator" || r === "HR ICF";
+}
+
+/** Cancel Transaction (fitur demo sementara) hanya untuk Role Administrator (akun asli yang login). */
+export function canCancelTransaction(): boolean {
+  return String(getLoginOriginUser().role) === "Administrator";
 }
 
 export function useAuthStore() {

@@ -17,6 +17,7 @@ import {
   saveManagedUsers,
 } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { BellCurveTagButton, GradeBellCurveModal } from "../../components/GradeBellCurveModal";
 
 // ─── Seeded helpers ────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ const COMPANY_UNITS: CompanyUnit[] = [
   { id: "2", name: "PT RSUP (Perkebunan)",        code: "RSUP-PKB", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "3", name: "PT RSTM",                     code: "RSTM",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "4", name: "PT GHS",                      code: "GHS",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
-  { id: "5", name: "ASD",                         code: "ASD",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
+  { id: "5", name: "PT RSUP ASD",                 code: "RSUP-ASD", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "6", name: "PT Pulau Sambu (Jakarta)",    code: "PSJ",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "7", name: "PT Pulau Sambu (Guntung)",    code: "PSG",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "8", name: "PT Pulau Sambu (Kuala Enok)", code: "PSKE",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
@@ -222,6 +223,27 @@ function getDivisionSummary(emps: EmpRow[]) {
   });
 }
 
+function getDepartmentSummary(emps: EmpRow[]) {
+  const map = new Map<string, { division: string; hc: number; upgraded: number; noChange: number; downgraded: number; grades: string[] }>();
+  for (const e of emps) {
+    const key = `${e.division}__${e.department}`;
+    if (!map.has(key)) map.set(key, { division: e.division, hc: 0, upgraded: 0, noChange: 0, downgraded: 0, grades: [] });
+    const d = map.get(key)!;
+    d.hc++;
+    d.grades.push(e.proposedGrade);
+    if (e.status === "Upgraded") d.upgraded++;
+    else if (e.status === "Downgraded") d.downgraded++;
+    else d.noChange++;
+  }
+  return Array.from(map.entries())
+    .map(([key, d]) => {
+      const gradeCounts = GRADE_KEYS.map((g) => ({ grade: g, count: d.grades.filter((x) => x === g).length }));
+      const top = [...gradeCounts].sort((a, b) => b.count - a.count)[0]?.grade ?? "B";
+      return { department: key.split("__")[1] || "-", ...d, gradeTop: top };
+    })
+    .sort((a, b) => a.division.localeCompare(b.division) || a.department.localeCompare(b.department));
+}
+
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sub, color = "#1A284F" }: {
@@ -238,22 +260,28 @@ function StatCard({ label, value, sub, color = "#1A284F" }: {
 
 // ─── Collapsible section ──────────────────────────────────────────────────────
 
-function Section({ title, subtitle, children, defaultOpen = true }: {
-  title: string; subtitle?: string; children: React.ReactNode; defaultOpen?: boolean;
+function Section({ title, subtitle, children, defaultOpen = true, action }: {
+  title: string; subtitle?: string; children: React.ReactNode; defaultOpen?: boolean; action?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between px-6 py-5 border-b border-gray-100 hover:bg-gray-50/50 transition-colors text-left"
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(v => !v); } }}
+        className="w-full flex items-center justify-between px-6 py-5 border-b border-gray-100 hover:bg-gray-50/50 transition-colors text-left cursor-pointer"
       >
         <div>
-          <p className="font-semibold text-gray-900 text-sm">{title}</p>
+          <div className="flex items-center gap-2">
+            <p className="font-semibold text-gray-900 text-sm">{title}</p>
+            {action}
+          </div>
           {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
         </div>
         {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-      </button>
+      </div>
       {open && <div className="p-6">{children}</div>}
     </div>
   );
@@ -385,7 +413,7 @@ export function BODCalibrationApproval() {
   const activeUser = getActiveUser();
   const isDirector = isDirectorRoleOrGrouping(activeUser);
   const [directorCalRole, setDirectorCalRole] = useState<"approver" | "mengetahui">(
-    () => activeUser.directorCalibrationRole ?? "approver",
+    () => activeUser.directorCalibrationRole || "approver",
   );
   const allowedUnitNames = useMemo(
     () => {
@@ -424,7 +452,7 @@ export function BODCalibrationApproval() {
   const [empSearch, setEmpSearch] = useState("");
 
   useEffect(() => {
-    setDirectorCalRole(activeUser.directorCalibrationRole ?? "approver");
+    setDirectorCalRole(activeUser.directorCalibrationRole || "approver");
   }, [activeUser.employeeId, activeUser.directorCalibrationRole]);
 
   useEffect(() => {
@@ -474,6 +502,8 @@ export function BODCalibrationApproval() {
     });
   }, [unit.totalHC, employees]);
   const divSummary = useMemo(() => getDivisionSummary(employees), [employees]);
+  const deptSummary = useMemo(() => getDepartmentSummary(employees), [employees]);
+  const [bellOpen, setBellOpen] = useState(false);
 
   const gradeChanges = useMemo(() => employees.filter(e => e.status !== "No Change"), [employees]);
   const totalHC      = unit.totalHC;
@@ -539,6 +569,27 @@ export function BODCalibrationApproval() {
         module: "Performance Appraisal",
         subModule: "Calibration Approval",
         description: `BOD requested revision on Calibration results for ${unit.name}`,
+      },
+    });
+    setModal(null);
+  };
+
+  const handleAcknowledge = () => {
+    const now = new Date().toLocaleString("id-ID", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) + " WIB";
+    const nextAck = {
+      ...acknowledgedMap,
+      [selectedUnitId]: { by: activeUser.name || "Director", at: now },
+    };
+    setAcknowledgedMap(nextAck);
+    savePersistedState("pa_bod_cal_acknowledged_map_v1", nextAck, {
+      kind: "kv-state",
+      stateKey: "pa_bod_cal_acknowledged_map_v1",
+      stateValue: nextAck,
+      audit: {
+        action: "Approve",
+        module: "Performance Appraisal",
+        subModule: "Calibration Approval (Mengetahui)",
+        description: `Director ${activeUser.name} acknowledged (Mengetahui) Calibration results for ${unit.name} (${now})`,
       },
     });
     setModal(null);
@@ -626,7 +677,11 @@ export function BODCalibrationApproval() {
         </div>
 
         {/* ── Grade Distribution ── */}
-        <Section title="Grade Distribution" subtitle="Setting target vs Aktual PA vs Proposed (after HR calibration)">
+        <Section
+          title="Grade Distribution"
+          subtitle="Setting target vs Aktual PA vs Proposed (after HR calibration)"
+          action={<BellCurveTagButton onClick={() => setBellOpen(true)} label="Bell Curve: Aktual vs Calibration" />}
+        >
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
@@ -727,6 +782,68 @@ export function BODCalibrationApproval() {
             </table>
           </div>
         </Section>
+
+        {/* ── Department Summary ── */}
+        <Section title="Calibration Summary by Departement" subtitle="Headcount and grade change breakdown per departement" defaultOpen={false}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left text-xs text-gray-500 font-medium pb-3 pr-6">Departement</th>
+                  <th className="text-left text-xs text-gray-500 font-medium pb-3 pr-6">Division</th>
+                  <th className="text-center text-xs text-gray-500 font-medium pb-3 px-4">Total HC</th>
+                  <th className="text-center text-xs font-medium pb-3 px-4 text-emerald-600">Upgraded</th>
+                  <th className="text-center text-xs text-gray-500 font-medium pb-3 px-4">No Change</th>
+                  <th className="text-center text-xs font-medium pb-3 px-4 text-red-500">Downgraded</th>
+                  <th className="text-left text-xs text-gray-500 font-medium pb-3 pl-6">Dominant Grade</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {deptSummary.length === 0 && (
+                  <tr><td colSpan={7} className="py-6 text-center text-xs text-gray-400">Belum ada data departemen.</td></tr>
+                )}
+                {deptSummary.map(dep => (
+                  <tr key={`${dep.division}-${dep.department}`} className="hover:bg-gray-50/50">
+                    <td className="py-3 pr-6 font-medium text-gray-900 text-sm">{dep.department}</td>
+                    <td className="py-3 pr-6 text-xs text-gray-500">{dep.division}</td>
+                    <td className="py-3 px-4 text-center text-gray-700 font-semibold tabular-nums text-xs">{dep.hc}</td>
+                    <td className="py-3 px-4 text-center tabular-nums text-xs">
+                      {dep.upgraded > 0 ? <span className="text-emerald-600 font-bold">+{dep.upgraded}</span> : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-3 px-4 text-center text-gray-500 tabular-nums text-xs">{dep.noChange}</td>
+                    <td className="py-3 px-4 text-center tabular-nums text-xs">
+                      {dep.downgraded > 0 ? <span className="text-red-500 font-bold">−{dep.downgraded}</span> : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-3 pl-6">
+                      <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-white text-xs font-black" style={{ background: GRADE_COLORS[dep.gradeTop] ?? "#6B7280" }}>
+                        {dep.gradeTop}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        {bellOpen && (
+          <GradeBellCurveModal
+            mode="compare"
+            title={`Grade Distribution (Bell Curve) — ${unit.name}`}
+            subtitle="Kurva Aktual (hasil PA) vs Calibration (setelah penyesuaian HR) beserta proporsi per grade."
+            rows={gradeDist.map((g) => ({
+              grade: g.grade,
+              color: g.color,
+              target: totalHC > 0 ? (g.setting / totalHC) * 100 : 0,
+              targetCount: g.setting,
+              actual: totalHC > 0 ? (g.aktual / totalHC) * 100 : 0,
+              actualCount: g.aktual,
+              calibration: totalProposed > 0 ? (g.proposed / totalProposed) * 100 : 0,
+              calibrationCount: g.proposed,
+            }))}
+            onClose={() => setBellOpen(false)}
+          />
+        )}
 
         {/* ── Grade Changes ── */}
         <Section title={`Grade Changes — ${totalChanged} Employees`} subtitle="Employees whose calibration grade differs from their PA result" defaultOpen={false}>
@@ -948,23 +1065,3 @@ export function BODCalibrationApproval() {
     </div>
   );
 }
-  const handleAcknowledge = () => {
-    const now = new Date().toLocaleString("id-ID", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) + " WIB";
-    const nextAck = {
-      ...acknowledgedMap,
-      [selectedUnitId]: { by: activeUser.name || "Director", at: now },
-    };
-    setAcknowledgedMap(nextAck);
-    savePersistedState("pa_bod_cal_acknowledged_map_v1", nextAck, {
-      kind: "kv-state",
-      stateKey: "pa_bod_cal_acknowledged_map_v1",
-      stateValue: nextAck,
-      audit: {
-        action: "Approve",
-        module: "Performance Appraisal",
-        subModule: "Calibration Approval (Mengetahui)",
-        description: `Director ${activeUser.name} acknowledged (Mengetahui) Calibration results for ${unit.name} (${now})`,
-      },
-    });
-    setModal(null);
-  };

@@ -391,7 +391,7 @@ const INITIAL_AUTO_TEMPLATES: AutoNotificationTemplate[] = [
     category: "Reminder",
     triggerType: "Scheduled",
     scheduledCompanyUnit: "All Units",
-    scheduledCompanyUnits: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
+    scheduledCompanyUnits: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
     scheduledModule: "KPI Measurement",
     scheduledDates: ["5", "25"],
     recurringMonthly: true,
@@ -446,7 +446,7 @@ const INITIAL_AUTO_TEMPLATES: AutoNotificationTemplate[] = [
     category: "Warning",
     triggerType: "Scheduled",
     scheduledCompanyUnit: "All Units",
-    scheduledCompanyUnits: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
+    scheduledCompanyUnits: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
     scheduledModule: "Appraisal Form",
     scheduledDates: ["20", "28"],
     recurringMonthly: true,
@@ -466,7 +466,7 @@ const INITIAL_AUTO_TEMPLATES: AutoNotificationTemplate[] = [
     description: "Mengirimkan undangan otomatis saat jadwal Management Interview atau Calibration diterbitkan.",
     category: "Calibration",
     triggerType: "Scheduled",
-    scheduledCompanyUnits: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
+    scheduledCompanyUnits: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
     scheduledModule: "Managerial Skill",
     scheduledDates: ["15"],
     recurringMonthly: true,
@@ -966,10 +966,22 @@ export async function createAndBroadcastNotification(
 }
 
 export function loadAutoNotificationTemplates(): AutoNotificationTemplate[] {
-  return loadPersistedState<AutoNotificationTemplate[]>(
+  const list = loadPersistedState<AutoNotificationTemplate[]>(
     AUTO_NOTIFICATION_TEMPLATES_KEY,
     INITIAL_AUTO_TEMPLATES,
   );
+  return (Array.isArray(list) ? list : INITIAL_AUTO_TEMPLATES).map((tpl) => ({
+    ...tpl,
+    scheduledCompanyUnits: Array.isArray(tpl.scheduledCompanyUnits)
+      ? Array.from(
+          new Set(
+            tpl.scheduledCompanyUnits
+              .map((u) => (u.trim().toUpperCase() === "ASD" || u.trim().toUpperCase() === "RSUP ASD" ? "PT RSUP ASD" : u))
+              .filter(Boolean),
+          ),
+        )
+      : tpl.scheduledCompanyUnits,
+  }));
 }
 
 export function saveAutoNotificationTemplates(templates: AutoNotificationTemplate[]): void {

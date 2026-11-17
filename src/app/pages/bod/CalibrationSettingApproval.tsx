@@ -19,6 +19,7 @@ import {
   isDirectorRoleOrGrouping,
 } from "../../store/authStore";
 import { hasRolePermission } from "../hr/settings/AccessManagement";
+import { BellCurveTagButton, GradeBellCurveModal } from "../../components/GradeBellCurveModal";
 
 const STATUS_TONE: Record<SoyStatus, string> = {
   Pending: "bg-amber-50 text-amber-700 border-amber-200",
@@ -36,27 +37,68 @@ function pct(v: string) {
   return parseFloat(String(v).replace("%", "")) || 0;
 }
 
-function ProportionTable({ title, rows, grades }: {
+const GRADE_TONE: Record<string, string> = {
+  "A+": "#7C3AED",
+  A: "#2563EB",
+  B: "#059669",
+  C: "#D97706",
+  D: "#EA580C",
+  E: "#DC2626",
+};
+const gradeTone = (g: string) => GRADE_TONE[g] ?? "#1A284F";
+
+const UNIT_PILL_PALETTES = [
+  "bg-sky-50 text-sky-700 border-sky-200",
+  "bg-violet-50 text-violet-700 border-violet-200",
+  "bg-emerald-50 text-emerald-700 border-emerald-200",
+  "bg-amber-50 text-amber-800 border-amber-200",
+  "bg-rose-50 text-rose-700 border-rose-200",
+  "bg-teal-50 text-teal-700 border-teal-200",
+  "bg-indigo-50 text-indigo-700 border-indigo-200",
+  "bg-orange-50 text-orange-700 border-orange-200",
+];
+
+const SECTION_HEAD_TONE: Record<string, string> = {
+  division: "from-indigo-50 via-white to-sky-50 text-indigo-800",
+  department: "from-emerald-50 via-white to-teal-50 text-emerald-800",
+  bagian: "from-amber-50 via-white to-orange-50 text-amber-800",
+};
+
+function GradeHead({ grade }: { grade: string }) {
+  return (
+    <span
+      className="inline-flex h-6 min-w-[26px] items-center justify-center rounded-md px-1.5 text-[11px] font-black text-white shadow-sm"
+      style={{ background: gradeTone(grade) }}
+    >
+      {grade}
+    </span>
+  );
+}
+
+function ProportionTable({ title, rows, grades, tone = "division" }: {
   title: string;
   rows: Array<{ id: string; label: string; parent?: string; hc: number; calcs: number[] }>;
   grades: SoyApprovalRecord["snapshot"]["calibrationGrades"];
+  tone?: "division" | "department" | "bagian";
 }) {
   const total = rows.reduce((s, r) => s + r.hc, 0);
   const colTotals = grades.map((_, gi) => rows.reduce((s, r) => s + (r.calcs[gi] ?? 0), 0));
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-200">
-      <div className="flex items-center justify-between bg-[#1A284F] px-4 py-2.5 text-white">
+    <div className="w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className={`flex items-center justify-between bg-gradient-to-r px-5 py-3 ${SECTION_HEAD_TONE[tone]}`}>
         <span className="text-xs font-bold uppercase tracking-wide">{title}</span>
-        <span className="text-[11px] text-white/70">Total HC: {total}</span>
+        <span className="rounded-full bg-white/80 px-2.5 py-0.5 text-[11px] font-semibold text-[#1A284F] shadow-sm">
+          {rows.length} baris · Total HC {total}
+        </span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
-          <thead className="bg-gray-50 text-[10px] uppercase tracking-wide text-gray-500">
+          <thead className="bg-gray-50/80 text-[10px] uppercase tracking-wide text-gray-500">
             <tr>
-              <th className="px-3 py-2 text-left">Organisasi</th>
-              <th className="px-3 py-2 text-right">HC</th>
+              <th className="px-4 py-2.5 text-left">Organisasi</th>
+              <th className="px-4 py-2.5 text-right">HC</th>
               {grades.map((g) => (
-                <th key={g.id} className="px-3 py-2 text-right">{g.grade}</th>
+                <th key={g.id} className="px-3 py-2.5 text-center"><GradeHead grade={g.grade} /></th>
               ))}
             </tr>
           </thead>
@@ -64,27 +106,38 @@ function ProportionTable({ title, rows, grades }: {
             {rows.length === 0 ? (
               <tr><td colSpan={grades.length + 2} className="py-6 text-center text-gray-400">Tidak ada data.</td></tr>
             ) : (
-              rows.map((r) => (
-                <tr key={r.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2">
-                    <span className="font-medium text-gray-800">{r.label}</span>
+              rows.map((r, ri) => (
+                <tr key={r.id} className={`border-t border-gray-100 transition-colors hover:bg-indigo-50/30 ${ri % 2 === 1 ? "bg-gray-50/40" : ""}`}>
+                  <td className="px-4 py-2.5">
+                    <span className="font-semibold text-gray-800">{r.label}</span>
                     {r.parent && <span className="block text-[10px] text-gray-400">{r.parent}</span>}
                   </td>
-                  <td className="px-3 py-2 text-right font-semibold">{r.hc}</td>
-                  {grades.map((g, gi) => (
-                    <td key={g.id} className="px-3 py-2 text-right text-gray-600">{r.calcs[gi] ?? 0}</td>
-                  ))}
+                  <td className="px-4 py-2.5 text-right">
+                    <span className="inline-flex min-w-[34px] justify-center rounded-md bg-[#1A284F]/[0.06] px-2 py-0.5 font-bold tabular-nums text-[#1A284F]">{r.hc}</span>
+                  </td>
+                  {grades.map((g, gi) => {
+                    const v = r.calcs[gi] ?? 0;
+                    return (
+                      <td key={g.id} className="px-3 py-2.5 text-center tabular-nums">
+                        {v > 0 ? (
+                          <span className="font-bold" style={{ color: gradeTone(g.grade) }}>{v}</span>
+                        ) : (
+                          <span className="text-gray-300">0</span>
+                        )}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))
             )}
           </tbody>
           {rows.length > 0 && (
-            <tfoot className="border-t-2 border-gray-200 bg-gray-50 font-semibold text-[#1A284F]">
+            <tfoot className="border-t-2 border-gray-200 bg-[#1A284F]/[0.03] font-semibold text-[#1A284F]">
               <tr>
-                <td className="px-3 py-2">Jumlah ({rows.length})</td>
-                <td className="px-3 py-2 text-right">{total}</td>
+                <td className="px-4 py-2.5">Jumlah ({rows.length})</td>
+                <td className="px-4 py-2.5 text-right tabular-nums">{total}</td>
                 {colTotals.map((t, gi) => (
-                  <td key={gi} className="px-3 py-2 text-right">{t}</td>
+                  <td key={gi} className="px-3 py-2.5 text-center tabular-nums" style={{ color: gradeTone(grades[gi]?.grade ?? "") }}>{t}</td>
                 ))}
               </tr>
             </tfoot>
@@ -101,6 +154,7 @@ export function CalibrationSettingApproval() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [action, setAction] = useState<"Approved" | "Revision" | null>(null);
   const [note, setNote] = useState("");
+  const [bellOpen, setBellOpen] = useState(false);
 
   useEffect(() => {
     const refresh = () => setRecords(loadSoyApprovals());
@@ -164,8 +218,14 @@ export function CalibrationSettingApproval() {
   const divName = (id: string) => snap?.divisionProportions.find((d) => d.id === id)?.divisi ?? "";
   const deptName = (id: string) => snap?.departemenenProportions.find((d) => d.id === id)?.departemen ?? "";
 
+  const unitPalette = (unitId: string) => {
+    const idx = Math.max(0, list.findIndex((r) => r.unitId === unitId));
+    return UNIT_PILL_PALETTES[idx % UNIT_PILL_PALETTES.length];
+  };
+  const unitTotalTargets = (snapAlloc?.unitGradeTargets ?? []).reduce((a, b) => a + b, 0);
+
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <div className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-6 py-4 shadow-sm">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1A284F]/8 text-[#1A284F]"><Settings className="h-5 w-5" /></div>
         <div>
@@ -179,58 +239,106 @@ export function CalibrationSettingApproval() {
           Belum ada Calibration Setting (SOY) yang disubmit untuk unit dalam kewenangan Anda.
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
-          <div className="flex flex-col gap-2">
-            {list.map((r) => (
-              <button
-                key={r.unitId}
-                onClick={() => setSelectedId(r.unitId)}
-                className={`rounded-xl border bg-white px-4 py-3 text-left shadow-sm transition-all ${
-                  selected?.unitId === r.unitId ? "border-[#1A284F] ring-1 ring-[#1A284F]/20" : "border-gray-100 hover:border-gray-200"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Building2 className="h-4 w-4 text-[#1A284F]" />
-                  <span className="flex-1 truncate text-sm font-semibold text-gray-800">{r.unitName}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between">
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_TONE[r.status]}`}>{r.status}</span>
-                  <span className="text-[10px] text-gray-400">{fmt(r.submittedAt)}</span>
-                </div>
-              </button>
-            ))}
+        <div className="flex w-full flex-col gap-4">
+          {/* Unit usaha (pill kecil berwarna lembut) + tag Disubmit oleh — satu baris di atas tabel */}
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
+            {list.map((r) => {
+              const active = selected?.unitId === r.unitId;
+              return (
+                <button
+                  key={r.unitId}
+                  type="button"
+                  onClick={() => setSelectedId(r.unitId)}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${unitPalette(r.unitId)} ${
+                    active ? "ring-2 ring-[#1A284F]/30 shadow-sm" : "opacity-75 hover:opacity-100"
+                  }`}
+                >
+                  <Building2 className="h-3 w-3" />
+                  {r.unitName}
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${r.status === "Approved" ? "bg-emerald-500" : r.status === "Revision" ? "bg-orange-500" : "bg-amber-400"}`}
+                    title={r.status}
+                  />
+                </button>
+              );
+            })}
+            {selected && (
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600">
+                  <Clock className="h-3 w-3" /> Disubmit oleh <strong className="font-semibold text-slate-800">{selected.submittedBy}</strong> · {fmt(selected.submittedAt)}
+                </span>
+                <span className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
+                  HC Awal Tahun: {totalHC}
+                </span>
+                <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${STATUS_TONE[selected.status]}`}>{selected.status}</span>
+                <BellCurveTagButton onClick={() => setBellOpen(true)} label="Grade Distribution (Bell Curve)" />
+              </div>
+            )}
           </div>
 
           {selected && snap && (
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white px-5 py-4 shadow-sm">
-                <div>
-                  <p className="text-base font-bold text-[#1A284F]">{selected.unitName}</p>
-                  <p className="text-xs text-gray-400">Disubmit oleh {selected.submittedBy} · {fmt(selected.submittedAt)} · HC Awal Tahun: {totalHC}</p>
-                </div>
-                <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${STATUS_TONE[selected.status]}`}>{selected.status}</span>
+            <div className="flex w-full flex-col gap-4">
+              {/* Ringkasan kartu grade berwarna */}
+              <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+                {snap.calibrationGrades.map((g, gi) => {
+                  const kuota = snapAlloc?.unitGradeTargets[gi] ?? 0;
+                  const c = gradeTone(g.grade);
+                  return (
+                    <div key={g.id} className="relative overflow-hidden rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
+                      <div className="absolute inset-x-0 top-0 h-1" style={{ background: c }} />
+                      <div className="flex items-center justify-between">
+                        <GradeHead grade={g.grade} />
+                        <span className="text-[11px] font-semibold text-gray-400">{g.proporsi}</span>
+                      </div>
+                      <p className="mt-2 text-2xl font-black tabular-nums" style={{ color: c }}>{kuota}</p>
+                      <p className="text-[10px] text-gray-400">kuota karyawan</p>
+                    </div>
+                  );
+                })}
               </div>
 
-              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-                <div className="bg-[#1A284F] px-4 py-2.5 text-xs font-bold uppercase tracking-wide text-white">Distribusi & Proporsi Grade</div>
+              <div className="w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between bg-gradient-to-r from-[#1A284F] to-[#2B3F73] px-5 py-3 text-white">
+                  <span className="text-xs font-bold uppercase tracking-wide">Distribusi & Proporsi Grade</span>
+                  <span className="text-[11px] text-white/70">Total HC {totalHC}</span>
+                </div>
                 <table className="w-full text-xs">
-                  <thead className="bg-gray-50 text-[10px] uppercase tracking-wide text-gray-500">
-                    <tr><th className="px-4 py-2 text-left">Grade</th><th className="px-4 py-2 text-right">Proporsi</th><th className="px-4 py-2 text-right">Kuota (HC {totalHC})</th></tr>
+                  <thead className="bg-gray-50/80 text-[10px] uppercase tracking-wide text-gray-500">
+                    <tr>
+                      <th className="px-5 py-2.5 text-left">Grade</th>
+                      <th className="px-5 py-2.5 text-right">Proporsi</th>
+                      <th className="px-5 py-2.5 text-right">Kuota (HC {totalHC})</th>
+                      <th className="px-5 py-2.5 text-left">Distribusi</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {snap.calibrationGrades.map((g, gi) => (
-                      <tr key={g.id} className="border-t border-gray-100">
-                        <td className="px-4 py-2 font-semibold">{g.grade}</td>
-                        <td className="px-4 py-2 text-right">{g.proporsi}</td>
-                        <td className="px-4 py-2 text-right">{snapAlloc?.unitGradeTargets[gi] ?? 0}</td>
-                      </tr>
-                    ))}
+                    {snap.calibrationGrades.map((g, gi) => {
+                      const kuota = snapAlloc?.unitGradeTargets[gi] ?? 0;
+                      const share = unitTotalTargets > 0 ? (kuota / unitTotalTargets) * 100 : pct(g.proporsi);
+                      const c = gradeTone(g.grade);
+                      return (
+                        <tr key={g.id} className="border-t border-gray-100 hover:bg-indigo-50/30">
+                          <td className="px-5 py-2.5"><GradeHead grade={g.grade} /></td>
+                          <td className="px-5 py-2.5 text-right font-semibold text-gray-600">{g.proporsi}</td>
+                          <td className="px-5 py-2.5 text-right text-sm font-black tabular-nums" style={{ color: c }}>{kuota}</td>
+                          <td className="px-5 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <div className="h-2 w-40 overflow-hidden rounded-full bg-gray-100">
+                                <div className="h-full rounded-full" style={{ width: `${Math.min(share, 100)}%`, background: c }} />
+                              </div>
+                              <span className="text-[10px] font-semibold text-gray-500">{share.toFixed(1)}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
-                  <tfoot className="border-t-2 border-gray-200 bg-gray-50 font-semibold text-[#1A284F]">
+                  <tfoot className="border-t-2 border-gray-200 bg-[#1A284F]/[0.03] font-semibold text-[#1A284F]">
                     <tr>
-                      <td className="px-4 py-2">Total</td>
-                      <td className="px-4 py-2 text-right">{snap.calibrationGrades.reduce((s, g) => s + pct(g.proporsi), 0)}%</td>
-                      <td className="px-4 py-2 text-right">{(snapAlloc?.unitGradeTargets ?? []).reduce((a, b) => a + b, 0)}</td>
+                      <td className="px-5 py-2.5">Total</td>
+                      <td className="px-5 py-2.5 text-right">{snap.calibrationGrades.reduce((s, g) => s + pct(g.proporsi), 0)}%</td>
+                      <td className="px-5 py-2.5 text-right">{unitTotalTargets}</td>
+                      <td />
                     </tr>
                   </tfoot>
                 </table>
@@ -238,6 +346,7 @@ export function CalibrationSettingApproval() {
 
               <ProportionTable
                 title="Proporsi per Divisi"
+                tone="division"
                 grades={snap.calibrationGrades}
                 rows={snap.divisionProportions.map((d) => ({
                   id: d.id,
@@ -248,6 +357,7 @@ export function CalibrationSettingApproval() {
               />
               <ProportionTable
                 title="Proporsi per Departemen"
+                tone="department"
                 grades={snap.calibrationGrades}
                 rows={snap.departemenenProportions.map((d) => ({
                   id: d.id,
@@ -259,6 +369,7 @@ export function CalibrationSettingApproval() {
               />
               <ProportionTable
                 title="Proporsi per Bagian"
+                tone="bagian"
                 grades={snap.calibrationGrades}
                 rows={snap.bagianProportions.map((b) => ({
                   id: b.id,
@@ -269,7 +380,7 @@ export function CalibrationSettingApproval() {
                 }))}
               />
 
-              <div className="rounded-xl border border-gray-100 bg-white p-4">
+              <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
                 <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Riwayat</p>
                 <ul className="space-y-1.5 text-xs">
                   {[...selected.history].reverse().map((h, i) => (
@@ -302,6 +413,21 @@ export function CalibrationSettingApproval() {
             </div>
           )}
         </div>
+      )}
+
+      {bellOpen && selected && snap && (
+        <GradeBellCurveModal
+          mode="single"
+          title={`Grade Distribution (Bell Curve) — ${selected.unitName}`}
+          subtitle={`Proporsi & kuota grade HC Awal Tahun (SOY) · Total HC ${totalHC}`}
+          rows={snap.calibrationGrades.map((g, gi) => ({
+            grade: g.grade,
+            color: gradeTone(g.grade),
+            target: pct(g.proporsi),
+            targetCount: snapAlloc?.unitGradeTargets[gi] ?? 0,
+          }))}
+          onClose={() => setBellOpen(false)}
+        />
       )}
 
       {action && selected && (

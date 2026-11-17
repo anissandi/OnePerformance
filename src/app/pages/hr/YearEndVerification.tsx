@@ -24,7 +24,7 @@ const VERIFICATION_COMPANY_UNITS: VerificationCompanyUnit[] = [
   { id: "5", name: "PT Pulau Sambu (Kuala Enok)", code: "PS-KE",    industry: "Kuala Enok" },
   { id: "6", name: "PT RSTM",                     code: "RSTM",     industry: "" },
   { id: "7", name: "PT GHS",                      code: "GHS",      industry: "" },
-  { id: "8", name: "ASD",                         code: "ASD",      industry: "" },
+  { id: "8", name: "PT RSUP ASD",                 code: "RSUP-ASD", industry: "" },
 ];
 
 type ModuleStatus = "complete" | "incomplete" | "pending" | "na";

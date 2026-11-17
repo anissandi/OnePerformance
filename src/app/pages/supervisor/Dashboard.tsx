@@ -28,6 +28,7 @@ import { ACCESS_UPDATED_EVENT, useAccessManagement } from "../hr/settings/Access
 import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../hr/settings/MenuManagement";
 import { useLocation } from "react-router";
 import { DashboardNotificationSection } from "../../components/DashboardNotificationSection";
+import { loadSoyApprovals, resolveSoyRoleForUser, SOY_EVENT } from "../../store/calibrationSoyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,8 @@ type Module =
   | "Project"
   | "Managerial Skill"
   | "Inter-Department Feedback"
-  | "RCA";
+  | "RCA"
+  | "Calibration";
 type ActionType = "Approve" | "Complete Assessment" | "Review & Validate";
 
 interface PendingItem {
@@ -67,6 +69,7 @@ const MODULE_META: Record<Module, { icon: React.ElementType; color: string; bg: 
   "Managerial Skill":          { icon: Briefcase,     color: "text-purple-700", bg: "bg-purple-50", border: "border-purple-200", hex: "#7e22ce" },
   "Inter-Department Feedback": { icon: Users,         color: "text-indigo-700", bg: "bg-indigo-50", border: "border-indigo-200", hex: "#4f46e5" },
   "RCA":                       { icon: Target,        color: "text-rose-700",   bg: "bg-rose-50",   border: "border-rose-200",   hex: "#be123c" },
+  "Calibration":               { icon: Sparkles,      color: "text-sky-700",    bg: "bg-sky-50",    border: "border-sky-200",    hex: "#0369a1" },
 };
 
 const ACTION_STYLE: Record<ActionType, string> = {
@@ -92,6 +95,7 @@ const MODULE_APPROVAL_ROUTE: Record<Module, string> = {
   "Managerial Skill":          "/supervisor/approvals/measurement/managerial-skill",
   "Inter-Department Feedback": "/supervisor/approvals/measurement/inter-department-feedback",
   "RCA":                       "/supervisor/approvals/measurement/kpi",
+  "Calibration":               "/supervisor/approvals/calibration/setting",
 };
 
 const MODULE_SETTING_APPROVAL_ROUTE: Partial<Record<Module, string>> = {
@@ -117,6 +121,7 @@ function ApprovalDashboard() {
     window.addEventListener("pa-db-hydrated", onRefresh);
     window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
     window.addEventListener("storage", onRefresh);
+    window.addEventListener(SOY_EVENT, onRefresh);
     return () => {
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("feedback-updated", onRefresh);
@@ -124,8 +129,37 @@ function ApprovalDashboard() {
       window.removeEventListener("pa-db-hydrated", onRefresh);
       window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
       window.removeEventListener("storage", onRefresh);
+      window.removeEventListener(SOY_EVENT, onRefresh);
     };
   }, []);
+
+  // Task Approval Calibration — Setting (SOY) yang masih Pending untuk Approver / Mengetahui unit tsb
+  const calibrationItems = useMemo<PendingItem[]>(() => {
+    const out: PendingItem[] = [];
+    for (const rec of Object.values(loadSoyApprovals())) {
+      if (rec.status !== "Pending") continue;
+      const role = resolveSoyRoleForUser(activeUser, rec.unitName, true);
+      if (!role) continue;
+      out.push({
+        id: `soy-${rec.unitId}`,
+        employeeId: "-",
+        employeeName: rec.unitName,
+        position: `Disubmit oleh ${rec.submittedBy}`,
+        unit: rec.unitName,
+        division: "-",
+        module: "Calibration",
+        submissionType: "Calibration Setting (HC Awal Tahun / SOY)",
+        actionNeeded: role === "approve" ? "Approve" : "Review & Validate",
+        submittedDate: normalizeDateDDMMYYYY(rec.submittedAt.slice(0, 10)),
+        notes:
+          role === "approve"
+            ? `Calibration Setting (SOY) ${rec.unitName} menunggu persetujuan (Approve / Revision) Anda.`
+            : `Calibration Setting (SOY) ${rec.unitName} disubmit untuk Anda ketahui (Mengetahui).`,
+        urgent: false,
+      });
+    }
+    return out;
+  }, [activeUser, tick]);
 
   const allowedApprovalModules = useMemo(() => {
     const allowed = new Set(getAllowedApprovalTypesForUser(activeUser, "checkin"));
@@ -138,8 +172,9 @@ function ApprovalDashboard() {
       "Inter-Department Feedback",
       "RCA",
     ];
-    return allOrder.filter((m) => allowed.has(m));
-  }, [activeUser, tick]);
+    const base = allOrder.filter((m) => allowed.has(m));
+    return calibrationItems.length > 0 ? [...base, "Calibration" as Module] : base;
+  }, [activeUser, tick, calibrationItems.length]);
 
   const subordinates = useMemo(
     () => {
@@ -300,8 +335,8 @@ function ApprovalDashboard() {
       }
     }
 
-    return list;
-  }, [subordinates, allowedApprovalModules, tick]);
+    return [...list, ...calibrationItems];
+  }, [subordinates, allowedApprovalModules, tick, calibrationItems]);
 
   const top5OldestIds = useMemo(
     () =>
@@ -500,8 +535,11 @@ function ApprovalDashboard() {
                         item.phase === "setting"
                           ? MODULE_SETTING_APPROVAL_ROUTE[item.module] ?? "/supervisor/approvals/setting"
                           : MODULE_APPROVAL_ROUTE[item.module];
+                      const portalSeg = location.pathname.split("/").filter(Boolean)[0];
                       const targetRoute = isHrPortal
                         ? rawRoute.replace(/^\/supervisor\//, "/hr/")
+                        : item.module === "Calibration" && (portalSeg === "bod" || portalSeg === "employee")
+                        ? rawRoute.replace(/^\/supervisor\//, `/${portalSeg}/`)
                         : rawRoute;
                       navigate(targetRoute);
                     }}

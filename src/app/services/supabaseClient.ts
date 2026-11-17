@@ -109,6 +109,60 @@ export async function selectRowsFromSupabase<T = Record<string, unknown>>(table:
   return restSelect<T>(table, query);
 }
 
+function canonicalizeDbCompanyUnit(raw: unknown): string {
+  const s = String(raw ?? "").trim();
+  const u = s.toUpperCase().replace(/\s+/g, " ");
+  if (u === "ASD" || u === "RSUP ASD" || u === "PT. RSUP ASD" || u === "PT RSUP (ASD)" || u === "PT RSUP ASD") {
+    return "PT RSUP ASD";
+  }
+  return s;
+}
+
+function normalizeDbApproverPair(rawAp1: unknown, rawAp2: unknown): { regNoAp1: string; regNoAp2: string } {
+  const clean = (v: unknown) => {
+    const s = String(v ?? "").trim();
+    if (!s) return "";
+    const u = s.toUpperCase();
+    return u === "-" || u === "—" || u === "N/A" || u === "NA" || u === "NULL" || u === "UNDEFINED" ? "" : s;
+  };
+  const a1 = clean(rawAp1);
+  const a2 = clean(rawAp2);
+  if (a1 && !a2) return { regNoAp1: a1, regNoAp2: a1 };
+  if (!a1 && a2) return { regNoAp1: a2, regNoAp2: a2 };
+  return { regNoAp1: a1, regNoAp2: a2 };
+}
+
+let legacyAsdDbMigrationTriggered = false;
+async function migrateLegacyAsdInSupabaseTables(): Promise<void> {
+  if (legacyAsdDbMigrationTriggered) return;
+  legacyAsdDbMigrationTriggered = true;
+  const now = new Date().toISOString();
+  const patchTable = async (pathAndQuery: string, body: Record<string, unknown>) => {
+    try {
+      await fetch(`${SUPABASE_REST_BASE}/${pathAndQuery}`, {
+        method: "PATCH",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      // ignore offline
+    }
+  };
+  await Promise.all([
+    patchTable("pa_users?company=in.(ASD,RSUP%20ASD)", { company: "PT RSUP ASD", updated_at: now }),
+    patchTable("pa_kpi_settings?company_unit=in.(ASD,RSUP%20ASD)", { company_unit: "PT RSUP ASD", updated_at: now }),
+    patchTable("pa_open_lock_requests?company_unit=in.(ASD,RSUP%20ASD)", { company_unit: "PT RSUP ASD", updated_at: now }),
+    patchTable("pa_interview_schedules?company_unit=in.(ASD,RSUP%20ASD)", { company_unit: "PT RSUP ASD", updated_at: now }),
+    patchTable("pa_calibration_settings?unit_name=in.(ASD,RSUP%20ASD)", { unit_name: "PT RSUP ASD", updated_at: now }),
+    patchTable("pa_calibration_adjustments?unit_name=in.(ASD,RSUP%20ASD)", { unit_name: "PT RSUP ASD", updated_at: now }),
+    patchTable("pa_evidence_files?company_unit=in.(ASD,RSUP%20ASD)", { company_unit: "PT RSUP ASD" }),
+  ]);
+}
+
 async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<boolean> {
   const kind = String(payload.kind ?? "");
   const now = new Date().toISOString();
@@ -122,6 +176,7 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
     );
   } else if (kind === "user-upsert" && payload.user) {
     const u = payload.user as Record<string, unknown>;
+    const apPair = normalizeDbApproverPair(u.regNoAp1, u.regNoAp2);
     const fullRow = {
       employee_id: String(u.employeeId ?? ""),
       no: String(u.no ?? ""),
@@ -129,7 +184,7 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       name: String(u.name ?? ""),
       email: String(u.email ?? ""),
       position: String(u.position ?? ""),
-      company: String(u.company ?? ""),
+      company: canonicalizeDbCompanyUnit(u.company ?? ""),
       unit_id: String(u.unitId ?? "IND"),
       division: String(u.division ?? ""),
       department: String(u.department ?? ""),
@@ -141,8 +196,8 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       groupings: String(u.groupings ?? "Operasional"),
       status: String(u.status ?? "Active"),
       last_login: String(u.lastLogin ?? ""),
-      reg_no_ap1: String(u.regNoAp1 ?? ""),
-      reg_no_ap2: String(u.regNoAp2 ?? ""),
+      reg_no_ap1: apPair.regNoAp1,
+      reg_no_ap2: apPair.regNoAp2,
       is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
       is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
       updated_at: now,
@@ -174,14 +229,16 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
   } else if (kind === "users-batch" && Array.isArray(payload.users)) {
     const valid = (payload.users as Array<Record<string, unknown>>).filter((u) => Boolean(u && String(u.employeeId ?? "").trim()));
     if (valid.length > 0) {
-      const fullRows = valid.map((u) => ({
+      const fullRows = valid.map((u) => {
+        const apPair = normalizeDbApproverPair(u.regNoAp1, u.regNoAp2);
+        return {
         employee_id: String(u.employeeId ?? "").trim(),
         no: String(u.no ?? ""),
         reg_no: String(u.regNo ?? ""),
         name: String(u.name || "-"),
         email: String(u.email ?? ""),
         position: String(u.position || "-"),
-        company: String(u.company || "PT RSUP (Industry)"),
+        company: canonicalizeDbCompanyUnit(u.company || "PT RSUP (Industry)"),
         unit_id: String(u.unitId ?? "IND"),
         division: String(u.division || "-"),
         department: String(u.department || "-"),
@@ -193,12 +250,13 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
         groupings: String(u.groupings || "Operasional"),
         status: u.status === "Inactive" ? "Inactive" : "Active",
         last_login: String(u.lastLogin ?? ""),
-        reg_no_ap1: String(u.regNoAp1 ?? ""),
-        reg_no_ap2: String(u.regNoAp2 ?? ""),
+        reg_no_ap1: apPair.regNoAp1,
+        reg_no_ap2: apPair.regNoAp2,
         is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
         is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
         updated_at: now,
-      }));
+        };
+      });
       ok = await restUpsert("pa_users", fullRows, "employee_id");
       if (!ok) {
         const minRows = fullRows.map((r) => ({
@@ -296,6 +354,25 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       },
       "doc_key",
     );
+  } else if (kind === "workflow-delete" && Array.isArray(payload.docKeys)) {
+    const cleanKeys = (payload.docKeys as unknown[])
+      .map((k) => encodeURIComponent(String(k ?? "").trim()))
+      .filter(Boolean)
+      .join(",");
+    if (cleanKeys) {
+      try {
+        const res = await fetch(`${SUPABASE_REST_BASE}/pa_workflow_documents?doc_key=in.(${cleanKeys})`, {
+          method: "DELETE",
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+        });
+        ok = res.ok;
+      } catch {
+        ok = false;
+      }
+    }
   } else if (kind === "open-lock" && payload.request) {
     const r = payload.request as Record<string, unknown>;
     ok = await restUpsert(
@@ -844,6 +921,7 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
       kind === "users-batch" ||
       kind === "users-replace" ||
       kind === "user-delete" ||
+      kind === "workflow-delete" ||
       (kind === "kv-state" && CRITICAL_AUTH_KV_KEYS.has(String(payload.stateKey ?? "")));
 
     // Path 0 (Vercel Serverless API with SUPABASE_SERVICE_ROLE_KEY — bypasses RLS & build-time env issues)
@@ -1320,7 +1398,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         }
       }
     }
-    if (edgeOk && Array.isArray(edgeData.kvStates)) {
+    if (edgeOk && edgeData && Array.isArray(edgeData.kvStates)) {
       for (const row of edgeData.kvStates as Array<{ state_key?: string; state_value?: unknown }>) {
         if (!row?.state_key || row.state_value === undefined) continue;
         const k = String(row.state_key);
@@ -1343,7 +1421,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
     }));
 
     const vercelUsers = vercelOk && Array.isArray(vercelData?.users) ? (vercelData.users as Array<Record<string, unknown>>) : [];
-    const finalUsers = vercelUsers.length >= users.length && vercelUsers.length > 0 ? vercelUsers : users.length > 0 ? users : edgeOk && Array.isArray(edgeData.users) ? edgeData.users : [];
+    const finalUsers = vercelUsers.length >= users.length && vercelUsers.length > 0 ? vercelUsers : users.length > 0 ? users : edgeOk && edgeData && Array.isArray(edgeData.users) ? edgeData.users : [];
     const pick = <T>(a: T[], b: unknown): T[] => (a.length > 0 ? a : Array.isArray(b) ? (b as T[]) : []);
 
     if (
@@ -1778,10 +1856,17 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
   // Jika pa_managed_users_v1 tersedia (hasil User Management / Import Excel), nilai field di pa_managed_users_v1
   // (seperti Company Unit, Reg No, Role, Divisi, Status) harus diutamakan agar baris seed lama di pa_users tidak menimpanya!
   const dbByEmp = new Map(users.map((u) => [String(u.employee_id ?? "").toLowerCase(), u]));
+  const hadLegacyAsdInDb =
+    users.some((u) => u?.company === "ASD" || u?.company === "RSUP ASD") ||
+    kvUsersList.some((u) => u?.company === "ASD" || u?.company === "RSUP ASD");
+  if (hadLegacyAsdInDb) {
+    void migrateLegacyAsdInSupabaseTables();
+  }
   if (kvUsersList.length > 0) {
     const mergedFromKv = kvUsersList.map((kvU, idx) => {
       const empKey = String(kvU.employeeId ?? "").toLowerCase();
       const dbU = dbByEmp.get(empKey);
+      const apPair = normalizeDbApproverPair(kvU.regNoAp1 ?? dbU?.reg_no_ap1, kvU.regNoAp2 ?? dbU?.reg_no_ap2);
       return {
         ...kvU,
         id: String(kvU.id || idx + 1),
@@ -1790,7 +1875,7 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
         name: String(kvU.name || dbU?.name || ""),
         employeeId: String(kvU.employeeId || dbU?.employee_id || ""),
         position: String(kvU.position || dbU?.position || ""),
-        company: String(kvU.company || dbU?.company || ""),
+        company: canonicalizeDbCompanyUnit(kvU.company || dbU?.company || ""),
         division: String(kvU.division || dbU?.division || ""),
         department: String(kvU.department || dbU?.department || ""),
         bagian: String(kvU.bagian ?? dbU?.bagian ?? ""),
@@ -1802,8 +1887,8 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
         status: String(kvU.status || dbU?.status || "Active"),
         lastLogin: String(dbU?.last_login || kvU.lastLogin || ""),
         email: String(kvU.email || dbU?.email || ""),
-        regNoAp1: String(kvU.regNoAp1 ?? dbU?.reg_no_ap1 ?? ""),
-        regNoAp2: String(kvU.regNoAp2 ?? dbU?.reg_no_ap2 ?? ""),
+        regNoAp1: apPair.regNoAp1,
+        regNoAp2: apPair.regNoAp2,
       };
     });
     const seenIds = new Set(mergedFromKv.map((u) => u.employeeId.toLowerCase()));
@@ -1812,13 +1897,14 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
       : users
           .filter((u) => !seenIds.has(String(u.employee_id ?? "").toLowerCase()))
           .map((u, idx) => ({
+            ...normalizeDbApproverPair(u.reg_no_ap1, u.reg_no_ap2),
             id: String(mergedFromKv.length + idx + 1),
             no: String(u.no || mergedFromKv.length + idx + 1),
             regNo: String(u.reg_no || `REG-${String(mergedFromKv.length + idx + 1).padStart(3, "0")}`),
             name: String(u.name ?? ""),
             employeeId: String(u.employee_id ?? ""),
             position: String(u.position ?? ""),
-            company: String(u.company ?? ""),
+            company: canonicalizeDbCompanyUnit(u.company ?? ""),
             division: String(u.division ?? ""),
             department: String(u.department ?? ""),
             bagian: String(u.bagian ?? ""),
@@ -1830,8 +1916,6 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
             status: String(u.status || "Active"),
             lastLogin: String(u.last_login || ""),
             email: String(u.email ?? ""),
-            regNoAp1: String(u.reg_no_ap1 ?? ""),
-            regNoAp2: String(u.reg_no_ap2 ?? ""),
             isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
             isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
           }));
@@ -1839,18 +1923,22 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
       (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
     );
     safeSetLocalJson("pa_managed_users_v1", synced);
+    if (hadLegacyAsdInDb) {
+      void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: synced });
+    }
     return synced;
   }
 
   // Jika pa_managed_users_v1 masih kosong (browser/perangkat baru), bangun dari pa_users
   const mapped = users.map((u, idx) => ({
+    ...normalizeDbApproverPair(u.reg_no_ap1, u.reg_no_ap2),
     id: String(idx + 1),
     no: String(u.no || idx + 1),
     regNo: String(u.reg_no || `REG-${String(idx + 1).padStart(3, "0")}`),
     name: String(u.name ?? ""),
     employeeId: String(u.employee_id ?? ""),
     position: String(u.position ?? ""),
-    company: String(u.company ?? ""),
+    company: canonicalizeDbCompanyUnit(u.company ?? ""),
     division: String(u.division ?? ""),
     department: String(u.department ?? ""),
     bagian: String(u.bagian ?? ""),
@@ -1862,8 +1950,6 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     status: String(u.status || "Active"),
     lastLogin: String(u.last_login || ""),
     email: String(u.email ?? ""),
-    regNoAp1: String(u.reg_no_ap1 ?? ""),
-    regNoAp2: String(u.reg_no_ap2 ?? ""),
     isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
     isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
   })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
@@ -2159,13 +2245,14 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       }
       for (const doc of workflowDocs) {
         const payload = doc.payload as Record<string, unknown> | undefined;
-        if (payload && typeof payload.key === "string") {
+        if (payload && typeof payload.key === "string" && (payload.cancelled === true || doc.status === "Cancelled")) {
+          // Dokumen yang dibatalkan Administrator (Cancel Transaction) tidak dimunculkan kembali
+          byKey.delete(payload.key);
+        } else if (payload && typeof payload.key === "string") {
           byKey.set(payload.key, payload);
         }
       }
-      if (byKey.size > 0) {
-        safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
-      }
+      safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
     }
 
     // 8. Hydrate normalized interview schedules if present

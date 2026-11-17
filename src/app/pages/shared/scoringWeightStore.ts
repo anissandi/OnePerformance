@@ -1,4 +1,5 @@
 import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
+import { canonicalizeCompanyUnitName } from "../../store/authStore";
 
 export type ScoreWeightColumn = "operasional" | "kaWaKaSeksi" | "pengawasKepalaBagian" | "kepalaDepartement" | "kepalaDivisi";
 export type ScoreWeightRow = { indikator: string } & Record<ScoreWeightColumn, string>;
@@ -19,7 +20,8 @@ export const DEFAULT_SCORE_WEIGHTS: UnitScoreWeights = {
 export function loadUnitScoreWeights(companyName: string): UnitScoreWeights {
   try {
     const saved = JSON.parse(safeGetLocalRaw(KEY) ?? "{}") as Record<string, UnitScoreWeights>;
-    return saved[companyName] ?? DEFAULT_SCORE_WEIGHTS;
+    const canon = canonicalizeCompanyUnitName(companyName);
+    return saved[canon] ?? (canon === "PT RSUP ASD" ? saved["ASD"] : undefined) ?? saved[companyName] ?? DEFAULT_SCORE_WEIGHTS;
   } catch {
     return DEFAULT_SCORE_WEIGHTS;
   }
@@ -49,19 +51,21 @@ export function getModuleWeightFraction(
 }
 
 export function saveUnitScoreWeights(companyName: string, rows: readonly ScoreWeightRow[]) {
+  const canon = canonicalizeCompanyUnitName(companyName);
   const weights: UnitScoreWeights = Object.fromEntries(rows.map(({ indikator, ...values }) => [indikator, values]));
   let saved: Record<string, UnitScoreWeights> = {};
   try { saved = JSON.parse(safeGetLocalRaw(KEY) ?? "{}"); } catch {}
-  const next = { ...saved, [companyName]: weights };
+  if (canon === "PT RSUP ASD") delete saved["ASD"];
+  const next = { ...saved, [canon]: weights };
   savePersistedState(KEY, next, {
     kind: "score-weights",
-    companyUnit: companyName,
+    companyUnit: canon,
     weights,
     audit: {
       action: "Update",
       module: "HR Settings",
       subModule: "Scores Setting",
-      description: `Updated module score weights for ${companyName}`,
+      description: `Updated module score weights for ${canon}`,
     },
   });
   window.dispatchEvent(new Event(SCORE_WEIGHT_EVENT));

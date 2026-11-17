@@ -55,13 +55,39 @@ async function pgRest(cfg, pathAndQuery, init = {}) {
   return fetch(`${cfg.url}/rest/v1/${pathAndQuery}`, { ...init, headers });
 }
 
+function canonicalizeUnitName(raw) {
+  const s = String(raw ?? "").trim();
+  const u = s.toUpperCase().replace(/\s+/g, " ");
+  if (u === "ASD" || u === "RSUP ASD" || u === "PT. RSUP ASD" || u === "PT RSUP (ASD)" || u === "PT RSUP ASD") {
+    return "PT RSUP ASD";
+  }
+  return s;
+}
+
+function cleanApproverRef(val) {
+  const s = String(val ?? "").trim();
+  if (!s) return "";
+  const u = s.toUpperCase();
+  if (u === "-" || u === "—" || u === "N/A" || u === "NA" || u === "NULL" || u === "UNDEFINED") return "";
+  return s;
+}
+
+function normalizeApproverPairServer(rawAp1, rawAp2) {
+  const a1 = cleanApproverRef(rawAp1);
+  const a2 = cleanApproverRef(rawAp2);
+  if (a1 && !a2) return { regNoAp1: a1, regNoAp2: a1 };
+  if (!a1 && a2) return { regNoAp1: a2, regNoAp2: a2 };
+  return { regNoAp1: a1, regNoAp2: a2 };
+}
+
 function toPaUserRow(u, now, minimal = false) {
+  const apPair = normalizeApproverPairServer(u.regNoAp1 ?? u.reg_no_ap1, u.regNoAp2 ?? u.reg_no_ap2);
   const base = {
     employee_id: String(u.employeeId ?? u.employee_id ?? "").trim(),
     name: String(u.name || "-"),
     email: String(u.email || ""),
     position: String(u.position || "-"),
-    company: String(u.company || "PT RSUP (Industry)"),
+    company: canonicalizeUnitName(u.company || "PT RSUP (Industry)"),
     unit_id: String(u.unitId || u.unit_id || "IND"),
     division: String(u.division || "-"),
     department: String(u.department || "-"),
@@ -80,8 +106,8 @@ function toPaUserRow(u, now, minimal = false) {
     bagian: String(u.bagian ?? ""),
     join_date: String(u.joinDate ?? u.join_date ?? ""),
     telegram_no: String(u.telegramNo ?? u.telegram_no ?? ""),
-    reg_no_ap1: String(u.regNoAp1 ?? u.reg_no_ap1 ?? ""),
-    reg_no_ap2: String(u.regNoAp2 ?? u.reg_no_ap2 ?? ""),
+    reg_no_ap1: apPair.regNoAp1,
+    reg_no_ap2: apPair.regNoAp2,
     is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.is_hr_unit_checker ?? base.role === "HR Unit"),
     is_hr_icf_validator: Boolean(
       u.isHrIcfValidator ?? u.is_hr_icf_validator ?? (base.role === "HR ICF" || base.role === "Administrator"),
@@ -114,6 +140,35 @@ export default async function handler(req, res) {
 
       const kvRows = kvRes.ok ? await kvRes.json() : [];
       const users = usersRes.ok ? await usersRes.json() : [];
+      // Auto-migrate baris pa_users di database yang masih bernama "ASD" / "RSUP ASD" -> "PT RSUP ASD"
+      if (Array.isArray(users) && users.some((u) => u && (u.company === "ASD" || u.company === "RSUP ASD"))) {
+        const nowIso = new Date().toISOString();
+        await pgRest(cfg, "pa_users?company=in.(ASD,RSUP%20ASD)", {
+          method: "PATCH",
+          body: JSON.stringify({ company: "PT RSUP ASD", updated_at: nowIso }),
+        });
+        for (const u of users) {
+          if (u && u.company) u.company = canonicalizeUnitName(u.company);
+        }
+      }
+      // Auto-normalize pasangan reg_no_ap1 & reg_no_ap2 di pa_users jika salah satu kosong
+      if (Array.isArray(users)) {
+        const nowIso = new Date().toISOString();
+        for (const u of users) {
+          if (!u) continue;
+          const norm = normalizeApproverPairServer(u.reg_no_ap1, u.reg_no_ap2);
+          if (norm.regNoAp1 !== String(u.reg_no_ap1 ?? "") || norm.regNoAp2 !== String(u.reg_no_ap2 ?? "")) {
+            u.reg_no_ap1 = norm.regNoAp1;
+            u.reg_no_ap2 = norm.regNoAp2;
+            if (u.employee_id) {
+              await pgRest(cfg, `pa_users?employee_id=eq.${encodeURIComponent(String(u.employee_id))}`, {
+                method: "PATCH",
+                body: JSON.stringify({ reg_no_ap1: norm.regNoAp1, reg_no_ap2: norm.regNoAp2, updated_at: nowIso }),
+              });
+            }
+          }
+        }
+      }
       const kvMap = {};
       if (Array.isArray(kvRows)) {
         for (const r of kvRows) {
@@ -234,6 +289,82 @@ export default async function handler(req, res) {
           { method: "DELETE" },
         );
         return res.status(200).json({ ok: del.ok, status: del.status });
+      }
+
+      if (kind === "workflow-document" && body.doc) {
+        const d = body.doc;
+        const up = await pgRest(cfg, "pa_workflow_documents?on_conflict=doc_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            doc_key: String(d.key ?? ""),
+            employee_id: String(d.employeeId ?? ""),
+            unit_id: String(d.unitId ?? "IND"),
+            module: String(d.module ?? ""),
+            phase: String(d.phase ?? "measurement"),
+            period: String(d.year ?? "2026"),
+            status: String(d.status ?? "Pending"),
+            version: Number(d.version ?? 1),
+            payload: d.payload ?? d,
+            updated_by: d.actorId ?? null,
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: up.ok, status: up.status });
+      }
+
+      if (kind === "workflow-delete" && Array.isArray(body.docKeys) && body.docKeys.length > 0) {
+        const encodedKeys = body.docKeys
+          .map((k) => encodeURIComponent(String(k).trim()))
+          .filter(Boolean)
+          .join(",");
+        let delOk = true;
+        if (encodedKeys) {
+          const del = await pgRest(cfg, `pa_workflow_documents?doc_key=in.(${encodedKeys})`, {
+            method: "DELETE",
+          });
+          delOk = del.ok;
+        }
+        // Reset status tabel modul terkait menjadi Draft / Unsubmitted menggunakan service_role
+        if (Array.isArray(body.records)) {
+          for (const rec of body.records) {
+            if (!rec || !rec.employeeId) continue;
+            const empEnc = encodeURIComponent(String(rec.employeeId).trim());
+            const mod = String(rec.module || "");
+            const phase = String(rec.phase || "measurement");
+            if (mod === "KPI" && phase === "setting") {
+              await pgRest(cfg, `pa_kpi_settings?employee_id=eq.${empEnc}&period=eq.2026`, {
+                method: "PATCH",
+                body: JSON.stringify({ status: "Draft", updated_at: now }),
+              });
+            } else if (mod === "SMART Goals") {
+              await pgRest(cfg, `pa_smart_goals?employee_id=eq.${empEnc}&period=eq.2026`, {
+                method: "PATCH",
+                body: JSON.stringify({
+                  status: phase === "setting" ? "Draft-Setting" : "Draft-Measurement",
+                  approval_decisions: [],
+                  updated_at: now,
+                }),
+              });
+            } else if (mod === "Appraisal Form") {
+              await pgRest(cfg, `pa_appraisal_forms?employee_id=eq.${empEnc}&period=eq.2026`, {
+                method: "PATCH",
+                body: JSON.stringify({ status: "Draft", approver_ratings: [], updated_at: now }),
+              });
+            } else if (mod === "Managerial Skill") {
+              await pgRest(cfg, `pa_managerial_skills?employee_id=eq.${empEnc}&period=eq.2026`, {
+                method: "PATCH",
+                body: JSON.stringify({ status: "Draft", approver_ratings: [], updated_at: now }),
+              });
+            } else if (mod === "Project") {
+              await pgRest(cfg, `pa_project_records?employee_id=eq.${empEnc}&period=eq.2026`, {
+                method: "PATCH",
+                body: JSON.stringify({ submitted: false, updated_at: now }),
+              });
+            }
+          }
+        }
+        return res.status(200).json({ ok: delOk });
       }
 
       return res.status(200).json({ ok: false, reason: "UNHANDLED_KIND" });

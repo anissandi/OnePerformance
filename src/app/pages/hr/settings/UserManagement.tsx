@@ -7,8 +7,10 @@ import { loadLocalAuditLogs } from "../../../services/supabaseClient";
 import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw } from "lucide-react";
 import {
   defaultAllowedModulesForGrouping,
+  getActiveUser,
   loadManagedUsers,
   loadUnitGroupRules,
+  normalizeApproverPair,
   saveManagedUsers,
   saveUnitGroupRules,
   type ManagedUser,
@@ -28,7 +30,7 @@ type User = ManagedUser;
 const COMPANIES = [
   "PT RSUP (Industry)", "PT RSUP (Perkebunan)",
   "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)",
-  "PT RSTM", "PT GHS", "ASD",
+  "PT RSTM", "PT GHS", "PT RSUP ASD",
 ];
 const GROUPINGS_SCORES = ["Operasional", "Ka./Wa.Ka.Seksi", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Div ke atas", "Direktur / Director"];
 
@@ -99,8 +101,8 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
             { label: "Division", value: user.division },
             { label: "Department", value: user.department },
             { label: "Bagian", value: user.bagian || "—" },
-            { label: "Reg No AP1 (Approval 1)", value: user.regNoAp1 || "—" },
-            { label: "Reg No AP2 (Approval 2)", value: user.regNoAp2 || "—" },
+            { label: "Reg No AP1 (Approval 1)", value: user.regNoAp1 || "Belum ada approver" },
+            { label: "Reg No AP2 (Approval 2)", value: user.regNoAp2 || "Belum ada approver" },
             { label: "Multi-Divisi (Tambahan)", value: user.managedDivisions?.length ? user.managedDivisions.join(", ") : "—" },
             { label: "Multi-Departemen (Tambahan)", value: user.managedDepartments?.length ? user.managedDepartments.join(", ") : "—" },
             { label: "Multi-Bagian (Tambahan)", value: user.managedBagians?.length ? user.managedBagians.join(", ") : "—" },
@@ -343,6 +345,30 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
             </div>
           ))}
 
+          {(() => {
+            const raw1 = String(form.regNoAp1 ?? "").trim();
+            const raw2 = String(form.regNoAp2 ?? "").trim();
+            const pair = normalizeApproverPair(raw1, raw2);
+            const singleFilled = (Boolean(raw1) && !raw2) || (!raw1 && Boolean(raw2));
+            return (
+              <div className="col-span-2">
+                {!pair.hasApprover ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-[11px] text-amber-800">
+                    <strong>Belum ada approver:</strong> Reg No AP1 dan Reg No AP2 keduanya kosong.
+                  </div>
+                ) : singleFilled ? (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-[11px] text-blue-800">
+                    Hanya satu Reg No terisi — otomatis ditetapkan sebagai <strong>Approver 1 &amp; Approver 2 ({pair.regNoAp1})</strong> saat disimpan.
+                  </div>
+                ) : pair.regNoAp1.toLowerCase() === pair.regNoAp2.toLowerCase() ? (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-800">
+                    Approver 1 &amp; Approver 2 menggunakan Reg No yang sama (<strong>{pair.regNoAp1}</strong>).
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()}
+
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Company / Unit</label>
             <input readOnly value={form.company}
@@ -521,7 +547,12 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
 
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100">
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
-          <button onClick={() => { onSave(form); onClose(); }}
+          <button
+            onClick={() => {
+              const ap = normalizeApproverPair(form.regNoAp1, form.regNoAp2);
+              onSave({ ...form, regNoAp1: ap.regNoAp1, regNoAp2: ap.regNoAp2 });
+              onClose();
+            }}
             className="px-4 py-2 text-sm bg-[#1A284F] text-white rounded-lg hover:bg-[#2a3d6e] flex items-center gap-1.5">
             <Save size={14} /> {isNew ? "Add User" : "Save Changes"}
           </button>
@@ -532,7 +563,9 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
 }
 
 // ─── Delete Confirm Modal ──────────────────────────────────────────────────────
-function DeleteModal({ user, onClose, onConfirm }: { user: User; onClose: () => void; onConfirm: (reason: string) => void }) {
+function DeleteModal({ user, users: bulkUsers, onClose, onConfirm }: { user?: User; users?: User[]; onClose: () => void; onConfirm: (reason: string) => void }) {
+  const targets = bulkUsers && bulkUsers.length > 0 ? bulkUsers : user ? [user] : [];
+  const isBulk = targets.length > 1;
   const [reason, setReason] = useState("");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
@@ -542,11 +575,25 @@ function DeleteModal({ user, onClose, onConfirm }: { user: User; onClose: () => 
             <Trash2 size={18} className="text-red-500" />
           </div>
           <div>
-            <h2 className="font-semibold text-gray-800">Delete User</h2>
+            <h2 className="font-semibold text-gray-800">{isBulk ? `Delete / Archive ${targets.length} User` : "Delete User"}</h2>
             <p className="text-sm text-gray-500">User akan dipindahkan ke menu Archive dan dapat di-restore.</p>
           </div>
         </div>
-        <p className="text-sm text-gray-600 mb-3">Hapus <strong>{user.name}</strong> (ID: {user.employeeId}) dari User Management? Karyawan tidak dapat login sampai di-restore dari Archive.</p>
+        {isBulk ? (
+          <div className="mb-3">
+            <p className="text-sm text-gray-600 mb-2">Hapus <strong>{targets.length} user</strong> berikut dari User Management? Karyawan tidak dapat login sampai di-restore dari Archive.</p>
+            <div className="max-h-36 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50 divide-y divide-gray-100">
+              {targets.map((t) => (
+                <div key={t.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                  <span className="font-medium text-gray-700 truncate">{t.name}</span>
+                  <span className="text-gray-400 shrink-0 ml-2">{t.employeeId}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-600 mb-3">Hapus <strong>{targets[0]?.name}</strong> (ID: {targets[0]?.employeeId}) dari User Management? Karyawan tidak dapat login sampai di-restore dari Archive.</p>
+        )}
         <label className="block text-xs font-semibold text-gray-600 mb-1">Keterangan Delete <span className="text-red-500">*</span></label>
         <textarea
           rows={3}
@@ -1705,6 +1752,8 @@ export function UserManagementPage() {
   const [editUser, setEditUser] = useState<User | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteUser, setDeleteUser] = useState<User | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [resetPwdUser, setResetPwdUser] = useState<User | null>(null);
   const [resetPwdBanner, setResetPwdBanner] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -1766,6 +1815,34 @@ export function UserManagementPage() {
     // Delete = arsipkan (dapat di-restore dari Setting → Archive)
     archiveUsers([deleted], reason, "manual");
     setUsers(prev => prev.filter(u => u.id !== id));
+    setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+  }
+
+  // Multi Delete / Archive (checkbox) — tersinkron ke backend via archiveUsers
+  const activeEmpId = getActiveUser().employeeId.toUpperCase();
+  const isSelectable = (u: User) => u.employeeId.toUpperCase() !== activeEmpId;
+  const selectedUsers = companyUsers.filter(u => selectedIds.has(u.id));
+  const pageSelectable = paginated.filter(isSelectable);
+  const allPageChecked = pageSelectable.length > 0 && pageSelectable.every(u => selectedIds.has(u.id));
+  function togglePageAll() {
+    setSelectedIds(prev => {
+      const n = new Set(prev);
+      if (allPageChecked) pageSelectable.forEach(u => n.delete(u.id));
+      else pageSelectable.forEach(u => n.add(u.id));
+      return n;
+    });
+  }
+  function toggleOne(id: string) {
+    setSelectedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+  function handleBulkDelete(reason: string) {
+    const targets = selectedUsers.filter(isSelectable);
+    if (targets.length === 0) return;
+    archiveUsers(targets, reason, "manual");
+    const ids = new Set(targets.map(t => t.id));
+    setUsers(prev => prev.filter(u => !ids.has(u.id)));
+    setSelectedIds(new Set());
+    setResetPwdBanner(`${targets.length} user berhasil dihapus & dipindahkan ke Archive.`);
   }
 
   const employeeCount = companyUsers.filter(u => u.role === "Employee").length;
@@ -1890,11 +1967,39 @@ export function UserManagementPage() {
           </button>
         </div>
 
+        {selectedUsers.length > 0 && (
+          <div className="flex items-center justify-between gap-3 px-5 py-2.5 bg-rose-50/70 border-b border-rose-100">
+            <span className="text-xs font-semibold text-rose-800">
+              {selectedUsers.length} user dipilih
+              {allFiltered.length > selectedUsers.length && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set(allFiltered.filter(isSelectable).map(u => u.id)))}
+                  className="ml-2 font-medium text-rose-600 underline hover:text-rose-800"
+                >
+                  Pilih semua {allFiltered.filter(isSelectable).length} hasil filter
+                </button>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setSelectedIds(new Set())} className="px-3 py-1.5 text-xs border border-gray-200 bg-white rounded-lg text-gray-600 hover:bg-gray-50">
+                Batal Pilih
+              </button>
+              <button type="button" onClick={() => setBulkDeleteOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700">
+                <Trash2 size={13} /> Delete / Archive Terpilih
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/60">
+                <th className="w-10 pl-5 pr-1 py-3 text-left">
+                  <input type="checkbox" checked={allPageChecked} onChange={togglePageAll} className="h-3.5 w-3.5 accent-[#1A284F] cursor-pointer" aria-label="Pilih semua user di halaman ini" />
+                </th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Action</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Employee</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Reg No & AP1/AP2</th>
@@ -1909,13 +2014,23 @@ export function UserManagementPage() {
             </thead>
             <tbody>
               {paginated.length === 0 ? (
-                <tr><td colSpan={10} className="text-center text-gray-400 py-14">No users match the current filter.</td></tr>
+                <tr><td colSpan={11} className="text-center text-gray-400 py-14">No users match the current filter.</td></tr>
               ) : paginated.map((user, idx) => {
                 const userUnitCfg = getUnitLoginConfig(user.company);
                 const isUserUnitPwdMode = userUnitCfg.enabledMethods.includes("password");
                 const userSec = securityMap[user.employeeId.trim().toUpperCase()];
                 return (
-                <tr key={user.id} className={`border-b border-gray-50 hover:bg-blue-50/20 transition-colors ${idx % 2 === 1 ? "bg-gray-50/20" : ""}`}>
+                <tr key={user.id} className={`border-b border-gray-50 hover:bg-blue-50/20 transition-colors ${selectedIds.has(user.id) ? "bg-rose-50/50" : idx % 2 === 1 ? "bg-gray-50/20" : ""}`}>
+                  <td className="pl-5 pr-1 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(user.id)}
+                      disabled={!isSelectable(user)}
+                      onChange={() => toggleOne(user.id)}
+                      title={isSelectable(user) ? "Pilih user" : "Akun yang sedang login tidak dapat dihapus"}
+                      className="h-3.5 w-3.5 accent-[#1A284F] cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+                    />
+                  </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-1.5">
                       <button onClick={() => setViewUser(user)} className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View"><Eye size={14} /></button>
@@ -1955,10 +2070,18 @@ export function UserManagementPage() {
                   </td>
                   <td className="px-4 py-3 text-xs">
                     <div className="font-mono font-semibold text-[#1A284F]">{user.regNo || "—"}</div>
-                    <div className="text-[11px] text-gray-400 mt-0.5">
-                      AP1: <span className="text-gray-600 font-medium">{user.regNoAp1 || "—"}</span> · AP2:{" "}
-                      <span className="text-gray-600 font-medium">{user.regNoAp2 || "—"}</span>
-                    </div>
+                    {!user.regNoAp1 && !user.regNoAp2 ? (
+                      <div className="mt-0.5">
+                        <span className="inline-flex px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-medium">
+                          Belum ada approver
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-gray-400 mt-0.5">
+                        AP1: <span className="text-gray-600 font-medium">{user.regNoAp1}</span> · AP2:{" "}
+                        <span className="text-gray-600 font-medium">{user.regNoAp2}</span>
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs max-w-[160px]">
                     <span className="block truncate" title={user.company}>{user.company}</span>
@@ -2042,6 +2165,9 @@ export function UserManagementPage() {
         />
       )}
       {deleteUser && <DeleteModal user={deleteUser} onClose={() => setDeleteUser(null)} onConfirm={(reason) => handleDelete(deleteUser.id, reason)} />}
+      {bulkDeleteOpen && selectedUsers.length > 0 && (
+        <DeleteModal users={selectedUsers.filter(isSelectable)} onClose={() => setBulkDeleteOpen(false)} onConfirm={(reason) => handleBulkDelete(reason)} />
+      )}
       {resetPwdUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">

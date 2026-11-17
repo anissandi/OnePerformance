@@ -8,6 +8,7 @@ import {
   isSameCompanyUnit,
   isUserEligibleForDelegation,
   loadManagedUsers,
+  normalizeApproverPair,
   saveManagedUsers,
   useAuthStore,
   type ManagedUser,
@@ -313,13 +314,22 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
   const [sectionFilter, setSectionFilter] = useState("");
   const [positionFilter, setPositionFilter] = useState("");
 
+  const isSelf = (u: ManagedUser) => lc(u.employeeId) === lc(activeUser.employeeId);
+  // - Approvals → Delegation: hanya baris milik user yang login (memilih sendiri penerima delegasinya)
+  // - Settings → Approval Management → Delegation: Administrator/HR ICF melihat seluruh karyawan eligible;
+  //   user lain yang di-allow submenu ini melihat karyawan sesuai cakupan wewenangnya (Role + Groupings + AP1/AP2)
   const scoped = (u: ManagedUser) => {
+    if (mode === "approvals") return isSelf(u);
     if (!isUserEligibleForDelegation(u)) return false;
-    if (isAdmin || mode === "settings") return true;
-    return canUserAccessEmployeeData(activeUser, u.employeeId, allUsers);
+    if (isAdmin) return true;
+    return isSelf(u) || canUserAccessEmployeeData(activeUser, u.employeeId, allUsers);
   };
 
-  const basePool = useMemo(() => allUsers.filter((u) => scoped(u)), [allUsers, activeUser, isAdmin, mode]);
+  const basePool = useMemo(() => {
+    const pool = allUsers.filter((u) => scoped(u));
+    if (mode === "approvals" && pool.length === 0 && activeUser.employeeId) return [activeUser];
+    return pool;
+  }, [allUsers, activeUser, isAdmin, mode]);
   const unitOptions = useMemo(() => uniqSorted(basePool.map((u) => u.company)), [basePool]);
   const divisionOptions = useMemo(
     () => uniqSorted(basePool.filter((u) => !unitFilter || u.company === unitFilter).map((u) => u.division)),
@@ -426,6 +436,15 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
 
   return (
     <div className="space-y-4">
+      {mode === "approvals" ? (
+        <div className="flex items-start gap-2 rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-xs text-indigo-800">
+          <Eye className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Atur delegasi milik Anda sendiri: pilih karyawan penerima delegasi pada kolom <strong>Delegasi Kepada</strong>,
+            centang modul & hak akses, lalu klik <strong>Start</strong>.
+          </span>
+        </div>
+      ) : (
       <OrgFilterBar
         search={search}
         onSearchChange={setSearch}
@@ -447,6 +466,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
         onPositionChange={setPositionFilter}
         onReset={() => { setSearch(""); setUnitFilter(""); setDivisionFilter(""); setDepartmentFilter(""); setSectionFilter(""); setPositionFilter(""); }}
       />
+      )}
       <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
         <table className="w-full text-xs">
           <thead className="bg-[#1A284F] text-white">
@@ -465,7 +485,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                 "Delegasi Kepada",
                 "KPI Setting",
                 "KPI Tracking",
-                "SMART Goals Setting",
+                "SMART Goals (Setting/Measurement)",
                 "Hak Akses",
               ].map((h) => (
                 <th key={h} className="whitespace-nowrap px-3 py-2.5 text-left font-semibold">{h}</th>
@@ -619,6 +639,7 @@ export function ApproverMonitoringTable() {
     )
     .sort((a, b) => a.name.localeCompare(b.name));
   const nameOf = (ref?: string) => {
+    if (!ref || !ref.trim()) return "Belum ada approver";
     const u = findByRef(allUsers, ref);
     return u ? u.name : ref || "-";
   };
@@ -626,7 +647,11 @@ export function ApproverMonitoringTable() {
     if (!edit) return;
     const a1 = allUsers.find((u) => u.employeeId === ap1);
     const a2 = allUsers.find((u) => u.employeeId === ap2);
-    const changed: ManagedUser = { ...edit, regNoAp1: a1 ? a1.regNo || a1.employeeId : "", regNoAp2: a2 ? a2.regNo || a2.employeeId : "" };
+    const pair = normalizeApproverPair(
+      a1 ? a1.regNo || a1.employeeId : "",
+      a2 ? a2.regNo || a2.employeeId : "",
+    );
+    const changed: ManagedUser = { ...edit, regNoAp1: pair.regNoAp1, regNoAp2: pair.regNoAp2 };
     saveManagedUsers(loadManagedUsers().map((u) => (u.employeeId === edit.employeeId ? changed : u)), changed);
     toast.success(`Approver ${edit.name} diperbarui`);
     setEdit(null);
@@ -745,6 +770,12 @@ export function ApproverMonitoringTable() {
                   <div className="mt-1"><EmployeePicker value={ap2} options={allUsers.filter((u) => u.employeeId !== edit.employeeId)} lookupPool={allUsers} onChange={setAp2} /></div>
                 </label>
                 {ap1 && ap1 === ap2 && <p className="text-xs text-amber-700">Approver 1 & 2 sama — approval cukup dilakukan 1 kali.</p>}
+                {((ap1 && !ap2) || (!ap1 && ap2)) && (
+                  <p className="text-xs text-blue-700">Hanya satu approver dipilih — otomatis ditetapkan sebagai Approver 1 &amp; Approver 2.</p>
+                )}
+                {!ap1 && !ap2 && (
+                  <p className="text-xs text-amber-700">Kedua approver kosong — karyawan berstatus belum ada approver.</p>
+                )}
                 <div className="flex justify-end gap-2">
                   <button onClick={() => setEdit(null)} className="rounded-xl border px-4 py-2 text-sm">Batal</button>
                   <button onClick={saveEdit} className="rounded-xl bg-[#1A284F] px-4 py-2 text-sm font-semibold text-white">Simpan</button>

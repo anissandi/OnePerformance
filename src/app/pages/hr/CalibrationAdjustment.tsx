@@ -337,7 +337,7 @@ const defaultCompanyUnits: CompanyUnit[] = [
   makeUnit("5", "PT Pulau Sambu (Kuala Enok)", "PS-KE",    "Kuala Enok"),
   makeUnit("6", "PT RSTM",                     "RSTM",     ""),
   makeUnit("7", "PT GHS",                      "GHS",      ""),
-  makeUnit("8", "ASD",                      "ASD",      ""),
+  makeUnit("8", "PT RSUP ASD",                 "RSUP-ASD", ""),
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

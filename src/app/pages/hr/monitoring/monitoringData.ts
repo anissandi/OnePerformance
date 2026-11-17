@@ -100,7 +100,7 @@ const ALL_COMPANY_UNITS = [
   "PT Pulau Sambu (Kuala Enok)",
   "PT RSTM",
   "PT GHS",
-  "ASD",
+  "PT RSUP ASD",
 ];
 
 function getScopedCompanyUnits(): string[] {

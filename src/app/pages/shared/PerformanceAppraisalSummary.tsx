@@ -39,7 +39,7 @@ const filterOptions = {
     "All Units",
     "PT RSUP (Industry)", "PT RSUP (Perkebunan)",
     "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)",
-    "PT RSTM", "PT GHS", "ASD",
+    "PT RSTM", "PT GHS", "PT RSUP ASD",
   ],
   division:    ["All Divisions", ...DIV_DEFS.map(d => d.divisi)],
   department:  ["All Departments", ...DEPT_DEFS.map(([,, name]) => name)],
@@ -371,7 +371,7 @@ function DistributionByGroup({ employees, calibrationTargets }: { employees: Emp
   );
 }
 
-function ModuleCell({ data, settingValidated, isYtd }: { data: ScoreGrade | null; settingValidated?: boolean; isYtd?: boolean }) {
+function ModuleCell({ data, settingValidated, isYtd, hideWeighted }: { data: ScoreGrade | null; settingValidated?: boolean; isYtd?: boolean; hideWeighted?: boolean }) {
   if (!data || data.score <= 0) {
     if (settingValidated) {
       return (
@@ -395,7 +395,7 @@ function ModuleCell({ data, settingValidated, isYtd }: { data: ScoreGrade | null
           </span>
         )}
       </div>
-      {typeof data.weightedScore === "number" && typeof data.weightPct === "number" && (
+      {!hideWeighted && typeof data.weightedScore === "number" && typeof data.weightPct === "number" && (
         <span className="text-[9px] font-semibold text-indigo-700 whitespace-nowrap">
           ×{data.weightPct}% = {data.weightedScore.toFixed(2)}
         </span>
@@ -737,7 +737,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formC} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.project} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-amber-50/20"><ModuleCell data={emp.managerialSkill} /></td>
-                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-amber-50/20"><ModuleCell data={liveMI[emp.id] ?? emp.managementInterview} /></td>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-amber-50/20"><ModuleCell data={liveMI[emp.id] ?? emp.managementInterview} hideWeighted /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-emerald-50/20">
                       <span className="font-bold text-gray-900 text-xs">{emp.totalScore.toFixed(1)}%</span>
                     </td>

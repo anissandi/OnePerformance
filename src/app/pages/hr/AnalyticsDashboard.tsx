@@ -1440,7 +1440,7 @@ function ScoreGradeDistributionDashboard({
 
 
 const filterOptions = {
-  companyUnit: ["All Units", "PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
+  companyUnit: ["All Units", "PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
   module: ["All Modules", "KPI (Setting)", "SMART Goals (Setting)", "Appraisal Form", "KPI (Tracking)", "SMART Goals (Tracking)", "Project OJS", "Managerial Skill", "Management Interview", "Inter-Department Feedback"],
   year: ["2026"],
   month: ["All Months", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],

@@ -264,6 +264,7 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
     { label: "Source",          w: 180 },
     { label: "Polaritas",       w: 80  },
     { label: "Detail Formula",  w: 240 },
+    { label: "Keterangan",      w: 180 },
     { label: "Baseline 2025",   w: 100 },
     { label: "Target 2026",     w: 100 },
     { label: "Tracking Period", w: 90  },
@@ -351,6 +352,9 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
                         <td className="border border-gray-200 py-2 px-1.5">
                           <span className="text-[11px] text-gray-600 leading-relaxed">{item.detailFormula || "—"}</span>
                         </td>
+                        <td className="border border-gray-200 py-2 px-1.5">
+                          <span className="text-[11px] text-gray-600 whitespace-pre-line leading-relaxed">{item.keterangan || "—"}</span>
+                        </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-700 font-medium">{item.baseline2025 || "—"}</span>
                         </td>
@@ -407,10 +411,10 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
     { label: "Source",          w: 180 },
     { label: "Polaritas",       w: 80  },
     { label: "Detail Formula",  w: 240 },
+    { label: "Keterangan",      w: 220 },
     { label: "Baseline 2025",   w: 100 },
     { label: "Target 2026",     w: 100 },
     { label: "Tracking Period", w: 90  },
-    { label: "Keterangan",      w: 220 },
   ];
   const totalWidth = COLS.reduce((s, c) => s + c.w, 0);
 
@@ -475,6 +479,9 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
                         <td className="border border-gray-200 py-2 px-1.5">
                           <span className="text-[11px] text-gray-600 leading-relaxed">{item.detailFormula || "—"}</span>
                         </td>
+                        <td className="border border-gray-200 py-2 px-1.5">
+                          <span className="text-[11px] text-gray-500 whitespace-pre-line leading-relaxed">{item.keterangan || "—"}</span>
+                        </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-700 font-medium">{item.baseline2025 || "—"}</span>
                         </td>
@@ -483,9 +490,6 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-500">{item.trackingPeriod || "—"}</span>
-                        </td>
-                        <td className="border border-gray-200 py-2 px-1.5">
-                          <span className="text-[11px] text-gray-500 italic">{item.keterangan || "—"}</span>
                         </td>
                       </tr>
                     );
@@ -510,7 +514,7 @@ const COMPANY_UNITS_BIZ = [
   "PT Pulau Sambu (Kuala Enok)",
   "PT RSTM",
   "PT GHS",
-  "ASD",
+  "PT RSUP ASD",
 ];
 
 const CURRENT_YEAR = 2026;
@@ -560,11 +564,11 @@ export function HRSettingKPIPage() {
         no: String(idx + 1),
         scope: "PT GHS",
       })),
-      "ASD": CORPORATE_KPI.filter((k) => Boolean(k.gmAsd)).map((k, idx) => ({
+      "PT RSUP ASD": CORPORATE_KPI.filter((k) => Boolean(k.gmAsd)).map((k, idx) => ({
         ...k,
         id: `asd-${k.id}`,
         no: String(idx + 1),
-        scope: "ASD",
+        scope: "PT RSUP ASD",
       })),
     }),
   );
@@ -905,7 +909,7 @@ export function HRSettingKPIPage() {
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 shrink-0 text-amber-600" />
                 <span>
-                  <strong>RSUP Group:</strong> PT RSUP (Industry), PT RSUP (Perkebunan), PT RSTM, PT GHS, dan ASD. Nilai Tracking KPI Group mendukung <strong>Cascading</strong> otomatis dari indikator turunan KPI Unit.
+                  <strong>RSUP Group:</strong> PT RSUP (Industry), PT RSUP (Perkebunan), PT RSTM, PT GHS, dan PT RSUP ASD. Nilai Tracking KPI Group mendukung <strong>Cascading</strong> otomatis dari indikator turunan KPI Unit.
                 </span>
               </div>
               <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">

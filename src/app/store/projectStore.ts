@@ -239,6 +239,7 @@ export function projectApprovalRows(role: ReviewerRole): ApprovalRow[] {
   const managedUsers = loadManagedUsers();
   const baseRows: ApprovalRow[] = [];
   entries.forEach(([normId, state]) => {
+    if (!state.submitted) return;
     const managedUser = managedUsers.find(
       (u) =>
         normalizeEmployeeId(u.employeeId).toLowerCase() === normId.toLowerCase() ||
@@ -306,6 +307,12 @@ export const projectStore = {
   submitAll() {
     _submitted = true;
     _projects = _projects.map((p) => ({ ...p, status: "submitted" as ProjectStatus }));
+    notify();
+  },
+
+  unsubmitAll() {
+    _submitted = false;
+    _projects = _projects.map((p) => ({ ...p, status: "draft" as ProjectStatus }));
     notify();
   },
 

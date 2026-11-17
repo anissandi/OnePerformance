@@ -98,6 +98,8 @@ function ProjectFormModal({ initial, nextNo, onSave, onClose }: ProjectFormProps
     endDate: initial?.endDate ?? "",
     role: initial?.role ?? "Member / Anggota",
     expectedOutput: initial?.expectedOutput ?? "",
+    note: initial?.note ?? "",
+    evidenceFiles: initial?.evidenceFiles ?? [],
   }));
 
   const set = <K extends keyof typeof form>(key: K, val: (typeof form)[K]) =>

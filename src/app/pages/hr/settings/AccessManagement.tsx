@@ -20,7 +20,7 @@ export const HIERARCHICAL_COMPANY_GROUPS = [
       "PT RSUP (Perkebunan)",
       "PT GHS",
       "PT RSTM",
-      "ASD",
+      "PT RSUP ASD",
     ],
   },
   {
@@ -1515,7 +1515,9 @@ export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
       ? {
           excludeFromCalibrationHC: Boolean(s.excludeFromCalibrationHC ?? base.excludeFromCalibrationHC),
           excludeFromVerification: Boolean(s.excludeFromVerification ?? base.excludeFromVerification),
-          allowedCompanyUnits: Array.isArray(s.allowedCompanyUnits) ? s.allowedCompanyUnits : base.allowedCompanyUnits ?? [],
+          allowedCompanyUnits: Array.isArray(s.allowedCompanyUnits)
+            ? Array.from(new Set(s.allowedCompanyUnits.map((u) => (u.trim().toUpperCase() === "ASD" || u.trim().toUpperCase() === "RSUP ASD" ? "PT RSUP ASD" : u)).filter(Boolean)))
+            : base.allowedCompanyUnits ?? [],
         }
       : { ...base, allowedCompanyUnits: base.allowedCompanyUnits ?? [] };
   }

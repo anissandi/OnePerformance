@@ -23,12 +23,12 @@ import {
   isDirectorRoleOrGrouping,
   loadManagedUsers,
   useAuthStore,
+  usesDemoSampleData,
   type ManagedUser,
 } from "../../store/authStore";
 import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type KpiMonthState } from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
-import { UnifiedRCADetailTable } from "../../components/UnifiedRCADetailTable";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -52,11 +52,8 @@ function inlineEntryToStatus(entry: RCAEntry): RCAStatus {
 
 /** Derive a 3-state status from a stored RCA submission */
 function submissionToStatus(sub: StoredRCASubmission): RCAStatus {
-  // Approval-level close takes priority
-  if (sub.approvalStatus === "Closed") return "closed";
-  const active = allActionPlans(sub).filter((ap) => ap.status !== "Dibatalkan");
-  if (!active.length) return "outstanding";
-  return active.every((ap) => ap.status === "Selesai") ? "closed" : "outstanding";
+  // Tag RCA tetap kuning (outstanding) sampai RCA benar-benar berstatus Closed
+  return sub.approvalStatus === "Closed" ? "closed" : "outstanding";
 }
 
 /**
@@ -92,7 +89,9 @@ type ComputeSpec =
   | { type: "ratio"; actualIdx: number; targetIdx: number; minimize?: boolean }
   | { type: "avg"; sourceIdxs: number[] }
   | { type: "ref"; sourceIdx: number }
-  | { type: "ratio_score"; negIdx: number; posIdx: number; multiplier: number };
+  | { type: "ratio_score"; negIdx: number; posIdx: number; multiplier: number }
+  | { type: "inverse_ratio"; numIdx: number; denomIdx: number }
+  | { type: "threshold"; actualIdx: number; target: number };
 
 interface SubRow {
   label: string;
@@ -328,8 +327,9 @@ export function getKpiSubItemMeta(
       if (extracted && extracted !== "—") itemBaseline = extracted;
     }
   }
-  const itemTargetYearly =
-    (targetRowIdx >= 0 && kpi.subRowTargets?.[targetRowIdx]) || kpi.target2026;
+  // Target (Yearly) RCA = nilai kolom "Target" pada baris KPI (subject KPI) di tabel KPI Tracking
+  void targetRowIdx;
+  const itemTargetYearly = kpi.target2026;
   return {
     isMultiItem: true,
     rcaKey: `${kpi.no}__sub${subIdx}__${monthId}`,
@@ -508,7 +508,7 @@ export function computeTotal2026(
 
     if (spec.type === "ratio_score") {
       const scores = months
-        .map((m) => {
+        .map((m): number | null => {
           const negRaw = allCells[m.id]?.[ck(kpi.no, spec.negIdx)] ?? "";
           if (!negRaw) return null;
           const neg = parseNum(negRaw) ?? 0;
@@ -675,6 +675,24 @@ export interface EmployeeKPITrackingEvaluation {
   hasAnyTrackingData: boolean;
   totalKPI: number;
   trackedKpiCount: number;
+}
+
+/** Apakah karyawan sudah pernah bertransaksi KPI (Setting/Measurement) di backend. */
+export function ownerHasKpiTransactions(employeeId: string): boolean {
+  const normId = normalizeEmployeeId(employeeId);
+  try {
+    const snapRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
+    const snap = snapRaw ? (JSON.parse(snapRaw) as KPITrackingSnapshot) : null;
+    if (snap && Array.isArray(snap.months) && snap.months.length > 0) return true;
+    const setRaw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+    const setMap = setRaw ? (JSON.parse(setRaw) as Record<string, unknown[]>) : {};
+    if (Array.isArray(setMap[normId]) && setMap[normId].length > 0) return true;
+  } catch {
+    // ignore
+  }
+  return loadWorkflowRecords().some(
+    (r) => r.module === "KPI" && normalizeEmployeeId(r.employeeId) === normId,
+  );
 }
 
 export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
@@ -2456,6 +2474,7 @@ function KPITable({
   storedRCAStatus,
   approvedEditCells,
   highlightMissingRca,
+  kpiItems = KPI_ITEMS,
 }: {
   months: MonthEntry[];
   editable: boolean;
@@ -2473,8 +2492,10 @@ function KPITable({
   approvedEditCells?: Set<string>;
   /** Highlight tag RCA merah (belum add RCA) saat Submit KPI Tracking diklik */
   highlightMissingRca?: boolean;
+  /** Daftar KPI yang ditampilkan (DEMO: kosong untuk non-Administrator yang belum bertransaksi) */
+  kpiItems?: KPIItem[];
 }) {
-  const sectionItems = (sec: "A" | "B") => KPI_ITEMS.filter((k) => k.section === sec);
+  const sectionItems = (sec: "A" | "B") => kpiItems.filter((k) => k.section === sec);
 
   const totalCols = 14 + months.length + 2 + (editable ? 1 : 0); // +1 for Total, +1 for Achievement
 
@@ -2632,15 +2653,16 @@ function KPITable({
                           const secondaryKeyId = `${subMeta.itemKpiName}__${toIdShortPeriode(m.label)}`;
                           const legacyNameKeyEn = !subMeta.isMultiItem ? `${kpi.kpi.split("\n")[0]}__${displayMonth(m.label)}` : "";
                           const legacyNameKeyId = !subMeta.isMultiItem ? `${kpi.kpi.split("\n")[0]}__${toIdShortPeriode(m.label)}` : "";
-                          const status: RCAStatus = inlineEntry
-                            ? inlineEntryToStatus(inlineEntry)
-                            : (storedRCAStatus?.[rcaKey] ??
-                                (!subMeta.isMultiItem ? storedRCAStatus?.[subMeta.legacyRcaKey] : undefined) ??
-                                storedRCAStatus?.[secondaryKey] ??
-                                storedRCAStatus?.[secondaryKeyId] ??
-                                (legacyNameKeyEn ? storedRCAStatus?.[legacyNameKeyEn] : undefined) ??
-                                (legacyNameKeyId ? storedRCAStatus?.[legacyNameKeyId] : undefined) ??
-                                "none");
+                          // Status tersimpan di backend (RCA tersimpan permanen) diprioritaskan agar tag tetap kuning hingga Closed
+                          const storedStatus: RCAStatus | undefined =
+                            storedRCAStatus?.[rcaKey] ??
+                            (!subMeta.isMultiItem ? storedRCAStatus?.[subMeta.legacyRcaKey] : undefined) ??
+                            storedRCAStatus?.[secondaryKey] ??
+                            storedRCAStatus?.[secondaryKeyId] ??
+                            (legacyNameKeyEn ? storedRCAStatus?.[legacyNameKeyEn] : undefined) ??
+                            (legacyNameKeyId ? storedRCAStatus?.[legacyNameKeyId] : undefined);
+                          const status: RCAStatus = storedStatus
+                            ?? (inlineEntry ? (inlineEntryToStatus(inlineEntry) === "closed" ? "closed" : "outstanding") : "none");
 
                           // Tag only shows color change when RCA has been filled (status ≠ "none")
                           const isFilled = status !== "none";
@@ -2839,7 +2861,7 @@ function KPITable({
           {(() => {
             // Pre-compute section scores for header rows
             const sectionScore = (sec: "A" | "B") =>
-              KPI_ITEMS.filter((k) => k.section === sec).reduce((s, k) => {
+              kpiItems.filter((k) => k.section === sec).reduce((s, k) => {
                 const ach = computeKPIAchievement(k, cells, months);
                 if (ach === null) return s;
                 return s + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
@@ -2847,7 +2869,7 @@ function KPITable({
 
             const scoreA = sectionScore("A");
             const scoreB = sectionScore("B");
-            const totalBobot = KPI_ITEMS.reduce((s, k) => s + parseFloat(k.bobot.replace("%", "")), 0);
+            const totalBobot = kpiItems.reduce((s, k) => s + parseFloat(k.bobot.replace("%", "")), 0);
             const totalNilai = scoreA + scoreB;
             // colSpan for label = all cols except Achievement (and editable button)
             const labelColSpan = 14 + months.length + 1;
@@ -2859,7 +2881,7 @@ function KPITable({
                   {label}
                 </td>
                 <td className="py-2 px-2 text-center border text-white text-xs font-bold" style={{ background: bg, borderColor: bg }}>
-                  {KPI_ITEMS.some((k) => k.section === sec && computeKPIAchievement(k, cells, months) !== null)
+                  {kpiItems.some((k) => k.section === sec && computeKPIAchievement(k, cells, months) !== null)
                     ? score.toFixed(2) + "%"
                     : "—"}
                 </td>
@@ -2872,19 +2894,33 @@ function KPITable({
                 {/* Section A */}
                 <SectionHeader sec="A" label="A. Objective KPI — Bobot 20%" bg="#1565C0" score={scoreA} />
                 {renderSectionRows("A")}
+                {kpiItems.length === 0 && (
+                  <tr>
+                    <td colSpan={totalCols} className="border border-gray-200 bg-white px-4 py-6 text-center text-xs text-gray-400">
+                      Belum ada data KPI. KPI akan tampil otomatis setelah KPI Setting berstatus Validated.
+                    </td>
+                  </tr>
+                )}
 
                 {/* Section B */}
                 <SectionHeader sec="B" label="B. Functional KPI — Bobot 80%" bg="#1976D2" score={scoreB} />
                 {renderSectionRows("B")}
+                {kpiItems.length === 0 && (
+                  <tr>
+                    <td colSpan={totalCols} className="border border-gray-200 bg-white px-4 py-6 text-center text-xs text-gray-400">
+                      Belum ada data KPI.
+                    </td>
+                  </tr>
+                )}
 
                 {/* ── Summary rows ── */}
                 <tr>
                   <td colSpan={totalCols} className="py-1 border border-[#1A284F]/20 bg-[#1A284F]/5" />
                 </tr>
                 {([
-                  { label: `Objective KPI (Section A)`, value: `${KPI_ITEMS.filter((k) => k.section === "A").length} KPI` },
-                  { label: `Functional KPI (Section B)`, value: `${KPI_ITEMS.filter((k) => k.section === "B").length} KPI` },
-                  { label: "Total KPI", value: `${KPI_ITEMS.length} KPI`, highlight: true },
+                  { label: `Objective KPI (Section A)`, value: `${kpiItems.filter((k) => k.section === "A").length} KPI` },
+                  { label: `Functional KPI (Section B)`, value: `${kpiItems.filter((k) => k.section === "B").length} KPI` },
+                  { label: "Total KPI", value: `${kpiItems.length} KPI`, highlight: true },
                   { label: "Total Bobot KPI", value: `${totalBobot.toFixed(0)}%`, highlight: true },
                 ] as { label: string; value: string; highlight?: boolean }[]).map(({ label, value, highlight }) => (
                   <tr key={label} className={highlight ? "bg-[#1A284F]/8" : "bg-[#1A284F]/4"}>
@@ -3044,7 +3080,12 @@ function RCAReadOnlyModal({
                           <>
                             <td rowSpan={totalRows} className={`${tdBase} text-center font-semibold text-gray-600`}>1</td>
                             <td rowSpan={totalRows} className={`${tdBase} text-center`}>
-                              <span className="px-2 py-0.5 bg-[#1A284F]/10 text-[#1A284F] rounded-full text-[10px] font-bold">{sub.periode || "—"}</span>
+                              <div className="flex flex-col items-center gap-1">
+                                <span className="px-2 py-0.5 bg-[#1A284F]/10 text-[#1A284F] rounded-full text-[10px] font-bold">{sub.periode || "—"}</span>
+                                {sub.approvalStatus === "Closed" && (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">Closed</span>
+                                )}
+                              </div>
                             </td>
                             <td rowSpan={totalRows} className={`${tdBase} font-medium text-gray-800`}>{sub.kpiIndicator || "—"}</td>
                             <td rowSpan={totalRows} className={`${tdBase} text-gray-600`}>{sub.satuan || "—"}</td>
@@ -3579,6 +3620,11 @@ function KPIWorkspace({
 
   const isDirectorMode = isDirectorRoleOrGrouping(activeUser);
   const isGmMode = !isDirectorMode && activeUser.role === "GM";
+  // DEMO: selain Administrator, karyawan yang belum pernah bertransaksi KPI melihat format tabel tanpa data
+  const showKpiSampleRows = usesDemoSampleData(activeUser) || ownerHasKpiTransactions(activeUser.employeeId);
+  const trackingKpiItems = showKpiSampleRows ? KPI_ITEMS : [];
+  // KPI (Group) tetap tampil sebagai dasar KPI Utama; KPI (Unit) mengikuti aturan demo di atas
+  const businessTrackingItems = isDirectorMode || showKpiSampleRows ? BUSINESS_KPI_ITEMS : [];
   const hasDualKpiTabs = !forcedTab && (isDirectorMode || isGmMode);
   const [directorKpiTabState, setDirectorKpiTab] = useState<"business" | "personal">(forcedTab ?? "business");
   const directorKpiTab = forcedTab ?? directorKpiTabState;
@@ -3621,11 +3667,13 @@ function KPIWorkspace({
     window.addEventListener("storage", sync);
     window.addEventListener("appraisal-updated", sync);
     window.addEventListener("pa-auth-updated", sync);
+    window.addEventListener("pa-db-hydrated", sync);
     return () => {
       window.removeEventListener("focus", sync);
       window.removeEventListener("storage", sync);
       window.removeEventListener("appraisal-updated", sync);
       window.removeEventListener("pa-auth-updated", sync);
+      window.removeEventListener("pa-db-hydrated", sync);
     };
   }, []);
 
@@ -3675,11 +3723,14 @@ function KPIWorkspace({
     try {
       const mods = loadLiveModuleActivationList("2026");
       const kpiMeasMod = mods.find(
-        (m) => m.id === "kpi_measurement" || m.name.toLowerCase().includes("kpi measurement"),
+        (m) =>
+          m.id === "kpi-measurement" ||
+          m.id === "kpi_measurement" ||
+          m.label.toLowerCase().includes("kpi · measurement"),
       );
       if (!kpiMeasMod) return false;
-      if (kpiMeasMod.isActive === false) return true;
       if (kpiMeasMod.endDate) {
+        if (kpiMeasMod.active === false) return true;
         const endTs = new Date(`${kpiMeasMod.endDate}T23:59:59`).getTime();
         if (Number.isFinite(endTs)) {
           return Date.now() > endTs;
@@ -4454,7 +4505,14 @@ function KPIWorkspace({
               </tr>
             </thead>
             <tbody>
-              {BUSINESS_KPI_ITEMS.map((item) =>
+              {businessTrackingItems.length === 0 && (
+                <tr>
+                  <td colSpan={6 + months.length} className="border border-gray-200 px-3 py-10 text-center text-xs text-gray-400">
+                    Belum ada data KPI (Unit). KPI akan tampil setelah KPI Setting (Unit) berstatus Validated.
+                  </td>
+                </tr>
+              )}
+              {businessTrackingItems.map((item) =>
                 item.subRows.map((sub, sIdx) => {
                   const isComputed = Boolean(sub.compute);
                   return (
@@ -4514,6 +4572,7 @@ function KPIWorkspace({
         </div>
       ) : (
       <KPITable
+        kpiItems={trackingKpiItems}
         months={months}
         editable={view === "input" && !submitted && !isLockedByDeadline && !isViewOnly}
         editableMonthId={(!submitted && !isLockedByDeadline && !isViewOnly && (canEdit || canCreate) && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
@@ -4533,15 +4592,7 @@ function KPIWorkspace({
       />
       )}
 
-      {/* Tabel RCA terintegrasi di bawah tabel KPI dan di atas Evidence Documents */}
-      {!isBusinessWorkspace && (
-        <UnifiedRCADetailTable
-          submissions={loadRCASubmissions(activeUser.employeeId)}
-          title="Root Cause Analysis (RCA) — Terintegrasi dengan KPI Tracking"
-          subtitle="Seluruh RCA yang telah diisi disertakan otomatis bersama pengajuan approval KPI Tracking bulanan."
-          onOpenRcaSubmenu={!isViewOnly ? () => navigate(`${portalBase}/measurement/rca`) : undefined}
-        />
-      )}
+      {/* Sisi owner: tabel RCA disembunyikan; riwayat RCA diakses melalui tag RCA (kuning) pada tabel KPI */}
 
       <EvidenceUploadSection
         files={evidenceFiles}
@@ -4695,14 +4746,14 @@ export function KPIPage() {
       const grp = getGroupNameForUnit(owner.company);
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-group`,
-        label: `KPI Group (${grp}) · ${owner.name}`,
+        label: `KPI (Group) · ${grp} · ${owner.name}`,
         owner,
         forcedTab: "business",
         access: d.access,
       });
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-personal`,
-        label: `KPI Personal · ${owner.name}`,
+        label: `KPI (Personal) · ${owner.name}`,
         owner,
         forcedTab: "personal",
         access: d.access,
@@ -4710,14 +4761,14 @@ export function KPIPage() {
     } else if (owner.role === "GM") {
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-unit`,
-        label: `KPI Unit (${owner.company}) · ${owner.name}`,
+        label: `KPI (Unit) · ${owner.company} · ${owner.name}`,
         owner,
         forcedTab: "business",
         access: d.access,
       });
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-personal`,
-        label: `KPI Personal · ${owner.name}`,
+        label: `KPI (Personal) · ${owner.name}`,
         owner,
         forcedTab: "personal",
         access: d.access,
@@ -4725,7 +4776,7 @@ export function KPIPage() {
     } else {
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-personal`,
-        label: `KPI Personal · ${owner.name}`,
+        label: `KPI (Personal) · ${owner.name}`,
         owner,
         forcedTab: "personal",
         access: d.access,
@@ -4738,21 +4789,21 @@ export function KPIPage() {
     const grp = getGroupNameForUnit(activeUser.company);
     selfTabs.push({
       id: `self-${activeUser.employeeId}-group`,
-      label: `KPI Group (${grp}) · Saya (${activeUser.name})`,
+      label: `KPI (Group) · ${grp} · Saya (${activeUser.name})`,
       owner: activeUser,
       forcedTab: "business",
     });
   } else if (activeUser.role === "GM") {
     selfTabs.push({
       id: `self-${activeUser.employeeId}-unit`,
-      label: `KPI Unit (${activeUser.company}) · Saya (${activeUser.name})`,
+      label: `KPI (Unit) · ${activeUser.company} · Saya (${activeUser.name})`,
       owner: activeUser,
       forcedTab: "business",
     });
   }
   selfTabs.push({
     id: `self-${activeUser.employeeId}-personal`,
-    label: `KPI Personal · Saya (${activeUser.name})`,
+    label: `KPI (Personal) · Saya (${activeUser.name})`,
     owner: activeUser,
     forcedTab: "personal",
   });
@@ -4915,4 +4966,40 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
     }
   }
   return results;
+}
+
+/**
+ * Statistik RCA per karyawan untuk Monitoring KPI (kolom RCA Req. & RCA Done):
+ * - Required: indikator KPI Tracking dengan pencapaian < 100% (tag RCA) + RCA tersimpan yang tidak terpetakan.
+ * - Done: RCA yang sudah berstatus Closed.
+ */
+export function getEmployeeRcaMonitoringStats(employeeId: string): {
+  required: number;
+  completed: number;
+  closedKeys: string[];
+} {
+  const subs = loadRCASubmissions(employeeId).filter(
+    (s) => !s.employeeId || normalizeEmployeeId(s.employeeId) === normalizeEmployeeId(employeeId),
+  );
+  let candidates: KPITrackingRCACandidate[] = [];
+  try {
+    candidates = getKpiTrackingRcaCandidates(employeeId);
+  } catch {
+    candidates = [];
+  }
+  const norm = (v: string) => v.trim().toLowerCase();
+  const matchesCandidate = (s: StoredRCASubmission) =>
+    candidates.some(
+      (c) =>
+        c.key === s.key ||
+        (norm(c.kpi) === norm(s.kpiIndicator) && (c.periode === s.periode || c.monthLabel === s.monthLabel)),
+    );
+  const extra = subs.filter((s) => !matchesCandidate(s)).length;
+  const required = candidates.length + extra;
+  const closedSubs = subs.filter((s) => s.approvalStatus === "Closed");
+  return {
+    required,
+    completed: Math.min(closedSubs.length, required),
+    closedKeys: closedSubs.map((s) => s.key),
+  };
 }

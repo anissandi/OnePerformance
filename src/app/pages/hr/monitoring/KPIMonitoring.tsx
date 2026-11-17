@@ -6,7 +6,7 @@ import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, type Wor
 const countValidatedKpiMonths = (employeeId: string) =>
   getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;
 import { dateToSortableKey, normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
-import { evaluateEmployeeKPITracking } from "../../employee/KPIPage";
+import { evaluateEmployeeKPITracking, getEmployeeRcaMonitoringStats } from "../../employee/KPIPage";
 
 // ─── Mock KPI data per employee ───────────────────────────────────────────────
 
@@ -122,9 +122,10 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
       (w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
     );
     const evalKpi = evaluateEmployeeKPITracking(emp.id);
+    const rcaStats = getEmployeeRcaMonitoringStats(emp.id);
     const settingStatus = resolveKpiPhaseStatus(wfSet);
     const measurementStatus = resolveKpiMeasurementStatus(emp.id, wfMeas);
-    const hasAny = Boolean(wfSet || wfMeas || evalKpi.hasAnyTrackingData);
+    const hasAny = Boolean(wfSet || wfMeas || evalKpi.hasAnyTrackingData || rcaStats.required > 0);
     const latestKpiDate = [
       wfMeas?.decisions.validator?.date,
       wfMeas?.decisions.approver2?.date,
@@ -147,8 +148,8 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
           submittedKPI: evalKpi.trackedKpiCount,
           avgAchievement: evalKpi.ytdScore > 0 ? Math.round(evalKpi.ytdScore) : 0,
           perspektifBreakdown: [],
-          rcaRequired: 0,
-          rcaCompleted: 0,
+          rcaRequired: rcaStats.required,
+          rcaCompleted: rcaStats.completed,
           status: settingStatus,
           measurementStatus,
           lastUpdated: normalizeDateDDMMYYYY(latestKpiDate),

@@ -11,7 +11,8 @@ import { ROWS, SAMPLE_GOALS } from "../employee/SMARTGoals";
 import { loadApprovalDecisions, loadCheckInEntries, loadSubmittedGoals, saveCheckInEntries } from "../shared/smartGoalsStore";
 import type { StoredCheckInEntry } from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
-import { getActiveUser } from "../../store/authStore";
+import { getActiveUser, loadManagedUsers, useAuthStore, usesDemoSampleData, type ManagedUser } from "../../store/authStore";
+import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX } from "../../utils/excelUtils";
@@ -918,7 +919,16 @@ function PenilaianAkhirSection({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export function SmartGoalsCheckInPage() {
+function SmartGoalsCheckInWorkspace({
+  ownerUser,
+  delegationAccess,
+  tabsSlot,
+}: {
+  ownerUser: ManagedUser;
+  delegationAccess?: DelegationAccess;
+  tabsSlot?: React.ReactNode;
+}) {
+  const canModify = !delegationAccess || Boolean(delegationAccess.create || delegationAccess.edit);
   const [goals, setGoals] = useState<SmartGoal[] | null>(null);
   const [entries, setEntries] = useState<CheckInEntry[]>([]);
   const [targetActuals, setTargetActuals] = useState<TargetActualEntry[]>([]);
@@ -933,10 +943,11 @@ export function SmartGoalsCheckInPage() {
   const [showSuccess, setShowSuccess] = useState(false);
 
   const syncCheckInPageState = () => {
-    const user = getActiveUser();
+    const user = ownerUser;
     const normId = normalizeEmployeeId(user.employeeId);
     const loaded = loadSubmittedGoals(user.employeeId);
-    const source = loaded ?? SAMPLE_GOALS;
+    // DEMO: Selain Administrator, karyawan yang belum bertransaksi melihat format tabel kosong
+    const source = loaded ?? (usesDemoSampleData(user) ? SAMPLE_GOALS : []);
     const savedCheckIn = loadCheckInEntries(user.employeeId);
     const wfSetting = loadWorkflowRecords().find(
       (r) =>
@@ -1076,7 +1087,7 @@ export function SmartGoalsCheckInPage() {
       window.removeEventListener("pa-db-hydrated", syncCheckInPageState);
       window.removeEventListener("storage", syncCheckInPageState);
     };
-  }, []);
+  }, [ownerUser.employeeId]);
 
   const updateEntry = (goalId: number, updated: CheckInEntry) =>
     setEntries((prev) => {
@@ -1114,7 +1125,7 @@ export function SmartGoalsCheckInPage() {
         evidenceFiles: ta?.evidenceFiles ?? [],
       };
     });
-    saveCheckInEntries(stored, { submitWorkflow });
+    saveCheckInEntries(stored, { submitWorkflow, employeeId: ownerUser.employeeId });
   };
 
   const handleConfirm = () => {
@@ -1199,6 +1210,7 @@ export function SmartGoalsCheckInPage() {
           <h1 className="text-[28px] font-bold text-[#1A284F] mb-1">SMART Goals Measurement</h1>
           <p className="text-gray-500 text-sm">2026 Performance Appraisal</p>
         </div>
+        {tabsSlot}
         <div className="flex flex-col items-center justify-center py-20 gap-4 border border-dashed border-gray-200 rounded-2xl bg-gray-50/50">
           <div className="w-14 h-14 rounded-full bg-amber-50 flex items-center justify-center">
             <AlertCircle className="w-7 h-7 text-amber-500" />
@@ -1215,11 +1227,10 @@ export function SmartGoalsCheckInPage() {
     );
   }
 
-  const editable = isSettingValidated && view === "input" && !submitted;
+  const editable = isSettingValidated && view === "input" && !submitted && canModify;
 
   // Ekstrak nilai & catatan terbaru dari Approver 1 & Approver 2 untuk Penilaian Akhir
-  const activeUser = getActiveUser();
-  const decisions = loadApprovalDecisions(activeUser.employeeId);
+  const decisions = loadApprovalDecisions(ownerUser.employeeId);
   const dec1 = decisions.find((d) => d.approverLevel === 1);
   const dec2 = decisions.find((d) => d.approverLevel === 2);
   const wfA1Vals = Object.values(wfRecState?.assessments.approver1?.ratings ?? {}).map(Number).filter((v) => v > 0);
@@ -1256,10 +1267,13 @@ export function SmartGoalsCheckInPage() {
         </div>
       </div>
 
+      {tabsSlot}
+
       <ModuleApprovalStatusBar
         module="SMART Goals"
         phase="measurement"
         submittedOverride={submitted}
+        employeeId={ownerUser.employeeId}
       />
 
       {/* Gate Banner: SMART Goals Setting belum Validated */}
@@ -1322,7 +1336,7 @@ export function SmartGoalsCheckInPage() {
       />
 
       {/* Action Buttons — di bawah Target vs Actual dan tepat di atas section Penilaian Akhir */}
-      {isSettingValidated && !submitted && (
+      {isSettingValidated && !submitted && canModify && (
         <div className="flex items-center justify-end gap-3 bg-white border border-gray-200 rounded-2xl px-5 py-3.5 shadow-sm">
           {editable ? (
             <>
@@ -1428,7 +1442,7 @@ export function SmartGoalsCheckInPage() {
       />
 
       <ApproverNotesHistory
-        employeeId={getActiveUser().employeeId}
+        employeeId={ownerUser.employeeId}
         module="SMART Goals"
         phase="measurement"
         title="History Catatan Approver"
@@ -1437,5 +1451,76 @@ export function SmartGoalsCheckInPage() {
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} />}
     </div>
+  );
+}
+
+/**
+ * SMART Goals Measurement: penerima delegasi SMART Goals (Setting/Measurement) melihat SMART Goals pemberi
+ * delegasi berdampingan (tab) dengan SMART Goals Measurement miliknya sendiri.
+ */
+export function SmartGoalsCheckInPage() {
+  const { activeUser, allUsers } = useAuthStore();
+  const [, setDelegTick] = useState(0);
+  useEffect(() => {
+    const r = () => setDelegTick((t) => t + 1);
+    window.addEventListener(DELEGATION_EVENT, r);
+    window.addEventListener("pa-db-hydrated", r);
+    return () => {
+      window.removeEventListener(DELEGATION_EVENT, r);
+      window.removeEventListener("pa-db-hydrated", r);
+    };
+  }, []);
+
+  const usersPool = allUsers.length > 0 ? allUsers : loadManagedUsers();
+  const received = getReceivedWorkspaceDelegations(activeUser.employeeId, "smartGoalsSetting", usersPool);
+  const workspaces: Array<{ id: string; label: string; owner: ManagedUser; access?: DelegationAccess }> = [
+    ...received.map((d) => ({
+      id: `deleg-${d.delegator.employeeId}`,
+      label: `SMART Goals Measurement · Delegasi: ${d.delegator.name}`,
+      owner: d.delegator,
+      access: d.access,
+    })),
+    {
+      id: `self-${activeUser.employeeId}`,
+      label: received.length > 0 ? `SMART Goals Measurement Saya (${activeUser.name})` : "SMART Goals Measurement",
+      owner: activeUser,
+    },
+  ];
+  const [selectedId, setSelectedId] = useState<string>(() => workspaces[0]?.id ?? "");
+  const activeWs = workspaces.find((w) => w.id === selectedId) ?? workspaces[0];
+
+  const tabsSlot =
+    workspaces.length > 1 ? (
+      <div className="flex gap-1 border-b border-gray-200 flex-wrap">
+        {workspaces.map((ws) => {
+          const isActive = ws.id === activeWs.id;
+          return (
+            <button
+              key={ws.id}
+              type="button"
+              onClick={() => setSelectedId(ws.id)}
+              className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                isActive
+                  ? "border-[#1A284F] text-[#1A284F] bg-[#1A284F]/5 rounded-t-lg"
+                  : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded-t-lg"
+              }`}
+            >
+              <span>{ws.label}</span>
+              {ws.access && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-700">Delegasi</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
+
+  return (
+    <SmartGoalsCheckInWorkspace
+      key={activeWs.id}
+      ownerUser={activeWs.owner}
+      delegationAccess={activeWs.access}
+      tabsSlot={tabsSlot}
+    />
   );
 }

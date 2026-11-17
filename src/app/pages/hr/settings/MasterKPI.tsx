@@ -1,100 +1,239 @@
-import { useState, useEffect } from "react";
-import { Plus, Pencil, Trash2, X, Save, Check } from "lucide-react";
-import { loadMasterKpi, saveMasterKpi } from "./masterKpiStore";
+import { useState, useEffect, useMemo } from "react";
+import { useLocation, useNavigate, useParams } from "react-router";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  Save,
+  Check,
+  Table2,
+  SlidersHorizontal,
+  Eye,
+  Edit3,
+  Layers,
+} from "lucide-react";
+import { toast } from "sonner";
+import {
+  loadMasterKpi,
+  loadMasterKpiFormats,
+  MASTER_KPI_FORMATS_UPDATED_EVENT,
+  MASTER_KPI_UPDATED_EVENT,
+  saveMasterKpi,
+  saveMasterKpiFormats,
+  type MasterCodeDescItem,
+  type MasterKpiFormatsStore,
+  type MasterKpiStore,
+} from "./masterKpiStore";
+import {
+  AddCorporateKPIModal,
+  AddKPIModal,
+  CORPORATE_KPI,
+  CorporateKPITable,
+  KPISettingTable,
+  PERSONAL_KPI,
+  type KPISetting,
+  type Polaritas,
+} from "../../supervisor/setting/KPISetting";
+import ExportImportButton from "../../../components/ExportImportButton";
+import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+type MainMasterTab = "kpi-format" | "kpi-variable";
+type FormatSubTab = "kpi-group" | "kpi-unit" | "kpi-personal";
 
 interface MasterItem { id: number; value: string; description?: string }
 
 interface SectionConfig {
-  key: string;
+  key: keyof MasterKpiStore;
   label: string;
   color: string;           // tailwind bg for header dot
   hasDescription: boolean; // whether items have a description field
+  codeLabel?: string;
   descLabel?: string;
+  modalGroup: "section" | "subsection";
+  fieldHint: string;
 }
 
-// ─── Section definitions ──────────────────────────────────────────────────────
+// ─── Section definitions (100% tersinkron dengan Add New KPI Modal: Tab Section & Sub Section) ──
 
 const SECTIONS: SectionConfig[] = [
-  { key: "scope",           label: "Scope",           color: "bg-blue-500",    hasDescription: false },
-  { key: "section",         label: "Section",         color: "bg-purple-500",  hasDescription: false },
-  { key: "perspektif",      label: "Perspektif",      color: "bg-teal-500",    hasDescription: false },
-  { key: "satuan",          label: "Satuan",          color: "bg-orange-500",  hasDescription: false },
-  { key: "period",          label: "Period",          color: "bg-rose-500",    hasDescription: false },
-  { key: "trackingPeriod",  label: "Tracking Period", color: "bg-indigo-500",  hasDescription: false },
-  { key: "cascading",       label: "Cascading",       color: "bg-emerald-500", hasDescription: true, descLabel: "Role Name" },
+  // 1. Variabel Tab Section pada Add New KPI Modal
+  {
+    key: "section",
+    label: "Section (KPI Group & Unit)",
+    color: "bg-purple-500",
+    hasDescription: false,
+    modalGroup: "section",
+    fieldHint: "Tab Section → Field Section (KPI Group / Unit / Division)",
+  },
+  {
+    key: "personalSection",
+    label: "Section (KPI Personal)",
+    color: "bg-violet-500",
+    hasDescription: true,
+    codeLabel: "Kode Section (mis. A, B)",
+    descLabel: "Nama Section",
+    modalGroup: "section",
+    fieldHint: "Tab Section → Field Section (KPI Personal)",
+  },
+  {
+    key: "sectionBobot",
+    label: "Section Bobot",
+    color: "bg-amber-500",
+    hasDescription: false,
+    modalGroup: "section",
+    fieldHint: "Tab Section → Field Section Bobot",
+  },
+  {
+    key: "cascadingTypes",
+    label: "Cascading Type (Section & Sub Section)",
+    color: "bg-cyan-500",
+    hasDescription: true,
+    codeLabel: "Kode Cascading (FC / PC / CC)",
+    descLabel: "Deskripsi Cascading",
+    modalGroup: "section",
+    fieldHint: "Tab Section & Sub Section → Field Cascading",
+  },
+  // 2. Variabel Tab Sub Section pada Add New KPI Modal
+  {
+    key: "perspektif",
+    label: "Perspektif",
+    color: "bg-teal-500",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Perspektif",
+  },
+  {
+    key: "satuan",
+    label: "Satuan",
+    color: "bg-orange-500",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Satuan (Unit)",
+  },
+  {
+    key: "period",
+    label: "Period (Satuan Periode)",
+    color: "bg-rose-500",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Satuan (/Periode)",
+  },
+  {
+    key: "formula",
+    label: "Formula Setahun / Pencapaian",
+    color: "bg-sky-500",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Formula Setahun / Pencapaian",
+  },
+  {
+    key: "trackingPeriod",
+    label: "Tracking Period",
+    color: "bg-indigo-500",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Tracking Period",
+  },
+  {
+    key: "scope",
+    label: "Scope",
+    color: "bg-blue-500",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Scope",
+  },
+  {
+    key: "bobot",
+    label: "Bobot KPI",
+    color: "bg-fuchsia-500",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Bobot",
+  },
+  {
+    key: "polaritas",
+    label: "Polaritas",
+    color: "bg-lime-600",
+    hasDescription: false,
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Polaritas",
+  },
+  {
+    key: "cascading",
+    label: "Cascading Role",
+    color: "bg-emerald-500",
+    hasDescription: true,
+    codeLabel: "Role Key",
+    descLabel: "Role Name",
+    modalGroup: "subsection",
+    fieldHint: "Tab Sub Section → Field Cascading (Daftar Role)",
+  },
 ];
 
-// ─── Default data ─────────────────────────────────────────────────────────────
+function storeToCardItems(stored: MasterKpiStore): Record<string, MasterItem[]> {
+  const fromStrings = (vals: string[]): MasterItem[] =>
+    vals.map((value, i) => ({ id: i + 1, value }));
+  const fromCodeDesc = (items: MasterCodeDescItem[]): MasterItem[] =>
+    items.map((c, i) => ({ id: i + 1, value: c.value, description: c.description }));
+  return {
+    section:         fromStrings(stored.section),
+    personalSection: fromCodeDesc(stored.personalSection),
+    sectionBobot:    fromStrings(stored.sectionBobot),
+    cascadingTypes:  fromCodeDesc(stored.cascadingTypes),
+    perspektif:      fromStrings(stored.perspektif),
+    satuan:          fromStrings(stored.satuan),
+    period:          fromStrings(stored.period),
+    formula:         fromStrings(stored.formula),
+    trackingPeriod:  fromStrings(stored.trackingPeriod),
+    scope:           fromStrings(stored.scope),
+    bobot:           fromStrings(stored.bobot),
+    polaritas:       fromStrings(stored.polaritas),
+    cascading:       fromCodeDesc(stored.cascading),
+  };
+}
 
-const DEFAULT_DATA: Record<string, MasterItem[]> = {
-  scope: [
-    { id: 1, value: "RMD" },
-    { id: 2, value: "MPD" },
-    { id: 3, value: "WCC" },
-    { id: 4, value: "PT RSUP (Industry)" },
-    { id: 5, value: "PT RSUP (Perkebunan)" },
-    { id: 6, value: "PT RSTM" },
-    { id: 7, value: "PT GHS" },
-    { id: 8, value: "ASD" },
-    { id: 9, value: "PT Pulau Sambu (Jakarta)" },
-    { id: 10, value: "PT Pulau Sambu (Guntung)" },
-    { id: 11, value: "PT Pulau Sambu (Kuala Enok)" },
-  ],
-  section: [
-    { id: 1, value: "Kinerja K3L Terintegrasi (SMK3/HSE)" },
-    { id: 2, value: "Finansial" },
-    { id: 3, value: "Produksi" },
-    { id: 4, value: "Be Employer of Choices" },
-    { id: 5, value: "Be Partner of Choices" },
-    { id: 6, value: "Regulatory Compliance" },
-  ],
-  perspektif: [
-    { id: 1, value: "Proses" },
-    { id: 2, value: "Finansial" },
-    { id: 3, value: "Learning & Growth" },
-    { id: 4, value: "Customer" },
-  ],
-  satuan: [
-    { id: 1, value: "%" },
-    { id: 2, value: "Temuan" },
-    { id: 3, value: "Hari" },
-    { id: 4, value: "Kasus" },
-    { id: 5, value: "Rp Juta" },
-    { id: 6, value: "Rp Miliar" },
-    { id: 7, value: "Jumlah" },
-  ],
-  period: [
-    { id: 1, value: "Hari" },
-    { id: 2, value: "Bulan" },
-    { id: 3, value: "Semester" },
-    { id: 4, value: "Triwulan" },
-    { id: 5, value: "Quarter" },
-    { id: 6, value: "Tahun" },
-  ],
-  trackingPeriod: [
-    { id: 1, value: "Bulanan" },
-    { id: 2, value: "Semester" },
-    { id: 3, value: "Triwulan" },
-    { id: 4, value: "Quarter" },
-    { id: 5, value: "Tahunan" },
-  ],
-  cascading: [
-    { id: 1,  value: "COO",            description: "COO"            },
-    { id: 2,  value: "GM Industry",    description: "GM Industry"    },
-    { id: 3,  value: "VGM Industry",   description: "VGM Industry"   },
-    { id: 4,  value: "GM Perkebunan",  description: "GM Perkebunan"  },
-    { id: 5,  value: "VGM Perkebunan", description: "VGM Perkebunan" },
-    { id: 6,  value: "GM ASD",         description: "GM ASD"         },
-    { id: 7,  value: "GM RSTM",        description: "GM RSTM"        },
-    { id: 8,  value: "GM GHS",         description: "GM GHS"         },
-    { id: 9,  value: "GM PSG",         description: "GM PSG"         },
-    { id: 10, value: "GM PSKE",        description: "GM PSKE"        },
-    { id: 11, value: "VGM PSG",        description: "VGM PSG"        },
-    { id: 12, value: "VGM PSKE",       description: "VGM PSKE"       },
-  ],
-};
+function cardItemsToStore(data: Record<string, MasterItem[]>): MasterKpiStore {
+  const toStrings = (arr?: MasterItem[]) => (arr ?? []).map((i) => i.value);
+  const toCodeDesc = (arr?: MasterItem[]): MasterCodeDescItem[] =>
+    (arr ?? []).map((i) => ({ value: i.value, description: i.description ?? "" }));
+  return {
+    section:         toStrings(data.section),
+    personalSection: toCodeDesc(data.personalSection),
+    sectionBobot:    toStrings(data.sectionBobot),
+    cascadingTypes:  toCodeDesc(data.cascadingTypes),
+    perspektif:      toStrings(data.perspektif),
+    satuan:          toStrings(data.satuan),
+    period:          toStrings(data.period),
+    formula:         toStrings(data.formula),
+    trackingPeriod:  toStrings(data.trackingPeriod),
+    scope:           toStrings(data.scope),
+    bobot:           toStrings(data.bobot),
+    polaritas:       toStrings(data.polaritas),
+    cascading:       toCodeDesc(data.cascading),
+  };
+}
+
+function cloneKpiList(list: KPISetting[], idPrefix?: string): KPISetting[] {
+  return list.map((it) => ({
+    ...it,
+    id: idPrefix && !it.id.startsWith(idPrefix) ? `${idPrefix}${it.id}` : it.id,
+    monthlyTargets: it.monthlyTargets ? { ...it.monthlyTargets } : undefined,
+    cascadingMap: it.cascadingMap ? { ...it.cascadingMap } : undefined,
+  }));
+}
+
+function buildDefaultFormats(): MasterKpiFormatsStore<KPISetting> {
+  return {
+    group: cloneKpiList(CORPORATE_KPI),
+    unit: cloneKpiList(CORPORATE_KPI, "unit-"),
+    personal: cloneKpiList(PERSONAL_KPI),
+    sectionCascadeGroup: {},
+    sectionCascadeUnit: {},
+  };
+}
 
 // ─── Item Modal ───────────────────────────────────────────────────────────────
 
@@ -102,6 +241,7 @@ function ItemModal({
   title,
   item,
   hasDescription,
+  codeLabel,
   descLabel,
   onSave,
   onClose,
@@ -109,6 +249,7 @@ function ItemModal({
   title: string;
   item?: MasterItem;
   hasDescription: boolean;
+  codeLabel?: string;
   descLabel?: string;
   onSave: (value: string, description?: string) => void;
   onClose: () => void;
@@ -132,7 +273,7 @@ function ItemModal({
         <div className="px-5 py-4 flex flex-col gap-3">
           <div>
             <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1 block">
-              {hasDescription ? "Code / Abbreviation" : "Value"}
+              {hasDescription ? (codeLabel ?? "Code / Abbreviation") : "Value"}
             </label>
             <input
               autoFocus
@@ -210,21 +351,24 @@ function SectionCard({ cfg, items, onChange }: {
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-        <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full ${cfg.color}`} />
-          <span className="text-sm font-bold text-[#1A284F]">{cfg.label}</span>
-          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">{items.length}</span>
+        <div className="min-w-0 pr-2">
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${cfg.color}`} />
+            <span className="text-sm font-bold text-[#1A284F] truncate">{cfg.label}</span>
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 shrink-0">{items.length}</span>
+          </div>
+          <p className="text-[10px] text-gray-400 mt-0.5 truncate">{cfg.fieldHint}</p>
         </div>
         <button
           onClick={() => setModal({ open: true })}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
+          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors shrink-0"
         >
           <Plus className="w-3 h-3" /> Add
         </button>
       </div>
 
       {/* Items */}
-      <div className="divide-y divide-gray-50">
+      <div className="divide-y divide-gray-50 max-h-64 overflow-y-auto">
         {items.length === 0 ? (
           <p className="text-center text-xs text-gray-400 py-6">No items yet. Click Add to create one.</p>
         ) : items.map(item => (
@@ -262,6 +406,7 @@ function SectionCard({ cfg, items, onChange }: {
           title={cfg.label}
           item={modal.item}
           hasDescription={cfg.hasDescription}
+          codeLabel={cfg.codeLabel}
           descLabel={cfg.descLabel}
           onSave={handleSave}
           onClose={() => setModal({ open: false })}
@@ -290,74 +435,570 @@ function SectionCard({ cfg, items, onChange }: {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function MasterKPIPage() {
-  const [data, setData] = useState<Record<string, MasterItem[]>>(DEFAULT_DATA);
+  const params = useParams<{ tab?: string; subtab?: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
 
-  // Sync to shared store whenever data changes so KPISetting can read it
-  useEffect(() => {
-    const toStrings = (arr: MasterItem[]) => arr.map(i => i.value);
-    const toCascading = (arr: MasterItem[]) =>
-      arr.map(i => ({ value: i.value, description: i.description ?? "" }));
-    saveMasterKpi({
-      scope:          toStrings(data.scope ?? []),
-      section:        toStrings(data.section ?? []),
-      perspektif:     toStrings(data.perspektif ?? []),
-      satuan:         toStrings(data.satuan ?? []),
-      period:         toStrings(data.period ?? []),
-      trackingPeriod: toStrings(data.trackingPeriod ?? []),
-      cascading:      toCascading(data.cascading ?? []),
-    });
-  }, [data]);
+  const baseMasterPath = useMemo(() => {
+    const idx = location.pathname.indexOf("/settings/master/kpi");
+    if (idx >= 0) {
+      return location.pathname.slice(0, idx + "/settings/master/kpi".length);
+    }
+    return "/hr/settings/master/kpi";
+  }, [location.pathname]);
 
-  // Hydrate from store on first mount
+  const activeMainTab: MainMasterTab =
+    params.tab === "kpi-variable" ? "kpi-variable" : "kpi-format";
+  const activeSubTab: FormatSubTab =
+    params.subtab === "kpi-unit"
+      ? "kpi-unit"
+      : params.subtab === "kpi-personal"
+      ? "kpi-personal"
+      : "kpi-group";
+
+  // Pastikan path URL selalu sesuai dengan tab & sub-tab yang sedang aktif
   useEffect(() => {
-    const stored = loadMasterKpi();
-    const fromStrings = (vals: string[], nextId: number): MasterItem[] =>
-      vals.map((value, i) => ({ id: nextId + i, value }));
-    const fromCascading = (items: { value: string; description: string }[]): MasterItem[] =>
-      items.map((c, i) => ({ id: i + 1, value: c.value, description: c.description }));
-    setData({
-      scope:          fromStrings(stored.scope, 1),
-      section:        fromStrings(stored.section, 1),
-      perspektif:     fromStrings(stored.perspektif, 1),
-      satuan:         fromStrings(stored.satuan, 1),
-      period:         fromStrings(stored.period, 1),
-      trackingPeriod: fromStrings(stored.trackingPeriod, 1),
-      cascading:      fromCascading(stored.cascading),
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!params.tab) {
+      navigate(`${baseMasterPath}/kpi-format/kpi-group`, { replace: true });
+    } else if (params.tab === "kpi-format" && !params.subtab) {
+      navigate(`${baseMasterPath}/kpi-format/kpi-group`, { replace: true });
+    }
+  }, [params.tab, params.subtab, baseMasterPath, navigate]);
+
+  const handleMainTabChange = (nextTab: MainMasterTab) => {
+    if (nextTab === "kpi-variable") {
+      navigate(`${baseMasterPath}/kpi-variable`);
+    } else {
+      navigate(`${baseMasterPath}/kpi-format/${activeSubTab}`);
+    }
+  };
+
+  const handleSubTabChange = (nextSub: FormatSubTab) => {
+    navigate(`${baseMasterPath}/kpi-format/${nextSub}`);
+  };
+
+  // ── State KPI Variable (tersinkron penuh ke database Supabase) ──
+  const [data, setData] = useState<Record<string, MasterItem[]>>(() =>
+    storeToCardItems(loadMasterKpi()),
+  );
+
+  useEffect(() => {
+    const syncVars = () => setData(storeToCardItems(loadMasterKpi()));
+    window.addEventListener("pa-db-hydrated", syncVars);
+    window.addEventListener(MASTER_KPI_UPDATED_EVENT, syncVars);
+    window.addEventListener("storage", syncVars);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", syncVars);
+      window.removeEventListener(MASTER_KPI_UPDATED_EVENT, syncVars);
+      window.removeEventListener("storage", syncVars);
+    };
   }, []);
 
-  function updateSection(key: string, items: MasterItem[]) {
-    setData(prev => ({ ...prev, [key]: items }));
+  function updateSection(key: keyof MasterKpiStore, items: MasterItem[]) {
+    setData((prev) => {
+      const next = { ...prev, [key]: items };
+      saveMasterKpi(cardItemsToStore(next));
+      return next;
+    });
   }
 
+  // ── State KPI Format: KPI (Group), KPI (Unit), KPI (Personal) ──
+  const [formats, setFormats] = useState<MasterKpiFormatsStore<KPISetting>>(() =>
+    loadMasterKpiFormats<KPISetting>(buildDefaultFormats()),
+  );
+  const [showAddModalFor, setShowAddModalFor] = useState<FormatSubTab | null>(null);
+  const [personalPreviewMode, setPersonalPreviewMode] = useState(false);
+
+  useEffect(() => {
+    const syncFormats = () =>
+      setFormats(loadMasterKpiFormats<KPISetting>(buildDefaultFormats()));
+    window.addEventListener("pa-db-hydrated", syncFormats);
+    window.addEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, syncFormats);
+    window.addEventListener("storage", syncFormats);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", syncFormats);
+      window.removeEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, syncFormats);
+      window.removeEventListener("storage", syncFormats);
+    };
+  }, []);
+
+  const persistFormats = (
+    updater: (prev: MasterKpiFormatsStore<KPISetting>) => MasterKpiFormatsStore<KPISetting>,
+    label: string,
+  ) => {
+    setFormats((prev) => {
+      const next = updater(prev);
+      saveMasterKpiFormats(next, label);
+      return next;
+    });
+  };
+
+  const currentFormatItems: KPISetting[] =
+    activeSubTab === "kpi-group"
+      ? formats.group
+      : activeSubTab === "kpi-unit"
+      ? formats.unit
+      : formats.personal;
+
+  const totalBobotActive = useMemo(
+    () =>
+      currentFormatItems.reduce(
+        (sum, item) => sum + (parseFloat(String(item.bobot ?? "0").replace("%", "")) || 0),
+        0,
+      ),
+    [currentFormatItems],
+  );
+
+  const handleExportFormat = (sub: FormatSubTab) => {
+    if (sub === "kpi-personal") {
+      const headers = [
+        "No", "Section", "Perspektif", "KPI", "Satuan", "Formula Setahun", "Scope",
+        "Bobot", "Definisi", "Source", "Baseline 2025", "Target 2026", "Polaritas",
+        "Detail Formula", "Keterangan", "Tracking Period",
+      ];
+      const rows = formats.personal.map((i) => [
+        i.no, `Section ${i.section}`, i.perspektif, i.kpi, i.satuan, i.formula, i.scope ?? "",
+        i.bobot, i.definisi, i.source, i.baseline2025, i.target2026, i.polaritas,
+        i.detailFormula, i.keterangan ?? "", i.trackingPeriod ?? "",
+      ]);
+      exportXLSX("Master_KPI_Format_Personal_2026.xlsx", headers, rows);
+      return;
+    }
+    const list = sub === "kpi-group" ? formats.group : formats.unit;
+    const headers = [
+      "No", "Section", "Perspektif", "KPI", "Satuan", "Formula Setahun", "Scope",
+      "Bobot", "Definisi", "Source", "Baseline 2025", "Target 2026", "Polaritas",
+      "Detail Formula", "Keterangan", "Tracking Period",
+      "COO", "GM Industry", "GM Perkebunan", "GM ASD", "GM RSTM", "GM GHS",
+    ];
+    const rows = list.map((i) => [
+      i.no, `${i.section}. ${i.sectionLabel ?? i.section}`, i.perspektif, i.kpi, i.satuan,
+      i.formula, i.scope ?? "", i.bobot, i.definisi, i.source, i.baseline2025, i.target2026,
+      i.polaritas, i.detailFormula, i.keterangan ?? "", i.trackingPeriod ?? "",
+      i.coo ?? "", i.gmVgmIndustry ?? "", i.gmVgmPerkebunan ?? "", i.gmAsd ?? "", i.gmRstm ?? "", i.gmGhs ?? "",
+    ]);
+    exportXLSX(
+      sub === "kpi-group" ? "Master_KPI_Format_Group_2026.xlsx" : "Master_KPI_Format_Unit_2026.xlsx",
+      headers,
+      rows,
+    );
+  };
+
+  const handleImportFormat = async (sub: FormatSubTab, file: File) => {
+    try {
+      const { headers, rows } = await parseXLSX(file);
+      const col = (pat: RegExp) => headers.findIndex((h) => pat.test(h.trim()));
+      const noI = col(/^no$/i),
+        sectionI = col(/section/i),
+        perspektifI = col(/perspektif/i),
+        kpiI = col(/^kpi$/i),
+        satuanI = col(/satuan/i),
+        formulaI = col(/formula/i),
+        scopeI = col(/scope/i),
+        bobotI = col(/bobot/i),
+        definisiI = col(/definisi/i),
+        sourceI = col(/source/i),
+        baseI = col(/baseline/i),
+        targetI = col(/target/i),
+        polarI = col(/polaritas/i),
+        detailI = col(/detail/i),
+        ketI = col(/keterangan/i),
+        trackI = col(/tracking/i);
+      const g = (r: string[], i: number) => (i >= 0 ? r[i] ?? "" : "");
+      const imported: KPISetting[] = rows
+        .filter((r) => r.some((c) => c.trim()))
+        .map((r, idx) => ({
+          id: `master-imp-${sub}-${Date.now()}-${idx}`,
+          no: g(r, noI) || String(idx + 1),
+          section: g(r, sectionI).toUpperCase().match(/[A-Z]/)?.[0] ?? "A",
+          perspektif: g(r, perspektifI) || "Proses",
+          kpi: g(r, kpiI),
+          satuan: g(r, satuanI),
+          formula: g(r, formulaI) || "Jumlah",
+          scope: g(r, scopeI),
+          bobot: g(r, bobotI) || "0%",
+          definisi: g(r, definisiI),
+          source: g(r, sourceI),
+          baseline2025: g(r, baseI),
+          target2026: g(r, targetI),
+          polaritas: ((g(r, polarI) as Polaritas) || "Maximize"),
+          detailFormula: g(r, detailI),
+          keterangan: g(r, ketI),
+          trackingPeriod: g(r, trackI) || "Bulanan",
+          monthlyTargets: {},
+          colorIndicator: false,
+          indicatorMode: "numeric",
+        }));
+      if (imported.length === 0) {
+        toast.error("Tidak ada baris KPI valid pada file Excel.");
+        return;
+      }
+      const keyField = sub === "kpi-group" ? "group" : sub === "kpi-unit" ? "unit" : "personal";
+      persistFormats((prev) => ({ ...prev, [keyField]: imported }), sub);
+      toast.success(`Berhasil mengimpor ${imported.length} item ke ${sub === "kpi-group" ? "KPI (Group)" : sub === "kpi-unit" ? "KPI (Unit)" : "KPI (Personal)"}.`);
+    } catch {
+      toast.error("Gagal membaca file Excel Master KPI.");
+    }
+  };
+
+  const sectionGroupCards = SECTIONS.filter((s) => s.modalGroup === "section");
+  const subSectionGroupCards = SECTIONS.filter((s) => s.modalGroup === "subsection");
+
   return (
-    <div className="p-6 max-w-screen-xl mx-auto space-y-5">
+    <div className="p-6 w-full space-y-5">
       {/* Header */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-6 py-4 flex items-center justify-between">
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-6 py-4 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="font-bold text-[#1A284F] text-xl">Master KPI</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Manage KPI master data — scope, section, perspektif, satuan, period, and cascading</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Kelola template format KPI (Group, Unit, Personal) dan variabel dinamis untuk modal Add New KPI
+          </p>
         </div>
         <div className="text-sm text-gray-400 flex items-center gap-1">
           <span>&#8962;</span><span>Home</span><span className="mx-1">›</span>
           <span>Setting</span><span className="mx-1">›</span>
           <span>Master</span><span className="mx-1">›</span>
-          <span className="font-medium text-gray-700">KPI</span>
+          <span className="text-gray-500">KPI</span><span className="mx-1">›</span>
+          <span className="font-medium text-gray-700">
+            {activeMainTab === "kpi-format" ? "KPI Format" : "KPI Variable"}
+          </span>
         </div>
       </div>
 
-      {/* Grid of section cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {SECTIONS.map(cfg => (
-          <SectionCard
-            key={cfg.key}
-            cfg={cfg}
-            items={data[cfg.key] ?? []}
-            onChange={items => updateSection(cfg.key, items)}
-          />
-        ))}
+      {/* Main Tabs: KPI Format | KPI Variable */}
+      <div className="flex w-fit gap-1 rounded-xl bg-gray-100 p-1">
+        <button
+          type="button"
+          onClick={() => handleMainTabChange("kpi-format")}
+          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
+            activeMainTab === "kpi-format"
+              ? "bg-white text-[#1A284F] shadow-sm"
+              : "text-gray-500 hover:text-gray-800"
+          }`}
+        >
+          <Table2 className="h-3.5 w-3.5" />
+          KPI Format
+        </button>
+        <button
+          type="button"
+          onClick={() => handleMainTabChange("kpi-variable")}
+          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
+            activeMainTab === "kpi-variable"
+              ? "bg-white text-[#1A284F] shadow-sm"
+              : "text-gray-500 hover:text-gray-800"
+          }`}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          KPI Variable
+        </button>
       </div>
+
+      {/* ══ TAB 1: KPI FORMAT (KPI Group | KPI Unit | KPI Personal) ══ */}
+      {activeMainTab === "kpi-format" && (
+        <div className="space-y-4">
+          {/* Sub-tab bar + summary badges */}
+          <div className="flex items-center justify-between border-b border-gray-200 flex-wrap gap-3">
+            <div className="flex gap-1 flex-wrap">
+              {(
+                [
+                  { id: "kpi-group", label: "KPI (Group)", count: formats.group.length },
+                  { id: "kpi-unit", label: "KPI (Unit)", count: formats.unit.length },
+                  { id: "kpi-personal", label: "KPI (Personal)", count: formats.personal.length },
+                ] as const
+              ).map((t) => {
+                const isAct = activeSubTab === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => handleSubTabChange(t.id)}
+                    className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                      isAct
+                        ? "border-[#1A284F] text-[#1A284F] bg-[#1A284F]/5 rounded-t-lg"
+                        : "border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded-t-lg"
+                    }`}
+                  >
+                    <span>{t.label}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        isAct ? "bg-[#1A284F] text-white" : "bg-gray-200 text-gray-600"
+                      }`}
+                    >
+                      {t.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center gap-2 pb-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1A284F]/5 text-[#1A284F] text-xs font-semibold">
+                Total KPI: <strong>{currentFormatItems.length}</strong>
+              </span>
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border ${
+                  Math.round(totalBobotActive) === 100
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : "bg-amber-50 text-amber-700 border-amber-200"
+                }`}
+              >
+                Total Bobot: <strong>{totalBobotActive}%</strong>
+              </span>
+            </div>
+          </div>
+
+          {/* Sub-tab 1: KPI (Group) — disalin dari /kpi/corporate */}
+          {activeSubTab === "kpi-group" && (
+            <CorporateKPITable
+              items={formats.group}
+              onUpdateItem={(id, updates) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    group: prev.group.map((i) => (i.id === id ? { ...i, ...updates } : i)),
+                  }),
+                  "KPI (Group)",
+                )
+              }
+              onDeleteItem={(id) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    group: prev.group.filter((i) => i.id !== id),
+                  }),
+                  "KPI (Group)",
+                )
+              }
+              onAddClick={() => setShowAddModalFor("kpi-group")}
+              onExport={() => handleExportFormat("kpi-group")}
+              onImport={(file) => handleImportFormat("kpi-group", file)}
+              sectionCascadeMap={formats.sectionCascadeGroup ?? {}}
+              onSectionCascadeChange={(sec, val) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    sectionCascadeGroup: { ...(prev.sectionCascadeGroup ?? {}), [sec]: val },
+                  }),
+                  "KPI (Group) Cascade",
+                )
+              }
+            />
+          )}
+
+          {/* Sub-tab 2: KPI (Unit) — disalin dari /kpi/corporate-unit */}
+          {activeSubTab === "kpi-unit" && (
+            <CorporateKPITable
+              items={formats.unit}
+              onUpdateItem={(id, updates) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    unit: prev.unit.map((i) => (i.id === id ? { ...i, ...updates } : i)),
+                  }),
+                  "KPI (Unit)",
+                )
+              }
+              onDeleteItem={(id) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    unit: prev.unit.filter((i) => i.id !== id),
+                  }),
+                  "KPI (Unit)",
+                )
+              }
+              onAddClick={() => setShowAddModalFor("kpi-unit")}
+              onExport={() => handleExportFormat("kpi-unit")}
+              onImport={(file) => handleImportFormat("kpi-unit", file)}
+              sectionCascadeMap={formats.sectionCascadeUnit ?? {}}
+              onSectionCascadeChange={(sec, val) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    sectionCascadeUnit: { ...(prev.sectionCascadeUnit ?? {}), [sec]: val },
+                  }),
+                  "KPI (Unit) Cascade",
+                )
+              }
+            />
+          )}
+
+          {/* Sub-tab 3: KPI (Personal) — disalin dari /kpi/personal */}
+          {activeSubTab === "kpi-personal" && (
+            <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex-wrap">
+                <div className="flex items-center gap-1.5">
+                  {personalPreviewMode ? (
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full">
+                      <Eye className="w-3.5 h-3.5" /> Preview Mode
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/5 border border-[#1A284F]/15 px-2.5 py-1 rounded-full">
+                      <Edit3 className="w-3.5 h-3.5" /> Edit Mode
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {!personalPreviewMode && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddModalFor("kpi-personal")}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add KPI
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPersonalPreviewMode((p) => !p)}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      personalPreviewMode
+                        ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        : "bg-amber-50 border border-amber-300 text-amber-700 hover:bg-amber-100"
+                    }`}
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    {personalPreviewMode ? "Back to Edit" : "Preview"}
+                  </button>
+                  <ExportImportButton
+                    onExport={() => handleExportFormat("kpi-personal")}
+                    onImport={(file) => handleImportFormat("kpi-personal", file)}
+                    size="sm"
+                  />
+                </div>
+              </div>
+              <div className="p-0">
+                <KPISettingTable
+                  items={formats.personal}
+                  editable={!personalPreviewMode}
+                  hideCascading={true}
+                  onUpdateItem={(id, updates) =>
+                    persistFormats(
+                      (prev) => ({
+                        ...prev,
+                        personal: prev.personal.map((i) => (i.id === id ? { ...i, ...updates } : i)),
+                      }),
+                      "KPI (Personal)",
+                    )
+                  }
+                  onDelete={(id) =>
+                    persistFormats(
+                      (prev) => ({
+                        ...prev,
+                        personal: prev.personal.filter((i) => i.id !== id),
+                      }),
+                      "KPI (Personal)",
+                    )
+                  }
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Add New KPI Modals untuk ketiga format (otomatis insert Keterangan ke kolom Keterangan setelah Detail Formula) */}
+          {showAddModalFor === "kpi-group" && (
+            <AddCorporateKPIModal
+              sectionLabel="KPI (Group)"
+              existingItems={formats.group}
+              onAdd={(newItem) => {
+                persistFormats(
+                  (prev) => ({ ...prev, group: [...prev.group, newItem] }),
+                  "KPI (Group) — Add KPI",
+                );
+                toast.success(`KPI No. ${newItem.no} berhasil ditambahkan ke Master KPI (Group).`);
+              }}
+              onClose={() => setShowAddModalFor(null)}
+            />
+          )}
+          {showAddModalFor === "kpi-unit" && (
+            <AddCorporateKPIModal
+              sectionLabel="KPI (Unit)"
+              existingItems={formats.unit}
+              onAdd={(newItem) => {
+                persistFormats(
+                  (prev) => ({ ...prev, unit: [...prev.unit, newItem] }),
+                  "KPI (Unit) — Add KPI",
+                );
+                toast.success(`KPI No. ${newItem.no} berhasil ditambahkan ke Master KPI (Unit).`);
+              }}
+              onClose={() => setShowAddModalFor(null)}
+            />
+          )}
+          {showAddModalFor === "kpi-personal" && (
+            <AddKPIModal
+              existingItems={formats.personal}
+              hideCascading={true}
+              onAdd={(newItem) => {
+                persistFormats(
+                  (prev) => ({ ...prev, personal: [...prev.personal, newItem] }),
+                  "KPI (Personal) — Add KPI",
+                );
+                toast.success(`KPI No. ${newItem.no} berhasil ditambahkan ke Master KPI (Personal).`);
+              }}
+              onClose={() => setShowAddModalFor(null)}
+            />
+          )}
+        </div>
+      )}
+
+      {/* ══ TAB 2: KPI VARIABLE (Sinkron penuh dengan Add New KPI Modal: Tab Section & Tab Sub Section) ══ */}
+      {activeMainTab === "kpi-variable" && (
+        <div className="space-y-6">
+          {/* Kelompok 1: Variabel Tab Section */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-[#1A284F] text-white flex items-center justify-center">
+                <Layers className="w-3.5 h-3.5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-[#1A284F]">
+                  Variabel Tab Section (Add New KPI Modal)
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Perubahan pada kartu di bawah ini langsung memperbarui pilihan pada tab Section di modal Add New KPI (/setting/kpi &amp; KPI Format)
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+              {sectionGroupCards.map((cfg) => (
+                <SectionCard
+                  key={cfg.key}
+                  cfg={cfg}
+                  items={data[cfg.key] ?? []}
+                  onChange={(items) => updateSection(cfg.key, items)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Kelompok 2: Variabel Tab Sub Section */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center">
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-[#1A284F]">
+                  Variabel Tab Sub Section (Add New KPI Modal)
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Perubahan pada kartu di bawah ini langsung memperbarui pilihan field pada tab Sub Section di modal Add New KPI (/setting/kpi &amp; KPI Format)
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {subSectionGroupCards.map((cfg) => (
+                <SectionCard
+                  key={cfg.key}
+                  cfg={cfg}
+                  items={data[cfg.key] ?? []}
+                  onChange={(items) => updateSection(cfg.key, items)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

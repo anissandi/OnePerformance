@@ -153,6 +153,7 @@ const MOCK_SUBMISSIONS: EmployeeSubmission[] = [
     ],
     status: "Pending Review",
     approverFeedback: "",
+    approverScore: "",
   },
   {
     employeeId: "E004",
@@ -222,6 +223,7 @@ const MOCK_SUBMISSIONS: EmployeeSubmission[] = [
     ],
     status: "Pending Review",
     approverFeedback: "",
+    approverScore: "",
   },
 ];
 

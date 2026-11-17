@@ -665,7 +665,7 @@ function ApprovalsTable({
           row={reviewRow}
           reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole}
           onClose={() => setReviewRow(null)}
-          onUpdated={() => window.dispatchEvent(new Event("feedback-updated"))}
+          onAssessed={() => window.dispatchEvent(new Event("feedback-updated"))}
         />
       )}
       {reviewRow && !isSetting && reviewRow.type !== "Inter-Department Feedback" && (

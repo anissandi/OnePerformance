@@ -145,7 +145,7 @@ const defaultCompanyUnits: CompanyUnit[] = [
   makeUnit("5", "PT Pulau Sambu (Kuala Enok)", "PS-KE",    "Kuala Enok"),
   makeUnit("6", "PT RSTM",                     "RSTM",     ""),
   makeUnit("7", "PT GHS",                      "GHS",      ""),
-  makeUnit("8", "ASD",                         "ASD",      ""),
+  makeUnit("8", "PT RSUP ASD",                 "RSUP-ASD", ""),
 ];
 
 // ─── 2D Largest-Remainder & Management Override Allocation Engine ─────────────
@@ -497,6 +497,9 @@ export function applyImportedEmployeesDistribution(
   unit: CompanyUnit,
   resetCustomQuotas = false,
 ): CompanyUnit {
+  if (unit.id === "8" || unit.name.trim().toUpperCase() === "ASD" || unit.name.trim().toUpperCase() === "RSUP ASD") {
+    unit = { ...unit, name: "PT RSUP ASD", code: "RSUP-ASD" };
+  }
   const unitUsers = loadManagedUsers().filter(
     (u) => u.company === unit.name && u.status === "Active" && !isExcludedFromAppraisalCalibration(u),
   );
@@ -593,6 +596,16 @@ function SingleBellCurveCard({
     };
   });
 
+  // Motion bertahap: kurva dimulai dari 0 lalu tumbuh ke nilai aktual setelah kontainer siap
+  // (berlaku sama untuk HC Awal Tahun (SOY) maupun HC Akhir Tahun (EOY) yang dibuka melalui tab).
+  const [chartReady, setChartReady] = useState(false);
+  useEffect(() => {
+    setChartReady(false);
+    const t = window.setTimeout(() => setChartReady(true), 180);
+    return () => window.clearTimeout(t);
+  }, [title]);
+  const chartData = chartReady ? data : data.map((d) => ({ ...d, pct: 0 }));
+
   const CustomBarShape = (props: any) => {
     const { x, y, width, height, payload } = props;
     if (!height || height <= 0) return null;
@@ -627,7 +640,7 @@ function SingleBellCurveCard({
       <div className="p-6 flex flex-col gap-4 flex-1 justify-between">
         <div className="w-full h-[250px]">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 14, right: 18, left: -12, bottom: 0 }} barSize={32}>
+            <ComposedChart data={chartData} margin={{ top: 14, right: 18, left: -12, bottom: 0 }} barSize={32}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis
                 dataKey="grade"
@@ -697,11 +710,14 @@ function SingleBellCurveCard({
         </div>
 
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-2 border-t border-gray-100">
-          {data.map((d) => {
+          {data.map((d, di) => {
             const color = GRADE_COLORS[d.grade] ?? "#1A284F";
             return (
-              <div
+              <motion.div
                 key={d.grade}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: 0.25 + di * 0.06, ease: [0.22, 1, 0.36, 1] }}
                 className="rounded-xl border border-gray-100 bg-gray-50/70 px-2.5 py-2 text-center"
               >
                 <span
@@ -712,7 +728,7 @@ function SingleBellCurveCard({
                 </span>
                 <p className="text-sm font-bold text-gray-900 mt-1">{d.count}</p>
                 <p className="text-[10px] text-gray-500">{d.configuredPct}%</p>
-              </div>
+              </motion.div>
             );
           })}
         </div>

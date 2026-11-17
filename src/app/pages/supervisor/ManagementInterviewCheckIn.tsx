@@ -25,7 +25,7 @@ const COMPANY_UNITS = [
   "PT Pulau Sambu (Kuala Enok)",
   "PT RSTM",
   "PT GHS",
-  "ASD",
+  "PT RSUP ASD",
 ];
 
 interface PersonOption { value: string; position: string; }

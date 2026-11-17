@@ -122,7 +122,33 @@ async function readAllBackendKvRows(client: SupabaseClient): Promise<Array<{ sta
   return Array.from(byKey.entries()).map(([state_key, state_value]) => ({ state_key, state_value }));
 }
 
+function canonicalizeUnitName(raw: unknown): string {
+  const s = String(raw ?? "").trim();
+  const u = s.toUpperCase().replace(/\s+/g, " ");
+  if (u === "ASD" || u === "RSUP ASD" || u === "PT. RSUP ASD" || u === "PT RSUP (ASD)" || u === "PT RSUP ASD") {
+    return "PT RSUP ASD";
+  }
+  return s;
+}
+
+function cleanApproverRef(val: unknown): string {
+  const s = String(val ?? "").trim();
+  if (!s) return "";
+  const u = s.toUpperCase();
+  if (u === "-" || u === "—" || u === "N/A" || u === "NA" || u === "NULL" || u === "UNDEFINED") return "";
+  return s;
+}
+
+function normalizeApproverPairServer(rawAp1: unknown, rawAp2: unknown): { regNoAp1: string; regNoAp2: string } {
+  const a1 = cleanApproverRef(rawAp1);
+  const a2 = cleanApproverRef(rawAp2);
+  if (a1 && !a2) return { regNoAp1: a1, regNoAp2: a1 };
+  if (!a1 && a2) return { regNoAp1: a2, regNoAp2: a2 };
+  return { regNoAp1: a1, regNoAp2: a2 };
+}
+
 async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknown>, now: string): Promise<void> {
+  const apPair = normalizeApproverPairServer(u.regNoAp1 ?? u.reg_no_ap1, u.regNoAp2 ?? u.reg_no_ap2);
   const fullRow = {
     employee_id: String(u.employeeId ?? ""),
     no: String(u.no ?? ""),
@@ -130,7 +156,7 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
     name: String(u.name ?? ""),
     email: String(u.email ?? ""),
     position: String(u.position ?? ""),
-    company: String(u.company ?? ""),
+    company: canonicalizeUnitName(u.company ?? ""),
     unit_id: String(u.unitId ?? "IND"),
     division: String(u.division ?? ""),
     department: String(u.department ?? ""),
@@ -142,8 +168,8 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
     groupings: String(u.groupings ?? "Operasional"),
     status: String(u.status ?? "Active"),
     last_login: String(u.lastLogin ?? ""),
-    reg_no_ap1: String(u.regNoAp1 ?? ""),
-    reg_no_ap2: String(u.regNoAp2 ?? ""),
+    reg_no_ap1: apPair.regNoAp1,
+    reg_no_ap2: apPair.regNoAp2,
     is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
     is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
     updated_at: now,
@@ -243,9 +269,29 @@ mainAppRoutes.get("/bootstrap", async (c) => {
       client.from("pa_kpi_business").select("*").order("updated_at", { ascending: false }),
       client.from("pa_smart_goals").select("*").order("updated_at", { ascending: false }),
     ]);
+    const userRows = usersRes.data ?? [];
+    if (userRows.some((u: Record<string, unknown>) => u?.company === "ASD" || u?.company === "RSUP ASD")) {
+      await client.from("pa_users").update({ company: "PT RSUP ASD", updated_at: new Date().toISOString() }).in("company", ["ASD", "RSUP ASD"]);
+      for (const u of userRows as Array<Record<string, unknown>>) {
+        if (u?.company) u.company = canonicalizeUnitName(u.company);
+      }
+    }
+    for (const u of userRows as Array<Record<string, unknown>>) {
+      const norm = normalizeApproverPairServer(u?.reg_no_ap1, u?.reg_no_ap2);
+      if (norm.regNoAp1 !== String(u?.reg_no_ap1 ?? "") || norm.regNoAp2 !== String(u?.reg_no_ap2 ?? "")) {
+        u.reg_no_ap1 = norm.regNoAp1;
+        u.reg_no_ap2 = norm.regNoAp2;
+        if (u?.employee_id) {
+          await client
+            .from("pa_users")
+            .update({ reg_no_ap1: norm.regNoAp1, reg_no_ap2: norm.regNoAp2, updated_at: new Date().toISOString() })
+            .eq("employee_id", String(u.employee_id));
+        }
+      }
+    }
     return c.json({
       ok: true,
-      users: usersRes.data ?? [],
+      users: userRows,
       groupRules: rulesRes.data ?? [],
       rolePermissions: permsRes.data ?? [],
       menuConfig: menusRes.data?.menus ?? null,
@@ -418,6 +464,34 @@ mainAppRoutes.post("/sync", async (c) => {
         note: d.note ?? "",
         payload: d.payload ?? d,
       });
+    } else if (kind === "workflow-delete" && Array.isArray(body.docKeys) && body.docKeys.length > 0) {
+      const cleanKeys = (body.docKeys as unknown[]).map((k) => String(k ?? "").trim()).filter(Boolean);
+      if (cleanKeys.length > 0) {
+        await client.from("pa_workflow_documents").delete().in("doc_key", cleanKeys);
+      }
+      if (Array.isArray(body.records)) {
+        for (const rawRec of body.records as Array<Record<string, unknown>>) {
+          const empId = String(rawRec?.employeeId ?? "").trim();
+          if (!empId) continue;
+          const mod = String(rawRec?.module ?? "");
+          const phase = String(rawRec?.phase ?? "measurement");
+          if (mod === "KPI" && phase === "setting") {
+            await client.from("pa_kpi_settings").update({ status: "Draft", updated_at: now }).eq("employee_id", empId).eq("period", "2026");
+          } else if (mod === "SMART Goals") {
+            await client
+              .from("pa_smart_goals")
+              .update({ status: phase === "setting" ? "Draft-Setting" : "Draft-Measurement", approval_decisions: [], updated_at: now })
+              .eq("employee_id", empId)
+              .eq("period", "2026");
+          } else if (mod === "Appraisal Form") {
+            await client.from("pa_appraisal_forms").update({ status: "Draft", approver_ratings: [], updated_at: now }).eq("employee_id", empId).eq("period", "2026");
+          } else if (mod === "Managerial Skill") {
+            await client.from("pa_managerial_skills").update({ status: "Draft", approver_ratings: [], updated_at: now }).eq("employee_id", empId).eq("period", "2026");
+          } else if (mod === "Project") {
+            await client.from("pa_project_records").update({ submitted: false, updated_at: now }).eq("employee_id", empId).eq("period", "2026");
+          }
+        }
+      }
     } else if (kind === "open-lock" && body.request) {
       const r = body.request;
       await client.from("pa_open_lock_requests").upsert({

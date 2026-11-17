@@ -14,6 +14,7 @@ import {
 import {
   COMPANY_UNIT_LOCATIONS,
   loadManagedUsers,
+  normalizeApproverPair,
   resolveGroupingForCompanyAndPosition,
   saveManagedUsers,
   type ManagedUser,
@@ -237,10 +238,12 @@ export function DataSyncPage() {
         // Collect all Reg No values referenced as AP1 or AP2 to auto-assign Supervisor role when appropriate
         const referencedApproverRegNos = new Set<string>();
         rawRows.forEach((r) => {
-          const ap1 = String(r["Reg No AP1"] ?? r["RegNoAP1"] ?? "").trim().toUpperCase();
-          const ap2 = String(r["Reg No AP2"] ?? r["RegNoAP2"] ?? "").trim().toUpperCase();
-          if (ap1) referencedApproverRegNos.add(ap1);
-          if (ap2) referencedApproverRegNos.add(ap2);
+          const pair = normalizeApproverPair(
+            String(r["Reg No AP1"] ?? r["RegNoAP1"] ?? r["AP1"] ?? ""),
+            String(r["Reg No AP2"] ?? r["RegNoAP2"] ?? r["AP2"] ?? ""),
+          );
+          if (pair.regNoAp1) referencedApproverRegNos.add(pair.regNoAp1.toUpperCase());
+          if (pair.regNoAp2) referencedApproverRegNos.add(pair.regNoAp2.toUpperCase());
         });
         existingUsers.forEach((u) => {
           if (u.regNoAp1) referencedApproverRegNos.add(u.regNoAp1.trim().toUpperCase());
@@ -262,8 +265,10 @@ export function DataSyncPage() {
           const joinDate = String(r["Joindate"] ?? r["Join Date"] ?? "").trim();
           const telegramNo = String(r["No Telegram"] ?? r["Telegram"] ?? "").trim();
           const email = String(r["Corporate Email"] ?? r["Email"] ?? "").trim();
-          const regNoAp1 = String(r["Reg No AP1"] ?? r["AP1"] ?? "").trim();
-          const regNoAp2 = String(r["Reg No AP2"] ?? r["AP2"] ?? "").trim();
+          const { regNoAp1, regNoAp2 } = normalizeApproverPair(
+            String(r["Reg No AP1"] ?? r["RegNoAP1"] ?? r["AP1"] ?? ""),
+            String(r["Reg No AP2"] ?? r["RegNoAP2"] ?? r["AP2"] ?? ""),
+          );
           const rawRole = String(r["Role"] ?? r["User Role"] ?? "").trim();
           const rawGrouping = String(r["Groupings"] ?? r["Grouping"] ?? r["User Groupings"] ?? "").trim();
 
@@ -384,7 +389,7 @@ export function DataSyncPage() {
   };
 
   const resolveApproverDisplay = (regNo?: string) => {
-    if (!regNo) return "—";
+    if (!regNo) return "Belum ada approver";
     const found = users.find(
       (u) =>
         (u.regNo && u.regNo.toLowerCase() === regNo.toLowerCase()) ||
@@ -638,12 +643,12 @@ export function DataSyncPage() {
                     <td className="px-3 py-2 font-mono text-gray-600 whitespace-nowrap">{u.telegramNo || "—"}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{u.email}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-medium text-[11px]">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium text-[11px] ${u.regNoAp1 ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
                         {resolveApproverDisplay(u.regNoAp1)}
                       </span>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium text-[11px]">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium text-[11px] ${u.regNoAp2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>
                         {resolveApproverDisplay(u.regNoAp2)}
                       </span>
                     </td>

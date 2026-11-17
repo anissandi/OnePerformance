@@ -3,13 +3,14 @@ import React, { useEffect, useState } from "react";
 import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, Info, AlertTriangle, Clock, RotateCcw, Lock } from "lucide-react";
 import { loadSubmittedGoals, saveSubmittedGoals } from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
-import { getActiveUser, loadManagedUsers, useAuthStore, type ManagedUser } from "../../store/authStore";
+import { getActiveUser, loadManagedUsers, useAuthStore, usesDemoSampleData, type ManagedUser } from "../../store/authStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -451,6 +452,29 @@ function InputView({
         g.actionPlans.every((ap) => ap.description.trim() !== ""),
   );
 
+  // Alasan tombol Preview belum aktif (ditampilkan via tooltip saat hover / klik)
+  const previewMissing: string[] = (() => {
+    const out: string[] = [];
+    if (goals.length < 3) out.push(`Minimal 3 SMART Goals (saat ini ${goals.length}).`);
+    const FIELD_LABELS: Array<[keyof SmartGoal, string]> = [
+      ["specific", "Specific"],
+      ["measurable", "Measurable"],
+      ["attainable", "Attainable"],
+      ["relevant", "Relevant"],
+      ["timely", "Time-bound"],
+      ["target", "Target"],
+    ];
+    goals.forEach((g, gi) => {
+      const name = g.label || `Goals ${gi + 1}`;
+      const empty = FIELD_LABELS.filter(([k]) => !String(g[k] ?? "").trim()).map(([, l]) => l);
+      if (empty.length > 0) out.push(`${name}: ${empty.join(", ")} belum diisi`);
+      if (g.actionPlans.length < 1) out.push(`${name}: minimal 1 Action Plan`);
+      else if (g.actionPlans.some((ap) => ap.description.trim() === "")) out.push(`${name}: deskripsi Action Plan belum diisi`);
+    });
+    return out;
+  })();
+  const [previewTipOpen, setPreviewTipOpen] = useState(false);
+
   return (
     <div className="flex flex-col gap-6">
       {/* Minimum goals info tag */}
@@ -491,15 +515,32 @@ function InputView({
       />
 
       <div className="flex justify-end gap-3 pt-2">
-        <button
-          onClick={onPreview}
-          disabled={!allFilled}
-          className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          <Eye className="w-4 h-4" />
-          Preview
-          <ChevronRight className="w-4 h-4" />
-        </button>
+        <Tooltip open={!allFilled && previewTipOpen} onOpenChange={setPreviewTipOpen}>
+          <TooltipTrigger asChild>
+            <span
+              tabIndex={0}
+              className="inline-flex"
+              onClick={() => { if (!allFilled) setPreviewTipOpen(true); }}
+            >
+              <button
+                onClick={onPreview}
+                disabled={!allFilled}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+              >
+                <Eye className="w-4 h-4" />
+                Preview
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="end" className="max-w-sm bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+            <p className="font-bold text-xs mb-1">Preview belum aktif — lengkapi data berikut ({previewMissing.length}):</p>
+            <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90 max-h-48 overflow-y-auto">
+              {previewMissing.slice(0, 8).map((m, i) => <li key={i}>{m}</li>)}
+              {previewMissing.length > 8 && <li>...dan {previewMissing.length - 8} lainnya.</li>}
+            </ul>
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       {showMinModal && <MinGoalsModal onClose={() => setShowMinModal(false)} />}
@@ -707,7 +748,8 @@ function SMARTGoalsWorkspace({
       statusTone = "submitted";
     }
 
-    const initialGoals = saved && saved.length > 0 ? saved : SAMPLE_GOALS;
+    // DEMO: Selain Administrator, karyawan yang belum bertransaksi melihat format tabel kosong
+    const initialGoals = saved && saved.length > 0 ? saved : usesDemoSampleData(ownerUser) ? SAMPLE_GOALS : [];
     const lockedSubmitted = Boolean(wfRec && !isRev);
     return {
       initialGoals,
@@ -907,13 +949,13 @@ export function SMARTGoalsPage() {
   const workspaces: Array<{ id: string; label: string; owner: ManagedUser; access?: DelegationAccess }> = [
     ...receivedDelegations.map((d) => ({
       id: `deleg-${d.delegator.employeeId}`,
-      label: `SMART Goals · Delegasi: ${d.delegator.name}`,
+      label: `SMART Goals Setting · Delegasi: ${d.delegator.name}`,
       owner: d.delegator,
       access: d.access,
     })),
     {
       id: `self-${activeUser.employeeId}`,
-      label: receivedDelegations.length > 0 ? `SMART Goals Saya (${activeUser.name})` : "SMART Goals",
+      label: receivedDelegations.length > 0 ? `SMART Goals Setting Saya (${activeUser.name})` : "SMART Goals",
       owner: activeUser,
     },
   ];

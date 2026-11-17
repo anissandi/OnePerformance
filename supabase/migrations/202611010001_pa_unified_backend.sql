@@ -210,7 +210,7 @@ values
   ('E015', 'Mario Sesman',  'mario.sesman@sambugroup.com',  'HR ICF Specialist',              'PT RSUP (Industry)',          'IND',  'Divisi Sumber Daya Manusia',    'SDM',         'Grade 6', 'HR ICF',        'Ka./Wa.Ka.Bagian',      'Active', '2026-06-10 09:20'),
   ('E016', 'Ir. Bambang Sutrisno', 'bambang.sutrisno@sambugroup.com', 'Direktur Operasional', 'PT RSUP (Industry)',          'IND',  'Direktorat Operasional',        'Direksi',     'Grade 10','Director',      'Ka./Wa.Ka.Div ke atas', 'Active', '2026-06-10 09:30'),
   ('E017', 'Surya Abimanyu','surya.abimanyu@sambugroup.com','Board of Directors',             'PT RSUP (Industry)',          'IND',  'Board of Directors',            'BOD',         'Grade 11','BOD',           'Ka./Wa.Ka.Div ke atas', 'Active', '2026-06-10 09:40'),
-  ('E018', 'Wahyu Nugroho', 'wahyu.nugroho@sambugroup.com', 'Kepala Bagian Operasional',      'ASD',                         'ASD',  'Divisi Operasional',            'Operasional', 'Grade 7', 'Supervisor',    'Ka./Wa.Ka.Bagian',      'Active', '2026-06-10 09:50')
+  ('E018', 'Wahyu Nugroho', 'wahyu.nugroho@sambugroup.com', 'Kepala Bagian Operasional',      'PT RSUP ASD',                 'ASD',  'Divisi Operasional',            'Operasional', 'Grade 7', 'Supervisor',    'Ka./Wa.Ka.Bagian',      'Active', '2026-06-10 09:50')
 on conflict (employee_id) do update set
   name = excluded.name,
   position = excluded.position,

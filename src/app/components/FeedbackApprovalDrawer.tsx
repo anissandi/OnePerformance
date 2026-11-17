@@ -43,12 +43,14 @@ export function FeedbackApprovalDrawer({
   reviewerRole,
   onClose,
   onAssessed,
+  onUpdated,
   readOnly,
 }: {
   row: ApprovalRow
   reviewerRole: ReviewerRole
   onClose: () => void
-  onAssessed: () => void
+  onAssessed?: () => void
+  onUpdated?: () => void
   readOnly?: boolean
 }) {
   const submission = loadFeedbackSubmissions().find(
@@ -590,7 +592,8 @@ export function FeedbackApprovalDrawer({
                                   : "Hasil Tindak Lanjut dikembalikan untuk revisi",
                               )
                               setDecisionConfirm(null)
-                              onAssessed()
+                              onAssessed?.()
+                              onUpdated?.()
                               onClose()
                             } catch (error) {
                               toast.error(error instanceof Error ? error.message : "Gagal menyimpan keputusan")
@@ -643,7 +646,8 @@ export function FeedbackApprovalDrawer({
                           onClick={() => {
                             try {
                               saveFeedbackFollowUp(row.no, reviewerRole, rows)
-                              onAssessed()
+                              onAssessed?.()
+                              onUpdated?.()
                               toast.success(
                                 "Tindak lanjut feedback berhasil disubmit",
                               )

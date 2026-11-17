@@ -13,7 +13,7 @@ import { buildZip, fetchFileBytes, safePathSegment, type ZipEntry } from "../../
 
 export type EvidenceType = "KPI Tracking" | "SMART Goals" | "Management Interview" | "RCA";
 
-type ApprovalStatus = "Approved" | "Pending" | "Revision";
+type ApprovalStatus = "Approved" | "Pending" | "Revision" | "Closed";
 
 interface EvidenceRow {
   no: string;
@@ -31,6 +31,7 @@ interface EvidenceRow {
   // RCA-specific
   period?: string;
   kpi?: string;
+  progressAPs?: number;
   fileName?: string;
   fileUrl?: string;
 }
@@ -45,7 +46,7 @@ const COMPANY_UNITS = [
   "PT Pulau Sambu (Kuala Enok)",
   "PT RSTM",
   "PT GHS",
-  "ASD",
+  "PT RSUP ASD",
 ];
 
 const DIVISIONS = [
@@ -80,7 +81,7 @@ const MONTHS = [
 
 // Data sampel statis dihapus: seluruh baris evidence berasal dari upload karyawan (backend).
 
-const RCA_ROWS: RCAEvidenceRow[] = [];
+const RCA_ROWS: EvidenceRow[] = [];
 
 // ─── Status meta ──────────────────────────────────────────────────────────────
 
@@ -243,7 +244,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
       if (isRCA && filterPeriods.length && !filterPeriods.includes(r.period ?? "")) return false;
       if (isRCA && filterProgressAPs.length) {
         const rcaRow = rcaRows.find((rr) => rr.no === r.no);
-        const pct = rcaRow ? (r.approvalStatus === "Closed" ? 100 : rcaRow.progressAPs) : 0;
+        const pct = rcaRow ? (r.approvalStatus === "Closed" ? 100 : (rcaRow.progressAPs ?? 0)) : 0;
         if (!filterProgressAPs.includes(`${pct}%`)) return false;
       }
       if (q && !r.employeeId.toLowerCase().includes(q) && !r.fullName.toLowerCase().includes(q)) return false;
@@ -517,7 +518,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
                       )}
                       {isRCA && (() => {
                         const rcaRow = rcaRows.find((r) => r.no === row.no);
-                        const pct = rcaRow ? (row.approvalStatus === "Closed" ? 100 : rcaRow.progressAPs) : 0;
+                        const pct = rcaRow ? (row.approvalStatus === "Closed" ? 100 : (rcaRow.progressAPs ?? 0)) : 0;
                         return <>
                           <td className="px-4 py-3">
                             <span className="px-2 py-0.5 bg-[#1A284F]/10 text-[#1A284F] rounded-full text-[11px] font-bold whitespace-nowrap">{row.period || "—"}</span>

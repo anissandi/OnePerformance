@@ -615,6 +615,8 @@ function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
 
 // ── KPI content ────────────────────────────��──────────────────────────────────
 
+type FullKPIItem = (typeof FULL_KPI_ITEMS)[number];
+
 function KPIContent({ employeeId }: { employeeId: string }) {
   const kpiItems: FullKPIItem[] = (() => {
     try {

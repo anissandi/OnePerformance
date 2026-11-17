@@ -27,7 +27,7 @@ const MONTHS = ["January","February","March","April","May","June","July","August
 const MONTH_NUM: Record<string,string> = Object.fromEntries(MONTHS.map((m, i) => [m, String(i + 1).padStart(2, "0")]));
 
 const filterOptionsCheckin = {
-  companyUnit: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
+  companyUnit: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
   year: ["2026"],
   month: MONTHS,
   division: ["Divisi Produksi & Operasional", "Divisi Sumber Daya Manusia", "Divisi Keuangan & Akuntansi", "Divisi Teknologi Informasi", "Divisi Pemasaran & Penjualan"],
@@ -35,7 +35,7 @@ const filterOptionsCheckin = {
   approvalType: ["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "Project", "Inter-Department Feedback"],
 };
 const filterOptionsSetting = {
-  companyUnit: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "ASD"],
+  companyUnit: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
   year: ["2026"],
   month: MONTHS,
   division: ["Divisi Produksi & Operasional", "Divisi Sumber Daya Manusia", "Divisi Keuangan & Akuntansi", "Divisi Pemasaran & Penjualan"],
@@ -614,7 +614,7 @@ function ApprovalsTable({
           row={reviewRow}
           reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole}
           onClose={() => setReviewRow(null)}
-          onUpdated={() => window.dispatchEvent(new Event("feedback-updated"))}
+          onAssessed={() => window.dispatchEvent(new Event("feedback-updated"))}
         />
       )}
       {reviewRow && !isSetting && reviewRow.type !== "Inter-Department Feedback" && (

@@ -40,7 +40,7 @@ const companyUnits = [
   { label: "PT RSUP Perkebunan", key: "perkebunan" },
   { label: "PT RSTM", key: "rstm" },
   { label: "PT GHS", key: "ghs" },
-  { label: "ASD", key: "asd" },
+  { label: "PT RSUP ASD", key: "asd" },
 ];
 
 function PhaseCircle({ status }: { status: PhaseStatus }) {

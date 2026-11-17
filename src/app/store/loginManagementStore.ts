@@ -10,7 +10,7 @@ import {
   PA_APP_API_BASE,
   SUPABASE_ANON_KEY,
 } from "../services/supabaseClient";
-import { COMPANY_UNIT_LOCATIONS } from "./authStore";
+import { canonicalizeCompanyUnitName, COMPANY_UNIT_LOCATIONS } from "./authStore";
 
 export type LoginMethodOption = "otp_telegram" | "otp_whatsapp" | "otp_email" | "password";
 
@@ -145,10 +145,11 @@ export function loadAllUnitLoginConfigs(): Record<string, UnitLoginConfig> {
   if (saved && typeof saved === "object") {
     for (const [comp, cfg] of Object.entries(saved)) {
       if (cfg && Array.isArray(cfg.enabledMethods) && cfg.enabledMethods.length > 0) {
-        result[comp] = {
-          ...defaults[comp],
+        const canon = canonicalizeCompanyUnitName(comp);
+        result[canon] = {
+          ...defaults[canon],
           ...cfg,
-          company: comp,
+          company: canon,
         };
       }
     }
@@ -158,9 +159,10 @@ export function loadAllUnitLoginConfigs(): Record<string, UnitLoginConfig> {
 
 export function getUnitLoginConfig(company: string): UnitLoginConfig {
   const map = loadAllUnitLoginConfigs();
+  const canon = canonicalizeCompanyUnitName(company);
   return (
-    map[company] ?? {
-      company,
+    map[canon] ?? {
+      company: canon,
       enabledMethods: ["password"],
     }
   );
@@ -173,6 +175,7 @@ export function isUnitUsingPasswordLogin(company: string): boolean {
 
 export function saveUnitLoginConfig(company: string, config: UnitLoginConfig): void {
   const all = loadAllUnitLoginConfigs();
+  const canon = canonicalizeCompanyUnitName(company);
   // Pastikan aturan eksklusivitas Password vs OTP terjaga
   let methods = [...config.enabledMethods];
   if (methods.includes("password")) {
@@ -182,13 +185,14 @@ export function saveUnitLoginConfig(company: string, config: UnitLoginConfig): v
   }
   const next: Record<string, UnitLoginConfig> = {
     ...all,
-    [company]: {
+    [canon]: {
       ...config,
-      company,
+      company: canon,
       enabledMethods: methods,
       updatedAt: new Date().toISOString(),
     },
   };
+  delete next["ASD"];
   savePersistedState(LOGIN_CONFIG_BY_UNIT_KEY, next, {
     kind: "kv-state",
     stateKey: LOGIN_CONFIG_BY_UNIT_KEY,

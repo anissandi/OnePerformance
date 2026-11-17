@@ -1,7 +1,13 @@
 // @refresh reset
 import React, { useState, useEffect, useRef } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
-import { loadMasterKpi, type MasterKpiStore } from "../../hr/settings/masterKpiStore";
+import {
+  loadMasterKpi,
+  loadMasterKpiFormats,
+  MASTER_KPI_FORMATS_UPDATED_EVENT,
+  MASTER_KPI_UPDATED_EVENT,
+  type MasterKpiStore,
+} from "../../hr/settings/masterKpiStore";
 import {
   getActiveUser,
   getGroupNameForUnit,
@@ -9,6 +15,7 @@ import {
   loadManagedUsers,
   resolveEffectiveUserGrouping,
   useAuthStore,
+  usesDemoSampleData,
   type ManagedUser,
 } from "../../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
@@ -18,7 +25,9 @@ import { DelegatedWorkspaceBanner } from "../../../components/approval/Delegated
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../../components/ApproverNotesHistory";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
-import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock } from "lucide-react";
+import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers } from "lucide-react";
+import { toast } from "sonner";
+import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
 
@@ -119,11 +128,11 @@ function computeRatioSumDisplay(mt: Record<string, string>): { totalP: number; t
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Polaritas = "Maximize" | "Minimize" | "Stabilize";
+export type Polaritas = "Maximize" | "Minimize" | "Stabilize";
 type PageView = "input" | "preview";
 type KPITab = "personal" | "department" | "division" | "corporate" | "pak-anton" | "corporate-unit";
 
-interface KPISetting {
+export interface KPISetting {
   id: string;
   no: string;
   section: string;
@@ -162,11 +171,13 @@ interface KPISetting {
   cascadingMap?: Record<string, string>;
   // Injected when KPI is cascaded from a parent layer (FC/PC/CC determines editability)
   _cascadeType?: "FC" | "PC" | "CC";
+  /** ID baris sumber bila KPI ini hasil copy dari KPI (Group) / KPI (Unit) */
+  copiedFromId?: string;
 }
 
 // ─── Personal KPI data (existing SettingKPIPage data) ─────────────────────────
 
-const PERSONAL_KPI: KPISetting[] = [
+export const PERSONAL_KPI: KPISetting[] = [
   {
     id: "1", no: "1", section: "A", perspektif: "Finansial",
     kpi: "Net Profit (dalam miliar)",
@@ -261,7 +272,7 @@ const PERSONAL_KPI: KPISetting[] = [
 
 // ─── Corporate KPI — KPI Bisnis RSUP Group 2026 ───────────────────────────────
 
-const CORPORATE_KPI: KPISetting[] = [
+export const CORPORATE_KPI: KPISetting[] = [
   // ── A. Kinerja K3L Terintegrasi (SMK3/HSE) — 15% ─────────────────────────
   {
     id: "c1a", no: "1a", section: "A", perspektif: "Proses",
@@ -741,7 +752,13 @@ function useMasterKpi(): MasterKpiStore {
   useEffect(() => {
     const refresh = () => setMaster(loadMasterKpi());
     window.addEventListener("storage", refresh);
-    return () => window.removeEventListener("storage", refresh);
+    window.addEventListener(MASTER_KPI_UPDATED_EVENT, refresh);
+    window.addEventListener("pa-db-hydrated", refresh);
+    return () => {
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener(MASTER_KPI_UPDATED_EVENT, refresh);
+      window.removeEventListener("pa-db-hydrated", refresh);
+    };
   }, []);
   return master;
 }
@@ -2066,7 +2083,7 @@ const PERSONAL_SECTION_OPTIONS = [
   { value: "B", label: "B — Functional KPI", bobot: "80%" },
 ];
 
-function AddKPIModal({
+export function AddKPIModal({
   existingItems,
   onAdd,
   onClose,
@@ -2082,11 +2099,27 @@ function AddKPIModal({
   onSectionCascade?: (section: string, type: string) => void;
 }) {
   const master = useMasterKpi();
+  const dynamicPersonalSections = (master.personalSection?.length ? master.personalSection : PERSONAL_SECTION_OPTIONS.map((p) => ({
+    value: p.value,
+    description: p.label.replace(/^[A-Z]+\s*—\s*/, ""),
+  }))).map((s) => ({
+    value: s.value,
+    label: `${s.value} — ${s.description || s.value}`,
+    bobot: s.value === "A" ? "20%" : s.value === "B" ? "80%" : "",
+  }));
+  const dynamicDivisionSections = (master.section?.length ? master.section : DIVISION_SECTION_OPTIONS.map((d) => d.label.replace(/^[A-Z]+\s*—\s*/, ""))).map((lbl, idx) => {
+    const code = SECTION_LABEL_TO_CODE[lbl] || String.fromCharCode("A".charCodeAt(0) + idx);
+    return { value: code, label: `${code} — ${lbl}` };
+  });
+  const firstPersonal = dynamicPersonalSections[0] ?? { value: "A", label: "A — Objective KPI", bobot: "20%" };
+  const firstDivision = dynamicDivisionSections[0] ?? { value: "A", label: "A — K3L Terintegrasi (SMK3/HSE)" };
   const [tab, setTab] = useState<"section" | "subsection">("section");
   const [form, setForm] = useState<Omit<KPISetting, "id">>({
-    no: "", sectionAlphabet: forDivision ? "A." : "A.", section: forDivision ? "A" : "A",
-    sectionLabel: forDivision ? "K3L Terintegrasi (SMK3/HSE)" : "Objective KPI",
-    sectionBobot: forDivision ? "" : "20%",
+    no: "",
+    sectionAlphabet: `${forDivision ? firstDivision.value : firstPersonal.value}.`,
+    section: forDivision ? firstDivision.value : firstPersonal.value,
+    sectionLabel: (forDivision ? firstDivision.label : firstPersonal.label).replace(/^[A-Z]+\s*—\s*/, ""),
+    sectionBobot: forDivision ? "" : firstPersonal.bobot,
     perspektif: "Proses", kpi: "", satuan: "", formula: "Jumlah",
     bobot: "", definisi: "", source: "", baseline2025: "", target2026: "", polaritas: "Maximize",
     detailFormula: "", keterangan: "", monthlyTargets: {}, colorIndicator: false, indicatorMode: "numeric",
@@ -2104,16 +2137,33 @@ function AddKPIModal({
   });
 
   // When section changes, auto-fill sectionLabel, sectionAlphabet, and sectionBobot
+  const [manualSection, setManualSection] = useState(false);
   const setSection = (code: string) => {
+    if (code === "__manual__") {
+      const used = new Set(existingItems.map((i) => i.section));
+      const nextCode = SECTION_LETTERS.find((l) => !used.has(l)) ?? "Z";
+      setManualSection(true);
+      setForm(p => ({ ...p, section: nextCode, sectionLabel: "", sectionAlphabet: nextCode + ".", sectionBobot: "" }));
+      return;
+    }
+    setManualSection(false);
+    const existingRow = existingItems.find((i) => i.section === code);
+    if (existingRow) {
+      const lbl = forDivision ? resolveKpiSectionLabel(existingRow) : resolvePersonalSectionLabel(existingRow);
+      const fallbackBobot = forDivision ? "" : PERSONAL_SECTION_OPTIONS.find((o) => o.value === code)?.bobot ?? "";
+      setForm(p => ({ ...p, section: code, sectionLabel: lbl, sectionAlphabet: code + ".", sectionBobot: existingRow.sectionBobot || fallbackBobot || p.sectionBobot }));
+      return;
+    }
     if (forDivision) {
-      const opt = DIVISION_SECTION_OPTIONS.find(o => o.value === code);
+      const opt = dynamicDivisionSections.find(o => o.value === code);
       // Try to get bobot from existing items, else from CORP_SECTION_META
       const existingBobot = existingItems.find(i => i.section === code)?.sectionBobot ?? "";
       const metaBobot = (CORP_SECTION_META as Record<string, { bobot: string }>)[code]?.bobot ?? "";
       setForm(p => ({ ...p, section: code, sectionLabel: opt?.label.replace(/^[A-Z] — /, "") ?? code, sectionAlphabet: code + ".", sectionBobot: existingBobot || metaBobot }));
     } else {
-      const opt = PERSONAL_SECTION_OPTIONS.find(o => o.value === code);
-      setForm(p => ({ ...p, section: code, sectionLabel: opt?.label.replace(/^[A-Z] — /, "") ?? code, sectionAlphabet: code + ".", sectionBobot: opt?.bobot ?? "" }));
+      const opt = dynamicPersonalSections.find(o => o.value === code);
+      const existingBobot = existingItems.find(i => i.section === code)?.sectionBobot ?? "";
+      setForm(p => ({ ...p, section: code, sectionLabel: opt?.label.replace(/^[A-Z] — /, "") ?? code, sectionAlphabet: code + ".", sectionBobot: existingBobot || opt?.bobot || "" }));
     }
   };
 
@@ -2144,7 +2194,36 @@ function AddKPIModal({
     onAdd({ ...form, id: `kpi-${Date.now()}` }); onClose();
   };
 
-  const sectionOptions = forDivision ? DIVISION_SECTION_OPTIONS : PERSONAL_SECTION_OPTIONS;
+  // Default section mengikuti section pertama pada tabel (mis. hasil copy) bila tersedia
+  useEffect(() => {
+    if (forDivision || existingItems.length === 0) return;
+    const first = [...existingItems].sort((a, b) => a.section.localeCompare(b.section))[0];
+    if (first) setSection(first.section);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Section dari baris yang sudah ada (termasuk hasil copy KPI (Group)/(Unit)) + section manual
+  const labelOf = (i: KPISetting) => (forDivision ? resolveKpiSectionLabel(i) : resolvePersonalSectionLabel(i));
+  const existingSectionOpts = Array.from(new Map(existingItems.map((i) => [i.section, i])).values())
+    .map((i) => ({ value: i.section, label: `${i.section} — ${labelOf(i)}`, bobot: i.sectionBobot ?? "" }));
+  const baseSectionOptions = forDivision ? dynamicDivisionSections : dynamicPersonalSections;
+  const sectionOptions = [
+    ...existingSectionOpts,
+    ...baseSectionOptions.filter((o) => !existingSectionOpts.some((e) => e.value === o.value)),
+  ].sort((a, b) => a.value.localeCompare(b.value));
+  const sectionBobotOpts = master.sectionBobot?.length ? master.sectionBobot : SECTION_BOBOT_OPTIONS;
+  const cascTypeOpts = master.cascadingTypes?.length
+    ? master.cascadingTypes
+    : [
+        { value: "FC", description: "Full Cascading" },
+        { value: "PC", description: "Partial Cascading" },
+        { value: "CC", description: "Contributing Cascading" },
+      ];
+  const formulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
+  const bobotOpts = master.bobot?.length ? master.bobot : BOBOT_OPTIONS;
+  const polaritasOpts = master.polaritas?.length
+    ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
+    : POLARITAS_OPTIONS;
   const modalTitle = forDivision ? "Add New KPI — Division" : "Add New KPI — Personal";
 
   return (
@@ -2175,12 +2254,31 @@ function AddKPIModal({
           {tab === "section" && (
             <>
               <Field label="Section">
-                <select value={form.section} onChange={(e) => setSection(e.target.value)} className={inputCls}>
+                <select value={manualSection ? "__manual__" : form.section} onChange={(e) => setSection(e.target.value)} className={inputCls}>
                   {sectionOptions.map(({ value, label }) => (
                     <option key={value} value={value}>{label}</option>
                   ))}
+                  <option value="__manual__">+ Tambah Section Manual…</option>
                 </select>
-                <p className="text-[10px] text-gray-400 mt-1">Pilih section untuk KPI ini.</p>
+                {manualSection && (
+                  <div className="mt-2 grid grid-cols-[90px_1fr] gap-2">
+                    <select
+                      value={form.section}
+                      onChange={(e) => setForm(p => ({ ...p, section: e.target.value, sectionAlphabet: e.target.value + "." }))}
+                      className={inputCls}
+                      aria-label="Kode Section"
+                    >
+                      {SECTION_LETTERS.map((l) => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                    <input
+                      value={form.sectionLabel ?? ""}
+                      onChange={(e) => setForm(p => ({ ...p, sectionLabel: e.target.value }))}
+                      placeholder="Nama section baru…"
+                      className={inputCls}
+                    />
+                  </div>
+                )}
+                <p className="text-[10px] text-gray-400 mt-1">Pilih section (termasuk section hasil copy) atau tambahkan section manual.</p>
               </Field>
 
               {/* Preview badge */}
@@ -2201,7 +2299,7 @@ function AddKPIModal({
               <Field label="Section Bobot">
                 <select value={form.sectionBobot ?? ""} onChange={(e) => set("sectionBobot" as keyof typeof form, e.target.value)} className={inputCls}>
                   <option value="">— Section Bobot —</option>
-                  {SECTION_BOBOT_OPTIONS.map(b => <option key={b} value={b}>{b}</option>)}
+                  {sectionBobotOpts.map(b => <option key={b} value={b}>{b}</option>)}
                 </select>
                 {form.sectionBobot && (
                   <p className="text-[10px] text-blue-600 mt-1 flex items-center gap-1">
@@ -2225,9 +2323,11 @@ function AddKPIModal({
                     fontWeight: 700,
                   }}
                 >
-                  <option value="FC" style={{ background: "#fff", color: "#312e81" }}>FC — Full Cascading (level bawah read-only)</option>
-                  <option value="PC" style={{ background: "#fff", color: "#78350f" }}>PC — Partial Cascading (dapat edit Section Bobot)</option>
-                  <option value="CC" style={{ background: "#fff", color: "#134e4a" }}>CC — Contributing Cascading (dapat edit Section Bobot & Name)</option>
+                  {cascTypeOpts.map((ct) => (
+                    <option key={ct.value} value={ct.value} style={{ background: "#fff", color: "#1A284F" }}>
+                      {ct.value} — {ct.description || ct.value}
+                    </option>
+                  ))}
                 </select>
                 <div className="mt-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-[10px] text-gray-500 leading-relaxed">
                   {sectionCascadeType === "FC" && <><span className="font-bold text-indigo-700">FC — Full Cascading:</span> Level di bawah tidak dapat mengubah Section Bobot maupun nama section.</>}
@@ -2271,7 +2371,7 @@ function AddKPIModal({
                 {colorMode || ratioMode
                   ? <div className={inputCls + " bg-gray-50 text-[#1A284F] font-semibold cursor-default select-none"}>{form.formula}</div>
                   : <select value={form.formula} onChange={(e) => set("formula", e.target.value)} className={inputCls}>
-                      {FORMULA_OPTIONS.map((f) => <option key={f}>{f}</option>)}
+                      {formulaOpts.map((f) => <option key={f}>{f}</option>)}
                     </select>}
               </Field>
 
@@ -2279,12 +2379,12 @@ function AddKPIModal({
                 <Field label="Bobot">
                   <select value={form.bobot} onChange={(e) => set("bobot", e.target.value)} className={inputCls}>
                     <option value="">— Pilih Bobot —</option>
-                    {BOBOT_OPTIONS.map((b) => <option key={b} value={b}>{b}</option>)}
+                    {bobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
                   </select>
                 </Field>
                 <Field label="Polaritas">
                   <select value={form.polaritas} onChange={(e) => set("polaritas", e.target.value as Polaritas)} className={inputCls}>
-                    {POLARITAS_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    {polaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 </Field>
               </div>
@@ -2462,7 +2562,7 @@ function ScopeCheckboxField({ options, value, onChange, hideLabel }: {
 function CascadingDropdownRow({
   type, desc, style, allRoles, cascadingMap, selectedInType, onChange,
 }: {
-  type: "FC" | "PC" | "CC";
+  type: string;
   desc: string;
   style: { bg: string; border: string; color: string; pill: string; pillText: string };
   allRoles: { key: string; label: string }[];
@@ -2591,8 +2691,21 @@ function CascadingDropdownRow({
   );
 }
 
-function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel = "Business" }: { onAdd: (item: KPISetting) => void; onClose: () => void; existingItems?: KPISetting[]; sectionLabel?: string }) {
+export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel = "Business" }: { onAdd: (item: KPISetting) => void; onClose: () => void; existingItems?: KPISetting[]; sectionLabel?: string }) {
   const master = useMasterKpi();
+  const corpSectionBobotOpts = master.sectionBobot?.length ? master.sectionBobot : SECTION_BOBOT_OPTIONS;
+  const corpFormulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
+  const corpBobotOpts = master.bobot?.length ? master.bobot : BOBOT_OPTIONS;
+  const corpPolaritasOpts = master.polaritas?.length
+    ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
+    : POLARITAS_OPTIONS;
+  const corpCascTypeOpts = master.cascadingTypes?.length
+    ? master.cascadingTypes
+    : [
+        { value: "FC", description: "Full Cascading" },
+        { value: "PC", description: "Partial Cascading" },
+        { value: "CC", description: "Contributing Cascading" },
+      ];
   const [tab, setTab] = useState<"section" | "subsection">("section");
   const [form, setForm] = useState<CorporateKPIForm>({
     no: "", sectionAlphabet: "", sectionBobot: "", section: "",
@@ -2618,10 +2731,12 @@ function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel
   // Auto-fills sectionBobot when an existing section is selected
   const setSection = (label: string) => {
     const usedCodes = Array.from(new Set(existingItems.map(i => i.section).filter(Boolean)));
-    const code = getMasterSectionCode(label.trim(), master.section, usedCodes);
+    // Section dari baris yang sudah ada / hasil copy KPI (Group) diprioritaskan agar kode section konsisten
+    const existingMatch = existingItems.find((i) => resolveKpiSectionLabel(i).trim().toLowerCase() === label.trim().toLowerCase());
+    const code = existingMatch?.section ?? getMasterSectionCode(label.trim(), master.section, usedCodes);
     // Prefer static metadata bobot (authoritative), fall back to existingItems sectionBobot field
     const metaBobot = (CORP_SECTION_META as Record<string, { label: string; bobot: string; bg: string }>)[code]?.bobot ?? "";
-    const itemBobot = existingItems.find(i => i.section === code)?.sectionBobot ?? "";
+    const itemBobot = existingMatch?.sectionBobot ?? existingItems.find(i => i.section === code)?.sectionBobot ?? "";
     const autoBobot = metaBobot || itemBobot;
     setForm(p => ({
       ...p,
@@ -2724,7 +2839,12 @@ function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel
                     className={inputCls}
                   />
                   <datalist id="corp-section-list">
-                    {master.section.map(label => (
+                    {Array.from(new Set([
+                      ...Array.from(new Map(existingItems.map((i) => [i.section, i])).values())
+                        .sort((a, b) => a.section.localeCompare(b.section))
+                        .map((i) => resolveKpiSectionLabel(i)),
+                      ...master.section,
+                    ])).map(label => (
                       <option key={label} value={label} />
                     ))}
                   </datalist>
@@ -2759,7 +2879,7 @@ function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel
               <Field label="Section Bobot">
                 <select value={form.sectionBobot} onChange={(e) => set("sectionBobot", e.target.value)} className={inputCls}>
                   <option value="">— Section Bobot —</option>
-                  {SECTION_BOBOT_OPTIONS.map(b => <option key={b} value={b}>{b}</option>)}
+                  {corpSectionBobotOpts.map(b => <option key={b} value={b}>{b}</option>)}
                 </select>
                 {form.section && form.sectionBobot && (CORP_SECTION_META as Record<string, { bobot: string }>)[form.section]?.bobot === form.sectionBobot && (
                   <p className="text-[10px] text-blue-600 mt-1 flex items-center gap-1">
@@ -2816,7 +2936,7 @@ function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel
                   {colorMode || ratioMode
                     ? <div className={inputCls + " bg-gray-50 text-[#1A284F] font-semibold cursor-default select-none"}>{form.formula}</div>
                     : <select value={form.formula} onChange={(e) => set("formula", e.target.value)} className={inputCls}>
-                        {FORMULA_OPTIONS.map((f) => <option key={f}>{f}</option>)}
+                        {corpFormulaOpts.map((f) => <option key={f}>{f}</option>)}
                       </select>}
                 </Field>
                 <Field label="Tracking Period">
@@ -2836,12 +2956,12 @@ function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel
                 <Field label="Bobot">
                   <select value={form.bobot} onChange={(e) => set("bobot", e.target.value)} className={inputCls}>
                     <option value="">— Pilih Bobot —</option>
-                    {BOBOT_OPTIONS.map((b) => <option key={b} value={b}>{b}</option>)}
+                    {corpBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
                   </select>
                 </Field>
                 <Field label="Polaritas">
                   <select value={form.polaritas} onChange={(e) => set("polaritas", e.target.value as Polaritas)} className={inputCls}>
-                    {POLARITAS_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    {corpPolaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 </Field>
               </div>
@@ -2910,14 +3030,15 @@ function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel
                     </div>
                     <p className="text-[11px] text-gray-400 -mt-0.5">Pilih Cascading type untuk setiap role. Satu role hanya bisa memiliki satu type.</p>
                     <div className="flex flex-col gap-2">
-                      {(["FC", "PC", "CC"] as const).map((type) => {
-                        const s = CASC_STYLE[type];
+                      {corpCascTypeOpts.map((ct) => {
+                        const type = ct.value;
+                        const s = CASC_STYLE[type] ?? { bg: "#f1f5f9", border: "#cbd5e1", color: "#1e293b", pill: "#e2e8f0", pillText: "#1e293b" };
                         const selectedInType = cascRoles.filter(r => cmap[r.key] === type);
                         return (
                           <CascadingDropdownRow
                             key={type}
                             type={type}
-                            desc={DESC[type]}
+                            desc={ct.description || DESC[type] || type}
                             style={s}
                             allRoles={cascRoles}
                             cascadingMap={cmap}
@@ -3051,13 +3172,24 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
 
 // ─── KPI Table ────────────────────────────────────────────────────────────────
 
-function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascading = false }: {
+export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascading = false, onRenameSection }: {
   items: KPISetting[]; editable: boolean;
+  onRenameSection?: (oldSec: string, newSec: string) => void;
   onDelete?: (id: string) => void;
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
   hideCascading?: boolean;
 }) {
   const master = useMasterKpi();
+  const tablePerspektifOpts = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
+  const tablePeriodeOpts = master.period?.length ? master.period : SATUAN_PERIODE_OPTIONS;
+  const tableFormulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
+  const tableBobotOpts = master.bobot?.length ? master.bobot : BOBOT_OPTIONS;
+  const tablePolaritasOpts = master.polaritas?.length
+    ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
+    : POLARITAS_OPTIONS;
+  const tableTrackingPeriodOpts = master.trackingPeriod?.length
+    ? master.trackingPeriod
+    : ["Bulanan", "Triwulan", "Semesteran", "Tahunan"];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<KPISetting | null>(null);
   const [targetEditItem, setTargetEditItem] = useState<KPISetting | null>(null);
@@ -3067,7 +3199,26 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
 
   const sections = Array.from(new Set(items.map((k) => k.section))).sort();
   const secItems = (sec: string) => items.filter((k) => k.section === sec);
-  const totalCols = (editable ? 17 : 16) - (hideCascading ? 1 : 0);
+  const headerDefs = [
+    { label: "No",                       style: { position: "sticky" as const, left: 0,               zIndex: 20, background: "#1A284F", minWidth: W_NO    } },
+    { label: "Perspektif",               style: { position: "sticky" as const, left: W_NO,            zIndex: 20, background: "#1A284F", minWidth: W_PERSP } },
+    { label: "KPI",                      style: { position: "sticky" as const, left: W_NO + W_PERSP,  zIndex: 20, background: "#1A284F", minWidth: W_KPI   } },
+    { label: "Satuan",                   style: { minWidth: 180  } },
+    { label: "Formula Setahun",          style: { minWidth: 100  } },
+    { label: "Scope",                    style: { minWidth: 140  } },
+    { label: "Bobot",                    style: { minWidth: 72   } },
+    { label: "Definisi",                 style: { minWidth: 240  } },
+    { label: "Source",                   style: { minWidth: 160  } },
+    { label: "Baseline 2025",            style: { minWidth: 96   } },
+    { label: "Target 2026",              style: { minWidth: 96   } },
+    { label: "Polaritas",                style: { minWidth: 96   } },
+    { label: "Detail Formula",           style: { minWidth: 260  } },
+    { label: "Keterangan",               style: { minWidth: 180  } },
+    { label: "Tracking Period",          style: { minWidth: 120  } },
+    ...(!hideCascading ? [{ label: "CASCADING (FC; PC; CC)", style: { minWidth: 100 } }] : []),
+    ...(editable ? [{ label: "Aksi", style: { minWidth: 88 } }] : []),
+  ];
+  const totalCols = headerDefs.length;
 
   const startEdit = (item: KPISetting) => { setEditingId(item.id); setDraft({ ...item }); };
   const cancelEdit = () => { setEditingId(null); setDraft(null); };
@@ -3122,7 +3273,7 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
             style={{ position: "sticky", left: W_NO, zIndex: 10, minWidth: W_PERSP, maxWidth: W_PERSP }}>
             {isEditing
               ? <select value={row.perspektif} onChange={(e) => setD({ perspektif: e.target.value })} className={ci}>
-                  {PERSPEKTIF_OPTIONS.map((p) => <option key={p}>{p}</option>)}
+                  {tablePerspektifOpts.map((p) => <option key={p}>{p}</option>)}
                 </select>
               : <span className={`text-xs font-bold ${PERSP_COLOR[item.perspektif] ?? "text-gray-700"}`}>{item.perspektif}</span>}
           </td>
@@ -3154,7 +3305,7 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
                       </select>
                       <select value={periode} onChange={(e) => combine(unit, e.target.value)} className={ci}>
                         <option value="">— Periode —</option>
-                        {SATUAN_PERIODE_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                        {tablePeriodeOpts.map((p) => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </div>
                   );
@@ -3165,7 +3316,7 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 100 }}>
             {isEditing
               ? <select value={row.formula} onChange={(e) => setD({ formula: e.target.value })} className={ci}>
-                  {FORMULA_OPTIONS.map((f) => <option key={f}>{f}</option>)}
+                  {tableFormulaOpts.map((f) => <option key={f}>{f}</option>)}
                 </select>
               : item.formula}
           </td>
@@ -3179,7 +3330,7 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
           <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 72 }}>
             {isEditing
               ? <select value={row.bobot} onChange={(e) => setD({ bobot: e.target.value })} className={ci}>
-                  {BOBOT_OPTIONS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {tableBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
                 </select>
               : <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{item.bobot}</span>}
           </td>
@@ -3217,7 +3368,7 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
           <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 96 }}>
             {isEditing
               ? <select value={row.polaritas} onChange={(e) => setD({ polaritas: e.target.value as Polaritas })} className={ci}>
-                  {POLARITAS_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  {tablePolaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
               : <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${item.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : item.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
                   {item.polaritas}
@@ -3229,12 +3380,18 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
               ? <textarea rows={3} value={row.detailFormula} onChange={(e) => setD({ detailFormula: e.target.value })} className={ci} />
               : item.detailFormula}
           </td>
+          {/* Keterangan */}
+          <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed" style={{ minWidth: 180 }}>
+            {isEditing
+              ? <textarea rows={3} value={row.keterangan ?? ""} onChange={(e) => setD({ keterangan: e.target.value })} className={ci} />
+              : item.keterangan || "—"}
+          </td>
           {/* Tracking Period */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 120 }}>
             {isEditing
               ? <select value={row.trackingPeriod ?? ""} onChange={(e) => setD({ trackingPeriod: e.target.value })} className={ci}>
                   <option value="">— Pilih —</option>
-                  {["Bulanan", "Triwulan", "Semesteran", "Tahunan"].map((p) => <option key={p}>{p}</option>)}
+                  {tableTrackingPeriodOpts.map((p) => <option key={p}>{p}</option>)}
                 </select>
               : item.trackingPeriod || "—"}
           </td>
@@ -3280,34 +3437,18 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
   return (
     <>
     <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
-      <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1660 + (editable ? 88 : 0)}px` }}>
+      <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1840 + (editable ? 88 : 0)}px` }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
-            {[
-              { label: "No",                       style: { position: "sticky" as const, left: 0,               zIndex: 20, background: "#1A284F", minWidth: W_NO    } },
-              { label: "Perspektif",               style: { position: "sticky" as const, left: W_NO,            zIndex: 20, background: "#1A284F", minWidth: W_PERSP } },
-              { label: "KPI",                      style: { position: "sticky" as const, left: W_NO + W_PERSP,  zIndex: 20, background: "#1A284F", minWidth: W_KPI   } },
-              { label: "Satuan",                   style: { minWidth: 180  } },
-              { label: "Formula Setahun",          style: { minWidth: 100  } },
-              { label: "Scope",                    style: { minWidth: 140  } },
-              { label: "Bobot",                    style: { minWidth: 72   } },
-              { label: "Definisi",                 style: { minWidth: 240  } },
-              { label: "Source",                   style: { minWidth: 160  } },
-              { label: "Baseline 2025",            style: { minWidth: 96   } },
-              { label: "Target 2026",              style: { minWidth: 96   } },
-              { label: "Polaritas",                style: { minWidth: 96   } },
-              { label: "Detail Formula",           style: { minWidth: 260  } },
-              { label: "Tracking Period",          style: { minWidth: 120  } },
-              ...(!hideCascading ? [{ label: "CASCADING (FC; PC; CC)", style: { minWidth: 100 } }] : []),
-              ...(editable ? [{ label: "Aksi", style: { minWidth: 88 } }] : []),
-            ].map(({ label, style }) => (
+            {headerDefs.map(({ label, style }) => (
               <th key={label} className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={style}>{label}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {sections.map((sec, si) => {
-            const isCorp = sections.some((s) => ["C","D","E","F"].includes(s));
+            // Tabel KPI (Personal) yang berisi hasil copy KPI (Group)/(Unit) tetap memakai label default personal
+            const isCorp = sections.some((s) => ["C","D","E","F"].includes(s)) && !items.some((i) => i.copiedFromId);
             const DEFAULT_SEC_LABELS: Record<string, string> = isCorp ? {
               A: "A. K3L Terintegrasi — Bobot 15%",
               B: "B. Finansial & Cost — Bobot 40%",
@@ -3321,7 +3462,11 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
             };
             const bgColors = ["#1565C0","#1976D2","#1E88E5","#2196F3","#42A5F5","#64B5F6"];
             const bg = bgColors[si % bgColors.length];
-            const label = sectionLabelOverrides[sec] ?? DEFAULT_SEC_LABELS[sec] ?? `${sec}.`;
+            const firstSecItem = items.find((k) => k.section === sec);
+            const itemLabel = firstSecItem?.sectionLabel
+              ? `${sec}. ${firstSecItem.sectionLabel}${firstSecItem.sectionBobot ? ` — Bobot ${firstSecItem.sectionBobot}` : ""}`
+              : undefined;
+            const label = sectionLabelOverrides[sec] ?? itemLabel ?? DEFAULT_SEC_LABELS[sec] ?? `${sec}.`;
             const isEditingThisSection = editingSection === sec;
             return (
               <React.Fragment key={sec}>
@@ -3339,7 +3484,19 @@ function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascadin
                           <button onClick={() => setEditingSection(null)} className="text-white/80 hover:text-white text-[10px] font-semibold px-2 py-0.5 rounded bg-white/10 hover:bg-white/20">Done</button>
                         </div>
                       : <div className="flex items-center justify-between px-4 py-2">
-                          <span className="text-white text-xs font-bold uppercase tracking-widest">{label}</span>
+                          <span className="flex items-center gap-2">
+                            {editable && onRenameSection && (
+                              <select
+                                value={sec}
+                                onChange={(e) => onRenameSection(sec, e.target.value)}
+                                title="Ubah urutan section (mis. Section C menjadi Section D)"
+                                className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1 py-0.5 outline-none cursor-pointer"
+                              >
+                                {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}</option>)}
+                              </select>
+                            )}
+                            <span className="text-white text-xs font-bold uppercase tracking-widest">{label}</span>
+                          </span>
                           {editable && onUpdateItem && (
                             <button onClick={() => setEditingSection(sec)} className="p-1 rounded hover:bg-white/20 text-white/70 hover:text-white" title="Edit section label">
                               <Edit3 className="w-3 h-3" />
@@ -3494,7 +3651,9 @@ function CascadingTypePanel({
   );
 }
 
-function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange }: {
+export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection }: {
+  toolbarExtra?: React.ReactNode;
+  onRenameSection?: (oldSec: string, newSec: string) => void;
   items: KPISetting[];
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
   onDeleteItem?: (id: string) => void;
@@ -3578,6 +3737,11 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
   };
 
   const sections = Array.from(new Set(items.map((k) => k.section))).sort();
+  const corpPerspOpts = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
+  const corpPolaritasOpts = master.polaritas?.length
+    ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
+    : POLARITAS_OPTIONS;
+  const corpSecBobotOpts = master.sectionBobot?.length ? master.sectionBobot : SECTION_BOBOT_OPTIONS;
   const COLS = [
     { label: "No",                w: 44  },
     { label: "Perspektif",        w: 100 },
@@ -3592,6 +3756,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
     { label: "Target 2026",       w: 100 },
     { label: "Polaritas",         w: 80  },
     { label: "Detail Formula",    w: 240 },
+    { label: "Keterangan",        w: 180 },
     { label: "Tracking Period",   w: 90  },
     { label: "FC",                w: 150 },
     { label: "PC",                w: 170 },
@@ -3609,10 +3774,10 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
   // Dynamic roles from master KPI cascading (for KPIs added via modal)
   const masterCascRoles = master.cascading.map(c => ({ key: c.value, label: c.description || c.value }));
   const hasCascadedRows = items.some(i => !!i._cascadeType);
-  const cascadingWidth = COLS.slice(14).reduce((s, c) => s + c.w, 0) + 80;
+  const cascadingWidth = COLS.slice(15).reduce((s, c) => s + c.w, 0) + 80;
   const showAksi = !previewMode && !kpiApproved && !submitted && Boolean(onUpdateItem || onDeleteItem);
   const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? 80 : 0) - (hideCascading ? cascadingWidth : 0) + (hasCascadedRows && !previewMode ? 62 : 0);
-  const totalCols = 14
+  const totalCols = 15
     + (showAksi ? 1 : 0)
     + (hasCascadedRows && !previewMode ? 1 : 0)
     + (!previewMode && !hideCascading ? 3 : 0);
@@ -3633,6 +3798,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                 <Edit3 className="w-3.5 h-3.5" /> Edit Mode
               </span>
             )}
+          {toolbarExtra}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {!submitted && !kpiApproved && onAddClick && (
@@ -3679,7 +3845,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                 Cascade
               </th>
             )}
-            {COLS.slice(0, 14).map(({ label, w }) => (
+            {COLS.slice(0, 15).map(({ label, w }) => (
               <th key={label} rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px] align-middle"
                 style={{ minWidth: w }}>{label}</th>
             ))}
@@ -3694,7 +3860,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
             )}
           </tr>
           <tr className="bg-[#243860] text-white">
-            {!previewMode && !hideCascading && COLS.slice(14).map(({ label, w }) => (
+            {!previewMode && !hideCascading && COLS.slice(15).map(({ label, w }) => (
               <th key={label} className="border border-[#1A284F]/30 py-2 px-1.5 text-center font-semibold text-[10px]"
                 style={{ minWidth: w }}>{label}</th>
             ))}
@@ -3706,9 +3872,10 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
             const secRows = items.filter((k) => k.section === sec);
             // For KPIs added via the new modal, derive header from item fields
             const firstItem = secRows[0];
-            const alphabet  = staticMeta ? `${sec}.` : (firstItem?.sectionAlphabet ?? sec + ".");
-            const secLabel  = staticMeta ? staticMeta.label : (firstItem?.sectionLabel ?? sec);
-            const bobot     = staticMeta ? staticMeta.bobot : (firstItem?.sectionBobot ?? "—");
+            const alphabet  = `${sec}.`;
+            const secLabel  = firstItem?.sectionLabel || staticMeta?.label || sec;
+            const bobot     = firstItem?.sectionBobot || staticMeta?.bobot || "—";
+            const canRename = Boolean(onRenameSection) && !previewMode && !submitted && !kpiApproved;
             const customIdx = sections.filter(s => !CORP_SECTION_META[s]).indexOf(sec);
             const bg        = staticMeta ? staticMeta.bg : CUSTOM_SECTION_BG_PALETTE[customIdx % CUSTOM_SECTION_BG_PALETTE.length];
             return (
@@ -3720,7 +3887,19 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                       {/* Section name — editable for CC cascade only */}
                       {parentSectionCascadeMap?.[sec] === "CC" ? (
                         <span className="flex items-center gap-1.5">
-                          <span className="opacity-60 text-[11px]">{alphabet}</span>
+                          {canRename ? (
+                            <select
+                              value={sec}
+                              onChange={(e) => onRenameSection?.(sec, e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              title="Ubah urutan section"
+                              className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1 py-0.5 outline-none cursor-pointer"
+                            >
+                              {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}.</option>)}
+                            </select>
+                          ) : (
+                            <span className="opacity-60 text-[11px]">{alphabet}</span>
+                          )}
                           <input
                             value={editedSectionLabels[sec] ?? secLabel}
                             onChange={(e) => { if (!submitted && !kpiApproved) setEditedSectionLabels(p => ({ ...p, [sec]: e.target.value })); }}
@@ -3730,7 +3909,22 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                           />
                         </span>
                       ) : (
-                        <span>{alphabet} {editedSectionLabels[sec] ?? secLabel}</span>
+                        <span className="flex items-center gap-1.5">
+                          {canRename ? (
+                            <select
+                              value={sec}
+                              onChange={(e) => onRenameSection?.(sec, e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              title="Ubah urutan section (mis. Section C menjadi Section D)"
+                              className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1 py-0.5 outline-none cursor-pointer"
+                            >
+                              {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}.</option>)}
+                            </select>
+                          ) : (
+                            <span>{alphabet}</span>
+                          )}
+                          <span>{editedSectionLabels[sec] ?? secLabel}</span>
+                        </span>
                       )}
                       {/* Section bobot — editable in pak-anton if PC/CC, read-only if FC */}
                       {parentSectionCascadeMap?.[sec] ? (
@@ -3749,7 +3943,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                               className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1.5 py-0.5 outline-none cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                               onClick={(e) => e.stopPropagation()}
                             >
-                              {SECTION_BOBOT_OPTIONS.map((o) => <option key={o} value={o} style={{ color: "#1A284F", background: "#fff" }}>{o}</option>)}
+                              {corpSecBobotOpts.map((o) => <option key={o} value={o} style={{ color: "#1A284F", background: "#fff" }}>{o}</option>)}
                             </select>
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: CASCADING_CELL_BG[parentSectionCascadeMap[sec]], color: CASCADING_CELL_COLOR[parentSectionCascadeMap[sec]], border: `1px solid ${CASCADING_CELL_BORDER[parentSectionCascadeMap[sec]]}` }}>
                               {parentSectionCascadeMap[sec]}
@@ -3820,7 +4014,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                       <td className="border border-gray-200 py-2 px-1.5">
                         {isEditing && isFieldEditable("perspektif")
                           ? <select value={row.perspektif} onChange={(e) => setDraftField({ perspektif: e.target.value })} className={cellInput}>
-                              {PERSPEKTIF_OPTIONS.map((p) => <option key={p}>{p}</option>)}
+                              {corpPerspOpts.map((p) => <option key={p}>{p}</option>)}
                             </select>
                           : <span className={`text-[11px] font-semibold ${PERSP_COLOR[row.perspektif] ?? "text-gray-700"}`}>{row.perspektif}</span>}
                       </td>
@@ -3915,7 +4109,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("polaritas")
                           ? <select value={row.polaritas} onChange={(e) => setDraftField({ polaritas: e.target.value as Polaritas })} className={cellInput}>
-                              {POLARITAS_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                              {corpPolaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                             </select>
                           : <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
                               row.polaritas === "Maximize" ? "bg-blue-50 text-blue-700"
@@ -3928,6 +4122,12 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                         {isEditing && isFieldEditable("detailFormula")
                           ? <textarea rows={3} value={row.detailFormula} onChange={(e) => setDraftField({ detailFormula: e.target.value })} className={cellInput} />
                           : <span className="text-[11px] text-gray-600 leading-relaxed">{row.detailFormula || "—"}</span>}
+                      </td>
+                      {/* Keterangan */}
+                      <td className="border border-gray-200 py-2 px-1.5">
+                        {isEditing && isFieldEditable("keterangan")
+                          ? <textarea rows={3} value={row.keterangan ?? ""} onChange={(e) => setDraftField({ keterangan: e.target.value })} className={cellInput} />
+                          : <span className="text-[11px] text-gray-600 whitespace-pre-line leading-relaxed">{row.keterangan || "—"}</span>}
                       </td>
                       {/* Tracking Period */}
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
@@ -3947,7 +4147,7 @@ function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSu
                         const getRoleValue = (key: string) =>
                           hasCascMap
                             ? (row.cascadingMap?.[key] ?? "")
-                            : ((row as Record<string, unknown>)[key] as string) ?? "";
+                            : ((row as unknown as Record<string, unknown>)[key] as string) ?? "";
                         return isEditing ? (
                           // Edit mode: one cell per type (FC/PC/CC) with search + checkbox list
                           <>
@@ -4134,23 +4334,140 @@ function readStoredBusinessKpiItems(scopeKey: string): KPISetting[] | null {
     const raw = localStorage.getItem("pa_kpi_business_by_scope_v1");
     const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
     if (Array.isArray(map[scopeKey]) && map[scopeKey].length > 0) return map[scopeKey];
+    if (scopeKey === "unit-PT RSUP ASD" && Array.isArray(map["unit-ASD"]) && map["unit-ASD"].length > 0) {
+      return map["unit-ASD"];
+    }
   } catch {
     // ignore
   }
   return null;
 }
 
+const SECTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+/** Nama section sebuah baris KPI (label tersimpan pada item → metadata statis KPI Group → kode). */
+export function resolveKpiSectionLabel(item?: Pick<KPISetting, "section" | "sectionLabel">): string {
+  if (!item) return "";
+  return item.sectionLabel || CORP_SECTION_META[item.section]?.label || `Section ${item.section}`;
+}
+
+/**
+ * Menyalin baris KPI sumber (KPI (Group) / KPI (Unit)) ke format tujuan:
+ * - Section: memakai section tujuan dengan nama sama, atau kode asli bila belum dipakai, atau huruf berikutnya.
+ * - Kolom yang tidak ada di format tujuan dikosongkan (mis. kolom Cascading untuk KPI (Personal)).
+ */
+/** Nama section untuk tabel KPI (Personal): label item → default Objective/Functional → kode. */
+export function resolvePersonalSectionLabel(item?: Pick<KPISetting, "section" | "sectionLabel">): string {
+  if (!item) return "";
+  const def = PERSONAL_SECTION_OPTIONS.find((o) => o.value === item.section)?.label.replace(/^[A-Z]+\s*—\s*/, "");
+  return item.sectionLabel || def || `Section ${item.section}`;
+}
+
+export function mapCopiedKpiRows(source: KPISetting[], target: KPISetting[], toPersonal: boolean): KPISetting[] {
+  const targetLabel = (t: KPISetting) => (toPersonal ? resolvePersonalSectionLabel(t) : resolveKpiSectionLabel(t));
+  const usedCodes = new Set(target.map((t) => t.section));
+  const codeByKey = new Map<string, string>();
+  const takeCode = (src: KPISetting): string => {
+    const label = resolveKpiSectionLabel(src);
+    const key = `${src.section}__${label}`;
+    const cached = codeByKey.get(key);
+    if (cached) return cached;
+    const sameLabel = target.find((t) => targetLabel(t).trim().toLowerCase() === label.trim().toLowerCase());
+    let code = sameLabel?.section;
+    if (!code) {
+      code = !usedCodes.has(src.section) ? src.section : SECTION_LETTERS.find((l) => !usedCodes.has(l)) ?? src.section;
+    }
+    usedCodes.add(code);
+    codeByKey.set(key, code);
+    return code;
+  };
+  const maxNo = target.reduce((m, t) => Math.max(m, parseInt(String(t.no), 10) || 0), 0);
+  const stamp = Date.now();
+  return source.map((src, idx) => {
+    const code = takeCode(src);
+    const base: KPISetting = {
+      id: `copy-${stamp}-${idx}`,
+      no: String(maxNo + idx + 1),
+      section: code,
+      sectionAlphabet: `${code}.`,
+      sectionLabel: resolveKpiSectionLabel(src),
+      sectionBobot: src.sectionBobot || CORP_SECTION_META[src.section]?.bobot || "",
+      perspektif: src.perspektif ?? "",
+      kpi: src.kpi ?? "",
+      satuan: src.satuan ?? "",
+      formula: src.formula ?? "",
+      bobot: src.bobot ?? "",
+      definisi: src.definisi ?? "",
+      source: src.source ?? "",
+      baseline2025: src.baseline2025 ?? "",
+      target2026: src.target2026 ?? "",
+      polaritas: src.polaritas ?? "Maximize",
+      detailFormula: src.detailFormula ?? "",
+      keterangan: src.keterangan ?? "",
+      monthlyTargets: src.monthlyTargets ? { ...src.monthlyTargets } : {},
+      colorIndicator: src.colorIndicator ?? false,
+      indicatorMode: src.indicatorMode ?? "numeric",
+      ratioPositiveLabel: src.ratioPositiveLabel,
+      ratioNegativeLabel: src.ratioNegativeLabel,
+      scope: src.scope ?? "",
+      trackingPeriod: src.trackingPeriod ?? "",
+      copiedFromId: src.id,
+    };
+    if (toPersonal) return base;
+    return { ...base, coo: "", gmVgmIndustry: "", gmVgmPerkebunan: "", gmAsd: "", gmRstm: "", gmGhs: "", cascadingMap: {} };
+  });
+}
+
+/** Ubah urutan section (mis. C → D). Bila kode tujuan sudah dipakai, kedua section ditukar. */
+export function renameKpiSection(items: KPISetting[], oldSec: string, newSec: string, personal = false): KPISetting[] {
+  if (!newSec || oldSec === newSec) return items;
+  const personalBobot = (sec: string) => PERSONAL_SECTION_OPTIONS.find((o) => o.value === sec)?.bobot ?? "";
+  const pin = (i: KPISetting): KPISetting => ({
+    ...i,
+    sectionLabel: personal ? resolvePersonalSectionLabel(i) : resolveKpiSectionLabel(i),
+    sectionBobot: i.sectionBobot || (personal ? personalBobot(i.section) : CORP_SECTION_META[i.section]?.bobot) || "",
+  });
+  return items.map((i) => {
+    if (i.section === oldSec) return { ...pin(i), section: newSec, sectionAlphabet: `${newSec}.` };
+    if (i.section === newSec) return { ...pin(i), section: oldSec, sectionAlphabet: `${oldSec}.` };
+    return i;
+  });
+}
+
+/** Sumber copy KPI (Group) / KPI (Unit) berdasarkan profil pemilik KPI (data tersimpan di backend, fallback format Master KPI). */
+function buildKpiCopySources(owner: ManagedUser): { group: KpiCopySource; unit: KpiCopySource } {
+  const fmt = () => loadMasterKpiFormats<KPISetting>({ group: CORPORATE_KPI, unit: CORPORATE_KPI, personal: PERSONAL_KPI });
+  return {
+    group: {
+      label: "KPI (Group)",
+      load: () => readStoredBusinessKpiItems(`corporate-${getGroupNameForUnit(owner.company)}`) ?? fmt().group,
+    },
+    unit: {
+      label: "KPI (Unit)",
+      load: () => readStoredBusinessKpiItems(`unit-${owner.company}`) ?? (usesDemoSampleData(owner) ? fmt().unit : []),
+    },
+  };
+}
+
 function readStoredBusinessKpiStatus(scopeKey: string): { submitted: boolean; approved: boolean } {
   try {
     const raw = localStorage.getItem("pa_kpi_business_status_v1");
     const map = raw ? (JSON.parse(raw) as Record<string, { submitted?: boolean; approved?: boolean }>) : {};
-    return { submitted: Boolean(map[scopeKey]?.submitted), approved: Boolean(map[scopeKey]?.approved) };
+    const entry = map[scopeKey] ?? (scopeKey === "unit-PT RSUP ASD" ? map["unit-ASD"] : undefined);
+    return { submitted: Boolean(entry?.submitted), approved: Boolean(entry?.approved) };
   } catch {
     return { submitted: false, approved: false };
   }
 }
 
-function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divisionApproved = true, useValidateTerms = false, onTabStatusChange, onItemsChange, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, ownerUser, businessScopeKey, delegationAccess, actorName, workspaceLabel }: {
+interface KpiCopySource {
+  /** Label tag & sumber, mis. "KPI (Group)" atau "KPI (Unit)" */
+  label: string;
+  load: () => KPISetting[];
+}
+
+function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divisionApproved = true, useValidateTerms = false, onTabStatusChange, onItemsChange, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, ownerUser, businessScopeKey, delegationAccess, actorName, workspaceLabel, copySource }: {
+  copySource?: KpiCopySource;
   initialItems: KPISetting[]; isPersonal: boolean; isCorporate?: boolean; hideCascading?: boolean; divisionApproved?: boolean; useValidateTerms?: boolean;
   onTabStatusChange?: (s: TabStatus) => void;
   onItemsChange?: (items: KPISetting[]) => void;
@@ -4256,6 +4573,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   }, [items]);
   const [editingItem, setEditingItem] = useState<KPISetting | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [copySourceItems, setCopySourceItems] = useState<KPISetting[]>([]);
+  const handleRenameSection = (oldSec: string, newSec: string) =>
+    setItems((prev) => renameKpiSection(prev, oldSec, newSec, !isCorporate));
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const readPersonalWorkflowState = () => {
@@ -4375,8 +4696,8 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   const handleExport = () => {
     if (isCorporate) {
-      const headers = ["No","Section","Perspektif","KPI","Satuan","Formula Setahun","Scope","Bobot","Definisi","Source","Polaritas","Detail Formula","Baseline 2025","Target 2026","Tracking Period","COO","GM Industry","GM Perkebunan","GM ASD","GM RSTM","GM GHS"];
-      const rows = items.map((i) => [i.no, `${i.section}. ${CORP_SECTION_META[i.section]?.label ?? i.section}`, i.perspektif, i.kpi, i.satuan, i.formula, i.scope ?? "", i.bobot, i.definisi, i.source, i.polaritas, i.detailFormula, i.baseline2025, i.target2026, i.trackingPeriod ?? "", i.coo ?? "", i.gmVgmIndustry ?? "", i.gmVgmPerkebunan ?? "", i.gmAsd ?? "", i.gmRstm ?? "", i.gmGhs ?? ""]);
+      const headers = ["No","Section","Perspektif","KPI","Satuan","Formula Setahun","Scope","Bobot","Definisi","Source","Polaritas","Detail Formula","Keterangan","Baseline 2025","Target 2026","Tracking Period","COO","GM Industry","GM Perkebunan","GM ASD","GM RSTM","GM GHS"];
+      const rows = items.map((i) => [i.no, `${i.section}. ${CORP_SECTION_META[i.section]?.label ?? i.section}`, i.perspektif, i.kpi, i.satuan, i.formula, i.scope ?? "", i.bobot, i.definisi, i.source, i.polaritas, i.detailFormula, i.keterangan ?? "", i.baseline2025, i.target2026, i.trackingPeriod ?? "", i.coo ?? "", i.gmVgmIndustry ?? "", i.gmVgmPerkebunan ?? "", i.gmAsd ?? "", i.gmRstm ?? "", i.gmGhs ?? ""]);
       exportXLSX("KPI_Bisnis_RSUP_Group_2026.xlsx", headers, rows);
     } else {
       const headers = ["No","Section","Perspektif","KPI","Satuan","Formula","Bobot","Definisi","Source","Baseline 2025","Target 2026","Polaritas","Detail Formula","Keterangan"];
@@ -4474,6 +4795,16 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 <span className={`text-sm font-bold ${totalBobot === 100 ? "text-green-700" : "text-orange-700"}`}>{totalBobot}%</span>
                 {totalBobot !== 100 && <span className="text-[10px] text-orange-600">(should be 100%)</span>}
               </div>
+              {copySource && (
+                <button
+                  type="button"
+                  onClick={() => { setCopySourceItems(copySource.load()); setShowCopyModal(true); }}
+                  title={`Lihat tabel ${copySource.label} & copy baris KPI ke tabel ini`}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors"
+                >
+                  <Layers className="w-3.5 h-3.5" /> {copySource.label}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -4623,6 +4954,17 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           parentSectionCascadeMap={parentSectionCascadeMap}
           editedSectionBobots={editedSectionBobots}
           onSectionBobotChange={canEdit ? onSectionBobotChange : undefined}
+          onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
+          toolbarExtra={copySource ? (
+            <button
+              type="button"
+              onClick={() => { setCopySourceItems(copySource.load()); setShowCopyModal(true); }}
+              title={`Lihat tabel ${copySource.label} & copy baris KPI ke tabel ini`}
+              className="flex items-center gap-1.5 text-xs font-semibold text-violet-700 bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-full hover:bg-violet-100 transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5" /> {copySource.label}
+            </button>
+          ) : undefined}
         />
       ) : (
         <KPISettingTable
@@ -4631,6 +4973,22 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           onDelete={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
           onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
           hideCascading={hideCascading}
+          onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
+        />
+      )}
+      {showCopyModal && copySource && (
+        <CopyKpiFromSourceModal
+          sourceLabel={copySource.label}
+          targetLabel={isCorporate ? (workspaceLabel?.includes("Unit") || effectiveScopeKey.startsWith("unit") ? "KPI (Unit)" : "KPI Business") : "KPI (Personal)"}
+          sourceItems={copySourceItems}
+          copiedSourceIds={new Set(items.map((i) => i.copiedFromId).filter((v): v is string => Boolean(v)))}
+          resolveSectionLabel={(i) => resolveKpiSectionLabel(i)}
+          canCopy={canCreate && !submitted && !kpiApproved && !isViewOnly}
+          onCopy={(rows) => {
+            setItems((prev) => [...prev, ...mapCopiedKpiRows(rows, prev, !isCorporate)]);
+            toast.success(`${rows.length} KPI dari ${copySource.label} berhasil di-copy. Setiap baris dapat diedit atau dihapus.`);
+          }}
+          onClose={() => setShowCopyModal(false)}
         />
       )}
       {!isCorporate && (
@@ -4748,7 +5106,29 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
   const [corporateTabStatus, setCorporateTabStatus] = useState<TabStatus>("idle");
   const [pakAntonTabStatus, setPakAntonTabStatus]   = useState<TabStatus>("idle");
   const [pakAmirTabStatus, setPakAmirTabStatus]     = useState<TabStatus>("idle");
-  const [businessItems, setBusinessItems]           = useState<KPISetting[]>(CORPORATE_KPI);
+  const copySources = buildKpiCopySources(activeUser);
+  const masterFormats = loadMasterKpiFormats<KPISetting>({
+    group: CORPORATE_KPI,
+    unit: CORPORATE_KPI,
+    personal: PERSONAL_KPI,
+  });
+  const [businessItems, setBusinessItems]           = useState<KPISetting[]>(() => masterFormats.group);
+  useEffect(() => {
+    const onFmt = () => {
+      const latest = loadMasterKpiFormats<KPISetting>({
+        group: CORPORATE_KPI,
+        unit: CORPORATE_KPI,
+        personal: PERSONAL_KPI,
+      });
+      setBusinessItems(latest.group);
+    };
+    window.addEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, onFmt);
+    window.addEventListener("pa-db-hydrated", onFmt);
+    return () => {
+      window.removeEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, onFmt);
+      window.removeEventListener("pa-db-hydrated", onFmt);
+    };
+  }, []);
   // Pak Anton's live items (after edits/deletions) – used to cascade to Pak Made
   const [pakAntonCurrentItems, setPakAntonCurrentItems] = useState<KPISetting[]>([]);
   // Section-level cascade assignments: section letter → "FC"|"PC"|"CC"|""
@@ -4765,7 +5145,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       return (val as "FC" | "PC" | "CC") || null;
     }
     // legacy typed items: coo field (COO = Pak Anton)
-    const v = (item as Record<string, unknown>)[SUPERVISOR_ROLE_KEY] as string | undefined;
+    const v = (item as unknown as Record<string, unknown>)[SUPERVISOR_ROLE_KEY] as string | undefined;
     return (v as "FC" | "PC" | "CC") || null;
   };
 
@@ -4837,7 +5217,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
         ?? item.cascadingMap["gmVgmIndustry"];
       return (val as "FC" | "PC" | "CC") || null;
     }
-    const v = (item as Record<string, unknown>)[PAK_MADE_ROLE_KEY] as string | undefined;
+    const v = (item as unknown as Record<string, unknown>)[PAK_MADE_ROLE_KEY] as string | undefined;
     return (v as "FC" | "PC" | "CC") || null;
   };
 
@@ -4948,7 +5328,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       {activeTab === "corporate" && (
         <KPISection
           key="corporate"
-          initialItems={CORPORATE_KPI}
+          initialItems={masterFormats.group}
           isPersonal={false}
           isCorporate={true}
           useValidateTerms={!isDirectorMode}
@@ -4960,7 +5340,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       )}
       {activeTab === "pak-anton" && (
         <KPISection
-          key={`pak-anton-${corpValidated ? "validated" : "pending"}-${businessItems.map(i => `${i.id}:${(i as Record<string,unknown>)["coo"] ?? ""}:${JSON.stringify(i.cascadingMap ?? {})}`).join("|")}-${JSON.stringify(sectionCascadeMap)}`}
+          key={`pak-anton-${corpValidated ? "validated" : "pending"}-${businessItems.map(i => `${i.id}:${(i as unknown as Record<string,unknown>)["coo"] ?? ""}:${JSON.stringify(i.cascadingMap ?? {})}`).join("|")}-${JSON.stringify(sectionCascadeMap)}`}
           initialItems={pakAntonInitialItems}
           isPersonal={false}
           isCorporate={true}
@@ -4977,11 +5357,14 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       {activeTab === "corporate-unit" && (
         <KPISection
           key={`corporate-unit-${isGmMode ? "gm" : pakAntonValidated ? "validated" : "pending"}-${pakAmirInitialItems.map(i => i.id).join("|")}`}
-          initialItems={isGmMode ? CORPORATE_KPI : pakAmirInitialItems}
+          initialItems={isGmMode ? (usesDemoSampleData(activeUser) ? masterFormats.unit : []) : pakAmirInitialItems}
           isPersonal={false}
           isCorporate={true}
           useValidateTerms={false}
+          businessScopeKey={isGmMode ? `unit-${activeUser.company}` : "corporate-unit-RSUP"}
           onTabStatusChange={setPakAmirTabStatus}
+          copySource={copySources.group}
+          workspaceLabel="KPI (Unit)"
         />
       )}
       {activeTab === "division" && (
@@ -4997,13 +5380,14 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       {activeTab === "personal" && (
         <KPISection
           key="personal"
-          initialItems={personalOnly || isDirectorMode || isGmMode ? PERSONAL_KPI : []}
+          initialItems={(personalOnly || isDirectorMode || isGmMode) && usesDemoSampleData(activeUser) ? masterFormats.personal : []}
           isPersonal={true}
           isCorporate={false}
           divisionApproved={personalOnly || isDirectorMode || isGmMode ? true : divisionApproved}
           useValidateTerms={false}
           hideCascading={personalOnly || isDirectorMode || isGmMode}
           onTabStatusChange={setPersonalTabStatus}
+          copySource={isDirectorMode ? copySources.group : isGmMode ? copySources.unit : undefined}
         />
       )}
     </div>
@@ -5052,7 +5436,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
       const grp = getGroupNameForUnit(owner.company);
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-group`,
-        label: `KPI Group (${grp}) · ${owner.name}`,
+        label: `KPI (Group) · ${grp} · ${owner.name}`,
         kind: "group",
         owner,
         access: d.access,
@@ -5060,7 +5444,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
       });
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-personal`,
-        label: `KPI Personal · ${owner.name}`,
+        label: `KPI (Personal) · ${owner.name}`,
         kind: "personal",
         owner,
         access: d.access,
@@ -5068,7 +5452,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
     } else if (owner.role === "GM") {
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-unit`,
-        label: `KPI Unit (${owner.company}) · ${owner.name}`,
+        label: `KPI (Unit) · ${owner.company} · ${owner.name}`,
         kind: "unit",
         owner,
         access: d.access,
@@ -5076,7 +5460,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
       });
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-personal`,
-        label: `KPI Personal · ${owner.name}`,
+        label: `KPI (Personal) · ${owner.name}`,
         kind: "personal",
         owner,
         access: d.access,
@@ -5084,7 +5468,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
     } else {
       delegatedTabs.push({
         id: `deleg-${owner.employeeId}-personal`,
-        label: `KPI Personal · ${owner.name}`,
+        label: `KPI (Personal) · ${owner.name}`,
         kind: "personal",
         owner,
         access: d.access,
@@ -5097,7 +5481,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
     const grp = getGroupNameForUnit(activeUser.company);
     selfTabs.push({
       id: `self-${activeUser.employeeId}-group`,
-      label: `KPI Group (${grp}) · Saya (${activeUser.name})`,
+      label: `KPI (Group) · ${grp} · Saya (${activeUser.name})`,
       kind: "group",
       owner: activeUser,
       businessScopeKey: `corporate-${grp}`,
@@ -5105,7 +5489,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
   } else if (!personalOnlyProp && activeUser.role === "GM") {
     selfTabs.push({
       id: `self-${activeUser.employeeId}-unit`,
-      label: `KPI Unit (${activeUser.company}) · Saya (${activeUser.name})`,
+      label: `KPI (Unit) · ${activeUser.company} · Saya (${activeUser.name})`,
       kind: "unit",
       owner: activeUser,
       businessScopeKey: `unit-${activeUser.company}`,
@@ -5113,7 +5497,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
   }
   selfTabs.push({
     id: `self-${activeUser.employeeId}-personal`,
-    label: `KPI Personal · Saya (${activeUser.name})`,
+    label: `KPI (Personal) · Saya (${activeUser.name})`,
     kind: "personal",
     owner: activeUser,
   });
@@ -5170,9 +5554,24 @@ function DelegatedKPISettingTabsView({
       </div>
 
       {current && (
+        (() => {
+          const fmt = loadMasterKpiFormats<KPISetting>({
+            group: CORPORATE_KPI,
+            unit: CORPORATE_KPI,
+            personal: PERSONAL_KPI,
+          });
+          // DEMO: KPI (Group) tetap sebagai dasar KPI Utama; KPI (Unit)/(Personal) kosong untuk non-Administrator
+          const ownerUsesDemo = usesDemoSampleData(current.owner);
+          const initByKind =
+            current.kind === "personal"
+              ? ownerUsesDemo ? fmt.personal : []
+              : current.kind === "unit"
+              ? ownerUsesDemo ? fmt.unit : []
+              : fmt.group;
+          return (
         <KPISection
           key={current.id}
-          initialItems={current.kind === "personal" ? PERSONAL_KPI : CORPORATE_KPI}
+          initialItems={initByKind}
           isPersonal={current.kind === "personal"}
           isCorporate={current.kind !== "personal"}
           divisionApproved={true}
@@ -5183,6 +5582,15 @@ function DelegatedKPISettingTabsView({
           delegationAccess={current.access}
           actorName={actorName}
           workspaceLabel={current.label}
+          copySource={(() => {
+            const src = buildKpiCopySources(current.owner);
+            if (current.kind === "unit") return src.group;
+            if (current.kind === "personal") {
+              if (isDirectorRoleOrGrouping(current.owner)) return src.group;
+              if (current.owner.role === "GM") return src.unit;
+            }
+            return undefined;
+          })()}
           sectionCascadeMap={sectionCascadeByTab[current.id] ?? {}}
           onSectionCascadeChange={(sec, val) =>
             setSectionCascadeByTab((prev) => ({
@@ -5192,6 +5600,8 @@ function DelegatedKPISettingTabsView({
           }
           onTabStatusChange={(st) => setStatusByTab((prev) => ({ ...prev, [current.id]: st }))}
         />
+          );
+        })()
       )}
     </div>
   );

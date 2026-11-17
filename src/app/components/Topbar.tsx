@@ -1,9 +1,11 @@
 // @refresh reset
-import { Bell, User, LogOut, ChevronDown, Clock, ArrowRight, X, CheckCheck, Search, LayoutDashboard, BarChart2, CalendarCheck, Settings, FileText, ShieldCheck, Database, PanelLeftClose, PanelLeftOpen, KeyRound, Eye, EyeOff, CheckCircle2, ShieldAlert } from "lucide-react";
+import { Bell, User, LogOut, ChevronDown, Clock, ArrowRight, X, CheckCheck, Search, LayoutDashboard, BarChart2, CalendarCheck, Settings, FileText, ShieldCheck, Database, PanelLeftClose, PanelLeftOpen, KeyRound, Eye, EyeOff, CheckCircle2, ShieldAlert, RotateCcw } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router";
 import { STAFF_PROFILE, SUPERVISOR_PROFILE } from "../store/profileStore";
 import {
+  canCancelTransaction,
+  canSwitchAccount,
   logoutCurrentUser,
   resolvePortalPathForRole,
   switchActiveUserByEmployeeId,
@@ -19,6 +21,7 @@ import {
   validateNewPasswordPolicy,
 } from "../store/loginManagementStore";
 import { TrialUserPicker } from "./TrialUserPicker";
+import { CancelTransactionModal } from "./CancelTransactionModal";
 
 // ─── Search data ──────────────────────────────────────────────────────────────
 
@@ -341,6 +344,9 @@ export function Topbar({
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [pwdError, setPwdError] = useState("");
   const [pwdSuccessPopupOpen, setPwdSuccessPopupOpen] = useState(false);
+  const [cancelTxOpen, setCancelTxOpen] = useState(false);
+  const showSwitchAccount = canSwitchAccount();
+  const showCancelTransaction = canCancelTransaction();
   const [, setPhotoTick] = useState(0);
   useEffect(() => {
     const bump = () => setPhotoTick((t) => t + 1);
@@ -627,6 +633,20 @@ export function Topbar({
                 <KeyRound className="w-4 h-4 text-indigo-500" />
                 Ganti Password
               </button>
+              {showCancelTransaction && (
+                <button
+                  onClick={() => {
+                    setDropOpen(false);
+                    setCancelTxOpen(true);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-rose-50 transition-colors border-t border-gray-50"
+                >
+                  <RotateCcw className="w-4 h-4 text-rose-500" />
+                  <span className="flex-1 text-left">Cancel Transaction</span>
+                  <span className="rounded-full bg-rose-50 border border-rose-200 px-1.5 py-0.5 text-[9px] font-semibold text-rose-600">Demo</span>
+                </button>
+              )}
+              {showSwitchAccount && (
               <div className="px-4 py-2.5 border-t border-gray-100">
                 <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">
                   Pindah Akun (User Management)
@@ -646,6 +666,7 @@ export function Topbar({
                   }}
                 />
               </div>
+              )}
               <div className="h-px bg-gray-100" />
               <button
                 onClick={() => {
@@ -673,6 +694,10 @@ export function Topbar({
           </div>
         </button>
       </div>
+
+      {cancelTxOpen && showCancelTransaction && (
+        <CancelTransactionModal onClose={() => setCancelTxOpen(false)} />
+      )}
 
       {/* Modal Ganti Password dari Menu Profil Kanan Atas */}
       {changePwdModalOpen && (

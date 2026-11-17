@@ -893,7 +893,7 @@ export function HRModuleActivation() {
           {[
             {
               step: "1. KPI Group → KPI Unit & KPI Individu Direktur",
-              desc: "KPI Group RSUP Group dibuat oleh Direktur Operasional PT RSUP (Industry). KPI Unit (GM PT RSUP Perkebunan, PT RSTM, PT GHS, ASD) & KPI Individu Direktur hanya bisa dibuat jika KPI Group sudah Validated atau Checklist Paralel aktif.",
+              desc: "KPI Group RSUP Group dibuat oleh Direktur Operasional PT RSUP (Industry). KPI Unit (GM PT RSUP Perkebunan, PT RSTM, PT GHS, PT RSUP ASD) & KPI Individu Direktur hanya bisa dibuat jika KPI Group sudah Validated atau Checklist Paralel aktif.",
               validatedKey: "kpiGroupValidated" as const,
               validatedLabel: "Status KPI Group: Validated",
               parallelKey: "allowParallelKpiUnit" as const,

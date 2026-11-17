@@ -1,11 +1,11 @@
 {
-  "title": "Performance Appraisal System",
+  "title": "One Performance System",
   "description": "Creates interactive prototype flows based on user scenarios and design guides to streamline UX design and improve user experience planning.",
   "robots": {
     "index": false
   },
   "icons": {
-    "icon": "/favicon.png"
+    "icon": "/.figma/make/favicon.png"
   },
   "accessibility": {
     "addBypassLinks": false,

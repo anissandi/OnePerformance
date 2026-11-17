@@ -929,7 +929,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                       return (
                         <NavLink
                           key={sIdx}
-                          to={sub.to}
+                          to={sub.to || ""}
                           className={({ isActive }) =>
                             `flex items-center gap-2 pl-12 pr-4 py-2.5 text-xs font-medium rounded-xl transition-colors ${
                               isActive ? "bg-[#1A284F] text-white shadow-sm" : "text-gray-500 hover:text-gray-800 hover:bg-gray-100/50"

@@ -38,7 +38,7 @@ const _UNUSED_PROJ_DATA: ProjRecord[] = [
   { employeeId: "E011", scope: "SS",  role: "Ideator",     title: "Digitalisasi Arsip Kepegawaian",       detail: "Konversi arsip fisik kepegawaian ke sistem digital untuk mempermudah akses dan pengelolaan dokumen.",    startDate: "2026-04-01", finishDate: "2026-09-30", progressStatus: "Submitted",   projectScore: null },
   { employeeId: "E012", scope: "QCC", role: "Ideator",     title: "Zero Defect Program Packaging",        detail: "Program zero defect pada lini packaging melalui penerapan quality gate dan kontrol statistik proses.",   startDate: "2026-01-15", finishDate: "2026-06-30", progressStatus: "In Progress", projectScore: 82   },
   { employeeId: "E013", scope: "SS",  role: "Team Leader", title: "Efisiensi Proses Rekrutmen Internal",  detail: "Penyederhanaan alur rekrutmen internal untuk mempercepat pemenuhan kebutuhan SDM di seluruh unit.",       startDate: "2026-03-01", finishDate: "2026-08-31", progressStatus: "In Progress", projectScore: null },
-  { employeeId: "E014", scope: "QCC", role: "Anggota",     title: "Standarisasi SOP Penilaian Kinerja",   detail: "Penyusunan dan standarisasi SOP penilaian kinerja agar selaras antar unit dan mudah diaudit.",           startDate: "2026-04-15", finishDate: "2026-09-30", progressStatus: "Submitted",   projectScore: null },
+  { employeeId: "E014", scope: "QCC", role: "Member",      title: "Standarisasi SOP Penilaian Kinerja",   detail: "Penyusunan dan standarisasi SOP penilaian kinerja agar selaras antar unit dan mudah diaudit.",           startDate: "2026-04-15", finishDate: "2026-09-30", progressStatus: "Submitted",   projectScore: null },
 ];
 
 const SCOPE_COLOR: Record<ProjectScope, string> = {

@@ -200,7 +200,7 @@ export function ModuleApprovalStatusBar({
         },
         {
           title: "3. Approver 1",
-          actor: a1Dec?.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+          actor: a1Dec?.approverName || ap1User?.name || activeUser.regNoAp1 || "Belum ada Approver",
           badge:
             a1Dec?.status === "Revision"
               ? "Revision"
@@ -215,7 +215,7 @@ export function ModuleApprovalStatusBar({
         },
         {
           title: "4. Approver 2",
-          actor: a2Dec?.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+          actor: a2Dec?.approverName || ap2User?.name || activeUser.regNoAp2 || "Belum ada Approver",
           badge:
             a2Dec?.status === "Revision"
               ? "Revision"
@@ -248,7 +248,7 @@ export function ModuleApprovalStatusBar({
     ? [
         {
           title: "1. Approver 1",
-          actor: a1Dec?.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+          actor: a1Dec?.approverName || ap1User?.name || activeUser.regNoAp1 || "Belum ada Approver",
           badge:
             a1Dec?.status === "Revision"
               ? "Revision"
@@ -263,7 +263,7 @@ export function ModuleApprovalStatusBar({
         },
         {
           title: "2. Approver 2",
-          actor: a2Dec?.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+          actor: a2Dec?.approverName || ap2User?.name || activeUser.regNoAp2 || "Belum ada Approver",
           badge:
             a2Dec?.status === "Revision"
               ? "Revision"
@@ -288,7 +288,7 @@ export function ModuleApprovalStatusBar({
         },
         {
           title: "2. Approver 1",
-          actor: a1Dec?.approverName || ap1User?.name || activeUser.regNoAp1 || "Approver 1",
+          actor: a1Dec?.approverName || ap1User?.name || activeUser.regNoAp1 || "Belum ada Approver",
           badge:
             a1Dec?.status === "Revision"
               ? "Revision"
@@ -303,7 +303,7 @@ export function ModuleApprovalStatusBar({
         },
         {
           title: "3. Approver 2",
-          actor: a2Dec?.approverName || ap2User?.name || activeUser.regNoAp2 || "Approver 2",
+          actor: a2Dec?.approverName || ap2User?.name || activeUser.regNoAp2 || "Belum ada Approver",
           badge:
             a2Dec?.status === "Revision"
               ? "Revision"

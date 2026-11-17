@@ -6,7 +6,7 @@ import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId } from ".
 
 const countValidatedKpiMonths = (employeeId: string) =>
   getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;
-import { evaluateEmployeeKPITracking } from "../../employee/KPIPage";
+import { evaluateEmployeeKPITracking, getEmployeeRcaMonitoringStats } from "../../employee/KPIPage";
 
 const TEAM_IDS   = ["E002", "E011"];
 const TEAM_UNIT  = "PT. RSUP (Industri)";
@@ -1085,20 +1085,21 @@ export function SupervisorMonitoringKPI() {
           wfSet?.decisions.approver2?.status === "Validated",
       );
       const evalKpi = evaluateEmployeeKPITracking(emp.id);
+      const rcaStats = getEmployeeRcaMonitoringStats(emp.id);
       const settingStatus = resolveSupKpiPhaseStatus(wfSet);
       const measurementStatus = resolveSupKpiMeasurementStatus(emp.id, wfMeas);
       const hasActiveKpi = Boolean(setApproved || wfMeas || evalKpi.hasAnyTrackingData);
       const kpi: KPIRecord = hasActiveKpi
         ? {
             employeeId: emp.id,
-            totalKPI: evalKpi.totalKPI || KPI_DEFS_E002.length,
+            totalKPI: evalKpi.totalKPI || DEFS_E002.length,
             submittedKPI: evalKpi.trackedKpiCount,
             avgAchievement: evalKpi.ytdScore > 0 ? Math.round(evalKpi.ytdScore) : 0,
-            rcaRequired: 0,
-            rcaCompleted: 0,
-            kpiDefs: KPI_DEFS_E002,
+            rcaRequired: rcaStats.required,
+            rcaCompleted: rcaStats.completed,
+            kpiDefs: DEFS_E002,
             cells: wfMeas ? CELLS_E002 : {},
-            rcaClosedSet: new Set<string>(),
+            rcaClosedSet: new Set<string>(rcaStats.closedKeys),
             rcaItems: [],
           }
         : {

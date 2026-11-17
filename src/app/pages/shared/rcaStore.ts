@@ -1,5 +1,6 @@
-import { deleteBackendRecordFromSupabase, safeGetLocalRaw, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
-import { getActiveUser } from "../../store/authStore";
+import { deleteBackendRecordFromSupabase, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
+import { getActiveUser, loadManagedUsers } from "../../store/authStore";
+import { pushEmployeeNotification } from "../../store/notificationStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
@@ -62,6 +63,9 @@ export interface StoredRCASubmission {
   kenapaB: string;
   kenapaC: string;
   actionPlans: StoredRCAActionPlan[];
+  /** Waktu terakhir owner menekan Confirm RCA (update progress tanpa request approval) */
+  confirmedAt?: string;
+  confirmedBy?: string;
 }
 
 function loadAll(): StoredRCASubmission[] {
@@ -244,4 +248,83 @@ export function updateRCASubmissionStatus(
     saveAll(all, merged);
     window.dispatchEvent(new Event("appraisal-updated"));
   }
+}
+
+/**
+ * Confirm RCA (update progress): memperbarui SELURUH entri RCA terkait (owner & tampilan approver membaca store yang sama)
+ * dengan periode + subjek KPI yang sama, tanpa mengirim request approval RCA (RCA satu paket dengan KPI Tracking).
+ * Status otomatis Closed bila seluruh Action Plan aktif Selesai. Owner menerima notifikasi.
+ */
+export function confirmRCAProgressUpdate(
+  key: string,
+  patch: Pick<StoredRCASubmission, "masalahBlocks" | "actionPlans">,
+): { updated: number; closed: boolean; periode: string } {
+  const all = loadAll();
+  const base = all.find((r) => r.key === key || r.id === key);
+  if (!base) return { updated: 0, closed: false, periode: "" };
+  const actor = getActiveUser();
+  const ownerNorm = normalizeEmployeeId(base.employeeId || actor.employeeId);
+  const now = new Date().toISOString();
+  const kpiName = base.kpiIndicator.trim().toLowerCase();
+  const isRelated = (r: StoredRCASubmission) =>
+    (r.key === base.key || r.id === base.id) ||
+    (normalizeEmployeeId(r.employeeId || "") === ownerNorm &&
+      r.kpiIndicator.trim().toLowerCase() === kpiName &&
+      (r.periode === base.periode || (Boolean(r.monthLabel) && r.monthLabel === base.monthLabel)));
+  const cloneAp = (ap: StoredRCAActionPlan): StoredRCAActionPlan => ({
+    ...ap,
+    keterangan: Array.isArray(ap.keterangan) ? [...ap.keterangan] : [],
+    output: Array.isArray(ap.output) ? [...ap.output] : [],
+    evidence: Array.isArray(ap.evidence) ? [...ap.evidence] : [],
+  });
+  let closed = false;
+  const changed: StoredRCASubmission[] = [];
+  const next = all.map((r) => {
+    if (!isRelated(r)) return r;
+    const merged: StoredRCASubmission = {
+      ...r,
+      masalahBlocks: (patch.masalahBlocks ?? r.masalahBlocks ?? []).map((b) => ({ ...b, actionPlans: b.actionPlans.map(cloneAp) })),
+      actionPlans: (patch.actionPlans ?? r.actionPlans ?? []).map(cloneAp),
+      confirmedAt: now,
+      confirmedBy: actor.name,
+    };
+    if (isAllActionPlansCompleted(merged)) {
+      merged.approvalStatus = "Closed";
+      closed = true;
+    }
+    changed.push(merged);
+    return merged;
+  });
+  savePersistedState(KEY, next);
+  for (const row of changed) {
+    void syncToSupabase({
+      kind: "rca-submission",
+      submission: row,
+      audit: {
+        userId: actor.employeeId,
+        userName: actor.name,
+        action: "Update",
+        module: "KPI",
+        subModule: "RCA",
+        description: `Confirm RCA "${row.kpiIndicator}" (${row.monthLabel || row.periode}) — ${row.approvalStatus ?? "Draft"}`,
+      },
+    });
+  }
+  const owner = loadManagedUsers().find((u) => normalizeEmployeeId(u.employeeId) === ownerNorm);
+  pushEmployeeNotification({
+    employeeIds: [owner?.employeeId ?? actor.employeeId],
+    title: closed ? "RCA Berstatus Closed" : "Update Progress RCA Tersimpan",
+    summary: `Update progress RCA "${base.kpiIndicator}" periode ${base.periode} telah dikonfirmasi${
+      closed ? " dan berstatus Closed" : ""
+    }. Status RCA otomatis ter-update pada tabel RCA KPI Tracking di riwayat Approver dan akan ikut terkirim saat KPI Tracking bulan berikutnya disubmit.`,
+    category: "Approval",
+    moduleName: "KPI",
+    senderName: "PA System",
+    senderRole: "System",
+    approvalStatus: closed ? "Closed" : "Updated",
+    ctaLabel: "Buka RCA",
+    ctaRoute: "/measurement/rca",
+  });
+  window.dispatchEvent(new Event("appraisal-updated"));
+  return { updated: changed.length, closed, periode: base.periode };
 }
