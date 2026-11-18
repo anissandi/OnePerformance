@@ -366,7 +366,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
                 a.download = `Evidence_${type.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.zip`;
                 a.click();
                 setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-                toast.success(`Exported ${entries.length - 1} file evidence ke folder per karyawan.`);
+                toast.success(`Downloaded ${entries.length - 1} file evidence ke folder per karyawan.`);
               } finally {
                 setExporting(false);
               }
@@ -378,7 +378,7 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
             }`}
           >
             <FileArchive className="w-3.5 h-3.5" />
-            {exporting ? "Menyiapkan…" : "Export Folder (.zip)"}
+            {exporting ? "Menyiapkan…" : "Download Folder (.zip)"}
             {hasSelected && (
               <span className="bg-white/25 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">
                 {selected.size}

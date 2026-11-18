@@ -5,6 +5,7 @@ import { type ApprovalRow } from "./ReviewDrawer";
 import { ROWS, SAMPLE_GOALS, type SmartGoal } from "../pages/employee/SMARTGoals";
 import { loadSubmittedGoals } from "../pages/shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
+import { DualScrollTableContainer } from "./DualScrollTableContainer";
 import { FORMS } from "../pages/employee/AppraisalForm";
 import { MS_ITEMS } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPI_ITEMS as FULL_KPI_ITEMS } from "../pages/employee/KPIPage";
@@ -693,13 +694,13 @@ function KPIContent({ employeeId }: { employeeId: string }) {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+      <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
           <table className="border-collapse text-xs w-full">
             <thead>
               <tr className="bg-[#1A284F] text-white">
-                <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ minWidth: 50 }}>No</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 120 }}>Perspektif</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 250 }}>KPI</th>
+                <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: 50, maxWidth: 50 }}>No</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 50, zIndex: 25, background: "#1A284F", minWidth: 120, maxWidth: 120 }}>Perspektif</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 170, zIndex: 25, background: "#1A284F", minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 110 }}>Satuan</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 100 }}>Formula Setahun</th>
                 <th className="border border-[#1A284F]/30 py-3 px-2 font-semibold text-center" style={{ minWidth: 64 }}>Bobot</th>
@@ -725,15 +726,19 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                 return (
                   <React.Fragment key={sec}>
                     <tr>
-                      <td colSpan={14} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: bg, borderColor: bg }}>
-                        {secTitle}
+                      <td colSpan={14} className="p-0 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: bg, borderColor: bg }}>
+                        <div className="py-2 px-4 inline-flex items-center whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}>
+                          {secTitle}
+                        </div>
                       </td>
                     </tr>
-                    {secRows.map((kpi, idx) => (
+                    {secRows.map((kpi, idx) => {
+                      const stickyBg = idx % 2 === 0 ? "#ffffff" : "#f9fafb";
+                      return (
                       <tr key={kpi.id ?? `${sec}-${kpi.no}-${idx}`} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                        <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.no}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.perspektif}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700 whitespace-pre-line">{kpi.kpi}</td>
+                        <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700" style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: 50, maxWidth: 50 }}>{kpi.no}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700" style={{ position: "sticky", left: 50, zIndex: 12, background: stickyBg, minWidth: 120, maxWidth: 120 }}>{kpi.perspektif}</td>
+                        <td className="border border-gray-200 py-2 px-3 text-gray-700 whitespace-pre-line" style={{ position: "sticky", left: 170, zIndex: 12, background: stickyBg, minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>{kpi.kpi}</td>
                         <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.satuan}</td>
                         <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.formula}</td>
                         <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.bobot}</td>
@@ -746,13 +751,14 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                         <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.keterangan || "—"}</td>
                         <td className="border border-gray-200 py-2 px-3 text-center text-gray-600 text-xs">{derivePeriodeTrackingLabel(kpi.satuan, kpi.trackingPeriod)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </React.Fragment>
                 );
               })}
             </tbody>
           </table>
-      </div>
+      </DualScrollTableContainer>
     </div>
   );
 }

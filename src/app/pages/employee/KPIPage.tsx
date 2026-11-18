@@ -12,6 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/too
 import { saveRCASubmission, loadRCASubmissions, submitRCAsForMonths } from "../shared/rcaStore";
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
+import { DualScrollTableContainer } from "../../components/DualScrollTableContainer";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
 import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../store/notificationStore";
@@ -2588,15 +2589,15 @@ function KPITable({
             {isFirst && (
               <>
                 <td rowSpan={rs} className="border border-gray-200 text-center text-xs font-semibold text-gray-600 bg-white align-top py-2 px-2"
-                  style={{ position: "sticky", left: 0, zIndex: 10, minWidth: W_NO, maxWidth: W_NO }}>
+                  style={{ position: "sticky", left: 0, zIndex: 12, minWidth: W_NO, maxWidth: W_NO }}>
                   {kpi.no}
                 </td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 bg-white"
-                  style={{ position: "sticky", left: W_NO, zIndex: 10, minWidth: W_PERSP, maxWidth: W_PERSP }}>
+                  style={{ position: "sticky", left: W_NO, zIndex: 12, minWidth: W_PERSP, maxWidth: W_PERSP }}>
                   <span className={`text-xs font-bold ${PERSP_COLOR[kpi.perspektif] ?? "text-gray-700"}`}>{kpi.perspektif}</span>
                 </td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 bg-white"
-                  style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 10, minWidth: W_KPI, maxWidth: W_KPI }}>
+                  style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 12, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
                   <p className="text-xs font-medium text-gray-800 whitespace-pre-line leading-relaxed">{kpi.kpi}</p>
                 </td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-600" style={{ minWidth: 110 }}>{kpi.satuan}</td>
@@ -2870,13 +2871,13 @@ function KPITable({
     );
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+    <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
       <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1354 + months.length * 120 + 120 + 110}px` }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
-            <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 20, background: "#1A284F", minWidth: W_NO }}>No</th>
-            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: W_NO, zIndex: 20, background: "#1A284F", minWidth: W_PERSP }}>Perspektif</th>
-            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 20, background: "#1A284F", minWidth: W_KPI }}>KPI</th>
+            <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: W_NO, maxWidth: W_NO }}>No</th>
+            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: W_NO, zIndex: 25, background: "#1A284F", minWidth: W_PERSP, maxWidth: W_PERSP }}>Perspektif</th>
+            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 25, background: "#1A284F", minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 110 }}>Satuan</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 110 }}>Formula Setahun</th>
             <th className="border border-[#1A284F]/30 py-3 px-2 font-semibold text-center" style={{ minWidth: 64 }}>Bobot</th>
@@ -2948,9 +2949,14 @@ function KPITable({
 
             const SectionHeader = ({ sec, label, bg, score }: { sec: string; label: string; bg: string; score: number }) => (
               <tr>
-                <td colSpan={labelColSpan} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border"
+                <td colSpan={labelColSpan} className="p-0 text-white text-xs font-bold uppercase tracking-widest border"
                   style={{ background: bg, borderColor: bg }}>
-                  {label}
+                  <div
+                    className="py-2 px-4 inline-flex items-center whitespace-nowrap"
+                    style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}
+                  >
+                    {label}
+                  </div>
                 </td>
                 <td className="py-2 px-2 text-center border text-white text-xs font-bold" style={{ background: bg, borderColor: bg }}>
                   {kpiItems.some((k) => k.section === sec && computeKPIAchievement(k, cells, months) !== null)
@@ -3000,8 +3006,13 @@ function KPITable({
                   { label: "Total Bobot KPI", value: `${totalBobot.toFixed(0)}%`, highlight: true },
                 ] as { label: string; value: string; highlight?: boolean }[]).map(({ label, value, highlight }) => (
                   <tr key={label} className={highlight ? "bg-[#1A284F]/8" : "bg-[#1A284F]/4"}>
-                    <td colSpan={labelColSpan} className="border border-gray-200 py-2 px-4 text-xs font-bold text-[#1A284F]">
-                      {label}
+                    <td colSpan={labelColSpan} className="border border-gray-200 p-0 text-xs font-bold text-[#1A284F]">
+                      <div
+                        className="py-2 px-4 inline-flex items-center whitespace-nowrap"
+                        style={{ position: "sticky", left: 0, zIndex: 14, background: highlight ? "#eaeef5" : "#f4f6f9" }}
+                      >
+                        {label}
+                      </div>
                     </td>
                     <td className="border border-gray-200 py-2 px-3 text-center text-xs font-bold text-[#1A284F] bg-[#0a2a4a]/8">
                       {value}
@@ -3022,8 +3033,13 @@ function KPITable({
                       : { row: "bg-rose-50 border-rose-200", label: "text-rose-800", val: "text-rose-700", valBg: "bg-rose-100", tag: "bg-rose-200/80 text-rose-700 border-rose-300/70" };
                   return (
                     <tr className={nilaiColor.row}>
-                      <td colSpan={labelColSpan} className={`border border-gray-200 py-3 px-4 text-sm font-extrabold tracking-wide ${nilaiColor.label}`}>
-                        Total Nilai KPI
+                      <td colSpan={labelColSpan} className={`border border-gray-200 p-0 text-sm font-extrabold tracking-wide ${nilaiColor.label}`}>
+                        <div
+                          className="py-3 px-4 inline-flex items-center whitespace-nowrap"
+                          style={{ position: "sticky", left: 0, zIndex: 14 }}
+                        >
+                          Total Nilai KPI
+                        </div>
                       </td>
                       <td className={`border border-gray-200 py-2 px-3 text-center ${nilaiColor.valBg}`}>
                         <div className="flex flex-col items-center gap-0.5">
@@ -3047,7 +3063,7 @@ function KPITable({
           })()}
         </tbody>
       </table>
-    </div>
+    </DualScrollTableContainer>
   );
 }
 
@@ -4185,7 +4201,7 @@ function KPIWorkspace({
 
       const hdrRowIdx = matrix.findIndex((r) => r.some((c) => /^no$/i.test(c.trim())) && r.some((c) => /^tracking$/i.test(c.trim())));
       if (hdrRowIdx < 0) {
-        toast.error("Format kolom tidak dikenali. Gunakan file hasil Export dari KPI Tracking.");
+        toast.error("Format kolom tidak dikenali. Gunakan file hasil Download dari KPI Tracking.");
         return;
       }
       const headers = matrix[hdrRowIdx].map((h) => h.trim());
@@ -4274,7 +4290,7 @@ function KPIWorkspace({
       } else {
         setCellsMap(newCellsMap);
       }
-      toast.success("Data KPI Tracking berhasil di-import dan disimpan.");
+      toast.success("Data KPI Tracking berhasil di-upload dan disimpan.");
     } catch {
       toast.error("Gagal membaca file Excel KPI Tracking.");
     }

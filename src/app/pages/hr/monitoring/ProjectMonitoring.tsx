@@ -391,7 +391,7 @@ export function HRMonitoringProject({ lockedUnits }: { lockedUnits?: string[] } 
                 <Download className="w-3.5 h-3.5" />Download Template Excel
               </button>
               <label className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-semibold text-gray-600 hover:bg-gray-50 cursor-pointer transition-colors shadow-sm">
-                <Upload className="w-3.5 h-3.5" />Import Excel
+                <Upload className="w-3.5 h-3.5" />Upload Excel
                 <input
                   type="file"
                   accept=".xlsx,.xls,.csv"
@@ -417,7 +417,7 @@ export function HRMonitoringProject({ lockedUnits }: { lockedUnits?: string[] } 
             </>
           )}
           <button onClick={handleExport} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#1A284F] text-white text-xs font-semibold hover:bg-[#131d3b] transition-colors shadow-sm">
-            <Download className="w-3.5 h-3.5" />Export Excel
+            <Download className="w-3.5 h-3.5" />Download Excel
           </button>
         </div>
       </div>

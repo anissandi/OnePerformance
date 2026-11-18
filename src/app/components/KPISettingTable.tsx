@@ -1,4 +1,5 @@
 import { Edit3, Trash2 } from "lucide-react";
+import { DualScrollTableContainer } from "./DualScrollTableContainer";
 
 type Polaritas = "Maximize" | "Minimize";
 export interface KPISetting {
@@ -62,7 +63,7 @@ export function KPISettingTable({
           </span>
         </td>
         <td className="border border-gray-200 py-3 px-3 bg-white"
-          style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 10, minWidth: W_KPI, maxWidth: W_KPI }}>
+          style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 10, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
           <p className="text-xs font-medium text-gray-800 whitespace-pre-line leading-relaxed">{item.kpi}</p>
         </td>
         <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600" style={{ minWidth: 120 }}>{item.satuan}</td>
@@ -106,16 +107,16 @@ export function KPISettingTable({
     ));
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+    <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
       <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1430 + (editable ? 80 : 0)}px` }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
             <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold"
-              style={{ position: "sticky", left: 0, zIndex: 20, background: "#1A284F", minWidth: W_NO }}>No</th>
+              style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: W_NO, maxWidth: W_NO }}>No</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold"
-              style={{ position: "sticky", left: W_NO, zIndex: 20, background: "#1A284F", minWidth: W_PERSP }}>Perspektif</th>
+              style={{ position: "sticky", left: W_NO, zIndex: 25, background: "#1A284F", minWidth: W_PERSP, maxWidth: W_PERSP }}>Perspektif</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold"
-              style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 20, background: "#1A284F", minWidth: W_KPI }}>KPI</th>
+              style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 25, background: "#1A284F", minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 120 }}>Satuan</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 100 }}>Formula Pencapaian</th>
             <th className="border border-[#1A284F]/30 py-3 px-2 font-semibold text-center" style={{ minWidth: 72 }}>Bobot</th>
@@ -134,22 +135,26 @@ export function KPISettingTable({
 
         <tbody>
           <tr>
-            <td colSpan={totalCols} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border"
+            <td colSpan={totalCols} className="p-0 text-white text-xs font-bold uppercase tracking-widest border"
               style={{ background: "#1565C0", borderColor: "#1565C0" }}>
-              A. Objective KPI — Bobot {sectionWeights?.A ?? 20}%
+              <div className="py-2 px-4 inline-flex items-center whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 15, background: "#1565C0" }}>
+                A. Objective KPI — Bobot {sectionWeights?.A ?? 20}%
+              </div>
             </td>
           </tr>
           {renderRows("A")}
 
           <tr>
-            <td colSpan={totalCols} className="py-2 px-4 text-white text-xs font-bold uppercase tracking-widest border"
+            <td colSpan={totalCols} className="p-0 text-white text-xs font-bold uppercase tracking-widest border"
               style={{ background: "#1976D2", borderColor: "#1976D2" }}>
-              B. Functional KPI — Bobot {sectionWeights?.B ?? 80}%
+              <div className="py-2 px-4 inline-flex items-center whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 15, background: "#1976D2" }}>
+                B. Functional KPI — Bobot {sectionWeights?.B ?? 80}%
+              </div>
             </td>
           </tr>
           {renderRows("B")}
         </tbody>
       </table>
-    </div>
+    </DualScrollTableContainer>
   );
 }

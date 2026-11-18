@@ -153,12 +153,14 @@ export function CopyKpiFromSourceModal<T extends CopyableKpiRow>({
                   return (
                     <React.Fragment key={sec}>
                       <tr>
-                        <td colSpan={showCascading ? 15 : 14} className="border px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-white" style={{ background: tone, borderColor: tone }}>
-                          <label className="flex cursor-pointer items-center gap-2">
-                            <input type="checkbox" checked={secAll} onChange={() => toggleSection(sec)} className="h-3.5 w-3.5 accent-white" />
-                            {sec}. {resolveSectionLabel(rows[0])}
-                            {rows[0]?.sectionBobot && <span className="font-normal normal-case opacity-80">— Bobot {rows[0].sectionBobot}</span>}
-                          </label>
+                        <td colSpan={showCascading ? 15 : 14} className="border p-0 text-[11px] font-bold uppercase tracking-wide text-white" style={{ background: tone, borderColor: tone }}>
+                          <div className="px-3 py-1.5 inline-flex items-center whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 12, background: tone }}>
+                            <label className="flex cursor-pointer items-center gap-2">
+                              <input type="checkbox" checked={secAll} onChange={() => toggleSection(sec)} className="h-3.5 w-3.5 accent-white" />
+                              {sec}. {resolveSectionLabel(rows[0])}
+                              {rows[0]?.sectionBobot && <span className="font-normal normal-case opacity-80">— Bobot {rows[0].sectionBobot}</span>}
+                            </label>
+                          </div>
                         </td>
                       </tr>
                       {rows.map((r, ri) => {

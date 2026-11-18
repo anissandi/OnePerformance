@@ -362,7 +362,7 @@ export function SupervisorMonitoringProject() {
         </div>
         <div className="flex items-center gap-2">
           <button onClick={handleExport} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#1A284F] text-white text-xs font-semibold hover:bg-[#131d3b] transition-colors shadow-sm">
-            <Download className="w-3.5 h-3.5" />Export Excel
+            <Download className="w-3.5 h-3.5" />Download Excel
           </button>
         </div>
       </div>

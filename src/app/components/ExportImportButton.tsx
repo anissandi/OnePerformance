@@ -9,7 +9,10 @@ interface Props {
 }
 
 export default function ExportImportButton({ onExport, onImport, label, size = "md" }: Props) {
-  const effectiveLabel = label ?? (onImport ? "Export / Import" : "Export");
+  const normalizedCustomLabel = label
+    ? label.replace(/\bExport\b/gi, "Download").replace(/\bImport\b/gi, "Upload")
+    : undefined;
+  const effectiveLabel = normalizedCustomLabel ?? (onImport ? "Download / Upload" : "Download");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -44,13 +47,13 @@ export default function ExportImportButton({ onExport, onImport, label, size = "
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1.5 w-44 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+        <div className="absolute right-0 mt-1.5 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
           <button
             onClick={() => { onExport(); setOpen(false); }}
             className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
           >
             <Download className="w-4 h-4 shrink-0" />
-            Export (.xlsx)
+            Download (.xlsx)
           </button>
           {onImport && (
             <button
@@ -58,7 +61,7 @@ export default function ExportImportButton({ onExport, onImport, label, size = "
               className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors"
             >
               <Upload className="w-4 h-4 shrink-0" />
-              Import (.xlsx)
+              Upload (.xlsx)
             </button>
           )}
         </div>

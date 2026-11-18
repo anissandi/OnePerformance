@@ -10,6 +10,7 @@ import {
 import type { MonthEntry } from "../pages/employee/KPIPage";
 import type { StoredRCASubmission } from "../pages/shared/rcaStore";
 import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
+import { DualScrollTableContainer } from "./DualScrollTableContainer";
 
 interface KPITableViewProps {
   kpiItems: KPIItem[];
@@ -101,15 +102,20 @@ export function KPITableView({
     return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
   }, 0);
   const colSpanBeforeTotal = 14 + (months.length > 0 ? months.length : 1);
+  const W_NO = 50;
+  const W_PERSP = 120;
+  const W_KPI = 220;
+  const dynamicSections = Array.from(new Set(kpiItems.map((k) => k.section || "A"))).sort();
+  const secPalette = ["#1565C0", "#1976D2", "#00838F", "#6A1B9A", "#2E7D32", "#EF6C00"];
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+    <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
       <table className="border-collapse text-xs w-full">
         <thead>
           <tr className="bg-[#1A284F] text-white">
-            <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ minWidth: 50 }}>No</th>
-            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 120 }}>Perspektif</th>
-            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 200 }}>KPI</th>
+            <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: W_NO, maxWidth: W_NO }}>No</th>
+            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: W_NO, zIndex: 25, background: "#1A284F", minWidth: W_PERSP, maxWidth: W_PERSP }}>Perspektif</th>
+            <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 25, background: "#1A284F", minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 110 }}>Satuan</th>
             <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 90 }}>Formula</th>
             <th className="border border-[#1A284F]/30 py-3 px-2 font-semibold text-center" style={{ minWidth: 64 }}>Bobot</th>
@@ -137,11 +143,29 @@ export function KPITableView({
           </tr>
         </thead>
         <tbody>
-          {kpiItems.map((kpi, kpiIdx) => {
+          {dynamicSections.map((sec, sIdx) => {
+            const secKpis = kpiItems.filter((k) => (k.section || "A") === sec);
+            const first = secKpis[0];
+            const defTitle = sec === "A" ? "Objective KPI — Bobot 20%" : sec === "B" ? "Functional KPI — Bobot 80%" : `Section ${sec}`;
+            const hdrLabel = first?.sectionLabel
+              ? `${sec}. ${first.sectionLabel}${first.sectionBobot ? ` — Bobot ${first.sectionBobot}` : ""}`
+              : `${sec}. ${defTitle}`;
+            const bg = secPalette[sIdx % secPalette.length];
+            return (
+              <React.Fragment key={sec}>
+                <tr>
+                  <td colSpan={colSpanBeforeTotal + 2} className="p-0 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: bg, borderColor: bg }}>
+                    <div className="py-2 px-4 inline-flex items-center whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}>
+                      {hdrLabel}
+                    </div>
+                  </td>
+                </tr>
+                {secKpis.map((kpi, kpiIdx) => {
             const rs = kpi.subRows.length;
             const ach = computeKPIAchievement(kpi, cells, months);
             const cappedAch = ach !== null ? Math.min(ach, 100) : null;
             const weightedScore = cappedAch !== null ? (cappedAch / 100) * parseBobotDecimal(kpi.bobot) * 100 : null;
+            const stickyBg = kpiIdx % 2 === 0 ? "#ffffff" : "#f9fafb";
             
             return kpi.subRows.map((sub, subIdx) => {
               const isFirst = subIdx === 0;
@@ -157,13 +181,16 @@ export function KPITableView({
                 <tr key={`${kpi.no}-${subIdx}`} className={kpiIdx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
                   {isFirst && (
                     <>
-                      <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">
+                      <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700"
+                        style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
                         {kpi.no}
                       </td>
-                      <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700">
+                      <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700"
+                        style={{ position: "sticky", left: W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
                         {kpi.perspektif}
                       </td>
-                      <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700">
+                      <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700"
+                        style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
                         {kpi.kpi}
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700">
@@ -297,6 +324,9 @@ export function KPITableView({
                 </tr>
               );
             });
+                })}
+              </React.Fragment>
+            );
           })}
           <tr className="bg-[#1A284F]/5 font-bold">
             <td colSpan={colSpanBeforeTotal + 1} className="border border-gray-200 py-2.5 px-4 text-right text-xs text-[#1A284F]">
@@ -308,6 +338,6 @@ export function KPITableView({
           </tr>
         </tbody>
       </table>
-    </div>
+    </DualScrollTableContainer>
   );
 }

@@ -7,6 +7,7 @@ import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId } from ".
 const countValidatedKpiMonths = (employeeId: string) =>
   getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;
 import { evaluateEmployeeKPITracking, getEmployeeRcaMonitoringStats } from "../../employee/KPIPage";
+import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
 
 const TEAM_IDS   = ["E002", "E011"];
 const TEAM_UNIT  = "PT. RSUP (Industri)";
@@ -421,7 +422,7 @@ function KPITrackingTable({ rec }: { rec: KPIRecord }) {
   const sections: ("A" | "B")[] = ["A", "B"];
 
   return (
-    <div className="overflow-x-auto">
+    <DualScrollTableContainer className="border-0 rounded-none shadow-none bg-white">
       <table className="text-left border-collapse text-[11px]" style={{ minWidth: 1600 }}>
         <thead>
           <tr className="bg-[#1A284F] text-white text-[10px] font-bold uppercase tracking-wide">
@@ -469,8 +470,13 @@ function KPITrackingTable({ rec }: { rec: KPIRecord }) {
                 {/* Section header */}
                 <tr>
                   <td colSpan={13 + MONTHS.length + 1}
-                    className={`py-1.5 px-4 text-[10px] font-bold text-white ${sec === "A" ? "bg-[#1565C0]" : "bg-[#1976D2]"}`}>
-                    {sec === "A" ? "A. Objective KPI" : "B. Functional KPI"}
+                    className={`p-0 text-[10px] font-bold text-white ${sec === "A" ? "bg-[#1565C0]" : "bg-[#1976D2]"}`}>
+                    <div
+                      className="py-1.5 px-4 inline-flex items-center whitespace-nowrap"
+                      style={{ position: "sticky", left: 0, zIndex: 15, background: sec === "A" ? "#1565C0" : "#1976D2" }}
+                    >
+                      {sec === "A" ? "A. Objective KPI" : "B. Functional KPI"}
+                    </div>
                   </td>
                 </tr>
 
@@ -615,7 +621,7 @@ function KPITrackingTable({ rec }: { rec: KPIRecord }) {
           })}
         </tbody>
       </table>
-    </div>
+    </DualScrollTableContainer>
   );
 }
 

@@ -641,7 +641,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           </div>
           <button className="flex items-center gap-2 bg-[#1A284F] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm">
             <Download className="w-4 h-4" />
-            Export Report
+            Download Report
           </button>
         </div>
         <div className="overflow-x-auto">

@@ -977,7 +977,7 @@ function SMARTGoalsWorkspace({
         );
         if (nonEmptyGoals.length > 0) {
           updateGoalsAndPersist(nonEmptyGoals.map((g, idx) => ({ ...g, label: `Goals ${idx + 1}` })));
-          toast.success(`${nonEmptyGoals.length} SMART Goals beserta Action Plan berhasil di-import.`);
+          toast.success(`${nonEmptyGoals.length} SMART Goals beserta Action Plan berhasil di-upload.`);
         } else {
           toast.error("File Excel belum berisi data SMART Goals.");
         }
@@ -1027,7 +1027,7 @@ function SMARTGoalsWorkspace({
         });
       if (imported.length > 0) {
         updateGoalsAndPersist(imported);
-        toast.success(`${imported.length} SMART Goals berhasil di-import.`);
+        toast.success(`${imported.length} SMART Goals berhasil di-upload.`);
       }
     } catch {
       toast.error("Gagal membaca file Excel SMART Goals.");

@@ -1717,7 +1717,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 mb-0.5">{t("Analytics Dashboard")}</h2>
-          <p className="text-sm text-gray-500">{t("Track completion status and export final appraisal scores")}</p>
+          <p className="text-sm text-gray-500">{t("Track completion status and download final appraisal scores")}</p>
         </div>
       </div>
 
@@ -1835,14 +1835,6 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
           accentHex="#5B3E86"
         />
       </div>
-
-      {/* ── Score / Grade Distribution (Urutan Kedua dibawah Card Total Employees dst.) ── */}
-      <ScoreGradeDistributionDashboard
-        key={`sgd-${refreshMotionKey}`}
-        employees={filteredEmployees}
-        calibrationTargets={calibrationTargets}
-        module={module}
-      />
 
       {/* ── 2. One-Line Row: PA Cycle Timeline | Multi-Module & Division | Approval Tracking & Bottleneck ── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 items-stretch">
@@ -2024,6 +2016,14 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
           />
         </motion.div>
       </div>
+
+      {/* ── Score / Grade Distribution (Dibawah PA Cycle Timeline; Multi-Module Breakdown & Division Scores; Approval Tracking & Bottleneck) ── */}
+      <ScoreGradeDistributionDashboard
+        key={`sgd-${refreshMotionKey}`}
+        employees={filteredEmployees}
+        calibrationTargets={calibrationTargets}
+        module={module}
+      />
 
       {/* ── 3. Module Completion Overview (9 Pie/Donut Cards — 3 per Line) ── */}
       <ModuleCompletionOverview

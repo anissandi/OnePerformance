@@ -32,6 +32,9 @@ import {
   CorporateKPITable,
   KPISettingTable,
   PERSONAL_KPI,
+  renameKpiSection,
+  resolveKpiSectionLabel,
+  resolvePersonalSectionLabel,
   type KPISetting,
   type Polaritas,
 } from "../../supervisor/setting/KPISetting";
@@ -635,7 +638,7 @@ export function MasterKPIPage() {
       }
       const keyField = sub === "kpi-group" ? "group" : sub === "kpi-unit" ? "unit" : "personal";
       persistFormats((prev) => ({ ...prev, [keyField]: imported }), sub);
-      toast.success(`Berhasil mengimpor ${imported.length} item ke ${sub === "kpi-group" ? "KPI (Group)" : sub === "kpi-unit" ? "KPI (Unit)" : "KPI (Personal)"}.`);
+      toast.success(`Berhasil meng-upload ${imported.length} item ke ${sub === "kpi-group" ? "KPI (Group)" : sub === "kpi-unit" ? "KPI (Unit)" : "KPI (Personal)"}.`);
     } catch {
       toast.error("Gagal membaca file Excel Master KPI.");
     }
@@ -769,6 +772,29 @@ export function MasterKPIPage() {
                   "KPI (Group)",
                 )
               }
+              onRenameSection={(oldSec, newSec) =>
+                persistFormats(
+                  (prev) => ({ ...prev, group: renameKpiSection(prev.group, oldSec, newSec, false) }),
+                  "KPI (Group) — Urutan Section",
+                )
+              }
+              onUpdateSectionMeta={(sec, patch) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    group: prev.group.map((i) =>
+                      i.section !== sec
+                        ? i
+                        : {
+                            ...i,
+                            sectionLabel: patch.sectionLabel !== undefined ? patch.sectionLabel : (i.sectionLabel || resolveKpiSectionLabel(i)),
+                            sectionBobot: patch.sectionBobot !== undefined ? patch.sectionBobot : i.sectionBobot,
+                          },
+                    ),
+                  }),
+                  "KPI (Group) — Section Meta",
+                )
+              }
               onAddClick={() => setShowAddModalFor("kpi-group")}
               onExport={() => handleExportFormat("kpi-group")}
               onImport={(file) => handleImportFormat("kpi-group", file)}
@@ -805,6 +831,29 @@ export function MasterKPIPage() {
                     unit: prev.unit.filter((i) => i.id !== id),
                   }),
                   "KPI (Unit)",
+                )
+              }
+              onRenameSection={(oldSec, newSec) =>
+                persistFormats(
+                  (prev) => ({ ...prev, unit: renameKpiSection(prev.unit, oldSec, newSec, false) }),
+                  "KPI (Unit) — Urutan Section",
+                )
+              }
+              onUpdateSectionMeta={(sec, patch) =>
+                persistFormats(
+                  (prev) => ({
+                    ...prev,
+                    unit: prev.unit.map((i) =>
+                      i.section !== sec
+                        ? i
+                        : {
+                            ...i,
+                            sectionLabel: patch.sectionLabel !== undefined ? patch.sectionLabel : (i.sectionLabel || resolveKpiSectionLabel(i)),
+                            sectionBobot: patch.sectionBobot !== undefined ? patch.sectionBobot : i.sectionBobot,
+                          },
+                    ),
+                  }),
+                  "KPI (Unit) — Section Meta",
                 )
               }
               onAddClick={() => setShowAddModalFor("kpi-unit")}
@@ -888,6 +937,29 @@ export function MasterKPIPage() {
                         personal: prev.personal.filter((i) => i.id !== id),
                       }),
                       "KPI (Personal)",
+                    )
+                  }
+                  onRenameSection={(oldSec, newSec) =>
+                    persistFormats(
+                      (prev) => ({ ...prev, personal: renameKpiSection(prev.personal, oldSec, newSec, true) }),
+                      "KPI (Personal) — Urutan Section",
+                    )
+                  }
+                  onUpdateSectionMeta={(sec, patch) =>
+                    persistFormats(
+                      (prev) => ({
+                        ...prev,
+                        personal: prev.personal.map((i) =>
+                          i.section !== sec
+                            ? i
+                            : {
+                                ...i,
+                                sectionLabel: patch.sectionLabel !== undefined ? patch.sectionLabel : (i.sectionLabel || resolvePersonalSectionLabel(i)),
+                                sectionBobot: patch.sectionBobot !== undefined ? patch.sectionBobot : i.sectionBobot,
+                              },
+                        ),
+                      }),
+                      "KPI (Personal) — Section Meta",
                     )
                   }
                 />

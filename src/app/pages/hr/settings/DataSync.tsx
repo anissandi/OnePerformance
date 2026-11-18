@@ -364,7 +364,7 @@ export function DataSyncPage() {
           importMode === "replace_all_trial"
             ? "Mode Trial End-to-End (Data Dummy Diganti Penuh & Transaksi Direset)"
             : "Mode Gabung / Upsert";
-        const summary = `${importedCount} data karyawan berhasil diimpor ke ${targetCompany} (${modeLabel}) pada ${now}`;
+        const summary = `${importedCount} data karyawan berhasil di-upload ke ${targetCompany} (${modeLabel}) pada ${now}`;
         setLastImportSummary(summary);
         savePersistedState("pa_last_employee_excel_import_v1", summary, {
           kind: "kv-state",
@@ -373,12 +373,12 @@ export function DataSyncPage() {
           audit: {
             action: "Import",
             module: "Data Sync",
-            subModule: "Employee Excel Import",
+            subModule: "Employee Excel Upload",
             description: summary,
           },
         });
         window.dispatchEvent(new Event("pa-employees-imported"));
-        toast.success(`Berhasil mengimpor ${importedCount} data karyawan beserta rantai Approval (Reg No AP1 & AP2).`);
+        toast.success(`Berhasil meng-upload ${importedCount} data karyawan beserta rantai Approval (Reg No AP1 & AP2).`);
       } catch (err) {
         toast.error(`Gagal membaca file Excel: ${err instanceof Error ? err.message : "Format tidak valid"}`);
       } finally {
@@ -490,10 +490,10 @@ export function DataSyncPage() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Database className="w-5 h-5 text-[#1A284F]" />
-            <h1 className="text-[26px] font-bold text-[#1A284F]">Data Sync & Import Data Karyawan</h1>
+            <h1 className="text-[26px] font-bold text-[#1A284F]">Data Sync & Upload Data Karyawan</h1>
           </div>
           <p className="text-gray-500 text-sm">
-            Update data karyawan dengan metode sync data atau import
+            Update data karyawan dengan metode sync data atau upload
           </p>
         </div>
         <button
@@ -517,7 +517,7 @@ export function DataSyncPage() {
             <div className="flex items-center gap-2">
               <FileSpreadsheet className="w-5 h-5 text-[#1A284F]" />
               <h2 className="text-base font-bold text-[#1A284F]">
-                Import Data Karyawan &amp; Mapping Approval
+                Upload Data Karyawan &amp; Mapping Approval
               </h2>
             </div>
           </div>
@@ -527,7 +527,7 @@ export function DataSyncPage() {
                 value={importMode}
                 onChange={(e) => setImportMode(e.target.value as "merge" | "replace_all_trial")}
                 className="text-xs font-semibold text-[#1A284F] bg-transparent focus:outline-none"
-                title="Pilih mode import: Gabungkan dengan data saat ini atau Ganti seluruh data dummy untuk Trial End-to-End"
+                title="Pilih mode upload: Gabungkan dengan data saat ini atau Ganti seluruh data dummy untuk Trial End-to-End"
               >
                 <option value="merge">Mode: Update / Gabung Data</option>
                 <option value="replace_all_trial">Mode: Ganti Data Dummy (Trial End-to-End)</option>
@@ -556,7 +556,7 @@ export function DataSyncPage() {
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-xs font-semibold text-gray-700 transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
-              Template Excel
+              Download Template
             </button>
 
             <button
@@ -564,8 +564,8 @@ export function DataSyncPage() {
               onClick={handleExportCurrentUsers}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-xs font-semibold text-gray-700 transition-colors"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              Export Excel
+              <Download className="w-3.5 h-3.5" />
+              Download Excel
             </button>
 
             <input
@@ -581,7 +581,7 @@ export function DataSyncPage() {
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold transition-colors shadow-sm"
             >
               <Upload className="w-3.5 h-3.5" />
-              Import Excel Karyawan
+              Upload Excel Karyawan
             </button>
           </div>
         </div>
@@ -600,7 +600,7 @@ export function DataSyncPage() {
             <div className="flex items-center gap-2 text-xs text-gray-600">
               <Users className="w-4 h-4 text-[#1A284F]" />
               <span>
-                Menampilkan <strong>{filteredUsers.length}</strong> karyawan terimpor
+                Menampilkan <strong>{filteredUsers.length}</strong> karyawan terdaftar
               </span>
             </div>
             <div className="relative w-72">

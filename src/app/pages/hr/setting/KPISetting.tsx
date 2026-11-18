@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
 import { loadPersistedState, mergeKvMapRecord, safeSetLocalJson, savePersistedState } from "../../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../../store/notificationStore";
+import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
 import {
   getActiveUser,
   getGroupCompaniesForUnit,
@@ -30,6 +31,8 @@ interface KPISetting {
   id: string;
   no: string;
   section: string;
+  sectionLabel?: string;
+  sectionBobot?: string;
   perspektif: string;
   kpi: string;
   satuan: string;
@@ -255,10 +258,13 @@ type ApprovalStatus = "pending" | "director_approved" | "approved" | "revision";
 
 function BusinessKPITable({ items }: { items: KPISetting[] }) {
   const sections = Array.from(new Set(items.map((k) => k.section))).sort();
+  const W_NO = 48;
+  const W_PERSP = 120;
+  const W_KPI = 260;
   const MAIN_COLS = [
-    { label: "No",              w: 44  },
-    { label: "Perspektif",      w: 100 },
-    { label: "KPI",             w: 260 },
+    { label: "No",              w: W_NO    },
+    { label: "Perspektif",      w: W_PERSP },
+    { label: "KPI",             w: W_KPI   },
     { label: "Satuan",          w: 120 },
     { label: "Formula Setahun", w: 110 },
     { label: "Scope",           w: 180 },
@@ -287,15 +293,20 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
   ];
   const totalWidth = MAIN_COLS.reduce((s, c) => s + c.w, 0) + CASC_TYPE_COLS.reduce((s, c) => s + c.w, 0);
   const totalCols = MAIN_COLS.length + CASC_TYPE_COLS.length;
+  const stickyHdrStyle = (colIdx: number, w: number): React.CSSProperties => {
+    if (colIdx === 0) return { position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w };
+    if (colIdx === 1) return { position: "sticky", left: W_NO, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w };
+    if (colIdx === 2) return { position: "sticky", left: W_NO + W_PERSP, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" };
+    return { minWidth: w };
+  };
 
   return (
-    <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className="overflow-x-auto">
+    <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
         <table className="border-collapse text-xs" style={{ minWidth: totalWidth + "px" }}>
           <thead>
             <tr className="bg-[#1A284F] text-white">
-              {MAIN_COLS.map(({ label, w }) => (
-                <th key={label} rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px] align-middle" style={{ minWidth: w }}>{label}</th>
+              {MAIN_COLS.map(({ label, w }, ci) => (
+                <th key={label} rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px] align-middle" style={stickyHdrStyle(ci, w)}>{label}</th>
               ))}
               <th colSpan={3} className="border border-[#1A284F]/30 py-2 px-2 text-center font-semibold text-[11px]">CASCADING</th>
             </tr>
@@ -309,26 +320,38 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
             {sections.map((sec) => {
               const meta = CORP_SECTION_META_BIZ[sec] ?? { label: sec, bobot: "—", bg: "#455A64" };
               const secRows = items.filter((k) => k.section === sec);
+              const first = secRows[0];
+              const secLabel = first?.sectionLabel || meta.label;
+              const secBobot = first?.sectionBobot || meta.bobot;
               return (
                 <React.Fragment key={sec}>
                   <tr>
-                    <td colSpan={totalCols} className="py-2.5 px-4 text-white text-[11px] font-bold uppercase tracking-wider border"
+                    <td colSpan={totalCols} className="p-0 text-white text-[11px] font-bold uppercase tracking-wider border"
                       style={{ background: meta.bg, borderColor: meta.bg }}>
-                      {sec}. {meta.label}
-                      <span className="ml-3 opacity-80 font-normal normal-case tracking-normal text-[11px]">— Bobot {meta.bobot}</span>
+                      <div
+                        className="py-2.5 px-4 inline-flex items-center whitespace-nowrap"
+                        style={{ position: "sticky", left: 0, zIndex: 15, background: meta.bg }}
+                      >
+                        <span>{sec}. {secLabel}</span>
+                        <span className="ml-3 opacity-85 font-normal normal-case tracking-normal text-[11px]">— Bobot {secBobot}</span>
+                      </div>
                     </td>
                   </tr>
                   {secRows.map((item, idx) => {
-                    const rowBg = idx % 2 === 0 ? "bg-white" : "bg-gray-50/30";
+                    const rowBg = idx % 2 === 0 ? "bg-white" : "bg-slate-50";
+                    const stickyBg = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
                     return (
                       <tr key={item.id} className={`border-t border-gray-100 ${rowBg} hover:bg-blue-50/20 transition-colors`}>
-                        <td className="border border-gray-200 py-2 px-1.5 text-center">
+                        <td className="border border-gray-200 py-2 px-1.5 text-center"
+                          style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
                           <span className="font-bold text-gray-500 text-[11px]">{item.no}</span>
                         </td>
-                        <td className="border border-gray-200 py-2 px-1.5">
+                        <td className="border border-gray-200 py-2 px-2"
+                          style={{ position: "sticky", left: W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
                           <span className={`text-[11px] font-semibold ${PERSP_COLOR[item.perspektif] ?? "text-gray-700"}`}>{item.perspektif}</span>
                         </td>
-                        <td className="border border-gray-200 py-2 px-1.5">
+                        <td className="border border-gray-200 py-2 px-2"
+                          style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
                           <p className="text-[11px] font-medium text-gray-800 leading-relaxed">{item.kpi}</p>
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5">
@@ -336,6 +359,9 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-600">{item.formula || "—"}</span>
+                        </td>
+                        <td className="border border-gray-200 py-2 px-1.5">
+                          <span className="text-[11px] text-gray-500 italic">{item.scope || "—"}</span>
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{item.bobot}</span>
@@ -392,17 +418,19 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
             })}
           </tbody>
         </table>
-      </div>
-    </div>
+    </DualScrollTableContainer>
   );
 }
 
 function GMKPITable({ items }: { items: KPISetting[] }) {
   const sections = Array.from(new Set(items.map((k) => k.section))).sort();
+  const W_NO = 48;
+  const W_PERSP = 120;
+  const W_KPI = 260;
   const COLS = [
-    { label: "No",              w: 44  },
-    { label: "Perspektif",      w: 100 },
-    { label: "KPI",             w: 260 },
+    { label: "No",              w: W_NO    },
+    { label: "Perspektif",      w: W_PERSP },
+    { label: "KPI",             w: W_KPI   },
     { label: "Satuan",          w: 120 },
     { label: "Formula Setahun", w: 110 },
     { label: "Bobot",           w: 60  },
@@ -416,15 +444,20 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
     { label: "Periode Tracking", w: 90  },
   ];
   const totalWidth = COLS.reduce((s, c) => s + c.w, 0);
+  const stickyHdrStyle = (colIdx: number, w: number): React.CSSProperties => {
+    if (colIdx === 0) return { position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w };
+    if (colIdx === 1) return { position: "sticky", left: W_NO, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w };
+    if (colIdx === 2) return { position: "sticky", left: W_NO + W_PERSP, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" };
+    return { minWidth: w };
+  };
 
   return (
-    <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className="overflow-x-auto">
+    <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
         <table className="border-collapse text-xs" style={{ minWidth: totalWidth + "px" }}>
           <thead>
             <tr className="bg-[#1A284F] text-white">
-              {COLS.map(({ label, w }) => (
-                <th key={label} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px]" style={{ minWidth: w }}>{label}</th>
+              {COLS.map(({ label, w }, ci) => (
+                <th key={label} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px]" style={stickyHdrStyle(ci, w)}>{label}</th>
               ))}
             </tr>
           </thead>
@@ -432,26 +465,38 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
             {sections.map((sec) => {
               const meta = CORP_SECTION_META_GM[sec] ?? { label: sec, bobot: "—", bg: "#455A64" };
               const secRows = items.filter((k) => k.section === sec);
+              const first = secRows[0];
+              const secLabel = first?.sectionLabel || meta.label;
+              const secBobot = first?.sectionBobot || meta.bobot;
               return (
                 <React.Fragment key={sec}>
                   <tr>
-                    <td colSpan={COLS.length} className="py-2.5 px-4 text-white text-[11px] font-bold uppercase tracking-wider border"
+                    <td colSpan={COLS.length} className="p-0 text-white text-[11px] font-bold uppercase tracking-wider border"
                       style={{ background: meta.bg, borderColor: meta.bg }}>
-                      {sec}. {meta.label}
-                      <span className="ml-3 opacity-80 font-normal normal-case tracking-normal text-[11px]">— Bobot {meta.bobot}</span>
+                      <div
+                        className="py-2.5 px-4 inline-flex items-center whitespace-nowrap"
+                        style={{ position: "sticky", left: 0, zIndex: 15, background: meta.bg }}
+                      >
+                        <span>{sec}. {secLabel}</span>
+                        <span className="ml-3 opacity-85 font-normal normal-case tracking-normal text-[11px]">— Bobot {secBobot}</span>
+                      </div>
                     </td>
                   </tr>
                   {secRows.map((item, idx) => {
-                    const rowBg = idx % 2 === 0 ? "bg-white" : "bg-gray-50/30";
+                    const rowBg = idx % 2 === 0 ? "bg-white" : "bg-slate-50";
+                    const stickyBg = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
                     return (
                       <tr key={item.id} className={`border-t border-gray-100 ${rowBg} hover:bg-blue-50/20 transition-colors`}>
-                        <td className="border border-gray-200 py-2 px-1.5 text-center">
+                        <td className="border border-gray-200 py-2 px-1.5 text-center"
+                          style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
                           <span className="font-bold text-gray-500 text-[11px]">{item.no}</span>
                         </td>
-                        <td className="border border-gray-200 py-2 px-1.5">
+                        <td className="border border-gray-200 py-2 px-2"
+                          style={{ position: "sticky", left: W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
                           <span className={`text-[11px] font-semibold ${PERSP_COLOR[item.perspektif] ?? "text-gray-700"}`}>{item.perspektif}</span>
                         </td>
-                        <td className="border border-gray-200 py-2 px-1.5">
+                        <td className="border border-gray-200 py-2 px-2"
+                          style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
                           <p className="text-[11px] font-medium text-gray-800 leading-relaxed">{item.kpi}</p>
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5">
@@ -459,9 +504,6 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-600">{item.formula || "—"}</span>
-                        </td>
-                        <td className="border border-gray-200 py-2 px-1.5">
-                          <span className="text-[11px] text-gray-500 italic">{item.scope || "—"}</span>
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{item.bobot}</span>
@@ -498,8 +540,7 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
             })}
           </tbody>
         </table>
-      </div>
-    </div>
+    </DualScrollTableContainer>
   );
 }
 
@@ -613,6 +654,8 @@ export function HRSettingKPIPage() {
   const currentScopeStatus = bizStatusMapLive[scopeKey];
   const submittedItems = bizItemsMapLive[scopeKey] ?? [];
   const hasSubmittedData = Boolean(currentScopeStatus?.submitted && submittedItems.length > 0);
+  const totalSubmittedBobot = submittedItems.reduce((sum, item) => sum + (parseFloat(String(item.bobot ?? "").replace("%", "")) || 0), 0);
+  const formattedSubmittedBobot = Number.isInteger(totalSubmittedBobot) ? String(totalSubmittedBobot) : totalSubmittedBobot.toFixed(1);
 
   const approvalStatus: ApprovalStatus = currentScopeStatus?.approved
     ? "approved"
@@ -935,6 +978,13 @@ export function HRSettingKPIPage() {
                 {hasSubmittedData ? submittedItems.length : 0}
               </span>
             </div>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${hasSubmittedData && Math.round(totalSubmittedBobot * 100) === 10000 ? "bg-green-50" : "bg-orange-50"}`}>
+              <span className={`text-xs font-bold ${hasSubmittedData && Math.round(totalSubmittedBobot * 100) === 10000 ? "text-green-700" : "text-orange-700"}`}>Total Bobot:</span>
+              <span className={`text-sm font-bold ${hasSubmittedData && Math.round(totalSubmittedBobot * 100) === 10000 ? "text-green-700" : "text-orange-700"}`}>{hasSubmittedData ? formattedSubmittedBobot : 0}%</span>
+              {(!hasSubmittedData || Math.round(totalSubmittedBobot * 100) !== 10000) && (
+                <span className="text-[10px] text-orange-600">(should be 100%)</span>
+              )}
+            </div>
             <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs text-[#1A284F]">
               <UserCheck className="w-3.5 h-3.5 text-blue-600" />
               <span className="font-semibold">Penyusun:</span>
@@ -1001,7 +1051,7 @@ export function HRSettingKPIPage() {
             )}
             <button onClick={handleExport}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 transition-all">
-              <Download className="w-4 h-4" /> Export
+              <Download className="w-4 h-4" /> Download
             </button>
           </div>
         </div>
@@ -1120,7 +1170,7 @@ export function HRSettingKPIPage() {
             <p className="text-sm font-semibold text-[#1A284F] text-center mb-6">{companyUnit} · {selectedYear}</p>
             <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl mb-6">
               <X className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-              <p className="text-xs text-red-800">This will revert the status to <span className="font-bold">Pending Validation</span>. The Revision, Validate, and Export actions will become available again.</p>
+              <p className="text-xs text-red-800">This will revert the status to <span className="font-bold">Pending Validation</span>. The Revision, Validate, and Download actions will become available again.</p>
             </div>
             <div className="flex gap-3">
               <button onClick={() => setShowCancelValidate(false)} className="flex-1 py-2.5 rounded-full border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors">

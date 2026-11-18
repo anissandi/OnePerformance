@@ -1,5 +1,6 @@
 // @refresh reset
 import React, { useState, useEffect, useRef } from "react";
+import { useBlocker } from "react-router";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import {
   loadMasterKpi,
@@ -32,6 +33,7 @@ import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2,
 import { toast } from "sonner";
 import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
 import ExportImportButton from "../../../components/ExportImportButton";
+import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
 
@@ -855,37 +857,231 @@ function SatuanField({ value, onChange, unitOptions, periodeOptions }: {
 
 const SECTION_BOBOT_LIMIT: Record<string, number> = { A: 20, B: 80 };
 
+function parsePctNum(val?: string | number | null): number {
+  if (typeof val === "number") return Number.isFinite(val) ? val : 0;
+  const cleaned = String(val ?? "").replace("%", "").replace(",", ".").trim();
+  const parsed = parseFloat(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatPctNum(val: number): string {
+  const rounded = Math.round(val * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+/**
+ * Membangun daftar pilihan dropdown bobot ("1%", "2%", ... s/d batas sisa kuota `maxPct`)
+ * sehingga hanya memunculkan angka sisa yang valid dan tidak melebihi batas kuota.
+ */
+function buildRemainingBobotOptions(
+  minPct: number,
+  maxPct: number,
+  currentVal?: string,
+  allowZero = false,
+): string[] {
+  const safeMax = Math.max(0, Math.floor(maxPct + 1e-6));
+  const safeMin = Math.max(allowZero ? 0 : 1, Math.ceil(minPct - 1e-6));
+  const numSet = new Set<number>();
+  if (allowZero && minPct <= 1e-6) {
+    numSet.add(0);
+  }
+  for (let v = safeMin; v <= safeMax; v += 1) {
+    if (v >= 0 && v <= safeMax) numSet.add(v);
+  }
+  // Jika maxPct memiliki pecahan desimal (mis. 7.5%), sertakan nilai batas sisa persisnya
+  const roundedMax = Math.round(maxPct * 100) / 100;
+  if (roundedMax > 0 && roundedMax >= minPct - 1e-6) {
+    numSet.add(roundedMax);
+  }
+  if (currentVal !== undefined && currentVal !== "") {
+    const curNum = Math.round(parsePctNum(currentVal) * 100) / 100;
+    if (curNum >= (allowZero ? 0 : Math.min(safeMin, curNum)) && curNum <= roundedMax + 1e-6) {
+      numSet.add(curNum);
+    }
+  }
+  return Array.from(numSet)
+    .sort((a, b) => a - b)
+    .map((n) => `${formatPctNum(n)}%`);
+}
+
+function resolveEffectiveSectionBobotNum(
+  items: KPISetting[],
+  sec: string,
+  isCorporate: boolean,
+  editedSectionBobots?: Record<string, string>,
+): number {
+  const edited = editedSectionBobots?.[sec];
+  if (edited !== undefined && edited !== "") {
+    return parsePctNum(edited);
+  }
+  const secRows = items.filter((i) => i.section === sec);
+  const explicit = secRows.find((i) => i.sectionBobot !== undefined && i.sectionBobot !== "")?.sectionBobot;
+  if (explicit !== undefined && explicit !== "") {
+    return parsePctNum(explicit);
+  }
+  if (isCorporate) {
+    const metaBobot = (CORP_SECTION_META as Record<string, { bobot?: string }>)[sec]?.bobot;
+    if (metaBobot !== undefined && metaBobot !== "") {
+      return parsePctNum(metaBobot);
+    }
+  } else if (SECTION_BOBOT_LIMIT[sec] !== undefined) {
+    return SECTION_BOBOT_LIMIT[sec];
+  }
+  return secRows.reduce((sum, i) => sum + parsePctNum(i.bobot), 0);
+}
+
+function calcAllSectionsBobotSum(
+  items: KPISetting[],
+  isCorporate: boolean,
+  editedSectionBobots?: Record<string, string>,
+  excludeSection?: string,
+): number {
+  const uniqueSecs = Array.from(new Set(items.map((i) => i.section).filter(Boolean)));
+  let sum = 0;
+  for (const sec of uniqueSecs) {
+    if (excludeSection && sec === excludeSection) continue;
+    sum += resolveEffectiveSectionBobotNum(items, sec, isCorporate, editedSectionBobots);
+  }
+  return Math.round(sum * 100) / 100;
+}
+
+function evaluateKpiSettingSubmitStatus(
+  items: KPISetting[],
+  isCorporate: boolean,
+  editedSectionBobots?: Record<string, string>,
+): { canSubmit: boolean; totalSectionBobot: number; totalItemBobot: number; reasons: string[] } {
+  if (items.length === 0) {
+    return {
+      canSubmit: false,
+      totalSectionBobot: 0,
+      totalItemBobot: 0,
+      reasons: ["Belum ada KPI. Tambahkan KPI terlebih dahulu hingga Total Bobot mencapai 100%."],
+    };
+  }
+  const reasons: string[] = [];
+  const totalSectionBobot = calcAllSectionsBobotSum(items, isCorporate, editedSectionBobots);
+  const totalItemBobot = Math.round(items.reduce((s, i) => s + parsePctNum(i.bobot), 0) * 100) / 100;
+
+  if (Math.round(totalSectionBobot * 100) !== 10000) {
+    const diff = Math.abs(100 - totalSectionBobot);
+    reasons.push(
+      totalSectionBobot < 100
+        ? `Total bobot semua Section saat ini ${formatPctNum(totalSectionBobot)}% (kurang ${formatPctNum(diff)}% dari 100%).`
+        : `Total bobot semua Section saat ini ${formatPctNum(totalSectionBobot)}% (melebihi 100% sebesar ${formatPctNum(diff)}%).`,
+    );
+  }
+
+  const uniqueSecs = Array.from(new Set(items.map((i) => i.section).filter(Boolean))).sort();
+  for (const sec of uniqueSecs) {
+    const secLimit = resolveEffectiveSectionBobotNum(items, sec, isCorporate, editedSectionBobots);
+    const subSum = Math.round(calcSubSectionBobot(items, sec) * 100) / 100;
+    if (Math.round(subSum * 100) !== Math.round(secLimit * 100)) {
+      reasons.push(
+        `Section ${sec}: total bobot Sub Section ${formatPctNum(subSum)}% belum tepat sama dengan bobot Section ${formatPctNum(secLimit)}%.`,
+      );
+    }
+  }
+
+  if (Math.round(totalItemBobot * 100) !== 10000) {
+    reasons.push(
+      `Total Bobot seluruh KPI saat ini ${formatPctNum(totalItemBobot)}% — wajib tepat 100% sebelum Submit KPI.`,
+    );
+  }
+
+  return {
+    canSubmit: reasons.length === 0,
+    totalSectionBobot,
+    totalItemBobot,
+    reasons,
+  };
+}
+
+function SubmitKpiGateButton({
+  canSubmit,
+  reasons,
+  onConfirmSubmit,
+  size = "md",
+}: {
+  canSubmit: boolean;
+  reasons: string[];
+  onConfirmSubmit: () => void;
+  size?: "sm" | "md";
+}) {
+  const [tipOpen, setTipOpen] = useState(false);
+  const isSm = size === "sm";
+
+  if (canSubmit) {
+    return (
+      <button
+        type="button"
+        onClick={onConfirmSubmit}
+        className={`flex items-center gap-1.5 rounded-lg font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors ${
+          isSm ? "px-3.5 py-1.5 text-xs" : "px-4 py-2 text-sm"
+        }`}
+      >
+        <Send className={isSm ? "w-3.5 h-3.5" : "w-4 h-4"} /> Submit KPI
+      </button>
+    );
+  }
+
+  return (
+    <Tooltip open={tipOpen} onOpenChange={setTipOpen}>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          role="button"
+          aria-disabled="true"
+          onMouseEnter={() => setTipOpen(true)}
+          onMouseLeave={() => setTipOpen(false)}
+          onClick={(e) => {
+            e.preventDefault();
+            setTipOpen((prev) => !prev);
+          }}
+          className="inline-flex outline-none"
+        >
+          <span
+            className={`flex items-center gap-1.5 rounded-lg font-semibold bg-[#1A284F] text-white opacity-45 cursor-not-allowed select-none ${
+              isSm ? "px-3.5 py-1.5 text-xs" : "px-4 py-2 text-sm"
+            }`}
+          >
+            <Send className={isSm ? "w-3.5 h-3.5" : "w-4 h-4"} /> Submit KPI
+          </span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="end" className="max-w-sm bg-[#1A284F] text-white p-3.5 rounded-xl shadow-xl z-[70]">
+        <p className="text-xs font-bold mb-1.5 text-amber-300">Belum dapat Submit KPI Setting:</p>
+        <ul className="list-disc pl-4 space-y-1 text-[11px] leading-relaxed text-white/95">
+          {reasons.map((r, idx) => (
+            <li key={idx}>{r}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function calcSectionBobot(items: KPISetting[], section: string, excludeId?: string): number {
   return items
     .filter((i) => i.section === section && i.id !== excludeId)
-    .reduce((sum, i) => sum + (parseFloat(i.bobot) || 0), 0);
+    .reduce((sum, i) => sum + parsePctNum(i.bobot), 0);
 }
 
 function calcTotalBobot(items: KPISetting[], excludeId?: string): number {
   return items
     .filter((i) => i.id !== excludeId)
-    .reduce((sum, i) => sum + (parseFloat(i.bobot) || 0), 0);
+    .reduce((sum, i) => sum + parsePctNum(i.bobot), 0);
 }
 
 // Sum of unique sectionBobots across all sections (for corporate/division KPIs)
 function calcTotalSectionBobot(items: KPISetting[], excludeSection?: string): number {
-  const seen = new Set<string>();
-  let total = 0;
-  for (const item of items) {
-    if (item.section === excludeSection) continue;
-    if (!seen.has(item.section) && item.sectionBobot) {
-      seen.add(item.section);
-      total += parseFloat(item.sectionBobot) || 0;
-    }
-  }
-  return total;
+  return calcAllSectionsBobotSum(items, true, undefined, excludeSection);
 }
 
 // Sum of KPI bobots within a section (for sub-section validation)
 function calcSubSectionBobot(items: KPISetting[], section: string, excludeId?: string): number {
   return items
     .filter((i) => i.section === section && i.id !== excludeId)
-    .reduce((sum, i) => sum + (parseFloat(i.bobot) || 0), 0);
+    .reduce((sum, i) => sum + parsePctNum(i.bobot), 0);
 }
 
 type BobotConflictItem = { no: string; label: string; bobot: string };
@@ -2229,32 +2425,89 @@ export function AddKPIModal({
 
   // When section changes, auto-fill sectionLabel, sectionAlphabet, and sectionBobot
   const [manualSection, setManualSection] = useState(false);
+
+  const computeSectionStateForCode = (code: string) => {
+    const existingRows = existingItems.filter((i) => i.section === code);
+    const isExisting = existingRows.length > 0;
+    const usedOtherSections = calcAllSectionsBobotSum(existingItems, Boolean(forDivision), undefined, code);
+    const remainingForSection = Math.max(0, Math.round((100 - usedOtherSections) * 100) / 100);
+    if (isExisting) {
+      const lockedNum = resolveEffectiveSectionBobotNum(existingItems, code, Boolean(forDivision));
+      return {
+        isExisting: true,
+        sectionBobotStr: `${formatPctNum(lockedNum)}%`,
+        remainingForSection,
+      };
+    }
+    // Section baru: sesuaikan default bobot ke dalam batas sisa dari 100%
+    let suggestedNum = remainingForSection;
+    if (forDivision) {
+      const metaStr = (CORP_SECTION_META as Record<string, { bobot: string }>)[code]?.bobot ?? "";
+      const metaNum = parsePctNum(metaStr);
+      if (metaNum > 0 && metaNum <= remainingForSection) suggestedNum = metaNum;
+    } else {
+      const optStr = dynamicPersonalSections.find((o) => o.value === code)?.bobot ?? "";
+      const optNum = parsePctNum(optStr);
+      if (optNum > 0 && optNum <= remainingForSection) suggestedNum = optNum;
+    }
+    return {
+      isExisting: false,
+      sectionBobotStr: remainingForSection > 0 ? `${formatPctNum(suggestedNum)}%` : "",
+      remainingForSection,
+    };
+  };
+
   const setSection = (code: string) => {
     if (code === "__manual__") {
       const used = new Set(existingItems.map((i) => i.section));
       const nextCode = SECTION_LETTERS.find((l) => !used.has(l)) ?? "Z";
+      const st = computeSectionStateForCode(nextCode);
       setManualSection(true);
-      setForm(p => ({ ...p, section: nextCode, sectionLabel: "", sectionAlphabet: nextCode + ".", sectionBobot: "" }));
+      setForm((p) => ({
+        ...p,
+        section: nextCode,
+        sectionLabel: "",
+        sectionAlphabet: nextCode + ".",
+        sectionBobot: st.sectionBobotStr,
+        bobot: "",
+      }));
       return;
     }
     setManualSection(false);
+    const st = computeSectionStateForCode(code);
     const existingRow = existingItems.find((i) => i.section === code);
     if (existingRow) {
       const lbl = forDivision ? resolveKpiSectionLabel(existingRow) : resolvePersonalSectionLabel(existingRow);
-      const fallbackBobot = forDivision ? "" : PERSONAL_SECTION_OPTIONS.find((o) => o.value === code)?.bobot ?? "";
-      setForm(p => ({ ...p, section: code, sectionLabel: lbl, sectionAlphabet: code + ".", sectionBobot: existingRow.sectionBobot || fallbackBobot || p.sectionBobot }));
+      setForm((p) => ({
+        ...p,
+        section: code,
+        sectionLabel: lbl,
+        sectionAlphabet: code + ".",
+        sectionBobot: st.sectionBobotStr,
+        bobot: "",
+      }));
       return;
     }
     if (forDivision) {
-      const opt = dynamicDivisionSections.find(o => o.value === code);
-      // Try to get bobot from existing items, else from CORP_SECTION_META
-      const existingBobot = existingItems.find(i => i.section === code)?.sectionBobot ?? "";
-      const metaBobot = (CORP_SECTION_META as Record<string, { bobot: string }>)[code]?.bobot ?? "";
-      setForm(p => ({ ...p, section: code, sectionLabel: opt?.label.replace(/^[A-Z] — /, "") ?? code, sectionAlphabet: code + ".", sectionBobot: existingBobot || metaBobot }));
+      const opt = dynamicDivisionSections.find((o) => o.value === code);
+      setForm((p) => ({
+        ...p,
+        section: code,
+        sectionLabel: opt?.label.replace(/^[A-Z] — /, "") ?? code,
+        sectionAlphabet: code + ".",
+        sectionBobot: st.sectionBobotStr,
+        bobot: "",
+      }));
     } else {
-      const opt = dynamicPersonalSections.find(o => o.value === code);
-      const existingBobot = existingItems.find(i => i.section === code)?.sectionBobot ?? "";
-      setForm(p => ({ ...p, section: code, sectionLabel: opt?.label.replace(/^[A-Z] — /, "") ?? code, sectionAlphabet: code + ".", sectionBobot: existingBobot || opt?.bobot || "" }));
+      const opt = dynamicPersonalSections.find((o) => o.value === code);
+      setForm((p) => ({
+        ...p,
+        section: code,
+        sectionLabel: opt?.label.replace(/^[A-Z] — /, "") ?? code,
+        sectionAlphabet: code + ".",
+        sectionBobot: st.sectionBobotStr,
+        bobot: "",
+      }));
     }
   };
 
@@ -2263,37 +2516,109 @@ export function AddKPIModal({
     ...(mode === "color" ? { formula: "Nilai Akhir" } : mode === "ratio" ? { formula: "Jumlah" } : {}),
   }));
 
-  const handleNextToSubSection = () => setTab("subsection");
+  const isExistingSection = existingItems.some((i) => i.section === form.section);
+  const usedOtherSectionsBobot = calcAllSectionsBobotSum(existingItems, Boolean(forDivision), undefined, form.section);
+  const remainingSectionFrom100 = Math.max(0, Math.round((100 - usedOtherSectionsBobot) * 100) / 100);
+  const activeSectionLimitNum = isExistingSection
+    ? resolveEffectiveSectionBobotNum(existingItems, form.section, Boolean(forDivision))
+    : parsePctNum(form.sectionBobot);
+  const subUsedInSection = Math.round(calcSubSectionBobot(existingItems, form.section) * 100) / 100;
+  const subRemainingInSection = Math.max(0, Math.round((activeSectionLimitNum - subUsedInSection) * 100) / 100);
+  const isSectionQuotaFull = activeSectionLimitNum > 0 && subRemainingInSection <= 1e-6;
+  const isNewSectionBlockedBy100 = !isExistingSection && remainingSectionFrom100 <= 1e-6;
+
+  const availableSectionBobotOpts = buildRemainingBobotOptions(1, remainingSectionFrom100);
+  const availableSubBobotOpts = buildRemainingBobotOptions(
+    activeSectionLimitNum === 0 ? 0 : 1,
+    subRemainingInSection,
+    undefined,
+    activeSectionLimitNum === 0,
+  );
+
+  const handleNextToSubSection = () => {
+    if (!form.sectionBobot || isNewSectionBlockedBy100 || isSectionQuotaFull) return;
+    const secNum = parsePctNum(form.sectionBobot);
+    if (!isExistingSection && usedOtherSectionsBobot + secNum > 100 + 1e-6) {
+      const conflictItems = Array.from(
+        new Map(existingItems.map((i) => [i.section, i])).values(),
+      ).map((i) => ({
+        no: i.section,
+        label: i.sectionLabel || `Section ${i.section}`,
+        bobot: `${formatPctNum(resolveEffectiveSectionBobotNum(existingItems, i.section, Boolean(forDivision)))}%`,
+      }));
+      setBobotError({
+        kind: "section_bobot",
+        totalUsed: usedOtherSectionsBobot,
+        remaining: remainingSectionFrom100,
+        conflictItems,
+      });
+      return;
+    }
+    setTab("subsection");
+  };
 
   const handleAdd = () => {
-    if (!form.no || !form.kpi) return;
-    const bobot = parseFloat(form.bobot) || 0;
+    if (!form.no.trim() || !form.kpi.trim() || !form.bobot) return;
+    const bobot = parsePctNum(form.bobot);
+    const sectionLimit = activeSectionLimitNum;
+    const sectionUsed = calcSubSectionBobot(existingItems, form.section);
+    if (sectionLimit > 0 && sectionUsed >= sectionLimit - 1e-6) {
+      setBobotError({
+        kind: "sub_section_bobot",
+        sectionLabel: form.sectionLabel || `Section ${form.section}`,
+        sectionLimit,
+        remaining: Math.max(0, sectionLimit - sectionUsed),
+        conflictItems: existingItems
+          .filter((i) => i.section === form.section)
+          .map((i) => ({ no: i.no, label: i.kpi.split("\n")[0], bobot: i.bobot })),
+      });
+      return;
+    }
+    if (sectionUsed + bobot > sectionLimit + 1e-6) {
+      setBobotError({
+        kind: "sub_section_bobot",
+        sectionLabel: form.sectionLabel || `Section ${form.section}`,
+        sectionLimit,
+        remaining: Math.max(0, sectionLimit - sectionUsed),
+        conflictItems: existingItems
+          .filter((i) => i.section === form.section)
+          .map((i) => ({ no: i.no, label: i.kpi.split("\n")[0], bobot: i.bobot })),
+      });
+      return;
+    }
     const totalUsed = calcTotalBobot(existingItems);
-    if (totalUsed + bobot > 100) {
+    if (totalUsed + bobot > 100 + 1e-6) {
       setBobotError({ kind: "global", totalUsed, remaining: 100 - totalUsed,
         conflictItems: existingItems.map((i) => ({ no: i.no, label: i.kpi.split("\n")[0], bobot: i.bobot })) });
       return;
     }
-    const sectionUsed = calcSectionBobot(existingItems, form.section);
-    const sectionLimit = SECTION_BOBOT_LIMIT[form.section] ?? 100;
-    if (sectionUsed + bobot > sectionLimit) {
-      setBobotError({ kind: "section", section: form.section, remaining: sectionLimit - sectionUsed,
-        conflictItems: existingItems.filter((i) => i.section === form.section).map((i) => ({ no: i.no, label: i.kpi.split("\n")[0], bobot: i.bobot })) });
-      return;
-    }
     if (!hideCascading && sectionCascadeType) onSectionCascade?.(form.section, sectionCascadeType);
     // S2: Periode Tracking otomatis diambil dari bagian /Periode pada field Satuan (/Periode) di tab Sub Section
-    const satuanSep = form.satuan.indexOf("/");
-    const rawPeriode = satuanSep >= 0 ? form.satuan.slice(satuanSep + 1).trim() : "";
     const derivedTracking = derivePeriodeTrackingFromSatuan(form.satuan, form.trackingPeriod);
-    onAdd({ ...form, trackingPeriod: derivedTracking, id: `kpi-${Date.now()}` }); onClose();
+    const pinnedSectionBobot = `${formatPctNum(sectionLimit)}%`;
+    onAdd({
+      ...form,
+      sectionBobot: pinnedSectionBobot,
+      trackingPeriod: derivedTracking,
+      id: `kpi-${Date.now()}`,
+    });
+    onClose();
   };
 
-  // Default section mengikuti section pertama pada tabel (mis. hasil copy) bila tersedia
+  // Sinkronkan section awal saat modal dibuka agar status read-only & sisa kuota langsung akurat
   useEffect(() => {
-    if (forDivision || existingItems.length === 0) return;
-    const first = [...existingItems].sort((a, b) => a.section.localeCompare(b.section))[0];
-    if (first) setSection(first.section);
+    if (existingItems.length > 0) {
+      const sortedSecs = Array.from(new Set(existingItems.map((i) => i.section))).sort();
+      // Utamakan section yang kuota sub-section-nya masih belum penuh, atau section pertama
+      const openSec = sortedSecs.find((sec) => {
+        const lim = resolveEffectiveSectionBobotNum(existingItems, sec, Boolean(forDivision));
+        const used = calcSubSectionBobot(existingItems, sec);
+        return lim > 0 && used < lim - 1e-6;
+      });
+      setSection(openSec ?? sortedSecs[0]);
+    } else {
+      setSection(forDivision ? firstDivision.value : firstPersonal.value);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2306,7 +2631,6 @@ export function AddKPIModal({
     ...existingSectionOpts,
     ...baseSectionOptions.filter((o) => !existingSectionOpts.some((e) => e.value === o.value)),
   ].sort((a, b) => a.value.localeCompare(b.value));
-  const sectionBobotOpts = master.sectionBobot?.length ? master.sectionBobot : SECTION_BOBOT_OPTIONS;
   const cascTypeOpts = master.cascadingTypes?.length
     ? master.cascadingTypes
     : [
@@ -2315,35 +2639,44 @@ export function AddKPIModal({
         { value: "CC", description: "Contributing Cascading" },
       ];
   const formulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
-  const bobotOpts = master.bobot?.length ? master.bobot : BOBOT_OPTIONS;
   const polaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
     : POLARITAS_OPTIONS;
   const modalTitle = forDivision ? "Add New KPI — Division" : "Add New KPI — Personal";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:p-5">
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-[96vw] max-w-[96vw] h-[93vh] max-h-[93vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between px-6 sm:px-8 py-4 border-b border-gray-100 shrink-0">
           <div>
             <h3 className="font-bold text-[#1A284F] text-lg">{modalTitle}</h3>
             <p className="text-xs text-gray-400 mt-0.5">{forDivision ? "KPI Divisi 2026" : "KPI Personal 2026"}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg"><X className="w-4 h-4 text-gray-500" /></button>
+          <button type="button" onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Close"><X className="w-4 h-4 text-gray-500" /></button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100 px-6 pt-3 gap-1">
+        <div className="flex border-b border-gray-100 px-6 sm:px-8 pt-3 gap-1 shrink-0">
           {([{ id: "section", label: "Section" }, { id: "subsection", label: "Sub Section" }] as const).map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-4 py-2 text-sm font-semibold rounded-t-lg transition-colors ${tab === t.id ? "bg-[#1A284F] text-white" : "text-gray-500 hover:text-[#1A284F] hover:bg-gray-50"}`}>
+            <button
+              key={t.id}
+              type="button"
+              disabled={t.id === "subsection" && (!form.sectionBobot || isNewSectionBlockedBy100 || isSectionQuotaFull)}
+              onClick={() => {
+                if (t.id === "subsection") handleNextToSubSection();
+                else setTab("section");
+              }}
+              className={`px-4 py-2 text-sm font-semibold rounded-t-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${tab === t.id ? "bg-[#1A284F] text-white" : "text-gray-500 hover:text-[#1A284F] hover:bg-gray-50"}`}>
               {t.label}
             </button>
           ))}
         </div>
 
-        <div className="px-6 py-5 flex flex-col gap-4 max-h-[65vh] overflow-y-auto">
+        <div className="px-6 sm:px-8 py-5 flex flex-col gap-4 flex-1 overflow-y-auto">
 
           {/* ══ SECTION TAB ══ */}
           {tab === "section" && (
@@ -2359,11 +2692,23 @@ export function AddKPIModal({
                   <div className="mt-2 grid grid-cols-[90px_1fr] gap-2">
                     <select
                       value={form.section}
-                      onChange={(e) => setForm(p => ({ ...p, section: e.target.value, sectionAlphabet: e.target.value + "." }))}
+                      onChange={(e) => {
+                        const code = e.target.value;
+                        const st = computeSectionStateForCode(code);
+                        setForm((p) => ({
+                          ...p,
+                          section: code,
+                          sectionAlphabet: code + ".",
+                          sectionBobot: st.sectionBobotStr,
+                          bobot: "",
+                        }));
+                      }}
                       className={inputCls}
                       aria-label="Kode Section"
                     >
-                      {SECTION_LETTERS.map((l) => <option key={l} value={l}>{l}</option>)}
+                      {SECTION_LETTERS.filter((l) => !existingItems.some((i) => i.section === l) || l === form.section).map((l) => (
+                        <option key={l} value={l}>{l}</option>
+                      ))}
                     </select>
                     <input
                       value={form.sectionLabel ?? ""}
@@ -2392,17 +2737,61 @@ export function AddKPIModal({
 
               {/* Section Bobot */}
               <Field label="Section Bobot">
-                <select value={form.sectionBobot ?? ""} onChange={(e) => set("sectionBobot" as keyof typeof form, e.target.value)} className={inputCls}>
-                  <option value="">— Section Bobot —</option>
-                  {sectionBobotOpts.map(b => <option key={b} value={b}>{b}</option>)}
-                </select>
-                {form.sectionBobot && (
-                  <p className="text-[10px] text-blue-600 mt-1 flex items-center gap-1">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                    Auto-filled dari section yang sudah ada. Dapat diubah jika diperlukan.
-                  </p>
+                {isExistingSection ? (
+                  <>
+                    <div className={`${inputCls} bg-gray-100 text-[#1A284F] font-bold flex items-center justify-between cursor-not-allowed select-none`}>
+                      <span>{`${formatPctNum(activeSectionLimitNum)}%`}</span>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-500">
+                        <Lock className="w-3.5 h-3.5" /> Read-only
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-blue-700 mt-1 flex items-center gap-1.5">
+                      <Lock className="w-3 h-3 shrink-0" />
+                      Section ini sudah memiliki Sub Section sehingga bobot Section bersifat read-only di modal (dapat disesuaikan langsung pada dropdown tabel).
+                    </p>
+                  </>
+                ) : isNewSectionBlockedBy100 ? (
+                  <div className="px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-medium">
+                    Total bobot seluruh Section yang ada sudah mencapai <strong>{formatPctNum(usedOtherSectionsBobot)}%</strong> (100%). Untuk membuat Section baru, kurangi terlebih dahulu bobot salah satu Section pada tabel.
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={form.sectionBobot ?? ""}
+                      onChange={(e) => set("sectionBobot" as keyof typeof form, e.target.value)}
+                      className={inputCls}
+                    >
+                      <option value="">— Pilih Section Bobot (Maks. Sisa {formatPctNum(remainingSectionFrom100)}%) —</option>
+                      {availableSectionBobotOpts.map((b) => (
+                        <option key={b} value={b}>
+                          {b}{parsePctNum(b) === remainingSectionFrom100 ? " (Sisa penuh dari 100%)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-emerald-700 mt-1">
+                      Bobot Section terpakai saat ini: <strong>{formatPctNum(usedOtherSectionsBobot)}%</strong> · Sisa kuota dari 100%: <strong>{formatPctNum(remainingSectionFrom100)}%</strong>.
+                    </p>
+                  </>
                 )}
               </Field>
+
+              {/* Info Sisa Kuota Sub Section pada Section terpilih */}
+              {isExistingSection && (
+                isSectionQuotaFull ? (
+                  <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium leading-relaxed">
+                    Total bobot Sub Section pada <strong>Section {form.section} ({form.sectionLabel})</strong> sudah terpenuhi <strong>{formatPctNum(subUsedInSection)}%</strong> dari batas <strong>{formatPctNum(activeSectionLimitNum)}%</strong>. Anda tidak dapat menambahkan Sub Section baru pada section ini kecuali mengurangi bobot Sub Section sebelumnya atau menaikkan bobot Section di tabel.
+                  </div>
+                ) : (
+                  <div className="px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between flex-wrap gap-2">
+                    <span>
+                      Kuota Sub Section pada <strong>Section {form.section}</strong>: terpakai <strong>{formatPctNum(subUsedInSection)}%</strong> dari <strong>{formatPctNum(activeSectionLimitNum)}%</strong>
+                    </span>
+                    <span className="font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                      Sisa tersedia: {formatPctNum(subRemainingInSection)}%
+                    </span>
+                  </div>
+                )
+              )}
 
               {/* Cascading */}
               {!hideCascading && (
@@ -2433,11 +2822,14 @@ export function AddKPIModal({
               )}
 
               <div className="flex items-center justify-between pt-2">
-                {!form.sectionBobot && (
+                {!form.sectionBobot && !isNewSectionBlockedBy100 && (
                   <p className="text-[11px] text-amber-600 font-medium">Choose Section Bobot to continue.</p>
                 )}
                 <div className="ml-auto">
-                  <button onClick={handleNextToSubSection} disabled={!form.sectionBobot}
+                  <button
+                    type="button"
+                    onClick={handleNextToSubSection}
+                    disabled={!form.sectionBobot || isNewSectionBlockedBy100 || isSectionQuotaFull || (manualSection && !form.sectionLabel?.trim())}
                     className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed">
                     Next: Sub Section →
                   </button>
@@ -2449,6 +2841,26 @@ export function AddKPIModal({
           {/* ══ SUB SECTION TAB ══ */}
           {tab === "subsection" && (
             <>
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-[#1A284F]/5 border border-[#1A284F]/15 text-xs flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded bg-[#1A284F] text-white font-bold">{form.section}</span>
+                  <span className="font-bold text-[#1A284F]">{form.sectionLabel}</span>
+                  <span className="text-gray-500">· Bobot Section: <strong>{formatPctNum(activeSectionLimitNum)}%</strong></span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">Terpakai: <strong>{formatPctNum(subUsedInSection)}%</strong></span>
+                  <span className={`px-2.5 py-0.5 rounded-full font-bold ${isSectionQuotaFull ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
+                    Sisa Bobot Sub Section: {formatPctNum(subRemainingInSection)}%
+                  </span>
+                </div>
+              </div>
+
+              {isSectionQuotaFull && (
+                <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-semibold">
+                  Kuota bobot pada section ini sudah penuh ({formatPctNum(activeSectionLimitNum)}%). Tidak dapat menambahkan Sub Section baru.
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <Field label="No *"><input value={form.no} onChange={(e) => set("no", e.target.value)} placeholder="e.g. 8" className={inputCls} /></Field>
                 <Field label="Perspektif">
@@ -2471,10 +2883,19 @@ export function AddKPIModal({
               </Field>
 
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Bobot">
-                  <select value={form.bobot} onChange={(e) => set("bobot", e.target.value)} className={inputCls}>
-                    <option value="">— Pilih Bobot —</option>
-                    {bobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
+                <Field label={`Bobot * (Maks. Sisa Section: ${formatPctNum(subRemainingInSection)}%)`}>
+                  <select
+                    value={form.bobot}
+                    disabled={isSectionQuotaFull}
+                    onChange={(e) => set("bobot", e.target.value)}
+                    className={inputCls + " disabled:bg-gray-100 disabled:cursor-not-allowed"}
+                  >
+                    <option value="">— Pilih Bobot (Sisa {formatPctNum(subRemainingInSection)}%) —</option>
+                    {availableSubBobotOpts.map((b) => (
+                      <option key={b} value={b}>
+                        {b}{parsePctNum(b) === subRemainingInSection && subRemainingInSection > 0 ? " (Gunakan seluruh sisa section)" : ""}
+                      </option>
+                    ))}
                   </select>
                 </Field>
                 <Field label="Polaritas">
@@ -2518,11 +2939,14 @@ export function AddKPIModal({
           )}
         </div>
 
-        <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
-          <button onClick={onClose} className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
+        <div className="flex justify-end gap-3 px-6 sm:px-8 py-4 border-t border-gray-100 shrink-0 bg-gray-50/40">
+          <button type="button" onClick={onClose} className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50">Cancel</button>
           {tab === "subsection" && (
-            <button onClick={handleAdd} disabled={!form.no || !form.kpi}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40">
+            <button
+              type="button"
+              onClick={handleAdd}
+              disabled={!form.no.trim() || !form.kpi.trim() || !form.bobot || isSectionQuotaFull || (subUsedInSection + parsePctNum(form.bobot) > activeSectionLimitNum + 1e-6)}
+              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed">
               <Plus className="w-4 h-4" /> Add KPI
             </button>
           )}
@@ -2788,9 +3212,7 @@ function CascadingDropdownRow({
 
 export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel = "Business", hideScope = false, hideCascading = false }: { onAdd: (item: KPISetting) => void; onClose: () => void; existingItems?: KPISetting[]; sectionLabel?: string; hideScope?: boolean; hideCascading?: boolean }) {
   const master = useMasterKpi();
-  const corpSectionBobotOpts = master.sectionBobot?.length ? master.sectionBobot : SECTION_BOBOT_OPTIONS;
   const corpFormulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
-  const corpBobotOpts = master.bobot?.length ? master.bobot : BOBOT_OPTIONS;
   const corpPolaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
     : POLARITAS_OPTIONS;
@@ -2802,6 +3224,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
         { value: "CC", description: "Contributing Cascading" },
       ];
   const [tab, setTab] = useState<"section" | "subsection">("section");
+  const [manualCustomSection, setManualCustomSection] = useState(false);
   const [form, setForm] = useState<CorporateKPIForm>({
     no: "", sectionAlphabet: "", sectionBobot: "", section: "",
     sectionLabel: "",
@@ -2822,26 +3245,99 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
     return next;
   });
 
-  // Handles free-text section label → derives letter code + alphabet
-  // Auto-fills sectionBobot when an existing section is selected
+  const computeCorpSectionState = (code: string, label: string) => {
+    const existingRows = existingItems.filter((i) => i.section === code);
+    const isExisting = existingRows.length > 0;
+    const usedOther = calcAllSectionsBobotSum(existingItems, true, undefined, code);
+    const remainingFrom100 = Math.max(0, Math.round((100 - usedOther) * 100) / 100);
+    if (isExisting) {
+      const lockedNum = resolveEffectiveSectionBobotNum(existingItems, code, true);
+      return {
+        isExisting: true,
+        sectionBobotStr: `${formatPctNum(lockedNum)}%`,
+        remainingFrom100,
+        resolvedLabel: resolveKpiSectionLabel(existingRows[0]) || label,
+      };
+    }
+    const metaBobotStr = (CORP_SECTION_META as Record<string, { label: string; bobot: string; bg: string }>)[code]?.bobot ?? "";
+    const metaNum = parsePctNum(metaBobotStr);
+    const suggestedNum = metaNum > 0 && metaNum <= remainingFrom100 ? metaNum : remainingFrom100;
+    return {
+      isExisting: false,
+      sectionBobotStr: remainingFrom100 > 0 ? `${formatPctNum(suggestedNum)}%` : "",
+      remainingFrom100,
+      resolvedLabel: label,
+    };
+  };
+
+  const selectSectionByCodeOrManual = (choice: string) => {
+    const usedCodes = Array.from(new Set(existingItems.map((i) => i.section).filter(Boolean)));
+    if (choice === "__manual__") {
+      const nextFree = SECTION_LETTERS.find((l) => !usedCodes.includes(l)) ?? "G";
+      const st = computeCorpSectionState(nextFree, "");
+      setManualCustomSection(true);
+      setForm((p) => ({
+        ...p,
+        section: nextFree,
+        sectionAlphabet: `${nextFree}.`,
+        sectionLabel: "",
+        sectionBobot: st.sectionBobotStr,
+        bobot: "",
+      }));
+      return;
+    }
+    setManualCustomSection(false);
+    const sepIdx = choice.indexOf("::");
+    const code = sepIdx >= 0 ? choice.slice(0, sepIdx) : choice;
+    const lbl = sepIdx >= 0 ? choice.slice(sepIdx + 2) : choice;
+    const st = computeCorpSectionState(code, lbl);
+    setForm((p) => ({
+      ...p,
+      section: code,
+      sectionAlphabet: `${code}.`,
+      sectionLabel: st.resolvedLabel,
+      sectionBobot: st.sectionBobotStr,
+      bobot: "",
+    }));
+  };
+
   const setSection = (label: string) => {
     const usedCodes = Array.from(new Set(existingItems.map(i => i.section).filter(Boolean)));
-    // Section dari baris yang sudah ada / hasil copy KPI (Group) diprioritaskan agar kode section konsisten
     const existingMatch = existingItems.find((i) => resolveKpiSectionLabel(i).trim().toLowerCase() === label.trim().toLowerCase());
     const code = existingMatch?.section ?? getMasterSectionCode(label.trim(), master.section, usedCodes);
-    // Prefer static metadata bobot (authoritative), fall back to existingItems sectionBobot field
-    const metaBobot = (CORP_SECTION_META as Record<string, { label: string; bobot: string; bg: string }>)[code]?.bobot ?? "";
-    const itemBobot = existingMatch?.sectionBobot ?? existingItems.find(i => i.section === code)?.sectionBobot ?? "";
-    const autoBobot = metaBobot || itemBobot;
+    const st = computeCorpSectionState(code, label);
     setForm(p => ({
       ...p,
       sectionLabel: label,
       section: code,
       sectionAlphabet: code + ".",
-      // Only auto-fill if we found a known bobot; don't overwrite a manually-set value when user clears and retypes
-      sectionBobot: autoBobot || p.sectionBobot,
+      sectionBobot: st.sectionBobotStr,
+      bobot: "",
     }));
   };
+
+  useEffect(() => {
+    const existingSecMap = new Map<string, KPISetting>();
+    existingItems.forEach((i) => {
+      if (i.section && !existingSecMap.has(i.section)) existingSecMap.set(i.section, i);
+    });
+    if (existingSecMap.size > 0) {
+      const sortedCodes = Array.from(existingSecMap.keys()).sort();
+      const openCode = sortedCodes.find((c) => {
+        const lim = resolveEffectiveSectionBobotNum(existingItems, c, true);
+        const used = calcSubSectionBobot(existingItems, c);
+        return lim > 0 && used < lim - 1e-6;
+      });
+      const chosenCode = openCode ?? sortedCodes[0];
+      const chosenLbl = resolveKpiSectionLabel(existingSecMap.get(chosenCode));
+      selectSectionByCodeOrManual(`${chosenCode}::${chosenLbl}`);
+    } else {
+      const firstLbl = master.section[0] || "Kinerja K3L Terintegrasi (SMK3/HSE)";
+      const firstCode = getMasterSectionCode(firstLbl, master.section, []);
+      selectSectionByCodeOrManual(`${firstCode}::${firstLbl}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const setIndicatorMode = (mode: IndicatorMode) => setForm((p) => ({
     ...p,
@@ -2855,32 +3351,81 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
 
   const [bobotError, setBobotError] = useState<BobotViolation | null>(null);
 
+  const isExistingSection = Boolean(form.section && existingItems.some((i) => i.section === form.section));
+  const usedOtherSectionsBobot = calcAllSectionsBobotSum(existingItems, true, undefined, form.section || undefined);
+  const remainingSectionFrom100 = Math.max(0, Math.round((100 - usedOtherSectionsBobot) * 100) / 100);
+  const activeSectionLimitNum = isExistingSection
+    ? resolveEffectiveSectionBobotNum(existingItems, form.section, true)
+    : parsePctNum(form.sectionBobot);
+  const subUsedInSection = form.section ? Math.round(calcSubSectionBobot(existingItems, form.section) * 100) / 100 : 0;
+  const subRemainingInSection = Math.max(0, Math.round((activeSectionLimitNum - subUsedInSection) * 100) / 100);
+  const isSectionQuotaFull = activeSectionLimitNum > 0 && subRemainingInSection <= 1e-6;
+  const isNewSectionBlockedBy100 = !isExistingSection && remainingSectionFrom100 <= 1e-6;
+
+  const availableCorpSectionBobotOpts = buildRemainingBobotOptions(1, remainingSectionFrom100);
+  const availableCorpSubBobotOpts = buildRemainingBobotOptions(
+    activeSectionLimitNum === 0 ? 0 : 1,
+    subRemainingInSection,
+    undefined,
+    activeSectionLimitNum === 0,
+  );
+
+  const corpSectionDropdownOpts = (() => {
+    const map = new Map<string, { code: string; label: string; isExisting: boolean }>();
+    existingItems.forEach((i) => {
+      if (i.section && !map.has(i.section)) {
+        map.set(i.section, { code: i.section, label: resolveKpiSectionLabel(i), isExisting: true });
+      }
+    });
+    const usedCodes = Array.from(map.keys());
+    master.section.forEach((lbl) => {
+      const alreadyByLabel = Array.from(map.values()).some((v) => v.label.trim().toLowerCase() === lbl.trim().toLowerCase());
+      if (alreadyByLabel) return;
+      const c = getMasterSectionCode(lbl, master.section, usedCodes);
+      if (!map.has(c)) {
+        usedCodes.push(c);
+        map.set(c, { code: c, label: lbl, isExisting: false });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
+  })();
+
   const handleNextToSubSection = () => {
-    const newSectionBobot = parseFloat(form.sectionBobot) || 0;
-    const usedSectionBobot = calcTotalSectionBobot(existingItems, form.section);
-    if (usedSectionBobot + newSectionBobot > 100) {
+    if (!form.sectionLabel?.trim() || !form.sectionBobot || isNewSectionBlockedBy100 || isSectionQuotaFull) return;
+    const newSectionBobot = parsePctNum(form.sectionBobot);
+    if (!isExistingSection && usedOtherSectionsBobot + newSectionBobot > 100 + 1e-6) {
       const conflictItems = Array.from(
-        new Map(existingItems.filter(i => i.sectionBobot).map(i => [i.section, i])).values()
-      ).map(i => ({ no: i.section, label: i.sectionLabel || `Section ${i.section}`, bobot: i.sectionBobot || "" }));
-      setBobotError({ kind: "section_bobot", totalUsed: usedSectionBobot, remaining: 100 - usedSectionBobot, conflictItems });
+        new Map(existingItems.map(i => [i.section, i])).values()
+      ).map(i => ({
+        no: i.section,
+        label: resolveKpiSectionLabel(i),
+        bobot: `${formatPctNum(resolveEffectiveSectionBobotNum(existingItems, i.section, true))}%`,
+      }));
+      setBobotError({ kind: "section_bobot", totalUsed: usedOtherSectionsBobot, remaining: remainingSectionFrom100, conflictItems });
       return;
     }
     setTab("subsection");
   };
 
   const handleAdd = () => {
-    if (!form.no || !form.kpi) return;
-    const kpiBobot = parseFloat(form.bobot) || 0;
-    const sectionLimit = parseFloat(form.sectionBobot) || 100;
+    if (!form.no.trim() || !form.kpi.trim() || !form.bobot) return;
+    const kpiBobot = parsePctNum(form.bobot);
+    const sectionLimit = activeSectionLimitNum;
     const subUsed = calcSubSectionBobot(existingItems, form.section);
-    if (subUsed + kpiBobot > sectionLimit) {
+    if ((sectionLimit > 0 && subUsed >= sectionLimit - 1e-6) || subUsed + kpiBobot > sectionLimit + 1e-6) {
       const conflictItems = existingItems
         .filter(i => i.section === form.section)
         .map(i => ({ no: i.no, label: i.kpi.split("\n")[0], bobot: i.bobot }));
-      setBobotError({ kind: "sub_section_bobot", sectionLabel: form.sectionLabel || `Section ${form.section}`, sectionLimit, remaining: sectionLimit - subUsed, conflictItems });
+      setBobotError({ kind: "sub_section_bobot", sectionLabel: form.sectionLabel || `Section ${form.section}`, sectionLimit, remaining: Math.max(0, sectionLimit - subUsed), conflictItems });
       return;
     }
-    onAdd({ ...form, id: `corp-kpi-${Date.now()}` });
+    const derivedTracking = derivePeriodeTrackingFromSatuan(form.satuan, form.trackingPeriod);
+    onAdd({
+      ...form,
+      sectionBobot: `${formatPctNum(sectionLimit)}%`,
+      trackingPeriod: derivedTracking,
+      id: `corp-kpi-${Date.now()}`,
+    });
     onClose();
   };
 
@@ -2890,24 +3435,32 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:p-5">
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-[96vw] max-w-[96vw] h-[93vh] max-h-[93vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between px-6 sm:px-8 py-4 border-b border-gray-100 shrink-0">
           <div>
             <h3 className="font-bold text-[#1A284F] text-lg">Add New KPI — {sectionLabel}</h3>
             <p className="text-xs text-gray-400 mt-0.5">{sectionLabel === "Division" ? "KPI Divisi 2026" : "KPI Bisnis RSUP Group 2026"}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg"><X className="w-4 h-4 text-gray-500" /></button>
+          <button type="button" onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Close"><X className="w-4 h-4 text-gray-500" /></button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100 px-6 pt-3 gap-1">
+        <div className="flex border-b border-gray-100 px-6 sm:px-8 pt-3 gap-1 shrink-0">
           {TABS.map(t => (
             <button
               key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`px-4 py-2 text-sm font-semibold rounded-t-lg transition-colors ${
+              type="button"
+              disabled={t.id === "subsection" && (!form.sectionLabel?.trim() || !form.sectionBobot || isNewSectionBlockedBy100 || isSectionQuotaFull)}
+              onClick={() => {
+                if (t.id === "subsection") handleNextToSubSection();
+                else setTab("section");
+              }}
+              className={`px-4 py-2 text-sm font-semibold rounded-t-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 tab === t.id
                   ? "bg-[#1A284F] text-white"
                   : "text-gray-500 hover:text-[#1A284F] hover:bg-gray-50"
@@ -2918,34 +3471,62 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
           ))}
         </div>
 
-        <div className="px-6 py-5 flex flex-col gap-4 max-h-[65vh] overflow-y-auto">
+        <div className="px-6 sm:px-8 py-5 flex flex-col gap-4 flex-1 overflow-y-auto">
 
           {/* ══ SECTION TAB ══ */}
           {tab === "section" && (
             <>
-              {/* Unified Section field — free text with master suggestions */}
               <Field label="Section">
-                <div className="relative">
-                  <input
-                    list="corp-section-list"
-                    value={form.sectionLabel ?? ""}
-                    onChange={(e) => setSection(e.target.value)}
-                    placeholder="Type or select a section name…"
-                    className={inputCls}
-                  />
-                  <datalist id="corp-section-list">
-                    {Array.from(new Set([
-                      ...Array.from(new Map(existingItems.map((i) => [i.section, i])).values())
-                        .sort((a, b) => a.section.localeCompare(b.section))
-                        .map((i) => resolveKpiSectionLabel(i)),
-                      ...master.section,
-                    ])).map(label => (
-                      <option key={label} value={label} />
-                    ))}
-                  </datalist>
-                </div>
+                <select
+                  value={
+                    manualCustomSection
+                      ? "__manual__"
+                      : corpSectionDropdownOpts.some((o) => o.code === form.section)
+                      ? `${form.section}::${corpSectionDropdownOpts.find((o) => o.code === form.section)?.label ?? form.sectionLabel}`
+                      : "__manual__"
+                  }
+                  onChange={(e) => selectSectionByCodeOrManual(e.target.value)}
+                  className={inputCls}
+                >
+                  {corpSectionDropdownOpts.map((o) => (
+                    <option key={o.code} value={`${o.code}::${o.label}`}>
+                      {o.code} — {o.label}{o.isExisting ? ` (Sudah ada · Bobot ${formatPctNum(resolveEffectiveSectionBobotNum(existingItems, o.code, true))}%)` : ""}
+                    </option>
+                  ))}
+                  <option value="__manual__">+ Tambah Section Baru…</option>
+                </select>
+                {manualCustomSection && (
+                  <div className="mt-2 grid grid-cols-[90px_1fr] gap-2">
+                    <select
+                      value={form.section}
+                      onChange={(e) => {
+                        const nextCode = e.target.value;
+                        const st = computeCorpSectionState(nextCode, form.sectionLabel ?? "");
+                        setForm((p) => ({
+                          ...p,
+                          section: nextCode,
+                          sectionAlphabet: `${nextCode}.`,
+                          sectionBobot: st.sectionBobotStr,
+                          bobot: "",
+                        }));
+                      }}
+                      className={inputCls}
+                      aria-label="Kode Section"
+                    >
+                      {SECTION_LETTERS.filter((l) => !existingItems.some((i) => i.section === l) || l === form.section).map((l) => (
+                        <option key={l} value={l}>{l}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={form.sectionLabel ?? ""}
+                      onChange={(e) => setForm((p) => ({ ...p, sectionLabel: e.target.value }))}
+                      placeholder="Ketik nama section baru…"
+                      className={inputCls}
+                    />
+                  </div>
+                )}
                 <p className="text-[10px] text-gray-400 mt-1">
-                  Choose from existing sections or type a new name to create a custom section.
+                  Pilih dari section yang sudah ada / master section, atau tambahkan section baru.
                 </p>
               </Field>
 
@@ -2972,28 +3553,68 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
 
               {/* Section Bobot — auto-filled when existing section is selected */}
               <Field label="Section Bobot">
-                <select value={form.sectionBobot} onChange={(e) => set("sectionBobot", e.target.value)} className={inputCls}>
-                  <option value="">— Section Bobot —</option>
-                  {corpSectionBobotOpts.map(b => <option key={b} value={b}>{b}</option>)}
-                </select>
-                {form.section && form.sectionBobot && (CORP_SECTION_META as Record<string, { bobot: string }>)[form.section]?.bobot === form.sectionBobot && (
-                  <p className="text-[10px] text-blue-600 mt-1 flex items-center gap-1">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                    Auto-filled dari bobot section yang sudah ada. Dapat diubah jika diperlukan.
-                  </p>
+                {isExistingSection ? (
+                  <>
+                    <div className={`${inputCls} bg-gray-100 text-[#1A284F] font-bold flex items-center justify-between cursor-not-allowed select-none`}>
+                      <span>{`${formatPctNum(activeSectionLimitNum)}%`}</span>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-500">
+                        <Lock className="w-3.5 h-3.5" /> Read-only
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-blue-700 mt-1 flex items-center gap-1.5">
+                      <Lock className="w-3 h-3 shrink-0" />
+                      Section ini sudah memiliki Sub Section sehingga bobot Section bersifat read-only di modal (dapat diubah melalui dropdown pada baris Section di tabel).
+                    </p>
+                  </>
+                ) : isNewSectionBlockedBy100 ? (
+                  <div className="px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-medium">
+                    Total bobot seluruh Section yang ada sudah mencapai <strong>{formatPctNum(usedOtherSectionsBobot)}%</strong> (100%). Kurangi bobot salah satu Section pada tabel terlebih dahulu jika ingin membuat Section baru.
+                  </div>
+                ) : (
+                  <>
+                    <select value={form.sectionBobot} onChange={(e) => set("sectionBobot", e.target.value)} className={inputCls}>
+                      <option value="">— Pilih Section Bobot (Maks. Sisa {formatPctNum(remainingSectionFrom100)}%) —</option>
+                      {availableCorpSectionBobotOpts.map((b) => (
+                        <option key={b} value={b}>
+                          {b}{parsePctNum(b) === remainingSectionFrom100 ? " (Sisa penuh dari 100%)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-emerald-700 mt-1">
+                      Bobot Section terpakai saat ini: <strong>{formatPctNum(usedOtherSectionsBobot)}%</strong> · Sisa kuota dari 100%: <strong>{formatPctNum(remainingSectionFrom100)}%</strong>.
+                    </p>
+                  </>
                 )}
               </Field>
 
+              {isExistingSection && (
+                isSectionQuotaFull ? (
+                  <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium leading-relaxed">
+                    Total bobot Sub Section pada <strong>Section {form.section} ({form.sectionLabel})</strong> sudah terpenuhi <strong>{formatPctNum(subUsedInSection)}%</strong> dari batas <strong>{formatPctNum(activeSectionLimitNum)}%</strong>. Tidak dapat menambahkan Sub Section baru pada section ini kecuali mengurangi bobot Sub Section sebelumnya atau menaikkan bobot Section di tabel.
+                  </div>
+                ) : (
+                  <div className="px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between flex-wrap gap-2">
+                    <span>
+                      Kuota Sub Section pada <strong>Section {form.section}</strong>: terpakai <strong>{formatPctNum(subUsedInSection)}%</strong> dari <strong>{formatPctNum(activeSectionLimitNum)}%</strong>
+                    </span>
+                    <span className="font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                      Sisa tersedia: {formatPctNum(subRemainingInSection)}%
+                    </span>
+                  </div>
+                )
+              )}
+
               <div className="flex items-center justify-between pt-2">
-                {(!form.sectionLabel?.trim() || !form.sectionBobot) && (
+                {(!form.sectionLabel?.trim() || !form.sectionBobot) && !isNewSectionBlockedBy100 && (
                   <p className="text-[11px] text-amber-600 font-medium">
                     {!form.sectionLabel?.trim() ? "Enter a section name." : "Choose Section Bobot to continue."}
                   </p>
                 )}
                 <div className="ml-auto">
                   <button
+                    type="button"
                     onClick={handleNextToSubSection}
-                    disabled={!form.sectionLabel?.trim() || !form.sectionBobot}
+                    disabled={!form.sectionLabel?.trim() || !form.sectionBobot || isNewSectionBlockedBy100 || isSectionQuotaFull}
                     className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Next: Sub Section →
@@ -3006,6 +3627,26 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
           {/* ══ SUB SECTION TAB ══ */}
           {tab === "subsection" && (
             <>
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-[#1A284F]/5 border border-[#1A284F]/15 text-xs flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded bg-[#1A284F] text-white font-bold">{form.section}</span>
+                  <span className="font-bold text-[#1A284F]">{form.sectionLabel}</span>
+                  <span className="text-gray-500">· Bobot Section: <strong>{formatPctNum(activeSectionLimitNum)}%</strong></span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">Terpakai: <strong>{formatPctNum(subUsedInSection)}%</strong></span>
+                  <span className={`px-2.5 py-0.5 rounded-full font-bold ${isSectionQuotaFull ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
+                    Sisa Bobot Sub Section: {formatPctNum(subRemainingInSection)}%
+                  </span>
+                </div>
+              </div>
+
+              {isSectionQuotaFull && (
+                <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-semibold">
+                  Kuota bobot pada section ini sudah penuh ({formatPctNum(activeSectionLimitNum)}%). Tidak dapat menambahkan Sub Section baru.
+                </div>
+              )}
+
               {/* No (narrow) + Perspektif */}
               <div className="grid gap-3" style={{ gridTemplateColumns: "100px 1fr" }}>
                 <Field label="No *">
@@ -3049,10 +3690,19 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Bobot">
-                  <select value={form.bobot} onChange={(e) => set("bobot", e.target.value)} className={inputCls}>
-                    <option value="">— Pilih Bobot —</option>
-                    {corpBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
+                <Field label={`Bobot * (Maks. Sisa Section: ${formatPctNum(subRemainingInSection)}%)`}>
+                  <select
+                    value={form.bobot}
+                    disabled={isSectionQuotaFull}
+                    onChange={(e) => set("bobot", e.target.value)}
+                    className={inputCls + " disabled:bg-gray-100 disabled:cursor-not-allowed"}
+                  >
+                    <option value="">— Pilih Bobot (Sisa {formatPctNum(subRemainingInSection)}%) —</option>
+                    {availableCorpSubBobotOpts.map((b) => (
+                      <option key={b} value={b}>
+                        {b}{parsePctNum(b) === subRemainingInSection && subRemainingInSection > 0 ? " (Gunakan seluruh sisa section)" : ""}
+                      </option>
+                    ))}
                   </select>
                 </Field>
                 <Field label="Polaritas">
@@ -3154,15 +3804,16 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
           )}
         </div>
 
-        <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
-          <button onClick={onClose} className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">
+        <div className="flex justify-end gap-3 px-6 sm:px-8 py-4 border-t border-gray-100 shrink-0 bg-gray-50/40">
+          <button type="button" onClick={onClose} className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50">
             Cancel
           </button>
           {tab === "subsection" && (
             <button
+              type="button"
               onClick={handleAdd}
-              disabled={!form.no || !form.kpi}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40"
+              disabled={!form.no.trim() || !form.kpi.trim() || !form.bobot || isSectionQuotaFull || (subUsedInSection + parsePctNum(form.bobot) > activeSectionLimitNum + 1e-6)}
+              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-4 h-4" /> Add KPI
             </button>
@@ -3268,9 +3919,10 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
 
 // ─── KPI Table ────────────────────────────────────────────────────────────────
 
-export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascading = false, onRenameSection }: {
+export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascading = false, onRenameSection, onUpdateSectionMeta }: {
   items: KPISetting[]; editable: boolean;
   onRenameSection?: (oldSec: string, newSec: string) => void;
+  onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
   onDelete?: (id: string) => void;
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
   hideCascading?: boolean;
@@ -3279,7 +3931,6 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
   const tablePerspektifOpts = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
   const tablePeriodeOpts = master.period?.length ? master.period : SATUAN_PERIODE_OPTIONS;
   const tableFormulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
-  const tableBobotOpts = master.bobot?.length ? master.bobot : BOBOT_OPTIONS;
   const tablePolaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
     : POLARITAS_OPTIONS;
@@ -3291,14 +3942,15 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
   const [targetEditItem, setTargetEditItem] = useState<KPISetting | null>(null);
   const [sectionLabelOverrides, setSectionLabelOverrides] = useState<Record<string, string>>({});
   const [editingSection, setEditingSection] = useState<string | null>(null);
+  const [editingSectionDraftName, setEditingSectionDraftName] = useState<string>("");
   const [bobotOverErrorPersonal, setBobotOverErrorPersonal] = useState<{ sectionLabel: string; sectionBobot: number; totalBobot: number; kind: "section" | "total" } | null>(null);
 
   const sections = Array.from(new Set(items.map((k) => k.section))).sort();
   const secItems = (sec: string) => items.filter((k) => k.section === sec);
   const headerDefs = [
-    { label: "No",                       style: { position: "sticky" as const, left: 0,               zIndex: 20, background: "#1A284F", minWidth: W_NO    } },
-    { label: "Perspektif",               style: { position: "sticky" as const, left: W_NO,            zIndex: 20, background: "#1A284F", minWidth: W_PERSP } },
-    { label: "KPI",                      style: { position: "sticky" as const, left: W_NO + W_PERSP,  zIndex: 20, background: "#1A284F", minWidth: W_KPI   } },
+    { label: "No",                       style: { position: "sticky" as const, left: 0,               zIndex: 25, background: "#1A284F", minWidth: W_NO,    maxWidth: W_NO    } },
+    { label: "Perspektif",               style: { position: "sticky" as const, left: W_NO,            zIndex: 25, background: "#1A284F", minWidth: W_PERSP, maxWidth: W_PERSP } },
+    { label: "KPI",                      style: { position: "sticky" as const, left: W_NO + W_PERSP,  zIndex: 25, background: "#1A284F", minWidth: W_KPI,   maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" } },
     { label: "Satuan",                   style: { minWidth: 180  } },
     { label: "Formula Setahun",          style: { minWidth: 100  } },
     { label: "Bobot",                    style: { minWidth: 72   } },
@@ -3321,13 +3973,12 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
     if (draft) {
       const sec = draft.section;
       // Rule 6: KPI item bobots in section must not exceed section bobot
-      const rawSecBobot = items.find(i => i.section === sec && i.sectionBobot)?.sectionBobot ?? "100";
-      const sectionBobot = parseFloat(rawSecBobot.replace("%", "")) || 100;
+      const sectionBobot = resolveEffectiveSectionBobotNum(items, sec, false);
       const secTotal = items
         .filter(i => i.section === sec && i.id !== draft.id)
-        .reduce((s, i) => s + (parseFloat(i.bobot.replace("%", "")) || 0), 0)
-        + (parseFloat(draft.bobot.replace("%", "")) || 0);
-      if (secTotal > sectionBobot) {
+        .reduce((s, i) => s + parsePctNum(i.bobot), 0)
+        + parsePctNum(draft.bobot);
+      if (secTotal > sectionBobot + 1e-6) {
         const lbl = items.find(i => i.section === sec)?.sectionLabel ?? `Section ${sec}`;
         setBobotOverErrorPersonal({ sectionLabel: lbl, sectionBobot, totalBobot: secTotal, kind: "section" });
         return;
@@ -3335,9 +3986,9 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
       // Rule 7: Total all KPI item bobots must not exceed 100%
       const allTotal = items
         .filter(i => i.id !== draft.id)
-        .reduce((s, i) => s + (parseFloat(i.bobot.replace("%", "")) || 0), 0)
-        + (parseFloat(draft.bobot.replace("%", "")) || 0);
-      if (allTotal > 100) {
+        .reduce((s, i) => s + parsePctNum(i.bobot), 0)
+        + parsePctNum(draft.bobot);
+      if (allTotal > 100 + 1e-6) {
         setBobotOverErrorPersonal({ sectionLabel: "Semua Section", sectionBobot: 100, totalBobot: allTotal, kind: "total" });
         return;
       }
@@ -3351,21 +4002,31 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
   const ci = "w-full text-[11px] border border-gray-200 rounded px-1.5 py-1 outline-none focus:border-[#1A284F] bg-white resize-none leading-relaxed";
 
   const renderRows = (sec: string) =>
-    secItems(sec).map((item) => {
+    secItems(sec).map((item, rowIdx) => {
       const isEditing = editingId === item.id;
       const row = isEditing && draft ? draft : item;
+      const stickyBg = isEditing ? "#f0f7ff" : rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc";
+      const secLimitNum = resolveEffectiveSectionBobotNum(items, sec, false);
+      const otherSubBobot = calcSubSectionBobot(items, sec, item.id);
+      const maxAllowedSubBobot = Math.max(0, Math.round((secLimitNum - otherSubBobot) * 100) / 100);
+      const rowSubBobotOpts = buildRemainingBobotOptions(
+        secLimitNum === 0 ? 0 : 1,
+        maxAllowedSubBobot,
+        row.bobot,
+        true,
+      );
       return (
-        <tr key={item.id} className={`border-t border-gray-200 transition-colors ${isEditing ? "bg-blue-50/20 ring-1 ring-inset ring-[#1A284F]/20" : "hover:bg-gray-50/50"}`}>
+        <tr key={item.id} className={`border-t border-gray-200 transition-colors ${isEditing ? "bg-blue-50/20 ring-1 ring-inset ring-[#1A284F]/20" : rowIdx % 2 === 0 ? "bg-white hover:bg-gray-50/50" : "bg-slate-50/60 hover:bg-gray-50"}`}>
           {/* No */}
-          <td className="border border-gray-200 text-center text-xs font-semibold text-gray-600 bg-white py-3 px-2"
-            style={{ position: "sticky", left: 0, zIndex: 10, minWidth: W_NO, maxWidth: W_NO }}>
+          <td className="border border-gray-200 text-center text-xs font-semibold text-gray-600 py-3 px-2"
+            style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
             {isEditing
               ? <input value={row.no} onChange={(e) => setD({ no: e.target.value })} className={ci + " text-center font-bold"} />
               : item.no}
           </td>
           {/* Perspektif */}
-          <td className="border border-gray-200 py-3 px-3 bg-white"
-            style={{ position: "sticky", left: W_NO, zIndex: 10, minWidth: W_PERSP, maxWidth: W_PERSP }}>
+          <td className="border border-gray-200 py-3 px-3"
+            style={{ position: "sticky", left: W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
             {isEditing
               ? <select value={row.perspektif} onChange={(e) => setD({ perspektif: e.target.value })} className={ci}>
                   {tablePerspektifOpts.map((p) => <option key={p}>{p}</option>)}
@@ -3373,8 +4034,8 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
               : <span className={`text-xs font-bold ${PERSP_COLOR[item.perspektif] ?? "text-gray-700"}`}>{item.perspektif}</span>}
           </td>
           {/* KPI */}
-          <td className="border border-gray-200 py-3 px-3 bg-white"
-            style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 10, minWidth: W_KPI, maxWidth: W_KPI }}>
+          <td className="border border-gray-200 py-3 px-3"
+            style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
             {isEditing
               ? (item._cascadeType === "FC" || item._cascadeType === "PC")
                 ? <div className="flex flex-col gap-1">
@@ -3416,10 +4077,21 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
               : item.formula}
           </td>
           {/* Bobot */}
-          <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 72 }}>
+          <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 88 }}>
             {isEditing
               ? <select value={row.bobot} onChange={(e) => setD({ bobot: e.target.value })} className={ci}>
-                  {tableBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {rowSubBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              : editable && onUpdateItem && item._cascadeType !== "FC"
+              ? <select
+                  value={item.bobot}
+                  title={`Pilih bobot Sub Section (Maks. sisa Section ${sec}: ${formatPctNum(maxAllowedSubBobot)}%)`}
+                  onChange={(e) => onUpdateItem(item.id, { bobot: e.target.value })}
+                  className="px-2 py-1 rounded-full bg-[#1A284F] text-white text-[10px] font-bold outline-none cursor-pointer hover:bg-[#243869] transition-colors"
+                >
+                  {rowSubBobotOpts.map((b) => (
+                    <option key={b} value={b} style={{ background: "#ffffff", color: "#1A284F" }}>{b}</option>
+                  ))}
                 </select>
               : <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{item.bobot}</span>}
           </td>
@@ -3520,7 +4192,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
 
   return (
     <>
-    <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+    <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
       <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1840 + (editable ? 88 : 0)}px` }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
@@ -3531,62 +4203,136 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
         </thead>
         <tbody>
           {sections.map((sec, si) => {
-            // Tabel KPI (Personal) yang berisi hasil copy KPI (Group)/(Unit) tetap memakai label default personal
             const isCorp = sections.some((s) => ["C","D","E","F"].includes(s)) && !items.some((i) => i.copiedFromId);
-            const DEFAULT_SEC_LABELS: Record<string, string> = isCorp ? {
-              A: "A. K3L Terintegrasi — Bobot 15%",
-              B: "B. Finansial & Cost — Bobot 40%",
-              C: "C. Produksi — Bobot 30%",
-              D: "D. Be Employer of Choices — Bobot 9%",
-              E: "E. Be Partner of Choices — Bobot 6%",
-              F: "F. Regulatory Compliance — Bobot 0%",
+            const DEFAULT_PURE_SEC_NAMES: Record<string, string> = isCorp ? {
+              A: "K3L Terintegrasi",
+              B: "Finansial & Cost",
+              C: "Produksi",
+              D: "Be Employer of Choices",
+              E: "Be Partner of Choices",
+              F: "Regulatory Compliance",
             } : {
-              A: "A. Objective KPI — Bobot 20%",
-              B: "B. Functional KPI — Bobot 80%",
+              A: "Objective KPI",
+              B: "Functional KPI",
             };
             const bgColors = ["#1565C0","#1976D2","#1E88E5","#2196F3","#42A5F5","#64B5F6"];
             const bg = bgColors[si % bgColors.length];
             const firstSecItem = items.find((k) => k.section === sec);
-            const itemLabel = firstSecItem?.sectionLabel
-              ? `${sec}. ${firstSecItem.sectionLabel}${firstSecItem.sectionBobot ? ` — Bobot ${firstSecItem.sectionBobot}` : ""}`
-              : undefined;
-            const label = sectionLabelOverrides[sec] ?? itemLabel ?? DEFAULT_SEC_LABELS[sec] ?? `${sec}.`;
+            const pureSecName = sectionLabelOverrides[sec] ?? firstSecItem?.sectionLabel ?? DEFAULT_PURE_SEC_NAMES[sec] ?? `Section ${sec}`;
+            const secBobotNum = resolveEffectiveSectionBobotNum(items, sec, isCorp);
+            const secBobotStr = `${formatPctNum(secBobotNum)}%`;
+            const otherSecTotal = calcAllSectionsBobotSum(items, isCorp, undefined, sec);
+            const maxSecAllowed = Math.max(0, Math.round((100 - otherSecTotal) * 100) / 100);
+            const currentSubSum = Math.round(calcSubSectionBobot(items, sec) * 100) / 100;
+            const minSecAllowed = Math.ceil(currentSubSum - 1e-6);
+            const secDropdownOpts = buildRemainingBobotOptions(
+              minSecAllowed,
+              maxSecAllowed,
+              secBobotNum <= maxSecAllowed + 1e-6 ? secBobotStr : undefined,
+              currentSubSum === 0,
+            );
             const isEditingThisSection = editingSection === sec;
+            const commitRenameSectionLabel = () => {
+              const nextName = editingSectionDraftName.trim();
+              if (nextName) {
+                setSectionLabelOverrides((p) => ({ ...p, [sec]: nextName }));
+                onUpdateSectionMeta?.(sec, { sectionLabel: nextName });
+              }
+              setEditingSection(null);
+            };
             return (
               <React.Fragment key={sec}>
                 <tr>
-                  <td colSpan={totalCols} className="border" style={{ background: bg, borderColor: bg }}>
-                    {editable && isEditingThisSection
-                      ? <div className="flex items-center gap-2 px-4 py-1.5">
+                  <td colSpan={totalCols} className="p-0 border" style={{ background: bg, borderColor: bg }}>
+                    <div
+                      className="px-4 py-2 inline-flex items-center gap-2.5 flex-wrap"
+                      style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}
+                    >
+                      {editable && onRenameSection ? (
+                        <select
+                          value={sec}
+                          onChange={(e) => onRenameSection(sec, e.target.value)}
+                          title="Ubah urutan kode section (mis. Section C menjadi Section D)"
+                          className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                        >
+                          {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => (
+                            <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}.</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-white text-xs font-bold uppercase tracking-wider">{sec}.</span>
+                      )}
+
+                      {editable && isEditingThisSection ? (
+                        <span className="inline-flex items-center gap-1.5">
                           <input
                             autoFocus
-                            value={sectionLabelOverrides[sec] ?? DEFAULT_SEC_LABELS[sec] ?? sec}
-                            onChange={(e) => setSectionLabelOverrides((p) => ({ ...p, [sec]: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingSection(null); }}
-                            className="flex-1 text-xs font-bold bg-white/20 text-white placeholder-white/60 border border-white/40 rounded px-2 py-0.5 outline-none"
+                            value={editingSectionDraftName}
+                            onChange={(e) => setEditingSectionDraftName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") commitRenameSectionLabel();
+                              if (e.key === "Escape") setEditingSection(null);
+                            }}
+                            placeholder="Nama section…"
+                            className="text-xs font-bold bg-white/20 text-white placeholder-white/60 border border-white/40 rounded px-2 py-0.5 outline-none min-w-[180px]"
                           />
-                          <button onClick={() => setEditingSection(null)} className="text-white/80 hover:text-white text-[10px] font-semibold px-2 py-0.5 rounded bg-white/10 hover:bg-white/20">Done</button>
-                        </div>
-                      : <div className="flex items-center justify-between px-4 py-2">
-                          <span className="flex items-center gap-2">
-                            {editable && onRenameSection && (
-                              <select
-                                value={sec}
-                                onChange={(e) => onRenameSection(sec, e.target.value)}
-                                title="Ubah urutan section (mis. Section C menjadi Section D)"
-                                className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1 py-0.5 outline-none cursor-pointer"
-                              >
-                                {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}</option>)}
-                              </select>
-                            )}
-                            <span className="text-white text-xs font-bold uppercase tracking-widest">{label}</span>
-                          </span>
-                          {editable && onUpdateItem && (
-                            <button onClick={() => setEditingSection(sec)} className="p-1 rounded hover:bg-white/20 text-white/70 hover:text-white" title="Edit section label">
+                          <button
+                            type="button"
+                            onClick={commitRenameSectionLabel}
+                            className="text-white text-[10px] font-bold px-2 py-0.5 rounded bg-white/25 hover:bg-white/35"
+                          >
+                            Simpan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingSection(null)}
+                            className="text-white/80 hover:text-white text-[10px] font-semibold px-1.5 py-0.5 rounded hover:bg-white/15"
+                          >
+                            Batal
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="text-white text-xs font-bold uppercase tracking-wider">{pureSecName}</span>
+                          {editable && (onUpdateSectionMeta || onUpdateItem) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSectionDraftName(pureSecName);
+                                setEditingSection(sec);
+                              }}
+                              className="p-1 rounded hover:bg-white/20 text-white/80 hover:text-white transition-colors"
+                              title="Rename nama section"
+                            >
                               <Edit3 className="w-3 h-3" />
                             </button>
                           )}
-                        </div>}
+                        </span>
+                      )}
+
+                      <span className="inline-flex items-center gap-1.5 text-white/90 text-[11px] font-semibold">
+                        <span>— Bobot</span>
+                        {editable && onUpdateSectionMeta ? (
+                          <select
+                            value={secBobotStr}
+                            title={`Pilih bobot Section ${sec} (Min. isi Sub Section ${formatPctNum(currentSubSum)}% · Maks. sisa gabungan Section ${formatPctNum(maxSecAllowed)}%)`}
+                            onChange={(e) => onUpdateSectionMeta(sec, { sectionBobot: e.target.value })}
+                            className="text-[11px] font-bold bg-white/20 text-white border border-white/35 rounded px-1.5 py-0.5 outline-none cursor-pointer hover:bg-white/30"
+                          >
+                            {secDropdownOpts.map((opt) => (
+                              <option key={opt} value={opt} style={{ color: "#1A284F", background: "#fff" }}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="font-bold text-white">{secBobotStr}</span>
+                        )}
+                        <span className="text-[10px] text-white/75 font-normal">
+                          (Terisi {formatPctNum(currentSubSum)}%)
+                        </span>
+                      </span>
+                    </div>
                   </td>
                 </tr>
                 {renderRows(sec)}
@@ -3595,7 +4341,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
           })}
         </tbody>
       </table>
-    </div>
+    </DualScrollTableContainer>
 
     {targetEditItem && (
       <TargetEditMiniModal
@@ -3735,10 +4481,13 @@ function CascadingTypePanel({
   );
 }
 
-export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection }: {
+export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection, onUpdateSectionMeta, canSubmitKpi, submitBlockReasons }: {
   hideScope?: boolean;
   toolbarExtra?: React.ReactNode;
   onRenameSection?: (oldSec: string, newSec: string) => void;
+  onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
+  canSubmitKpi?: boolean;
+  submitBlockReasons?: string[];
   items: KPISetting[];
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
   onDeleteItem?: (id: string) => void;
@@ -3765,6 +4514,8 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   const [corpTargetEdit, setCorpTargetEdit] = useState<KPISetting | null>(null);
   // Local editable section names for CC cascade type (pak-anton view)
   const [editedSectionLabels, setEditedSectionLabels] = useState<Record<string, string>>({});
+  const [renamingSecCode, setRenamingSecCode] = useState<string | null>(null);
+  const [renamingSecDraft, setRenamingSecDraft] = useState<string>("");
 
   const startEdit = (item: KPISetting) => { if (submitted || kpiApproved) return; setEditingRowId(item.id); setDraft({ ...item }); };
   const cancelEdit = () => { setEditingRowId(null); setDraft(null); };
@@ -3772,17 +4523,16 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
     if (draft) {
       const sec = draft.section;
       // Rule 6: total KPI bobot in section must not exceed section bobot
-      const rawSectionBobot = editedSectionBobots?.[sec] ?? CORP_SECTION_META[sec]?.bobot ?? "100";
-      const sectionBobot = parseFloat(rawSectionBobot.replace("%", "")) || 100;
+      const sectionBobot = resolveEffectiveSectionBobotNum(items, sec, true, editedSectionBobots);
       const sectionTotal = items
         .filter((i) => i.section === sec && i.id !== draft.id)
-        .reduce((s, i) => s + (parseFloat(i.bobot.replace("%", "")) || 0), 0)
-        + (parseFloat(draft.bobot.replace("%", "")) || 0);
-      if (sectionTotal > sectionBobot) {
+        .reduce((s, i) => s + parsePctNum(i.bobot), 0)
+        + parsePctNum(draft.bobot);
+      if (sectionTotal > sectionBobot + 1e-6) {
         const secMeta = CORP_SECTION_META[sec];
         setBobotOverError({
           section: sec,
-          sectionLabel: secMeta?.label ?? `Section ${sec}`,
+          sectionLabel: items.find((i) => i.section === sec)?.sectionLabel || secMeta?.label || `Section ${sec}`,
           sectionBobot,
           totalBobot: sectionTotal,
           kind: "section",
@@ -3792,9 +4542,9 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
       // Rule 7: total of all KPI item bobots across all sections must not exceed 100%
       const allTotal = items
         .filter((i) => i.id !== draft.id)
-        .reduce((s, i) => s + (parseFloat(i.bobot.replace("%", "")) || 0), 0)
-        + (parseFloat(draft.bobot.replace("%", "")) || 0);
-      if (allTotal > 100) {
+        .reduce((s, i) => s + parsePctNum(i.bobot), 0)
+        + parsePctNum(draft.bobot);
+      if (allTotal > 100 + 1e-6) {
         setBobotOverError({
           section: sec,
           sectionLabel: "Semua Section",
@@ -3826,15 +4576,18 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   const corpPolaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
     : POLARITAS_OPTIONS;
-  const corpSecBobotOpts = master.sectionBobot?.length ? master.sectionBobot : SECTION_BOBOT_OPTIONS;
+  const W_CORP_CASC = 62;
+  const W_CORP_NO = 48;
+  const W_CORP_PERSP = 120;
+  const W_CORP_KPI = 260;
   const COLS = [
-    { label: "No",                w: 44  },
-    { label: "Perspektif",        w: 100 },
-    { label: "KPI",               w: 260 },
+    { label: "No",                w: W_CORP_NO    },
+    { label: "Perspektif",        w: W_CORP_PERSP },
+    { label: "KPI",               w: W_CORP_KPI   },
     { label: "Satuan",            w: 120 },
     { label: "Formula Setahun",   w: 110 },
     { label: "Scope",             w: 180 },
-    { label: "Bobot",             w: 60  },
+    { label: "Bobot",             w: 82  },
     { label: "Definisi",          w: 240 },
     { label: "Source",            w: 180 },
     { label: "Baseline 2025",     w: 100 },
@@ -3862,16 +4615,28 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   const cascadingWidth = COLS.slice(15).reduce((s, c) => s + c.w, 0) + 80;
   const showAksi = !previewMode && !kpiApproved && !submitted && Boolean(onUpdateItem || onDeleteItem);
   const visibleMainCols = hideScope ? COLS.slice(0, 15).filter((c) => c.label !== "Scope") : COLS.slice(0, 15);
-  const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? 80 : 0) - (hideCascading ? cascadingWidth : 0) - (hideScope ? 180 : 0) + (hasCascadedRows && !previewMode ? 62 : 0);
+  const showCascadeCol = hasCascadedRows && !previewMode;
+  const leftOffsetBase = showCascadeCol ? W_CORP_CASC : 0;
+  const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? 80 : 0) - (hideCascading ? cascadingWidth : 0) - (hideScope ? 180 : 0) + (showCascadeCol ? W_CORP_CASC : 0);
   const totalCols = visibleMainCols.length
     + (showAksi ? 1 : 0)
-    + (hasCascadedRows && !previewMode ? 1 : 0)
+    + (showCascadeCol ? 1 : 0)
     + (!previewMode && !hideCascading ? 3 : 0);
   const cellInput = "w-full text-[11px] border border-gray-200 rounded px-1.5 py-1 outline-none focus:border-[#1A284F] bg-white resize-none leading-relaxed";
+  const computedSubmitEval = evaluateKpiSettingSubmitStatus(items, true, editedSectionBobots);
+  const effectiveCanSubmit = canSubmitKpi ?? computedSubmitEval.canSubmit;
+  const effectiveSubmitReasons = submitBlockReasons ?? computedSubmitEval.reasons;
+
+  const getCorpMainHdrStyle = (label: string, w: number): React.CSSProperties => {
+    if (label === "No") return { position: "sticky", left: leftOffsetBase, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w };
+    if (label === "Perspektif") return { position: "sticky", left: leftOffsetBase + W_CORP_NO, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w };
+    if (label === "KPI") return { position: "sticky", left: leftOffsetBase + W_CORP_NO + W_CORP_PERSP, zIndex: 25, background: "#1A284F", minWidth: w, maxWidth: w, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" };
+    return { minWidth: w };
+  };
 
   return (
     <>
-    <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+    <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
       {/* ── Toolbar ── */}
       <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex-wrap">
         <div className="flex items-center gap-1.5">
@@ -3914,26 +4679,29 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
             </button>
           )}
           {!submitted && onSubmit && (
-            <button onClick={onSubmit}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">
-              <Send className="w-3.5 h-3.5" /> Submit KPI
-            </button>
+            <SubmitKpiGateButton
+              canSubmit={effectiveCanSubmit}
+              reasons={effectiveSubmitReasons}
+              onConfirmSubmit={onSubmit}
+              size="sm"
+            />
           )}
           {onExport && <ExportImportButton onExport={onExport} onImport={onImport} size="sm" />}
         </div>
       </div>
-    <div className="overflow-x-auto">
+    <DualScrollTableContainer className="border-0 rounded-none shadow-none bg-white">
       <table className="border-collapse text-xs" style={{ minWidth: totalWidth + "px" }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
-            {hasCascadedRows && !previewMode && (
-              <th rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-1.5 text-center font-semibold text-[10px] align-middle" style={{ minWidth: 62 }}>
+            {showCascadeCol && (
+              <th rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-1.5 text-center font-semibold text-[10px] align-middle"
+                style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: W_CORP_CASC, maxWidth: W_CORP_CASC }}>
                 Cascade
               </th>
             )}
             {visibleMainCols.map(({ label, w }) => (
               <th key={label} rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px] align-middle"
-                style={{ minWidth: w }}>{label}</th>
+                style={getCorpMainHdrStyle(label, w)}>{label}</th>
             ))}
             {!previewMode && !hideCascading && (
               <th colSpan={3} className="border border-[#1A284F]/30 py-2 px-2 text-center font-semibold text-[11px]">
@@ -3959,89 +4727,143 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
             // For KPIs added via the new modal, derive header from item fields
             const firstItem = secRows[0];
             const alphabet  = `${sec}.`;
-            const secLabel  = firstItem?.sectionLabel || staticMeta?.label || sec;
-            const bobot     = firstItem?.sectionBobot || staticMeta?.bobot || "—";
+            const secLabel  = editedSectionLabels[sec] ?? firstItem?.sectionLabel ?? staticMeta?.label ?? sec;
+            const secBobotNum = resolveEffectiveSectionBobotNum(items, sec, true, editedSectionBobots);
+            const bobot     = `${formatPctNum(secBobotNum)}%`;
             const canRename = Boolean(onRenameSection) && !previewMode && !submitted && !kpiApproved;
+            const parentCasc = parentSectionCascadeMap?.[sec];
+            const canEditSecName = !previewMode && !submitted && !kpiApproved && Boolean(onUpdateSectionMeta || onUpdateItem) && (!parentCasc || parentCasc === "CC");
+            const canEditSecBobot = !previewMode && !submitted && !kpiApproved && Boolean(onUpdateSectionMeta || onSectionBobotChange) && parentCasc !== "FC";
+            const otherSecTotal = calcAllSectionsBobotSum(items, true, editedSectionBobots, sec);
+            const maxAllowedSecBobot = Math.max(0, Math.round((100 - otherSecTotal) * 100) / 100);
+            const subSumInSec = Math.round(calcSubSectionBobot(items, sec) * 100) / 100;
+            const minAllowedSecBobot = Math.ceil(subSumInSec - 1e-6);
+            const corpSecDropdownOpts = buildRemainingBobotOptions(
+              minAllowedSecBobot,
+              maxAllowedSecBobot,
+              secBobotNum <= maxAllowedSecBobot + 1e-6 ? bobot : undefined,
+              subSumInSec === 0,
+            );
             const customIdx = sections.filter(s => !CORP_SECTION_META[s]).indexOf(sec);
             const bg        = staticMeta ? staticMeta.bg : CUSTOM_SECTION_BG_PALETTE[customIdx % CUSTOM_SECTION_BG_PALETTE.length];
+            const commitCorpSectionRename = () => {
+              const nextLbl = renamingSecDraft.trim();
+              if (nextLbl) {
+                setEditedSectionLabels((p) => ({ ...p, [sec]: nextLbl }));
+                onUpdateSectionMeta?.(sec, { sectionLabel: nextLbl });
+              }
+              setRenamingSecCode(null);
+            };
             return (
               <React.Fragment key={sec}>
                 <tr>
-                  <td colSpan={totalCols} className="py-2.5 px-4 text-white text-[11px] font-bold uppercase tracking-wider border"
+                  <td colSpan={totalCols} className="p-0 text-white text-[11px] font-bold uppercase tracking-wider border"
                     style={{ background: bg, borderColor: bg }}>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      {/* Section name — editable for CC cascade only */}
-                      {parentSectionCascadeMap?.[sec] === "CC" ? (
-                        <span className="flex items-center gap-1.5">
-                          {canRename ? (
-                            <select
-                              value={sec}
-                              onChange={(e) => onRenameSection?.(sec, e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                              title="Ubah urutan section"
-                              className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1 py-0.5 outline-none cursor-pointer"
-                            >
-                              {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}.</option>)}
-                            </select>
-                          ) : (
-                            <span className="opacity-60 text-[11px]">{alphabet}</span>
-                          )}
-                          <input
-                            value={editedSectionLabels[sec] ?? secLabel}
-                            onChange={(e) => { if (!submitted && !kpiApproved) setEditedSectionLabels(p => ({ ...p, [sec]: e.target.value })); }}
-                            readOnly={submitted || kpiApproved}
-                            className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-2 py-0.5 outline-none min-w-0 w-48 read-only:opacity-70 read-only:cursor-default"
+                    <div
+                      className="py-2 px-4 inline-flex items-center gap-3 flex-wrap"
+                      style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        {canRename ? (
+                          <select
+                            value={sec}
+                            onChange={(e) => onRenameSection?.(sec, e.target.value)}
                             onClick={(e) => e.stopPropagation()}
-                          />
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1.5">
-                          {canRename ? (
-                            <select
-                              value={sec}
-                              onChange={(e) => onRenameSection?.(sec, e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                              title="Ubah urutan section (mis. Section C menjadi Section D)"
-                              className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1 py-0.5 outline-none cursor-pointer"
+                            title="Ubah urutan section (mis. Section C menjadi Section D)"
+                            className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                          >
+                            {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}.</option>)}
+                          </select>
+                        ) : (
+                          <span>{alphabet}</span>
+                        )}
+
+                        {canEditSecName && renamingSecCode === sec ? (
+                          <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              autoFocus
+                              value={renamingSecDraft}
+                              onChange={(e) => setRenamingSecDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") commitCorpSectionRename();
+                                if (e.key === "Escape") setRenamingSecCode(null);
+                              }}
+                              placeholder="Nama section…"
+                              className="text-[11px] font-bold bg-white/20 text-white placeholder-white/60 border border-white/40 rounded px-2 py-0.5 outline-none min-w-[200px]"
+                            />
+                            <button
+                              type="button"
+                              onClick={commitCorpSectionRename}
+                              className="text-white text-[10px] font-bold px-2 py-0.5 rounded bg-white/25 hover:bg-white/35 normal-case tracking-normal"
                             >
-                              {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}.</option>)}
-                            </select>
-                          ) : (
-                            <span>{alphabet}</span>
-                          )}
-                          <span>{editedSectionLabels[sec] ?? secLabel}</span>
-                        </span>
-                      )}
-                      {/* Section bobot — editable in pak-anton if PC/CC, read-only if FC */}
-                      {parentSectionCascadeMap?.[sec] ? (
-                        parentSectionCascadeMap[sec] === "FC" ? (
-                          <span className="opacity-80 font-normal normal-case tracking-normal text-[11px] flex items-center gap-1">
-                            — Bobot {bobot}
-                            <Lock className="w-3 h-3 opacity-70" />
+                              Simpan
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRenamingSecCode(null)}
+                              className="text-white/80 hover:text-white text-[10px] font-semibold px-1.5 py-0.5 rounded hover:bg-white/15 normal-case tracking-normal"
+                            >
+                              Batal
+                            </button>
                           </span>
                         ) : (
-                          <span className="font-normal normal-case tracking-normal text-[11px] flex items-center gap-1.5 opacity-90">
-                            — Bobot
-                            <select
-                              value={editedSectionBobots?.[sec] ?? bobot}
-                              onChange={(e) => onSectionBobotChange?.(sec, e.target.value)}
-                              disabled={submitted || kpiApproved}
-                              className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1.5 py-0.5 outline-none cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {corpSecBobotOpts.map((o) => <option key={o} value={o} style={{ color: "#1A284F", background: "#fff" }}>{o}</option>)}
-                            </select>
-                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: CASCADING_CELL_BG[parentSectionCascadeMap[sec]], color: CASCADING_CELL_COLOR[parentSectionCascadeMap[sec]], border: `1px solid ${CASCADING_CELL_BORDER[parentSectionCascadeMap[sec]]}` }}>
-                              {parentSectionCascadeMap[sec]}
-                            </span>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span>{secLabel}</span>
+                            {canEditSecName && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRenamingSecDraft(secLabel);
+                                  setRenamingSecCode(sec);
+                                }}
+                                title="Rename nama section"
+                                className="p-1 rounded hover:bg-white/20 text-white/80 hover:text-white transition-colors"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                              </button>
+                            )}
                           </span>
-                        )
+                        )}
+                      </span>
+
+                      {parentCasc === "FC" ? (
+                        <span className="opacity-85 font-normal normal-case tracking-normal text-[11px] flex items-center gap-1">
+                          — Bobot {bobot}
+                          <Lock className="w-3 h-3 opacity-70" />
+                        </span>
+                      ) : canEditSecBobot ? (
+                        <span className="font-normal normal-case tracking-normal text-[11px] inline-flex items-center gap-1.5 opacity-95">
+                          <span>— Bobot</span>
+                          <select
+                            value={bobot}
+                            title={`Pilih bobot Section ${sec} (Min. isi Sub Section ${formatPctNum(subSumInSec)}% · Maks. sisa gabungan Section ${formatPctNum(maxAllowedSecBobot)}%)`}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              onSectionBobotChange?.(sec, val);
+                              onUpdateSectionMeta?.(sec, { sectionBobot: val });
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-[11px] font-bold bg-white/20 text-white border border-white/35 rounded px-1.5 py-0.5 outline-none cursor-pointer hover:bg-white/30"
+                          >
+                            {corpSecDropdownOpts.map((o) => (
+                              <option key={o} value={o} style={{ color: "#1A284F", background: "#fff" }}>{o}</option>
+                            ))}
+                          </select>
+                          <span className="text-[10px] text-white/75">(Terisi {formatPctNum(subSumInSec)}%)</span>
+                          {parentCasc && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: CASCADING_CELL_BG[parentCasc], color: CASCADING_CELL_COLOR[parentCasc], border: `1px solid ${CASCADING_CELL_BORDER[parentCasc]}` }}>
+                              {parentCasc}
+                            </span>
+                          )}
+                        </span>
                       ) : (
-                        <span className="opacity-80 font-normal normal-case tracking-normal text-[11px]">— Bobot {bobot}</span>
+                        <span className="opacity-85 font-normal normal-case tracking-normal text-[11px]">— Bobot {bobot}</span>
                       )}
+
                       {/* Section-level cascade selector (corporate tab only, not in preview) */}
                       {!previewMode && !hideCascading && sectionCascadeMap !== undefined && (
-                        <span className="font-normal normal-case tracking-normal text-[11px] flex items-center gap-1.5 opacity-90 ml-auto">
+                        <span className="font-normal normal-case tracking-normal text-[11px] inline-flex items-center gap-1.5 opacity-90">
                           <span className="text-white/70">Cascade:</span>
                           <select
                             value={sectionCascadeMap?.[sec] ?? "FC"}
@@ -4068,9 +4890,18 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                 {secRows.map((item, idx) => {
                   const isEditing = editingRowId === item.id;
                   const row = isEditing && draft ? draft : item;
-                  const rowBg = idx % 2 === 0 ? "bg-white" : "bg-gray-50/30";
-                  const cascBg = (v?: string) => isEditing && v ? CASCADING_CELL_BG[v] : undefined;
+                  const rowBg = idx % 2 === 0 ? "bg-white" : "bg-slate-50/70";
+                  const stickyBg = isEditing ? "#f0f7ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
                   const ct = item._cascadeType;
+                  const otherSubUsed = calcSubSectionBobot(items, sec, item.id);
+                  const maxAllowedRowSubBobot = Math.max(0, Math.round((secBobotNum - otherSubUsed) * 100) / 100);
+                  const corpRowSubBobotOpts = buildRemainingBobotOptions(
+                    secBobotNum === 0 ? 0 : 1,
+                    maxAllowedRowSubBobot,
+                    row.bobot,
+                    true,
+                  );
+                  const canQuickEditBobot = showAksi && Boolean(onUpdateItem) && (!ct || ct === "PC" || ct === "CC");
                   const CASCADE_BADGE: Record<string, { label: string; cls: string }> = {
                     FC: { label: "FC", cls: "bg-indigo-100 text-indigo-800 border border-indigo-300" },
                     PC: { label: "PC", cls: "bg-amber-100 text-amber-800 border border-amber-300" },
@@ -4079,8 +4910,9 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                   return (
                     <tr key={item.id} className={`border-t border-gray-100 ${rowBg} ${isEditing ? "ring-1 ring-inset ring-[#1A284F]/20 bg-blue-50/10" : "hover:bg-blue-50/20"} transition-colors`}>
                       {/* Cascade badge column */}
-                      {hasCascadedRows && !previewMode && (
-                        <td className="border border-gray-200 py-2 px-1 text-center">
+                      {showCascadeCol && (
+                        <td className="border border-gray-200 py-2 px-1 text-center"
+                          style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: W_CORP_CASC, maxWidth: W_CORP_CASC }}>
                           {ct ? (
                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${CASCADE_BADGE[ct]?.cls}`}>
                               {CASCADE_BADGE[ct]?.label}
@@ -4091,13 +4923,15 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                         </td>
                       )}
                       {/* No */}
-                      <td className="border border-gray-200 py-2 px-1.5 text-center">
+                      <td className="border border-gray-200 py-2 px-1.5 text-center"
+                        style={{ position: "sticky", left: leftOffsetBase, zIndex: 12, background: stickyBg, minWidth: W_CORP_NO, maxWidth: W_CORP_NO }}>
                         {isEditing && isFieldEditable("no")
                           ? <input value={row.no} onChange={(e) => setDraftField({ no: e.target.value })} className={cellInput + " text-center font-bold text-gray-600"} />
                           : <span className="font-bold text-gray-500 text-[11px]">{row.no}</span>}
                       </td>
                       {/* Perspektif */}
-                      <td className="border border-gray-200 py-2 px-1.5">
+                      <td className="border border-gray-200 py-2 px-2"
+                        style={{ position: "sticky", left: leftOffsetBase + W_CORP_NO, zIndex: 12, background: stickyBg, minWidth: W_CORP_PERSP, maxWidth: W_CORP_PERSP }}>
                         {isEditing && isFieldEditable("perspektif")
                           ? <select value={row.perspektif} onChange={(e) => setDraftField({ perspektif: e.target.value })} className={cellInput}>
                               {corpPerspOpts.map((p) => <option key={p}>{p}</option>)}
@@ -4105,7 +4939,8 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                           : <span className={`text-[11px] font-semibold ${PERSP_COLOR[row.perspektif] ?? "text-gray-700"}`}>{row.perspektif}</span>}
                       </td>
                       {/* KPI */}
-                      <td className="border border-gray-200 py-2 px-1.5">
+                      <td className="border border-gray-200 py-2 px-2"
+                        style={{ position: "sticky", left: leftOffsetBase + W_CORP_NO + W_CORP_PERSP, zIndex: 12, background: stickyBg, minWidth: W_CORP_KPI, maxWidth: W_CORP_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
                         {isEditing && isFieldEditable("kpi")
                           ? <textarea rows={3} value={row.kpi} onChange={(e) => setDraftField({ kpi: e.target.value })} className={cellInput} />
                           : <p className="text-[11px] font-medium text-gray-800 leading-relaxed">{row.kpi}</p>}
@@ -4158,8 +4993,18 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("bobot")
                           ? <select value={row.bobot} onChange={(e) => setDraftField({ bobot: e.target.value })} className={cellInput + " text-center font-bold text-[#1A284F]"}>
-                              <option value="">— Bobot —</option>
-                              {BOBOT_OPTIONS.map((b) => <option key={b} value={b}>{b}</option>)}
+                              {corpRowSubBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
+                            </select>
+                          : canQuickEditBobot
+                          ? <select
+                              value={row.bobot}
+                              title={`Pilih bobot Sub Section (Maks. sisa Section ${sec}: ${formatPctNum(maxAllowedRowSubBobot)}%)`}
+                              onChange={(e) => onUpdateItem?.(item.id, { bobot: e.target.value })}
+                              className="px-2 py-0.5 rounded-full bg-[#1A284F] text-white text-[10px] font-bold outline-none cursor-pointer hover:bg-[#243869] transition-colors"
+                            >
+                              {corpRowSubBobotOpts.map((b) => (
+                                <option key={b} value={b} style={{ background: "#ffffff", color: "#1A284F" }}>{b}</option>
+                              ))}
                             </select>
                           : <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{row.bobot}</span>}
                       </td>
@@ -4318,7 +5163,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
           })}
         </tbody>
       </table>
-    </div>
+    </DualScrollTableContainer>
     </div>
 
     {/* Target Edit Mini Modal — opens from Target 2026 cell in edit mode */}
@@ -4663,11 +5508,39 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     }
   };
 
+  const [draftDirtyInSession, setDraftDirtyInSession] = useState(false);
+  const latestItemsRef = useRef<KPISetting[]>(items);
+  useEffect(() => {
+    latestItemsRef.current = items;
+  }, [items]);
+
   const setItems = (updater: KPISetting[] | ((prev: KPISetting[]) => KPISetting[])) => {
+    setDraftDirtyInSession(true);
     setItems_((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       persistKpiItemsToBackend(next, "Draft");
       return next;
+    });
+  };
+
+  const handleUpdateSectionMeta = (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => {
+    if (patch.sectionBobot !== undefined) {
+      onSectionBobotChange?.(sec, patch.sectionBobot);
+    }
+    setItems((prev) => {
+      const secRows = prev.filter((i) => i.section === sec);
+      const fallbackLabel = !isCorporate
+        ? resolvePersonalSectionLabel(secRows[0])
+        : resolveKpiSectionLabel(secRows[0]);
+      const fallbackBobot = `${formatPctNum(resolveEffectiveSectionBobotNum(prev, sec, Boolean(isCorporate), editedSectionBobots))}%`;
+      return prev.map((i) => {
+        if (i.section !== sec) return i;
+        return {
+          ...i,
+          sectionLabel: patch.sectionLabel !== undefined ? patch.sectionLabel : (i.sectionLabel || fallbackLabel),
+          sectionBobot: patch.sectionBobot !== undefined ? patch.sectionBobot : (i.sectionBobot || fallbackBobot),
+        };
+      });
     });
   };
 
@@ -4682,7 +5555,6 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     setItems((prev) => renameKpiSection(prev, oldSec, newSec, !isCorporate));
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [submitTipOpen, setSubmitTipOpen] = useState(false);
   const readPersonalWorkflowState = () => {
     if (isCorporate) {
       const st = readStoredBusinessKpiStatus(effectiveScopeKey);
@@ -4794,15 +5666,45 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     onTabStatusChange?.(ts);
   }, [submitted, kpiApproved, pendingTargetEditRequest, monthlyTargetPending]);
 
-  const totalBobot = items.reduce((sum, item) => {
-    const n = parseFloat(item.bobot.replace("%", "")) || 0;
-    return sum + n;
-  }, 0);
-  const canSubmitPersonalBobot = items.length > 0 && Math.round(totalBobot * 100) === 10000;
+  const submitStatus = evaluateKpiSettingSubmitStatus(items, Boolean(isCorporate), editedSectionBobots);
+  const totalBobot = submitStatus.totalItemBobot;
+  const totalSectionBobot = submitStatus.totalSectionBobot;
+  const isBobotExact100 = submitStatus.canSubmit;
+
+  const hasUnsubmittedCreatedDraft =
+    !submitted &&
+    !kpiApproved &&
+    !isViewOnly &&
+    items.length > 0 &&
+    (draftDirtyInSession || initialItems.length === 0);
+
+  const draftBlocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      hasUnsubmittedCreatedDraft && currentLocation.pathname !== nextLocation.pathname,
+  );
+
+  useEffect(() => {
+    if (draftBlocker.state === "blocked") {
+      persistKpiItemsToBackend(latestItemsRef.current, "Draft");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftBlocker.state]);
+
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      if (!submitted && !kpiApproved && !isViewOnly && latestItemsRef.current.length > 0 && draftDirtyInSession) {
+        persistKpiItemsToBackend(latestItemsRef.current, "Draft");
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submitted, kpiApproved, isViewOnly, draftDirtyInSession]);
 
   const handleConfirm = () => { setShowConfirm(false); setShowSuccess(true); };
   const handleSuccessClose = () => {
     setShowSuccess(false);
+    setDraftDirtyInSession(false);
     setSubmitted(true);
     setView("preview");
     const todayStr = formatTodayDDMMYYYY();
@@ -5165,7 +6067,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
       if (imported.length > 0) {
         setItems(imported);
-        toast.success(`${imported.length} baris KPI berhasil di-import dan disimpan.`);
+        toast.success(`${imported.length} baris KPI berhasil di-upload dan disimpan.`);
       } else {
         toast.error("Tidak ada baris KPI berisi data pada file Excel yang dipilih.");
       }
@@ -5203,15 +6105,41 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
             <span className="text-sm font-bold text-[#1A284F]">{items.length}</span>
           </div>
           {isCorporate ? (
-            Object.entries(CORP_SECTION_META).map(([sec, meta]) => (
-              <div key={sec} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-white">
-                <span className="w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold text-white" style={{ background: meta.bg }}>{sec}</span>
-                <span className="text-[11px] font-semibold text-gray-600">{meta.label}</span>
-                <span className="text-[11px] text-gray-400">·</span>
-                <span className="text-[11px] font-bold text-[#1A284F]">{items.filter((i) => i.section === sec).length} KPI</span>
-                <span className="text-[10px] text-gray-400">({meta.bobot})</span>
+            <>
+              {Array.from(new Set(items.map((i) => i.section))).sort().map((sec, si) => {
+                const staticMeta = CORP_SECTION_META[sec];
+                const secRows = items.filter((i) => i.section === sec);
+                const secLbl = secRows[0]?.sectionLabel || staticMeta?.label || `Section ${sec}`;
+                const secBbt = `${formatPctNum(resolveEffectiveSectionBobotNum(items, sec, true, editedSectionBobots))}%`;
+                const bg = staticMeta?.bg ?? CUSTOM_SECTION_BG_PALETTE[si % CUSTOM_SECTION_BG_PALETTE.length];
+                return (
+                  <div key={sec} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-white">
+                    <span className="w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold text-white" style={{ background: bg }}>{sec}</span>
+                    <span className="text-[11px] font-semibold text-gray-600">{secLbl}</span>
+                    <span className="text-[11px] text-gray-400">·</span>
+                    <span className="text-[11px] font-bold text-[#1A284F]">{secRows.length} KPI</span>
+                    <span className="text-[10px] text-gray-400">({secBbt})</span>
+                  </div>
+                );
+              })}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${isBobotExact100 ? "bg-green-50" : "bg-orange-50"}`}>
+                <span className={`text-xs font-bold ${isBobotExact100 ? "text-green-700" : "text-orange-700"}`}>Total Bobot:</span>
+                <span className={`text-sm font-bold ${isBobotExact100 ? "text-green-700" : "text-orange-700"}`}>{formatPctNum(totalBobot)}%</span>
+                {!isBobotExact100 && (
+                  <span className="text-[10px] text-orange-600">
+                    {Math.round(totalSectionBobot * 100) !== 10000
+                      ? `(Section: ${formatPctNum(totalSectionBobot)}% · should be 100%)`
+                      : "(should be 100%)"}
+                  </span>
+                )}
               </div>
-            ))
+              {!submitted && !kpiApproved && items.length > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+                  Draft Tersimpan
+                </span>
+              )}
+            </>
           ) : (
             <>
               {Array.from(new Set(items.map((i) => i.section))).sort().map((sec, si) => {
@@ -5224,11 +6152,23 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                   </div>
                 );
               })}
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${totalBobot === 100 ? "bg-green-50" : "bg-orange-50"}`}>
-                <span className={`text-xs font-bold ${totalBobot === 100 ? "text-green-700" : "text-orange-700"}`}>Total Bobot:</span>
-                <span className={`text-sm font-bold ${totalBobot === 100 ? "text-green-700" : "text-orange-700"}`}>{totalBobot}%</span>
-                {totalBobot !== 100 && <span className="text-[10px] text-orange-600">(should be 100%)</span>}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${isBobotExact100 ? "bg-green-50" : "bg-orange-50"}`}>
+                <span className={`text-xs font-bold ${isBobotExact100 ? "text-green-700" : "text-orange-700"}`}>Total Bobot:</span>
+                <span className={`text-sm font-bold ${isBobotExact100 ? "text-green-700" : "text-orange-700"}`}>{formatPctNum(totalBobot)}%</span>
+                {!isBobotExact100 && (
+                  <span className="text-[10px] text-orange-600">
+                    {Math.round(totalSectionBobot * 100) !== 10000
+                      ? `(Section: ${formatPctNum(totalSectionBobot)}% · should be 100%)`
+                      : "(should be 100%)"}
+                  </span>
+                )}
               </div>
+              {!submitted && !kpiApproved && items.length > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+                  Draft Tersimpan
+                </span>
+              )}
               {copySource && (
                 <button
                   type="button"
@@ -5261,31 +6201,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 <Eye className="w-4 h-4" /> Preview
               </button>
               {canSubmit && (
-                <Tooltip open={!canSubmitPersonalBobot && submitTipOpen} onOpenChange={setSubmitTipOpen}>
-                  <TooltipTrigger asChild>
-                    <span
-                      tabIndex={0}
-                      className="inline-flex"
-                      onClick={() => { if (!canSubmitPersonalBobot) setSubmitTipOpen(true); }}
-                    >
-                      <button
-                        type="button"
-                        disabled={!canSubmitPersonalBobot}
-                        onClick={() => setShowConfirm(true)}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
-                      >
-                        <Send className="w-4 h-4" /> Submit KPI
-                      </button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" align="end" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
-                    <p className="text-xs font-semibold">
-                      {items.length === 0
-                        ? "Belum ada KPI. Tambahkan KPI terlebih dahulu hingga Total Bobot mencapai 100%."
-                        : `Total Bobot KPI saat ini ${totalBobot}% — wajib tepat 100% sebelum Submit KPI.`}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
+                <SubmitKpiGateButton
+                  canSubmit={submitStatus.canSubmit}
+                  reasons={submitStatus.reasons}
+                  onConfirmSubmit={() => setShowConfirm(true)}
+                />
               )}
             </>
           )}
@@ -5296,31 +6216,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 <Edit3 className="w-4 h-4" /> Back
               </button>
               {canSubmit && (
-                <Tooltip open={!canSubmitPersonalBobot && submitTipOpen} onOpenChange={setSubmitTipOpen}>
-                  <TooltipTrigger asChild>
-                    <span
-                      tabIndex={0}
-                      className="inline-flex"
-                      onClick={() => { if (!canSubmitPersonalBobot) setSubmitTipOpen(true); }}
-                    >
-                      <button
-                        type="button"
-                        disabled={!canSubmitPersonalBobot}
-                        onClick={() => setShowConfirm(true)}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
-                      >
-                        <Send className="w-4 h-4" /> Submit KPI
-                      </button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" align="end" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
-                    <p className="text-xs font-semibold">
-                      {items.length === 0
-                        ? "Belum ada KPI. Tambahkan KPI terlebih dahulu hingga Total Bobot mencapai 100%."
-                        : `Total Bobot KPI saat ini ${totalBobot}% — wajib tepat 100% sebelum Submit KPI.`}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
+                <SubmitKpiGateButton
+                  canSubmit={submitStatus.canSubmit}
+                  reasons={submitStatus.reasons}
+                  onConfirmSubmit={() => setShowConfirm(true)}
+                />
               )}
             </>
           )}
@@ -5419,6 +6319,8 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           onDeleteItem={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
           onAddClick={canCreate ? () => setShowAddModal(true) : undefined}
           onSubmit={canSubmit ? () => setShowConfirm(true) : undefined}
+          canSubmitKpi={submitStatus.canSubmit}
+          submitBlockReasons={submitStatus.reasons}
           onExport={handleExport}
           onImport={canCreate || canEdit ? handleImport : undefined}
           submitted={submitted || isViewOnly}
@@ -5432,6 +6334,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           editedSectionBobots={editedSectionBobots}
           onSectionBobotChange={canEdit ? onSectionBobotChange : undefined}
           onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
+          onUpdateSectionMeta={canEdit && !isViewOnly ? handleUpdateSectionMeta : undefined}
           toolbarExtra={copySource ? (
             <button
               type="button"
@@ -5451,6 +6354,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
           hideCascading={hideCascading}
           onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
+          onUpdateSectionMeta={canEdit && !isViewOnly ? handleUpdateSectionMeta : undefined}
         />
       )}
       {showCopyModal && copySource && (
@@ -5503,6 +6407,38 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       )}
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} validateMode={useValidateTerms} />}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} validateMode={useValidateTerms} />}
+      {draftBlocker.state === "blocked" && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-7 text-center border border-sky-100">
+            <div className="w-14 h-14 rounded-full bg-sky-50 border border-sky-200 flex items-center justify-center mx-auto mb-4">
+              <CheckCircle2 className="w-7 h-7 text-sky-600" />
+            </div>
+            <h3 className="font-bold text-[#1A284F] text-lg mb-2">Tersimpan Otomatis sebagai Draft</h3>
+            <p className="text-gray-600 text-sm leading-relaxed mb-6">
+              Data KPI Setting yang telah Anda buat (<strong>{items.length} KPI</strong> · Total Bobot{" "}
+              <strong>{formatPctNum(totalBobot)}%</strong>) belum di-submit dan telah{" "}
+              <strong className="text-sky-700">otomatis disimpan sebagai Draft</strong>. Anda dapat melanjutkan
+              pengisian kembali kapan saja saat membuka halaman ini.
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => draftBlocker.reset?.()}
+                className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Tetap di Halaman Ini
+              </button>
+              <button
+                type="button"
+                onClick={() => draftBlocker.proceed?.()}
+                className="px-5 py-2.5 rounded-xl bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"
+              >
+                OK, Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showEditRequest && (
         <EditRequestModal
           onCancel={() => setShowEditRequest(false)}

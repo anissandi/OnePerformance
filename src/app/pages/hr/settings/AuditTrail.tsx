@@ -382,7 +382,7 @@ export function AuditTrailPage() {
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
           >
-            <Download size={13} /> Export
+            <Download size={13} /> Download
           </button>
         </div>
 
