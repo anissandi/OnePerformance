@@ -158,7 +158,7 @@ export const SAMPLE_GOALS: SmartGoal[] = [
 ];
 
 const newGoal = (idx: number): SmartGoal => ({
-  id: _id++,
+  id: Date.now() + _id++ * 1000 + Math.floor(Math.random() * 999),
   label: `Goals ${idx}`,
   specific: "",
   measurable: "",
@@ -167,7 +167,7 @@ const newGoal = (idx: number): SmartGoal => ({
   timely: "",
   bukti: "",
   target: "",
-  actionPlans: [],
+  actionPlans: [{ id: Date.now() + _apId++ * 1000, description: "" }],
 });
 
 // ─── Shared Table ─────────────────────────────────────────────────────────────
@@ -796,6 +796,24 @@ function SMARTGoalsWorkspace({
   const readUserGoalsState = () => {
     const normId = normalizeEmployeeId(ownerUser.employeeId);
     const saved = loadSubmittedGoals(ownerUser.employeeId);
+    const normalizedSaved = saved
+      ? saved.map((g, gi) => ({
+          ...g,
+          id: g.id ?? Date.now() + gi * 1000,
+          actionPlans: Array.isArray(g.actionPlans)
+            ? g.actionPlans.map((ap, ai) => ({ ...ap, id: ap.id ?? Date.now() + gi * 1000 + ai }))
+            : [],
+        }))
+      : null;
+    if (normalizedSaved) {
+      const seenGoalIds = new Set<number>();
+      normalizedSaved.forEach((g, gi) => {
+        if (seenGoalIds.has(g.id)) {
+          g.id = Date.now() + gi * 10000 + Math.floor(Math.random() * 999);
+        }
+        seenGoalIds.add(g.id);
+      });
+    }
     const wfRec = loadWorkflowRecords().find(
       (r) =>
         r.year === "2026" &&
@@ -836,7 +854,7 @@ function SMARTGoalsWorkspace({
     }
 
     // DEMO: Selain Administrator, karyawan yang belum bertransaksi melihat format tabel kosong
-    const initialGoals = saved && saved.length > 0 ? saved : usesDemoSampleData(ownerUser) ? SAMPLE_GOALS : [];
+    const initialGoals = normalizedSaved && normalizedSaved.length > 0 ? normalizedSaved : usesDemoSampleData(ownerUser) ? SAMPLE_GOALS : [];
     const lockedSubmitted = Boolean(wfRec && !isRev);
     return {
       initialGoals,

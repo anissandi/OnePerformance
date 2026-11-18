@@ -632,15 +632,21 @@ export function HRSettingKPIPage() {
   }, [selectedYear]);
 
   // Jika di tab KPI (Unit) unit terpilih belum memiliki pengajuan tetapi unit lain sudah submit, arahkan otomatis ke unit tsb
+  const autoSelectedUnitRef = React.useRef(false);
   useEffect(() => {
-    if (routeKpiTab !== "gm") return;
+    if (routeKpiTab !== "gm") {
+      autoSelectedUnitRef.current = false;
+      return;
+    }
+    if (autoSelectedUnitRef.current) return;
+    autoSelectedUnitRef.current = true;
     const bizStatus = loadPersistedState<Record<string, { submitted?: boolean }>>("pa_kpi_business_status_v1", {});
     if (bizStatus[`unit-${companyUnit}`]?.submitted) return;
     const firstSubmittedUnit = allowedUnits.find((u) => Boolean(bizStatus[`unit-${u}`]?.submitted));
     if (firstSubmittedUnit && firstSubmittedUnit !== companyUnit) {
       setCompanyUnit(firstSubmittedUnit);
     }
-  }, [routeKpiTab, allowedUnits, companyUnit]);
+  }, [routeKpiTab, allowedUnits]);
 
   const handleCompanyUnitChange = (unit: string) => {
     setCompanyUnit(unit);

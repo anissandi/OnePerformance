@@ -508,11 +508,15 @@ function RequestTable({
   showActions,
   onDetail,
   onReview,
+  requestCountByEmp,
+  unitByEmp,
 }: {
   rows: OpenLockRequest[];
   showActions: boolean;
   onDetail: (r: OpenLockRequest) => void;
   onReview?: (r: OpenLockRequest) => void;
+  requestCountByEmp: Record<string, number>;
+  unitByEmp: Record<string, string>;
 }) {
   if (rows.length === 0) {
     return (
@@ -527,51 +531,70 @@ function RequestTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm" style={{ minWidth: 860 }}>
+      <table className="w-full border-collapse text-sm" style={{ minWidth: 1050 }}>
         <thead>
           <tr className="bg-[#1A284F] text-white text-xs">
-            <th className="border border-gray-600 px-3 py-3 text-left font-semibold w-8">#</th>
-            <th className="border border-gray-600 px-3 py-3 text-left font-semibold min-w-[160px]">Karyawan</th>
-            <th className="border border-gray-600 px-3 py-3 text-left font-semibold min-w-[140px]">Divisi / Departemen</th>
-            <th className="border border-gray-600 px-3 py-3 text-center font-semibold">Posisi</th>
-            <th className="border border-gray-600 px-3 py-3 text-center font-semibold">Modul</th>
-            <th className="border border-gray-600 px-3 py-3 text-center font-semibold">Deadline</th>
+            <th className="border border-gray-600 px-3 py-3 text-center font-semibold w-10">No</th>
+            <th className="border border-gray-600 px-3 py-3 text-center font-semibold">Aksi</th>
+            <th className="border border-gray-600 px-3 py-3 text-left font-semibold min-w-[160px]">ID Karyawan</th>
+            <th className="border border-gray-600 px-3 py-3 text-left font-semibold min-w-[150px]">Unit Usaha</th>
+            <th className="border border-gray-600 px-3 py-3 text-left font-semibold min-w-[140px]">Divisi</th>
+            <th className="border border-gray-600 px-3 py-3 text-left font-semibold min-w-[140px]">Departemen</th>
+            <th className="border border-gray-600 px-3 py-3 text-center font-semibold min-w-[125px]">Tgl Request</th>
+            <th className="border border-gray-600 px-3 py-3 text-center font-semibold min-w-[130px]">Jumlah Tgl Terlewat</th>
+            <th className="border border-gray-600 px-3 py-3 text-center font-semibold min-w-[110px]">Jumlah Request</th>
             {!showActions && (
               <th className="border border-gray-600 px-3 py-3 text-center font-semibold min-w-[110px]">Akses Hingga</th>
             )}
             {!showActions && (
               <th className="border border-gray-600 px-3 py-3 text-center font-semibold">Status</th>
             )}
-            <th className="border border-gray-600 px-3 py-3 text-center font-semibold">Aksi</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, idx) => {
             const sm = STATUS_META[r.status];
-            const mm = MODULE_META[r.module] ?? MODULE_META["KPI Tracking"];
+            const effectiveDeadline = resolveKpiMeasurementDeadlineIso(r.originalDeadline);
+            const daysLate = daysPast(effectiveDeadline);
+            const empKey = (r.employeeId || r.nip || "").toLowerCase();
+            const totalReqCount = requestCountByEmp[empKey] ?? 1;
+            const unitName = r.companyUnit || unitByEmp[empKey] || "—";
             return (
               <tr key={r.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/40"}>
-                <td className="border border-gray-200 px-3 py-3 text-center text-gray-400 text-xs">{idx + 1}</td>
+                <td className="border border-gray-200 px-3 py-3 text-center text-gray-500 text-xs font-semibold">{idx + 1}</td>
+                <td className="border border-gray-200 px-3 py-3 text-center">
+                  <div className="flex items-center justify-center gap-1.5">
+                    <button onClick={() => onDetail(r)}
+                      className="px-2.5 py-1 text-[10px] font-semibold border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors">
+                      Detail
+                    </button>
+                    {showActions && onReview && (
+                      <button onClick={() => onReview(r)}
+                        className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold bg-[#1A284F] text-white rounded-lg hover:bg-[#131d3b] transition-colors">
+                        <LockOpen className="w-3 h-3" />Review
+                      </button>
+                    )}
+                  </div>
+                </td>
                 <td className="border border-gray-200 px-3 py-3">
+                  <p className="text-[11px] text-gray-500 font-mono">{r.employeeId || r.nip}</p>
                   <p className="font-semibold text-gray-900 text-xs">{r.employeeName}</p>
-                  <p className="text-[10px] text-gray-400 font-mono">{r.nip}</p>
                 </td>
-                <td className="border border-gray-200 px-3 py-3">
-                  <p className="text-xs font-medium text-gray-700">{r.divisi}</p>
-                  <p className="text-[10px] text-gray-400">{r.departemen}</p>
-                </td>
-                <td className="border border-gray-200 px-3 py-3 text-center">
-                  <span className="text-xs text-gray-600">{r.posisi}</span>
+                <td className="border border-gray-200 px-3 py-3 text-xs text-gray-700">{unitName}</td>
+                <td className="border border-gray-200 px-3 py-3 text-xs text-gray-700">{r.divisi || "—"}</td>
+                <td className="border border-gray-200 px-3 py-3 text-xs text-gray-700">{r.departemen || "—"}</td>
+                <td className="border border-gray-200 px-3 py-3 text-center text-xs text-gray-700 whitespace-nowrap">
+                  {fmtDateTime(r.submittedAt)}
                 </td>
                 <td className="border border-gray-200 px-3 py-3 text-center">
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border"
-                    style={{ background: mm.bg, color: mm.color, borderColor: mm.border }}>
-                    {r.module}
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-50 text-red-600 border border-red-200">
+                    {daysLate} hari
                   </span>
                 </td>
                 <td className="border border-gray-200 px-3 py-3 text-center">
-                  <p className="text-xs font-medium text-red-600">{fmtDate(r.originalDeadline)}</p>
-                  <p className="text-[10px] text-red-400">{daysPast(r.originalDeadline)}h lalu</p>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-50 text-[#1A284F] border border-sky-200">
+                    {totalReqCount}x
+                  </span>
                 </td>
                 {!showActions && (
                   <td className="border border-gray-200 px-3 py-3 text-center">
@@ -591,20 +614,6 @@ function RequestTable({
                     </span>
                   </td>
                 )}
-                <td className="border border-gray-200 px-3 py-3 text-center">
-                  <div className="flex items-center justify-center gap-1.5">
-                    <button onClick={() => onDetail(r)}
-                      className="px-2.5 py-1 text-[10px] font-semibold border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors">
-                      Detail
-                    </button>
-                    {showActions && onReview && (
-                      <button onClick={() => onReview(r)}
-                        className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold bg-[#1A284F] text-white rounded-lg hover:bg-[#131d3b] transition-colors">
-                        <LockOpen className="w-3 h-3" />Review
-                      </button>
-                    )}
-                  </div>
-                </td>
               </tr>
             );
           })}
@@ -635,21 +644,59 @@ export function OpenLockPage() {
 
   // Filters
   const [searchQ, setSearchQ] = useState("");
+  const [selUnit, setSelUnit]             = useState("__all__");
   const [selDivisi, setSelDivisi] = useState("__all__");
-  const [selModule, setSelModule] = useState("__all__");
+  const [selDepartemen, setSelDepartemen] = useState("__all__");
   const [selHistStatus, setSelHistStatus] = useState<"all" | "approved" | "rejected">("all");
 
   const pendingRows  = requests.filter(r => r.status === "pending");
   const historyRows  = requests.filter(r => r.status !== "pending");
 
+  const unitByEmp = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    loadManagedUsers().forEach((u) => {
+      map[u.employeeId.toLowerCase()] = u.company;
+      if (u.regNo) map[u.regNo.toLowerCase()] = u.company;
+    });
+    return map;
+  }, [requests]);
+
+  const requestCountByEmp = React.useMemo(() => {
+    const currentYear = String(new Date().getFullYear());
+    const map: Record<string, number> = {};
+    requests.forEach((r) => {
+      const yr = (r.submittedAt || "").slice(0, 4);
+      if (yr && yr !== currentYear) return;
+      const k = (r.employeeId || r.nip || "").toLowerCase();
+      if (!k) return;
+      map[k] = (map[k] ?? 0) + 1;
+    });
+    return map;
+  }, [requests]);
+
+  const unitOptions = React.useMemo(
+    () => Array.from(new Set(requests.map((r) => r.companyUnit || unitByEmp[(r.employeeId || r.nip || "").toLowerCase()] || "").filter(Boolean))).sort(),
+    [requests, unitByEmp],
+  );
+  const divisiOptions = React.useMemo(
+    () => Array.from(new Set(requests.map((r) => r.divisi).filter(Boolean))).sort(),
+    [requests],
+  );
+  const departemenOptions = React.useMemo(
+    () => Array.from(new Set(requests.map((r) => r.departemen).filter(Boolean))).sort(),
+    [requests],
+  );
+
   function applyFilters(rows: OpenLockRequest[]) {
     return rows.filter(r => {
+      const uName = r.companyUnit || unitByEmp[(r.employeeId || r.nip || "").toLowerCase()] || "";
+      if (selUnit !== "__all__" && uName !== selUnit) return false;
       if (selDivisi !== "__all__" && r.divisi !== selDivisi) return false;
-      if (selModule !== "__all__" && r.module !== selModule) return false;
+      if (selDepartemen !== "__all__" && r.departemen !== selDepartemen) return false;
       if (activeTab === "history" && selHistStatus !== "all" && r.status !== selHistStatus) return false;
       if (searchQ.trim()) {
         const q = searchQ.toLowerCase();
-        if (!r.employeeName.toLowerCase().includes(q) && !r.nip.includes(q) && !r.departemen.toLowerCase().includes(q)) return false;
+        if (!r.employeeName.toLowerCase().includes(q) && !r.employeeId.toLowerCase().includes(q) && !r.nip.includes(q) && !r.departemen.toLowerCase().includes(q)) return false;
       }
       return true;
     });
@@ -744,7 +791,7 @@ export function OpenLockPage() {
     setSuccess("Request ditolak dan catatan alasan telah disimpan.");
   }
 
-  const hasFilter = selDivisi !== "__all__" || selModule !== "__all__" || searchQ.trim().length > 0 || selHistStatus !== "all";
+  const hasFilter = selUnit !== "__all__" || selDivisi !== "__all__" || selDepartemen !== "__all__" || searchQ.trim().length > 0 || selHistStatus !== "all";
 
   return (
     <div className="w-full flex flex-col gap-6">
@@ -823,14 +870,14 @@ export function OpenLockPage() {
             </div>
           </div>
 
-          {/* Module */}
+          {/* Unit Usaha */}
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Modul</label>
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Unit Usaha</label>
             <div className="relative">
-              <select value={selModule} onChange={e => setSelModule(e.target.value)}
-                className="appearance-none border border-gray-200 rounded-lg px-3 py-2 pr-8 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 min-w-[160px] bg-white cursor-pointer">
-                <option value="__all__">Semua Modul</option>
-                {MODULE_OPTIONS.map(m => <option key={m} value={m}>{m}</option>)}
+              <select value={selUnit} onChange={e => setSelUnit(e.target.value)}
+                className="appearance-none border border-gray-200 rounded-lg px-3 py-2 pr-8 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 min-w-[170px] bg-white cursor-pointer">
+                <option value="__all__">Semua Unit Usaha</option>
+                {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
             </div>
@@ -843,7 +890,20 @@ export function OpenLockPage() {
               <select value={selDivisi} onChange={e => setSelDivisi(e.target.value)}
                 className="appearance-none border border-gray-200 rounded-lg px-3 py-2 pr-8 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 min-w-[170px] bg-white cursor-pointer">
                 <option value="__all__">Semua Divisi</option>
-                {DIVISI_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                {divisiOptions.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+            </div>
+          </div>
+
+          {/* Departemen */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Departemen</label>
+            <div className="relative">
+              <select value={selDepartemen} onChange={e => setSelDepartemen(e.target.value)}
+                className="appearance-none border border-gray-200 rounded-lg px-3 py-2 pr-8 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 min-w-[170px] bg-white cursor-pointer">
+                <option value="__all__">Semua Departemen</option>
+                {departemenOptions.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
             </div>
@@ -866,7 +926,7 @@ export function OpenLockPage() {
           )}
 
           {hasFilter && (
-            <button onClick={() => { setSearchQ(""); setSelDivisi("__all__"); setSelModule("__all__"); setSelHistStatus("all"); }}
+            <button onClick={() => { setSearchQ(""); setSelUnit("__all__"); setSelDivisi("__all__"); setSelDepartemen("__all__"); setSelHistStatus("all"); }}
               className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors self-end">
               <X className="w-3.5 h-3.5" />Clear Filter
             </button>
@@ -888,6 +948,8 @@ export function OpenLockPage() {
           showActions={activeTab === "pending"}
           onDetail={setDetailTarget}
           onReview={activeTab === "pending" ? setApproveTarget : undefined}
+          requestCountByEmp={requestCountByEmp}
+          unitByEmp={unitByEmp}
         />
       </div>
 
