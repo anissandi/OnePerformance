@@ -186,6 +186,7 @@ function AccumulationCard({
 }) {
   return (
     <SmartGoalsProgressCard
+      variant="light"
       goals={goals.map((g) => ({ id: g.id, actionPlanIds: g.actionPlans.map((ap) => ap.id) }))}
       getActionPlanStatus={(goalId, apId) =>
         entries.find((e) => e.goalId === goalId)?.actionPlanStatuses[apId as number] ?? "-"

@@ -197,8 +197,8 @@ function SmartTable({
     if (!raw || !raw.trim()) return [""];
     const parts = raw
       .split(/[;\n]+/)
-      .map((s) => s.replace(/^\s*\d+\.\s*/, "").trim())
-      .filter(Boolean);
+      .map((s) => s.replace(/^\s*\d+\.\s*/, ""))
+      .filter((s) => s.length > 0);
     return parts.length > 0 ? parts : [""];
   };
 
@@ -280,7 +280,7 @@ function SmartTable({
                       const commitPts = (nextPts: string[]) => {
                         const cleaned = nextPts.length > 0 ? nextPts : [""];
                         const formatted = cleaned
-                          .map((p, idx) => (p.trim() ? `${idx + 1}. ${p.trim()}` : ""))
+                          .map((p, idx) => (p.length > 0 ? `${idx + 1}. ${p}` : ""))
                           .filter(Boolean)
                           .join("; ");
                         if (onSyncAttainablePlans) {
@@ -393,7 +393,7 @@ function ActionPlansSection({
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
         <div className="w-1 h-5 bg-[#1A284F] rounded-full" />
-        <h3 className="text-sm font-bold text-[#1A284F] uppercase tracking-wide">Action Plans | Attainable</h3>
+        <h3 className="text-sm font-bold text-[#1A284F] uppercase tracking-wide">SUMMARY Action Plans | Attainable</h3>
         <span className="text-xs text-gray-500 font-normal normal-case tracking-normal">— Rencana dan tindakan untuk mencapai Goal sebagai bahan evaluasi atasan</span>
       </div>
 
@@ -404,7 +404,7 @@ function ActionPlansSection({
             <div className="p-4 bg-white flex flex-col gap-2">
               {editable && (
                 <p className="text-xs text-blue-600 italic mb-1">
-                  Rencana konkret Anda untuk mencapai Goals {goal.label}
+                  Rencana konkret Anda untuk mencapai {goal.label}
                 </p>
               )}
               {goal.actionPlans.length === 0 && !editable && (
@@ -477,7 +477,7 @@ function InputView({
 
   const syncAttainablePlans = (id: number, points: string[]) => {
     const formatted = points
-      .map((p, idx) => (p.trim() ? `${idx + 1}. ${p.trim()}` : ""))
+      .map((p, idx) => (p.length > 0 ? `${idx + 1}. ${p}` : ""))
       .filter(Boolean)
       .join("; ");
     setGoals((prev) =>
