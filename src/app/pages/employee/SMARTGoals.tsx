@@ -193,7 +193,11 @@ function SmartTable({
   onRemove?: (id: number) => void;
   onSyncAttainablePlans?: (id: number, points: string[]) => void;
 }) {
-  const parseAttainablePoints = (raw: string): string[] => {
+  const parseAttainablePoints = (g: SmartGoal): string[] => {
+    if (Array.isArray(g.actionPlans) && g.actionPlans.length > 0) {
+      return g.actionPlans.map((ap) => ap.description ?? "");
+    }
+    const raw = g.attainable ?? "";
     if (!raw || !raw.trim()) return [""];
     const parts = raw
       .split(/[;\n]+/)
@@ -276,11 +280,11 @@ function SmartTable({
                 <td key={g.id} className={`border-2 border-black align-top px-3 py-3 ${row.key === "target" ? "bg-blue-50/60" : "bg-white"}`}>
                   {row.key === "attainable" ? (
                     (() => {
-                      const pts = parseAttainablePoints(g.attainable);
+                      const pts = parseAttainablePoints(g);
                       const commitPts = (nextPts: string[]) => {
                         const cleaned = nextPts.length > 0 ? nextPts : [""];
                         const formatted = cleaned
-                          .map((p, idx) => (p.length > 0 ? `${idx + 1}. ${p}` : ""))
+                          .map((p, idx) => `${idx + 1}. ${p}`)
                           .filter(Boolean)
                           .join("; ");
                         if (onSyncAttainablePlans) {
@@ -303,15 +307,22 @@ function SmartTable({
                                   next[idx] = e.target.value;
                                   commitPts(next);
                                 }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    commitPts([...pts, ""]);
+                                  }
+                                }}
                                 placeholder="Tulis poin attainable..."
                                 className="flex-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-[#1A284F] bg-white text-gray-800"
                               />
-                              {canDelete && pts.length > 1 && (
+                              {canDelete && (
                                 <button
                                   type="button"
-                                  onClick={() => commitPts(pts.filter((_, i) => i !== idx))}
+                                  disabled={pts.length <= 1 && !pt}
+                                  onClick={() => commitPts(pts.length > 1 ? pts.filter((_, i) => i !== idx) : [""])}
                                   title="Hapus poin"
-                                  className="mt-1.5 text-gray-300 hover:text-red-500 transition-colors shrink-0"
+                                  className="mt-1.5 text-gray-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>

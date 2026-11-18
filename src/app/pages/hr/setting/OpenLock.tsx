@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DatePickerID } from "../../../components/DatePickerID";
 import { X, CheckCircle2, XCircle, LockOpen, Lock, ChevronDown, Search, Clock, AlertCircle, Filter } from "lucide-react";
 import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../../store/notificationStore";
+import { loadManagedUsers } from "../../../store/authStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,7 @@ interface OpenLockRequest {
   employeeId: string;
   employeeName: string;
   nip: string;
+  companyUnit?: string;
   divisi: string;
   departemen: string;
   bagian: string;
@@ -205,6 +207,29 @@ function daysPast(deadline: string) {
   return Math.max(0, Math.floor((Date.now() - new Date(deadline).getTime()) / 86400000));
 }
 
+function resolveKpiMeasurementDeadlineIso(fallbackIso: string): string {
+  try {
+    const saved = loadPersistedState<Record<string, { dateLockPerMonth?: string; endDate?: string }>>(
+      "pa_module_activation_v1",
+      {},
+    );
+    const kpiMeas = saved?.["kpi-measurement"] ?? saved?.["kpi_measurement"] ?? saved?.["KPI · Measurement"];
+    const dayNum = Number(kpiMeas?.dateLockPerMonth);
+    if (Number.isFinite(dayNum) && dayNum >= 1 && dayNum <= 28) {
+      const now = new Date();
+      const year = now.getFullYear();
+      let month = now.getMonth();
+      if (now.getDate() < dayNum) month -= 1;
+      const d = new Date(year, month, dayNum);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+    if (kpiMeas?.endDate) return kpiMeas.endDate;
+  } catch {
+    // ignore
+  }
+  return fallbackIso;
+}
+
 // ─── Pill Tab (matches image reference) ──────────────────────────────────────
 
 function PillTab({ label, count, active, onClick }: {
@@ -303,8 +328,8 @@ function ApproveModal({
             <div className="text-xs">
               <p className="font-semibold text-red-700">Deadline Terlewati</p>
               <p className="text-red-600 mt-0.5">
-                Deadline original: <span className="font-bold">{fmtDate(request.originalDeadline)}</span>
-                {" — "}<span className="font-bold">{daysPast(request.originalDeadline)} hari</span> yang lalu
+                Deadline (Date Lock Per Month): <span className="font-bold">{fmtDate(resolveKpiMeasurementDeadlineIso(request.originalDeadline))}</span>
+                {" — "}<span className="font-bold">{daysPast(resolveKpiMeasurementDeadlineIso(request.originalDeadline))} hari</span> yang lalu
               </p>
             </div>
           </div>
@@ -313,7 +338,7 @@ function ApproveModal({
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Alasan Karyawan</p>
             <div className="bg-amber-50/60 border border-amber-200 rounded-xl px-4 py-3">
-              <p className="text-sm text-gray-800 leading-relaxed">{request.reason}</p>
+              <p className="text-sm text-gray-800 leading-relaxed">{request.reason?.trim() || "—"}</p>
             </div>
           </div>
           <p className="text-[10px] text-gray-400 -mt-3">Diajukan: {fmtDateTime(request.submittedAt)}</p>

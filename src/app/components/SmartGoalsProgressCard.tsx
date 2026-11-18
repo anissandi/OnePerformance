@@ -142,10 +142,11 @@ export function SmartGoalsProgressCard({ variant = "dark", ...rest }: Props) {
         </div>
         <div className="pt-3 md:pt-0 md:pl-3 flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5">
-            <TrendingUp className={`w-3.5 h-3.5 ${dark ? "text-green-300" : "text-violet-600"}`} />
-            <span className={`text-[10px] font-bold uppercase tracking-widest ${label}`}>Action Plan</span>
+            <Target className={`w-3.5 h-3.5 ${dark ? "text-green-300" : "text-violet-600"}`} />
+            <span className={`text-[10px] font-bold uppercase tracking-widest ${label}`}>Breakdown Status</span>
           </div>
           <div className="flex flex-col gap-1">
+            <span className={`text-[10px] font-semibold uppercase tracking-wide ${muted}`}>Action Plan</span>
             <Row name="Selesai" value={p.apBreakdown.selesai} dot="bg-green-500" tone={dark ? "text-green-400" : "text-emerald-600"} />
             <Row name="Sedang dilaksanakan" value={p.apBreakdown.sedang} dot="bg-amber-400" tone={dark ? "text-amber-400" : "text-amber-600"} />
             <Row name="Belum dilaksanakan" value={p.apBreakdown.belum} dot="bg-gray-400" tone={dark ? "text-gray-300" : "text-gray-500"} />

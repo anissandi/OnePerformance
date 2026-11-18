@@ -2376,6 +2376,262 @@ const PERSONAL_SECTION_OPTIONS = [
   { value: "B", label: "B — Functional KPI", bobot: "80%" },
 ];
 
+const LIHAT_KPI_ATASAN_ROLES = new Set([
+  "vGM",
+  "Division",
+  "Departement",
+  "HR Unit",
+  "Supervisor",
+  "Employee",
+  "Administrator",
+  "HR ICF",
+]);
+
+function resolveApproverKpiSnapshot(approverUser: ManagedUser | undefined): {
+  statusKind: "validated" | "not_submitted" | "in_approval";
+  statusText: string;
+  items: KPISetting[];
+} {
+  if (!approverUser) {
+    return { statusKind: "not_submitted", statusText: "KPI Belum di Submit", items: [] };
+  }
+  const normId = normalizeEmployeeId(approverUser.employeeId);
+  const wfRec = loadWorkflowRecords().find(
+    (r) =>
+      r.year === "2026" &&
+      r.module === "KPI" &&
+      r.phase === "setting" &&
+      (r.employeeId === normId || r.employeeId.toLowerCase() === approverUser.employeeId.toLowerCase()),
+  );
+  const storedItems = readStoredPersonalKpiItems(approverUser.employeeId) ?? [];
+  if (!wfRec) {
+    return { statusKind: "not_submitted", statusText: "KPI Belum di Submit", items: [] };
+  }
+  const chk = wfRec.decisions.checker?.status ?? "";
+  const a1 = wfRec.decisions.approver1?.status ?? "";
+  const a2 = wfRec.decisions.approver2?.status ?? "";
+  const val = wfRec.decisions.validator?.status ?? "";
+  if (val === "Validated" || a2 === "Validated") {
+    return { statusKind: "validated", statusText: "Validated", items: storedItems };
+  }
+  if (chk === "Revision" || a1 === "Revision" || a2 === "Revision" || val === "Revision") {
+    return { statusKind: "in_approval", statusText: "Revision", items: [] };
+  }
+  let stageLabel = "Pending Check HR Unit";
+  if (a2 === "Approved" || a2.startsWith("Assessed")) stageLabel = "Pending Validate (HR ICF)";
+  else if (a1 === "Approved" || a1.startsWith("Assessed")) stageLabel = "Pending Approver 2";
+  else if (chk && chk !== "Revision") stageLabel = "Pending Approver 1";
+  return { statusKind: "in_approval", statusText: stageLabel, items: [] };
+}
+
+function LihatKpiAtasanModal({
+  ownerUser,
+  onSelectKpi,
+  onClose,
+}: {
+  ownerUser: ManagedUser;
+  onSelectKpi: (item: KPISetting) => void;
+  onClose: () => void;
+}) {
+  const allUsers = loadManagedUsers();
+  const findUserByRegOrId = (key?: string): ManagedUser | undefined => {
+    const k = (key ?? "").trim().toLowerCase();
+    if (!k) return undefined;
+    return allUsers.find(
+      (u) =>
+        (u.regNo ?? "").trim().toLowerCase() === k ||
+        u.employeeId.trim().toLowerCase() === k ||
+        u.name.trim().toLowerCase() === k,
+    );
+  };
+  const ap1User = findUserByRegOrId(ownerUser.regNoAp1);
+  const ap2User = findUserByRegOrId(ownerUser.regNoAp2);
+  const isSameApprover =
+    Boolean(ap1User && ap2User && ap1User.employeeId.toLowerCase() === ap2User.employeeId.toLowerCase()) ||
+    (!ap2User && Boolean(ap1User));
+
+  const tabs = React.useMemo(() => {
+    const list: Array<{ id: "ap1" | "ap2"; label: string; user?: ManagedUser }> = [];
+    if (ap1User) {
+      list.push({ id: "ap1", label: `Approver 1 · ${ap1User.name}`, user: ap1User });
+    } else {
+      list.push({ id: "ap1", label: "Approver 1 · Belum Ditentukan", user: undefined });
+    }
+    if (!isSameApprover && ap2User) {
+      list.push({ id: "ap2", label: `Approver 2 · ${ap2User.name}`, user: ap2User });
+    }
+    return list;
+  }, [ap1User, ap2User, isSameApprover]);
+
+  const [activeTab, setActiveTab] = useState<"ap1" | "ap2">(tabs[0]?.id ?? "ap1");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const currentTab = tabs.find((t) => t.id === activeTab) ?? tabs[0];
+  const snapshot = resolveApproverKpiSnapshot(currentTab?.user);
+  const selectedItem = snapshot.items.find((i) => i.id === selectedId) ?? null;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 sm:p-5">
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-[96vw] max-w-[96vw] h-[90vh] max-h-[90vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
+          <div>
+            <h3 className="font-bold text-[#1A284F] text-lg">Lihat KPI Atasan</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Pilih maksimal 1 baris KPI atasan (berstatus Validated) lalu klik Add untuk menyalin ke form Add New KPI.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500"
+            title="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex border-b border-gray-100 px-6 pt-3 gap-2 shrink-0">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                setActiveTab(t.id);
+                setSelectedId(null);
+              }}
+              className={`px-4 py-2 text-xs sm:text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
+                activeTab === t.id
+                  ? "border-[#1A284F] bg-sky-50/70 text-[#1A284F]"
+                  : "border-transparent text-gray-500 hover:text-[#1A284F] hover:bg-gray-50"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {snapshot.statusKind === "not_submitted" ? (
+            <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-16 text-center">
+              <p className="text-sm font-bold text-gray-600">KPI Belum di Submit</p>
+              <p className="text-xs text-gray-400 mt-1">Atasan belum melakukan submit KPI Setting 2026.</p>
+            </div>
+          ) : snapshot.statusKind === "in_approval" ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/60 py-16 text-center px-6">
+              <p className="text-sm font-bold text-amber-800">
+                KPI dalam status Approval {snapshot.statusText}
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                KPI Atasan hanya dapat dipilih setelah berstatus Validated.
+              </p>
+            </div>
+          ) : snapshot.items.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-16 text-center">
+              <p className="text-sm font-bold text-gray-500">Belum ada data KPI pada atasan ini.</p>
+            </div>
+          ) : (
+            <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
+              <table className="border-collapse text-xs w-full" style={{ minWidth: 1650 }}>
+                <thead>
+                  <tr className="bg-[#1A284F] text-white">
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold w-12">Pilih</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold w-14">No</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[130px]">Perspektif</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[240px]">KPI</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[120px]">Satuan</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[100px]">Formula</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold w-20">Bobot</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[220px]">Definisi</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[150px]">Source</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Baseline 2025</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Target 2026</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Polaritas</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[220px]">Detail Formula</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[160px]">Keterangan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshot.items.map((it, idx) => {
+                    const checked = selectedId === it.id;
+                    return (
+                      <tr
+                        key={it.id}
+                        onClick={() => setSelectedId(checked ? null : it.id)}
+                        className={`cursor-pointer border-t border-gray-200 transition-colors ${
+                          checked ? "bg-sky-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-slate-50/60 hover:bg-gray-50"
+                        }`}
+                      >
+                        <td className="border border-gray-200 py-2.5 px-2 text-center">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setSelectedId(checked ? null : it.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 h-4 accent-[#1A284F] cursor-pointer"
+                          />
+                        </td>
+                        <td className="border border-gray-200 py-2.5 px-2 text-center font-semibold text-gray-600">{it.no}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 font-semibold text-gray-700">{it.perspektif}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 font-medium text-gray-800 whitespace-pre-line">{it.kpi}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.satuan}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-600">{it.formula}</td>
+                        <td className="border border-gray-200 py-2.5 px-2 text-center">
+                          <span className="px-2 py-0.5 rounded-full bg-[#1A284F] text-white text-[10px] font-bold">{it.bobot}</span>
+                        </td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.definisi || "—"}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.source || "—"}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-700">{it.baseline2025 || "—"}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-center font-bold text-[#1A284F]">{it.target2026 || "—"}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-center">{it.polaritas}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line">{it.detailFormula || "—"}</td>
+                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line">{it.keterangan || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </DualScrollTableContainer>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50/40 shrink-0">
+          <span className="text-xs text-gray-500">
+            {selectedItem ? (
+              <>Terpilih: <strong className="text-[#1A284F]">{selectedItem.kpi}</strong> (Bobot {selectedItem.bobot})</>
+            ) : (
+              "Pilih 1 baris KPI untuk disalin ke form."
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+            >
+              Close
+            </button>
+            {selectedItem && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectKpi(selectedItem);
+                  onClose();
+                }}
+                className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b]"
+              >
+                <Plus className="w-4 h-4" /> Add
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AddKPIModal({
   existingItems,
   onAdd,
@@ -2383,6 +2639,7 @@ export function AddKPIModal({
   forDivision,
   hideCascading,
   onSectionCascade,
+  ownerUser,
 }: {
   existingItems: KPISetting[];
   onAdd: (item: KPISetting) => void;
@@ -2390,7 +2647,15 @@ export function AddKPIModal({
   forDivision?: boolean;
   hideCascading?: boolean;
   onSectionCascade?: (section: string, type: string) => void;
+  ownerUser?: ManagedUser;
 }) {
+  const [showLihatAtasan, setShowLihatAtasan] = useState(false);
+  const [atasanBobotWarning, setAtasanBobotWarning] = useState<string | null>(null);
+  const activeActor = getActiveUser();
+  const canLihatKpiAtasan =
+    !forDivision &&
+    LIHAT_KPI_ATASAN_ROLES.has((ownerUser ?? activeActor).role) &&
+    Boolean(ownerUser ?? activeActor);
   const master = useMasterKpi();
   const dynamicPersonalSections = (master.personalSection?.length ? master.personalSection : PERSONAL_SECTION_OPTIONS.map((p) => ({
     value: p.value,
@@ -2666,7 +2931,7 @@ export function AddKPIModal({
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100 px-6 sm:px-8 pt-3 gap-1 shrink-0">
+        <div className="flex items-center border-b border-gray-100 px-6 sm:px-8 pt-3 gap-1 shrink-0 flex-wrap">
           {([{ id: "section", label: "Section" }, { id: "subsection", label: "Sub Section" }] as const).map(t => (
             <button
               key={t.id}
@@ -2680,6 +2945,16 @@ export function AddKPIModal({
               {t.label}
             </button>
           ))}
+          {canLihatKpiAtasan && tab === "subsection" && (
+            <button
+              type="button"
+              onClick={() => setShowLihatAtasan(true)}
+              className="ml-2 mb-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Lihat KPI Atasan
+            </button>
+          )}
         </div>
 
         <div className="px-6 sm:px-8 py-5 flex flex-col gap-4 flex-1 overflow-y-auto">
@@ -2847,6 +3122,11 @@ export function AddKPIModal({
           {/* ══ SUB SECTION TAB ══ */}
           {tab === "subsection" && (
             <>
+              {atasanBobotWarning && (
+                <div className="px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-medium">
+                  {atasanBobotWarning}
+                </div>
+              )}
               <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-[#1A284F]/5 border border-[#1A284F]/15 text-xs flex-wrap">
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 rounded bg-[#1A284F] text-white font-bold">{form.section}</span>
@@ -2959,6 +3239,43 @@ export function AddKPIModal({
         </div>
       </div>
       {bobotError && <BobotExceededModal violation={bobotError} onClose={() => setBobotError(null)} />}
+      {showLihatAtasan && (
+        <LihatKpiAtasanModal
+          ownerUser={ownerUser ?? activeActor}
+          onSelectKpi={(picked) => {
+            const pickedBobotNum = parsePctNum(picked.bobot);
+            const exceeds = pickedBobotNum > subRemainingInSection + 1e-6;
+            if (exceeds) {
+              setAtasanBobotWarning(
+                `Bobot KPI atasan (${picked.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Silakan sesuaikan bobot sebelum menyimpan.`,
+              );
+            } else {
+              setAtasanBobotWarning(null);
+            }
+            setForm((p) => ({
+              ...p,
+              no: picked.no || p.no,
+              perspektif: picked.perspektif || p.perspektif,
+              kpi: picked.kpi || p.kpi,
+              satuan: picked.satuan || p.satuan,
+              formula: picked.formula || p.formula,
+              bobot: exceeds ? "" : picked.bobot,
+              definisi: picked.definisi || "",
+              source: picked.source || "",
+              baseline2025: picked.baseline2025 || "",
+              target2026: picked.target2026 || "",
+              polaritas: picked.polaritas || "Maximize",
+              detailFormula: picked.detailFormula || "",
+              keterangan: picked.keterangan || "",
+              monthlyTargets: picked.monthlyTargets ? { ...picked.monthlyTargets } : {},
+              colorIndicator: picked.colorIndicator ?? false,
+              indicatorMode: picked.indicatorMode ?? "numeric",
+              trackingPeriod: picked.trackingPeriod || p.trackingPeriod,
+            }));
+          }}
+          onClose={() => setShowLihatAtasan(false)}
+        />
+      )}
     </div>
   );
 }
@@ -6457,6 +6774,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       {showAddModal && !isCorporate && (
         <AddKPIModal
           existingItems={items}
+          ownerUser={effectiveOwner}
           onAdd={(item) => setItems((p) => [...p, item])}
           onClose={() => setShowAddModal(false)}
           hideCascading={
