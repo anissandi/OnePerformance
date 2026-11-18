@@ -544,13 +544,13 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
       map.set(u.employeeId.toLowerCase(), u);
     });
     return map;
-  }, [baseEmployees]);
+  }, [liveEmployees]);
 
   const dynamicFilterOpts = useMemo(() => {
     const poolByUnit =
       companyUnit === "All Units"
-        ? baseEmployees
-        : baseEmployees.filter((e) => e.companyUnit === companyUnit);
+        ? liveEmployees
+        : liveEmployees.filter((e) => e.companyUnit === companyUnit);
     const poolByDiv =
       division === "All Divisions"
         ? poolByUnit
@@ -564,12 +564,12 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
       Array.from(new Set(arr.map((s) => s.trim()).filter((s) => s && s !== "-"))).sort((a, b) => a.localeCompare(b));
 
     return {
-      companyUnit: ["All Units", ...uniq(baseEmployees.map((e) => e.companyUnit))],
+      companyUnit: ["All Units", ...uniq(liveEmployees.map((e) => e.companyUnit))],
       division: ["All Divisions", ...uniq(poolByUnit.map((e) => e.division))],
       department: ["All Departments", ...uniq(poolByDiv.map((e) => e.department))],
       position: ["All Positions", ...uniq(poolByDept.map((e) => e.position))],
     };
-  }, [baseEmployees, companyUnit, division, department]);
+  }, [liveEmployees, companyUnit, division, department]);
 
   const handleDownloadReport = () => {
     const leftHeaders = [
