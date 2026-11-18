@@ -20,6 +20,17 @@ export function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [, setSessionTick] = useState(0);
 
+  useEffect(() => {
+    const onTableFullscreen = (e: Event) => {
+      const custom = e as CustomEvent<{ fullscreen?: boolean }>;
+      if (typeof custom.detail?.fullscreen === "boolean") {
+        setSidebarCollapsed(custom.detail.fullscreen);
+      }
+    };
+    window.addEventListener("pa-table-fullscreen-change", onTableFullscreen);
+    return () => window.removeEventListener("pa-table-fullscreen-change", onTableFullscreen);
+  }, []);
+
   const sessionSnapshot = peekSessionValidity();
 
   useEffect(() => {

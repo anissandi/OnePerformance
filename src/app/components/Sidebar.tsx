@@ -71,7 +71,7 @@ const hrLinks = [
     label: "Approvals",
     icon: CheckSquare,
     subLinks: [
-      { to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp },
+      { to: "/hr/approvals/settings/kpi/group", label: "KPI Business", icon: TrendingUp },
       { to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock },
       { to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target },
       { to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen },
@@ -383,7 +383,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
       const approvalSubs: NavSubLink[] = [
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-          ? [{ to: "/hr/settings/kpi", label: "KPI Business", icon: TrendingUp }]
+          ? [{ to: "/hr/approvals/settings/kpi/group", label: "KPI Business", icon: TrendingUp }]
           : []),
         ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
@@ -498,7 +498,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
       const approvalSubs: NavSubLink[] = [
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-          ? [{ to: "/bod/settings/kpi/gm", label: "KPI Business", icon: TrendingUp }]
+          ? [{ to: "/bod/approvals/settings/kpi/gm", label: "KPI Business", icon: TrendingUp }]
           : []),
         ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
@@ -639,7 +639,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     // Approvals (jika di-allow untuk GM / Supervisor / HR Unit / Employee)
     const approvalSubs: NavSubLink[] = [
       ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-        ? [{ to: `${prefix}/settings/kpi`, label: "KPI Business", icon: TrendingUp }]
+        ? [{ to: `${prefix}/approvals/settings/kpi/group`, label: "KPI Business", icon: TrendingUp }]
         : []),
       ...(canView("approvals_pa_setting") ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: Target }] : []),
       ...(canView("approvals_pa_measurement") ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }] : []),

@@ -10,7 +10,7 @@ import {
   type ScheduleEntry,
 } from "./interviewScheduleStore";
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
-import { isAdminOrHrIcfRole, loadManagedUsers, useAuthStore } from "../../store/authStore";
+import { isAdminOrHrIcfRole, isSameCompanyUnit, loadManagedUsers, useAuthStore } from "../../store/authStore";
 import { pushEmployeeNotification } from "../../store/notificationStore";
 import { toast } from "sonner";
 import { Download, Search, Send } from "lucide-react";
@@ -341,21 +341,37 @@ function DetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose: () => 
 export function SupervisorManagementInterviewCheckIn() {
   const { activeUser } = useAuthStore();
   const [entries, setEntries]     = useState<ScheduleEntry[]>(getEntries);
-  // Data karyawan aktual (tanpa data dummy)
-  const employeeOptions = React.useMemo(() => getMergedPersonOptions(), [entries]);
-  const interviewerOptions = employeeOptions;
-  const otherUserOptions = employeeOptions;
   const [confirmSend, setConfirmSend] = useState(false);
   const [sending, setSending] = useState(false);
   const [showForm, setShowForm]   = useState(false);
   const [editId, setEditId]       = useState<string | null>(null);
   const [form, setForm]           = useState<FormState>(EMPTY_FORM);
+  // Filter karyawan berdasarkan Company Unit yang dipilih
+  const employeeOptions = React.useMemo(
+    () => getMergedPersonOptions([], (u) => !form.companyUnit || isSameCompanyUnit(u.company, form.companyUnit)),
+    [form.companyUnit, entries],
+  );
+  const allPersonOptions = React.useMemo(() => getMergedPersonOptions(), [entries]);
+  const interviewerOptions = allPersonOptions;
+  const otherUserOptions = allPersonOptions;
   const [lampiranFiles, setLampiranFiles] = useState<File[]>([]);
   const [viewEntry, setViewEntry] = useState<ScheduleEntry | null>(null);
   const [savedToast, setSavedToast]   = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState<string | null>(null);
 
-  useEffect(() => subscribe(() => setEntries(getEntries())), []);
+  useEffect(() => {
+    const sync = () => setEntries(getEntries());
+    const unsub = subscribe(sync);
+    window.addEventListener("appraisal-updated", sync);
+    window.addEventListener("pa-db-hydrated", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      unsub();
+      window.removeEventListener("appraisal-updated", sync);
+      window.removeEventListener("pa-db-hydrated", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
 
   const setF = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm(p => ({ ...p, [k]: v }));
@@ -504,7 +520,7 @@ export function SupervisorManagementInterviewCheckIn() {
               <div className="relative">
                 <select
                   value={form.companyUnit}
-                  onChange={e => setF("companyUnit", e.target.value)}
+                  onChange={e => setForm(p => ({ ...p, companyUnit: e.target.value, addedUsers: [] }))}
                   className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 bg-white text-gray-700 focus:outline-none focus:border-indigo-400 appearance-none pr-8"
                 >
                   <option value="">— Pilih Company Unit —</option>

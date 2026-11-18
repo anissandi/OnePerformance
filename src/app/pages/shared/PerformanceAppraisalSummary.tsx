@@ -1,6 +1,7 @@
 // @refresh reset
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Download, ChevronDown, ChevronUp, ChevronsUpDown, Eye, X, Star } from "lucide-react";
+import { EXCEL_THEME, exportStyledXLSX, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
 import type { Employee, CalibrationTarget, ScoreGrade } from "../../data/mockEmployees";
 import {
   getLiveTransactionalEmployees, gradeColor, gradeFromScore, readCalibrationTargets, MI_EMPLOYEE_STORE_MAP,
@@ -8,7 +9,7 @@ import {
 import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
-import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole, useAuthStore } from "../../store/authStore";
+import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole, loadManagedUsers, useAuthStore } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 
 type Role = "hr" | "supervisor";
@@ -537,6 +538,149 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     ? (filtered.reduce((s, e) => s + e.totalScore, 0) / filtered.length).toFixed(1)
     : "—";
 
+  const managedUsersById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof loadManagedUsers>[number]>();
+    loadManagedUsers().forEach((u) => {
+      map.set(u.employeeId.toLowerCase(), u);
+    });
+    return map;
+  }, [baseEmployees]);
+
+  const dynamicFilterOpts = useMemo(() => {
+    const poolByUnit =
+      companyUnit === "All Units"
+        ? baseEmployees
+        : baseEmployees.filter((e) => e.companyUnit === companyUnit);
+    const poolByDiv =
+      division === "All Divisions"
+        ? poolByUnit
+        : poolByUnit.filter((e) => e.division === division);
+    const poolByDept =
+      department === "All Departments"
+        ? poolByDiv
+        : poolByDiv.filter((e) => e.department === department);
+
+    const uniq = (arr: string[]) =>
+      Array.from(new Set(arr.map((s) => s.trim()).filter((s) => s && s !== "-"))).sort((a, b) => a.localeCompare(b));
+
+    return {
+      companyUnit: ["All Units", ...uniq(baseEmployees.map((e) => e.companyUnit))],
+      division: ["All Divisions", ...uniq(poolByUnit.map((e) => e.division))],
+      department: ["All Departments", ...uniq(poolByDiv.map((e) => e.department))],
+      position: ["All Positions", ...uniq(poolByDept.map((e) => e.position))],
+    };
+  }, [baseEmployees, companyUnit, division, department]);
+
+  const handleDownloadReport = () => {
+    const leftHeaders = [
+      "No",
+      "Reg No",
+      "ID Karyawan",
+      "Nama Karyawan",
+      "Divisi",
+      "Departemen",
+      "Bagian",
+      "Join Date",
+      "Masa Kerja",
+      "Update Terakhir",
+    ];
+    const hdrNavy = { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center" as const, vAlign: "center" as const, borderColor: "334155" };
+    const hdrBlue = { bg: "1D4ED8", fg: EXCEL_THEME.white, bold: true, align: "center" as const, vAlign: "center" as const, borderColor: "1E40AF" };
+    const hdrAmber = { bg: "B45309", fg: EXCEL_THEME.white, bold: true, align: "center" as const, vAlign: "center" as const, borderColor: "92400E" };
+    const hdrEmerald = { bg: "047857", fg: EXCEL_THEME.white, bold: true, align: "center" as const, vAlign: "center" as const, borderColor: "065F46" };
+
+    const row0: StyledExcelCell[] = [
+      ...leftHeaders.map((h) => ({ value: h, style: hdrNavy })),
+      { value: "KPI", style: hdrBlue },
+      { value: "SMART Goals", style: hdrBlue },
+      { value: "Appraisal Form", style: hdrBlue },
+      { value: "", style: hdrBlue },
+      { value: "", style: hdrBlue },
+      { value: "Project", style: hdrBlue },
+      { value: "Supervisor Level", style: hdrAmber },
+      { value: "", style: hdrAmber },
+      { value: "Final Score", style: hdrEmerald },
+      { value: "", style: hdrEmerald },
+    ];
+    const row1: StyledExcelCell[] = [
+      ...leftHeaders.map(() => ({ value: "", style: hdrNavy })),
+      { value: "", style: hdrBlue },
+      { value: "", style: hdrBlue },
+      { value: "Form A", style: hdrBlue },
+      { value: "Form B", style: hdrBlue },
+      { value: "Form C", style: hdrBlue },
+      { value: "", style: hdrBlue },
+      { value: "Managerial Skill", style: hdrAmber },
+      { value: "Mgmt Interview", style: hdrAmber },
+      { value: "Score", style: hdrEmerald },
+      { value: "Grade", style: hdrEmerald },
+    ];
+
+    const merges: StyledExcelMerge[] = [
+      ...leftHeaders.map((_, ci) => ({ sRow: 0, sCol: ci, eRow: 1, eCol: ci })),
+      { sRow: 0, sCol: 10, eRow: 1, eCol: 10 },
+      { sRow: 0, sCol: 11, eRow: 1, eCol: 11 },
+      { sRow: 0, sCol: 12, eRow: 0, eCol: 14 },
+      { sRow: 0, sCol: 15, eRow: 1, eCol: 15 },
+      { sRow: 0, sCol: 16, eRow: 0, eCol: 17 },
+      { sRow: 0, sCol: 18, eRow: 0, eCol: 19 },
+    ];
+
+    const modFmt = (m?: { score: number; grade: string } | null) =>
+      m && m.score > 0 ? `${m.score.toFixed(1)}% (${m.grade})` : "—";
+
+    const rowsOut: StyledExcelCell[][] = [row0, row1];
+    const rowHeights: Record<number, number> = { 0: 26, 1: 22 };
+
+    sorted.forEach((emp, idx) => {
+      const u = managedUsersById.get(emp.id.toLowerCase());
+      const zebraBg = idx % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
+      const miData = liveMI[emp.id] ?? emp.managementInterview;
+      const vals = [
+        String(idx + 1),
+        u?.regNo || "-",
+        emp.id,
+        emp.fullName,
+        emp.division,
+        emp.department,
+        u?.bagian || "-",
+        emp.joined,
+        emp.tenure,
+        emp.approvalCompleteDate,
+        modFmt(emp.kpi),
+        modFmt(emp.smartGoals),
+        modFmt(emp.formA),
+        modFmt(emp.formB),
+        modFmt(emp.formC),
+        modFmt(emp.project),
+        modFmt(emp.managerialSkill),
+        modFmt(miData),
+        `${emp.totalScore.toFixed(1)}%`,
+        emp.grade,
+      ];
+      rowsOut.push(
+        vals.map((val, ci) => ({
+          value: val,
+          style: {
+            bg: ci >= 18 ? "ECFDF5" : ci >= 16 ? "FFFBEB" : ci >= 10 ? "EFF6FF" : zebraBg,
+            fg: EXCEL_THEME.textDark,
+            bold: ci === 3 || ci >= 18,
+            align: ci === 0 || ci >= 7 ? "center" : "left",
+          },
+        })),
+      );
+      rowHeights[rowsOut.length - 1] = 24;
+    });
+
+    exportStyledXLSX(`Performance_Appraisal_Summary_${year}.xlsx`, {
+      sheetName: "PA Summary",
+      colWidths: [6, 14, 14, 26, 20, 20, 18, 13, 14, 15, 14, 14, 12, 12, 12, 14, 16, 16, 12, 10],
+      rowHeights,
+      rows: rowsOut,
+      merges,
+    });
+  };
+
   return (
     <div className="w-full flex flex-col gap-6">
       <div>
@@ -555,7 +699,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
         </div>
       </div>
 
-      <div className="bg-white border border-gray-100 rounded-2xl px-6 py-4 shadow-sm">
+      <div className="bg-gradient-to-r from-slate-50 via-white to-sky-50/40 border border-slate-200/80 rounded-2xl px-6 py-4 shadow-sm">
         <div className="grid gap-4 grid-cols-5">
           <FilterSelect label="Year"         options={filterOptions.year}        value={year}        onChange={setYear} />
           <FilterSelect
@@ -567,41 +711,53 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                   : ["All Units", ...effectiveLockedUnits]
                 : role === "supervisor" && scopedMeta.units.length > 0
                 ? ["All Units", ...scopedMeta.units]
-                : filterOptions.companyUnit
+                : dynamicFilterOpts.companyUnit
             }
             value={
               effectiveLockedUnits && effectiveLockedUnits.length === 1
                 ? effectiveLockedUnits[0]
                 : companyUnit
             }
-            onChange={setCompanyUnit}
+            onChange={(val) => {
+              setCompanyUnit(val);
+              setDivision("All Divisions");
+              setDepartment("All Departments");
+              setPosition("All Positions");
+            }}
           />
           <FilterSelect
             label="Division"
             options={
               role === "supervisor" && scopedMeta.divisions.length > 0
                 ? ["All Divisions", ...scopedMeta.divisions]
-                : filterOptions.division
+                : dynamicFilterOpts.division
             }
             value={division}
-            onChange={setDivision}
+            onChange={(val) => {
+              setDivision(val);
+              setDepartment("All Departments");
+              setPosition("All Positions");
+            }}
           />
           <FilterSelect
             label="Department"
             options={
               role === "supervisor" && scopedMeta.departments.length > 0
                 ? ["All Departments", ...scopedMeta.departments]
-                : filterOptions.department
+                : dynamicFilterOpts.department
             }
             value={department}
-            onChange={setDepartment}
+            onChange={(val) => {
+              setDepartment(val);
+              setPosition("All Positions");
+            }}
           />
           <FilterSelect
             label="Position"
             options={
               role === "supervisor" && scopedMeta.positions.length > 0
                 ? ["All Positions", ...scopedMeta.positions]
-                : filterOptions.position
+                : dynamicFilterOpts.position
             }
             value={position}
             onChange={setPosition}
@@ -610,18 +766,18 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
       </div>
 
       <div className="grid grid-cols-8 gap-3">
-        <div className="col-span-2 bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex flex-col gap-1">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Total Employees</p>
-          <p className="text-3xl font-bold text-gray-900">{filtered.length}</p>
-          <p className="text-xs text-gray-400">Appraisal approved</p>
+        <div className="col-span-2 bg-gradient-to-br from-sky-50/90 via-white to-blue-50/40 border border-sky-200/80 rounded-2xl p-5 shadow-sm flex flex-col gap-1">
+          <p className="text-xs font-semibold text-sky-700 uppercase tracking-wide">Total Employees</p>
+          <p className="text-3xl font-bold text-[#1A284F]">{filtered.length}</p>
+          <p className="text-xs text-sky-600/80">Appraisal approved</p>
         </div>
-        <div className="col-span-2 bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex flex-col gap-1">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Average Score</p>
+        <div className="col-span-2 bg-gradient-to-br from-indigo-50/90 via-white to-violet-50/40 border border-indigo-200/80 rounded-2xl p-5 shadow-sm flex flex-col gap-1">
+          <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Average Score</p>
           <p className="text-3xl font-bold text-[#1A284F]">{avgScore}</p>
-          <p className="text-xs text-gray-400">Across all modules</p>
+          <p className="text-xs text-indigo-600/80">Across all modules</p>
         </div>
-        <div className="col-span-4 bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Grade Distribution</p>
+        <div className="col-span-4 bg-gradient-to-br from-emerald-50/70 via-white to-teal-50/35 border border-emerald-200/75 rounded-2xl p-5 shadow-sm">
+          <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3">Grade Distribution</p>
           <div className="flex items-center gap-3">
             {gradeCounts.map(({ grade, count }) => (
               <div key={grade} className="flex-1 flex flex-col items-center gap-1">
@@ -639,7 +795,11 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
             <h3 className="font-semibold text-gray-900">Employee Appraisal Results</h3>
             <span className="text-xs text-gray-400 font-medium">{filtered.length} employees</span>
           </div>
-          <button className="flex items-center gap-2 bg-[#1A284F] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm">
+          <button
+            type="button"
+            onClick={handleDownloadReport}
+            className="flex items-center gap-2 bg-[#1A284F] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm"
+          >
             <Download className="w-4 h-4" />
             Download Report
           </button>
@@ -648,27 +808,24 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           <table className="w-full text-sm text-left border-collapse">
             <thead className="bg-gray-50 text-xs text-gray-600 font-semibold">
               <tr className="border-b border-gray-200">
-                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 text-center">Action</th>
-                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Employee ID</th>
+                <th rowSpan={2} className="px-3 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 text-center">No</th>
+                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 text-center">Aksi</th>
+                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Reg No</th>
+                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">ID Karyawan</th>
                 <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("fullName")}>
-                  <div className="flex items-center gap-1">Full Name <SortIcon col="fullName" sortKey={sortKey} sortDir={sortDir} /></div>
-                </th>
-                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("position")}>
-                  <div className="flex items-center gap-1">Position <SortIcon col="position" sortKey={sortKey} sortDir={sortDir} /></div>
-                </th>
-                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("department")}>
-                  <div className="flex items-center gap-1">Department <SortIcon col="department" sortKey={sortKey} sortDir={sortDir} /></div>
+                  <div className="flex items-center gap-1">Nama Karyawan <SortIcon col="fullName" sortKey={sortKey} sortDir={sortDir} /></div>
                 </th>
                 <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("division")}>
-                  <div className="flex items-center gap-1">Division <SortIcon col="division" sortKey={sortKey} sortDir={sortDir} /></div>
+                  <div className="flex items-center gap-1">Divisi <SortIcon col="division" sortKey={sortKey} sortDir={sortDir} /></div>
                 </th>
-                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("companyUnit")}>
-                  <div className="flex items-center gap-1">Company Unit <SortIcon col="companyUnit" sortKey={sortKey} sortDir={sortDir} /></div>
+                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("department")}>
+                  <div className="flex items-center gap-1">Departemen <SortIcon col="department" sortKey={sortKey} sortDir={sortDir} /></div>
                 </th>
-                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Joined</th>
-                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Tenure</th>
+                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Bagian</th>
+                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Join Date</th>
+                <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100">Masa Kerja</th>
                 <th rowSpan={2} className="px-4 py-2.5 whitespace-nowrap border border-gray-200 bg-gray-100 cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort("approvalCompleteDate")}>
-                  <div className="flex items-center gap-1">Last Updated <SortIcon col="approvalCompleteDate" sortKey={sortKey} sortDir={sortDir} /></div>
+                  <div className="flex items-center gap-1">Update Terakhir <SortIcon col="approvalCompleteDate" sortKey={sortKey} sortDir={sortDir} /></div>
                 </th>
                 <th rowSpan={2} className="px-3 py-2.5 text-center whitespace-nowrap border border-gray-200 bg-blue-50 text-blue-700">KPI</th>
                 <th rowSpan={2} className="px-3 py-2.5 text-center whitespace-nowrap border border-gray-200 bg-blue-50 text-blue-700">SMART Goals</th>
@@ -694,15 +851,17 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
             <tbody className="divide-y divide-gray-50">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={20} className="px-4 py-12 text-center text-gray-400 text-sm">
+                  <td colSpan={21} className="px-4 py-12 text-center text-gray-400 text-sm">
                     No employees found matching the selected filters.
                   </td>
                 </tr>
               ) : (
-                sorted.map(emp => {
+                sorted.map((emp, idx) => {
                   const isSelf = emp.id.toLowerCase() === activeUser.employeeId.toLowerCase();
+                  const u = managedUsersById.get(emp.id.toLowerCase());
                   return (
                   <tr key={emp.id} className={isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/50 transition-colors"}>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center text-xs font-semibold text-gray-500">{idx + 1}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-center">
                       <button
                         onClick={() => setSelectedEmployee(emp)}
@@ -712,6 +871,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                         View Detail
                       </button>
                     </td>
+                    <td className="px-4 py-2.5 border border-gray-100 font-mono text-xs text-gray-600 whitespace-nowrap">{u?.regNo || "-"}</td>
                     <td className="px-4 py-2.5 border border-gray-100 font-mono text-xs text-gray-500 whitespace-nowrap">{emp.id}</td>
                     <td className="px-4 py-2.5 border border-gray-100 font-semibold text-gray-900 whitespace-nowrap">
                       <div className="flex items-center gap-2">
@@ -723,10 +883,9 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.position}</td>
-                    <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.department}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.division}</td>
-                    <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.companyUnit}</td>
+                    <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{emp.department}</td>
+                    <td className="px-4 py-2.5 border border-gray-100 text-gray-600 whitespace-nowrap">{u?.bagian || "-"}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.joined}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.tenure}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.approvalCompleteDate}</td>

@@ -13,6 +13,12 @@ import { saveRCASubmission, loadRCASubmissions, submitRCAsForMonths } from "../s
 import type { StoredMasalahBlock, StoredRCASubmission, StoredRCAActionPlan } from "../shared/rcaStore";
 import ExportImportButton from "../../components/ExportImportButton";
 import { DualScrollTableContainer } from "../../components/DualScrollTableContainer";
+import {
+  dispatchTableFullscreen,
+  getKpiTableScaleClasses,
+  KpiTableDisplayControls,
+  type KpiTableScale,
+} from "../../components/KpiTableDisplayControls";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
 import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../store/notificationStore";
@@ -4297,6 +4303,26 @@ function KPIWorkspace({
   };
 
   const [showEvidenceWarn, setShowEvidenceWarn] = useState(false);
+  const [isTableFullscreen, setIsTableFullscreen] = useState(false);
+  const [tableScale, setTableScale] = useState<KpiTableScale>("md");
+
+  const toggleTableFullscreen = () => {
+    setIsTableFullscreen((prev) => {
+      const next = !prev;
+      dispatchTableFullscreen(next);
+      return next;
+    });
+  };
+
+  const cycleTableScale = () => {
+    setTableScale((prev) => (prev === "md" ? "sm" : prev === "sm" ? "lg" : "md"));
+  };
+
+  React.useEffect(() => {
+    return () => {
+      dispatchTableFullscreen(false);
+    };
+  }, []);
 
   const [businessCellsMap, setBusinessCellsMap] = useState<Record<string, Record<CellKey, string>>>(() => {
     try {
@@ -4844,25 +4870,73 @@ function KPIWorkspace({
         </div>
       )}
 
-      <KPITable
-        kpiItems={isBusinessWorkspace ? businessTrackingItems : trackingKpiItems}
-        months={months}
-        editable={view === "input" && !submitted && !isLockedByDeadline && !isViewOnly}
-        editableMonthId={(!submitted && !isLockedByDeadline && !isViewOnly && (canEdit || canCreate) && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
-        onRemoveMonth={canDelete ? removeMonth : undefined}
-        onAddMonth={canCreate ? () => setShowAddModal(true) : undefined}
-        cells={isBusinessWorkspace ? businessCellsMap : cellsMap}
-        onCellChange={canEdit || canCreate ? (isBusinessWorkspace ? updateBusinessCell : updateCell) : undefined}
-        onCellBlur={handleCellBlur}
-        onOpenRCA={canCreate || canEdit ? openRCA : undefined}
-        onViewRCA={(rcaKey, secondaryKey, kpiName, monthLabel) =>
-          setViewingRCA({ rcaKey, secondaryKey, kpiName, monthLabel })
-        }
-        rcaMap={rcaMap}
-        storedRCAStatus={storedRCAStatus}
-        approvedEditCells={approvedEditCells}
-        highlightMissingRca={highlightRca}
-      />
+      {(() => {
+        const activeTrackingList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
+        const totalTrackingBobot = activeTrackingList.reduce(
+          (sum, k) => sum + (parseFloat(String(k.bobot ?? "").replace("%", "")) || 0),
+          0,
+        );
+        const formattedTrackingBobot = Number.isInteger(totalTrackingBobot)
+          ? String(totalTrackingBobot)
+          : totalTrackingBobot.toFixed(1);
+        return (
+          <div
+            className={
+              isTableFullscreen
+                ? `fixed top-16 bottom-[41px] left-0 md:left-20 right-0 z-40 bg-white overflow-y-auto p-4 md:p-6 flex flex-col gap-3 shadow-2xl border-t border-gray-200 ${getKpiTableScaleClasses(tableScale)}`
+                : `flex flex-col gap-3 ${getKpiTableScaleClasses(tableScale)}`
+            }
+          >
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/5 border border-[#1A284F]/15 px-2.5 py-1 rounded-full">
+                  <Edit3 className="w-3.5 h-3.5" />
+                  {view === "input" && !submitted && !isLockedByDeadline && !isViewOnly ? "Edit Mode" : "View Mode"}
+                </span>
+                <KpiTableDisplayControls
+                  isFullscreen={isTableFullscreen}
+                  onToggleFullscreen={toggleTableFullscreen}
+                  tableScale={tableScale}
+                  onCycleScale={cycleTableScale}
+                />
+                <div className="flex items-center gap-2 px-3 py-1 bg-[#1A284F]/5 rounded-lg">
+                  <span className="text-xs font-bold text-[#1A284F]">Total KPI:</span>
+                  <span className="text-xs font-bold text-[#1A284F]">{activeTrackingList.length}</span>
+                </div>
+                <div className={`flex items-center gap-2 px-3 py-1 rounded-lg ${Math.round(totalTrackingBobot * 100) === 10000 ? "bg-green-50" : "bg-orange-50"}`}>
+                  <span className={`text-xs font-bold ${Math.round(totalTrackingBobot * 100) === 10000 ? "text-green-700" : "text-orange-700"}`}>Total Bobot:</span>
+                  <span className={`text-xs font-bold ${Math.round(totalTrackingBobot * 100) === 10000 ? "text-green-700" : "text-orange-700"}`}>{formattedTrackingBobot}%</span>
+                </div>
+              </div>
+              {isTableFullscreen && isCurrentTabValidated && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <ExportImportButton onExport={handleExport} onImport={!submitted && !isLockedByDeadline && !isViewOnly && (canCreate || canEdit) ? handleImport : undefined} size="sm" />
+                </div>
+              )}
+            </div>
+
+            <KPITable
+              kpiItems={activeTrackingList}
+              months={months}
+              editable={view === "input" && !submitted && !isLockedByDeadline && !isViewOnly}
+              editableMonthId={(!submitted && !isLockedByDeadline && !isViewOnly && (canEdit || canCreate) && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
+              onRemoveMonth={canDelete ? removeMonth : undefined}
+              onAddMonth={canCreate ? () => setShowAddModal(true) : undefined}
+              cells={isBusinessWorkspace ? businessCellsMap : cellsMap}
+              onCellChange={canEdit || canCreate ? (isBusinessWorkspace ? updateBusinessCell : updateCell) : undefined}
+              onCellBlur={handleCellBlur}
+              onOpenRCA={canCreate || canEdit ? openRCA : undefined}
+              onViewRCA={(rcaKey, secondaryKey, kpiName, monthLabel) =>
+                setViewingRCA({ rcaKey, secondaryKey, kpiName, monthLabel })
+              }
+              rcaMap={rcaMap}
+              storedRCAStatus={storedRCAStatus}
+              approvedEditCells={approvedEditCells}
+              highlightMissingRca={highlightRca}
+            />
+          </div>
+        );
+      })()}
 
       {/* Sisi owner: tabel RCA disembunyikan; riwayat RCA diakses melalui tag RCA (kuning) pada tabel KPI */}
 

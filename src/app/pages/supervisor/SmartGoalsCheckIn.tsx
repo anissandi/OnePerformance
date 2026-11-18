@@ -282,7 +282,7 @@ function ActionPlansSection({
 
   return (
     <div className="border-t border-gray-100 pt-4 flex flex-col gap-4">
-      <p className="text-[11px] font-bold uppercase tracking-widest text-[#1A284F]">Status Action Plans</p>
+      <p className="text-[11px] font-bold uppercase tracking-widest text-[#1A284F]">Status Action Plans | Attainable</p>
 
       {/* Horizontal table */}
       <div className="overflow-x-auto rounded-xl border border-gray-200">
@@ -535,11 +535,11 @@ function GoalSection({
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
       {/* Header */}
-      <div className="flex items-center px-5 py-3 bg-[#1A284F] gap-3">
-        <span className="text-white text-sm font-bold flex-1">{goal.label}</span>
+      <div className="flex items-center px-5 py-3 bg-gradient-to-r from-sky-50 via-indigo-50/70 to-slate-50 border-b border-sky-200 gap-3">
+        <span className="text-[#1A284F] text-sm font-bold flex-1">{goal.label}</span>
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="text-white/70 hover:text-white transition-colors"
+          className="text-[#1A284F]/70 hover:text-[#1A284F] transition-colors"
         >
           {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
         </button>
@@ -670,9 +670,9 @@ function TargetVsActualSection({
 
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-      <div className="flex items-center px-5 py-3 bg-[#1A284F] gap-3">
-        <TrendingUp className="w-4 h-4 text-green-300" />
-        <span className="text-white text-sm font-bold flex-1">Target vs Actual</span>
+      <div className="flex items-center px-5 py-3 bg-gradient-to-r from-sky-50 via-indigo-50/70 to-slate-50 border-b border-sky-200 gap-3">
+        <TrendingUp className="w-4 h-4 text-emerald-600" />
+        <span className="text-[#1A284F] text-sm font-bold flex-1">Target vs Actual</span>
       </div>
 
       <div className="overflow-x-auto">
@@ -868,9 +868,9 @@ function PenilaianAkhirSection({
 }) {
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-      <div className="flex items-center px-5 py-3 bg-[#1A284F] gap-3">
-        <Star className="w-4 h-4 text-amber-300" />
-        <span className="text-white text-sm font-bold flex-1">Penilaian Akhir</span>
+      <div className="flex items-center px-5 py-3 bg-gradient-to-r from-sky-50 via-indigo-50/70 to-slate-50 border-b border-sky-200 gap-3">
+        <Star className="w-4 h-4 text-amber-500" />
+        <span className="text-[#1A284F] text-sm font-bold flex-1">Penilaian Akhir</span>
       </div>
       <div className="p-5 bg-white flex flex-col gap-4">
         <div className="flex flex-col gap-1">

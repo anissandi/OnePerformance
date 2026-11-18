@@ -578,8 +578,7 @@ export function HRSettingKPIPage() {
     ["group", "gm"],
     isDirector ? "gm" : "group",
   );
-  // Untuk Role Director, tab KPI (Group) di-hide karena KPI (Group) dibuat oleh level Director
-  const kpiTab: "group" | "gm" = isDirector ? "gm" : routeKpiTab;
+  const kpiTab: "group" | "gm" = routeKpiTab;
   const [checklist, setChecklist] = useState<KpiHierarchyValidationChecklist>(() =>
     loadKpiValidationChecklist(String(CURRENT_YEAR)),
   );
@@ -645,7 +644,7 @@ export function HRSettingKPIPage() {
 
   const handleCompanyUnitChange = (unit: string) => {
     setCompanyUnit(unit);
-    if (isDirector || unit !== "PT RSUP (Industry)") setKpiTab("gm");
+    if (kpiTab !== "gm") setKpiTab("gm");
   };
   const currentKey = `${kpiTab}::${companyUnit}`;
   const scopeKey = kpiTab === "group" ? "corporate-RSUP Group" : `unit-${companyUnit}`;
@@ -918,18 +917,6 @@ export function HRSettingKPIPage() {
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Company Unit</label>
-          <select
-            value={companyUnit}
-            onChange={(e) => handleCompanyUnitChange(e.target.value)}
-            className="text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-700 bg-white outline-none focus:border-[#1A284F] focus:ring-1 focus:ring-[#1A284F]/20 transition-all min-w-[200px]"
-          >
-            {allowedUnits.map((u) => (
-              <option key={u} value={u}>{u}</option>
-            ))}
-          </select>
-        </div>
-        <div className="flex items-center gap-2">
           <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Year</label>
           <div className="relative flex items-center">
             <select
@@ -952,7 +939,7 @@ export function HRSettingKPIPage() {
 
       {/* Tab header */}
       <div className="flex gap-1 border-b border-gray-200">
-        {(!isDirector && companyUnit === "PT RSUP (Industry)" ? (["group", "gm"] as const) : (["gm"] as const)).map((tab) => (
+        {(["group", "gm"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setKpiTab(tab)}
@@ -968,6 +955,30 @@ export function HRSettingKPIPage() {
       </div>
 
       <div className="flex flex-col gap-5">
+        {kpiTab === "gm" && (
+          <div className="flex items-center gap-2 flex-wrap bg-slate-50/70 border border-slate-200/80 rounded-xl px-3.5 py-2.5">
+            <span className="text-xs font-semibold text-slate-500 mr-1">Company Unit:</span>
+            {allowedUnits.map((u) => {
+              const isActiveUnit = companyUnit === u;
+              const hasSub = Boolean(bizStatusMapLive[`unit-${u}`]?.submitted);
+              return (
+                <button
+                  key={u}
+                  type="button"
+                  onClick={() => handleCompanyUnitChange(u)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                    isActiveUnit
+                      ? "bg-sky-100 text-[#1A284F] border-sky-300 shadow-xs"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-sky-50/70 hover:text-sky-800 hover:border-sky-200"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${hasSub ? "bg-emerald-500" : "bg-slate-300"}`} />
+                  <span>{u}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {/* Sub-header */}
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3 flex-wrap">
@@ -1056,7 +1067,7 @@ export function HRSettingKPIPage() {
           </div>
         </div>
 
-        {kpiTab === "group" && companyUnit === "PT RSUP (Industry)" && selectedYear === CURRENT_YEAR ? (() => {
+        {kpiTab === "group" && selectedYear === CURRENT_YEAR ? (() => {
           const bizStatusMap = loadPersistedState<Record<string, { submitted?: boolean; approved?: boolean }>>("pa_kpi_business_status_v1", {});
           const bizItemsMap = loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_business_by_scope_v1", {});
           const groupSubmitted = Boolean(bizStatusMap["corporate-RSUP Group"]?.submitted);

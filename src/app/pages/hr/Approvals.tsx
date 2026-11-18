@@ -366,7 +366,7 @@ function ApprovalsTable({
     const matchType   = !selectedApprovalTypes.length || selectedApprovalTypes.includes(row.type);
     const parts       = getDateParts(row.submittedDate);
     const inferredYear = parts ? parts[2] : row.no.match(/20\d{2}/)?.[0];
-    const matchYear   = !selectedYears.length   || (inferredYear ? selectedYears.includes(inferredYear) : false);
+    const matchYear   = !selectedYears.length   || !inferredYear || selectedYears.includes(inferredYear);
     const matchMonth  = !selectedMonths.length  || (parts ? selectedMonths.some(m => MONTH_NUM[m] === parts[1]) : false);
     return matchTab && matchSearch && matchUnit && matchDiv && matchDept && matchType && matchYear && matchMonth;
   });
@@ -516,10 +516,10 @@ function ApprovalsTable({
       {isSetting && <TargetEditRequestsSection />}
 
       {/* Table */}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm bg-white">
         <table className="w-full text-left border-collapse">
           <thead>
-            <tr className="border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            <tr className="bg-[#1A284F] text-white text-xs font-semibold uppercase tracking-wider">
               {([
                 { col: null,            label: "Actions",       cls: "" },
                 { col: "no",            label: "No",            cls: "w-16" },
@@ -552,7 +552,7 @@ function ApprovalsTable({
             {paginated.length === 0 ? (
               <tr><td colSpan={11} className="py-16 text-center text-gray-400 text-sm">No records found for this tab.</td></tr>
             ) : paginated.map((row, idx) => (
-              <tr key={row.no} className={`border-b border-gray-50/50 hover:bg-gray-50/50 ${idx === 0 ? "bg-[#FDF9F1]" : ""}`}>
+              <tr key={row.no} className={`border-b border-gray-100 transition-colors hover:bg-sky-100/40 ${idx % 2 === 0 ? "bg-white" : "bg-sky-50/35"}`}>
                 <td className="py-4 px-4">
                   <div className="flex items-center gap-2 flex-wrap">
                     {activeTab === "Pending" && (row.status === "Pending" || row.status === "Pending-Hasil Tindak Lanjut") && (
@@ -651,12 +651,12 @@ function FilterDropdown({ label, options, selected, onToggle, isOpen, onToggleOp
 
   return (
     <div className="relative" ref={ref}>
-      <button onClick={onToggleOpen} className="w-full flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+      <button onClick={onToggleOpen} className="w-full flex items-center justify-between bg-slate-50/80 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-sky-50/70 hover:border-sky-200 transition-colors">
         <div className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-gray-400" />
-          <span>{label}{selected.length > 0 && <span className="ml-2 px-2 py-0.5 bg-[#1A284F] text-white text-xs rounded-full">{selected.length}</span>}</span>
+          <Filter className="w-4 h-4 text-sky-600" />
+          <span>{label}{selected.length > 0 && <span className="ml-2 px-2 py-0.5 bg-sky-100 text-sky-800 border border-sky-200 text-xs font-semibold rounded-full">{selected.length}</span>}</span>
         </div>
-        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </button>
       {isOpen && (
         <div className="absolute z-50 w-full mt-2 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">

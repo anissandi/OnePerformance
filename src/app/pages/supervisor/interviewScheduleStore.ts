@@ -100,6 +100,9 @@ export function addEntry(e: Omit<ScheduleEntry, "id" | "createdAt" | "status">):
       description: `Scheduled Management Interview for ${entry.companyUnit} (${entry.addedUsers.join(", ")}) on ${entry.scheduledDate} ${entry.scheduledTime}`,
     },
   });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("appraisal-updated"));
+  }
   return entry;
 }
 

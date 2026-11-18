@@ -13,10 +13,14 @@ import {
 export type AppUserRole =
   | "Employee"
   | "Supervisor"
+  | "Departement"
+  | "Division"
+  | "vGM"
   | "GM"
   | "HR Unit"
   | "HR ICF"
   | "Director"
+  | "DirectorNonOpr"
   | "BOD"
   | "Administrator"
   | "HR Admin"
@@ -312,11 +316,25 @@ export type HierarchyAuthorityLevel =
   | "seksi"
   | "operational";
 
+type HierarchyAuthorityLevel =
+  | "admin"
+  | "bod"
+  | "director_group"
+  | "gm_unit"
+  | "vgm_unit"
+  | "hr_unit"
+  | "division"
+  | "department"
+  | "bagian"
+  | "seksi"
+  | "operational";
+
 const HIERARCHY_RANK: Record<HierarchyAuthorityLevel, number> = {
   admin: 100,
   bod: 95,
   director_group: 90,
   gm_unit: 80,
+  vgm_unit: 78,
   hr_unit: 75,
   division: 70,
   department: 60,
@@ -386,9 +404,12 @@ export function resolveEffectiveUserGrouping(user: ManagedUser): UserGrouping {
 export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthorityLevel {
   if (isAdminOrHrIcfRole(user.role)) return "admin";
   if (user.role === "BOD") return "bod";
-  if (user.role === "Director") return "director_group";
+  if (user.role === "Director" || user.role === "DirectorNonOpr") return "director_group";
   if (user.role === "GM") return "gm_unit";
+  if (user.role === "vGM") return "vgm_unit";
   if (user.role === "HR Unit") return "hr_unit";
+  if (user.role === "Division") return "division";
+  if (user.role === "Departement") return "department";
 
   // Penentuan level kewenangan berjenjang murni dari Effective Grouping (bebas dari perbedaan nama posisi seperti 'Mandor' vs 'Kepala Bagian')
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
@@ -518,25 +539,44 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     [user.bagian ?? "", ...(user.managedBagians ?? [])].map(normOrgName).filter(Boolean),
   );
 
+  // 0. Semua role kecuali Administrator & HR ICF tidak boleh melihat data/history/summary approver-nya (AP1 & AP2)
+  const myAp1 = (user.regNoAp1 ?? "").trim().toLowerCase();
+  const myAp2 = (user.regNoAp2 ?? "").trim().toLowerCase();
+  const isMyApprover = (target: ManagedUser): boolean => {
+    if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return false;
+    const tReg = (target.regNo ?? "").trim().toLowerCase();
+    const tEmp = target.employeeId.trim().toLowerCase();
+    const tName = target.name.trim().toLowerCase();
+    const matchesAp = (ap: string) =>
+      Boolean(ap) && ((tReg && tReg === ap) || (tEmp && tEmp === ap) || (tName && tName === ap));
+    return matchesAp(myAp1) || matchesAp(myAp2);
+  };
+
   return allUsers.filter((target) => {
     if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return true;
+    if (isMyApprover(target)) return false;
     if (transitiveSubIds.has(target.employeeId.toLowerCase())) return true;
-    // Jika Role memiliki cakupan Unit Usaha yang diceklis di Access Management (mis. jabatan ganda Director + GM lintas group),
-    // maka seluruh karyawan pada unit usaha yang diceklis tersebut dapat diakses
-    if (roleAllowedUnits.length > 0 && roleAllowedUnits.some((u) => normOrgName(u) === normOrgName(target.company))) {
-      return true;
-    }
 
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];
+
+    // Jika Role memiliki cakupan Unit Usaha yang diceklis di Access Management,
+    // tetap patuhi batas hirarki role agar tidak membocorkan data atasan (BOD/Director/GM/dll.)
+    if (
+      roleAllowedUnits.length > 0 &&
+      roleAllowedUnits.some((u) => normOrgName(u) === normOrgName(target.company)) &&
+      targetRank <= myRank
+    ) {
+      return true;
+    }
 
     // 1. Level Direktur pada Group: melihat semua unit dalam Group-nya (RSUP Group atau Sambu Group), GM, Divisi, Departemen, Bagian, All Posisi
     if (level === "director_group") {
       return directorGroupUnits.has(normOrgName(target.company)) && targetRank <= myRank;
     }
 
-    // 2. Level GM & HR Unit: melihat semua karyawan pada Unit Usahanya
-    if (level === "gm_unit" || level === "hr_unit") {
+    // 2. Level GM, vGM & HR Unit: melihat karyawan pada Unit Usahanya sesuai batas hirarki role
+    if (level === "gm_unit" || level === "vgm_unit" || level === "hr_unit") {
       return allowedUnits.has(normOrgName(target.company)) && targetRank <= myRank;
     }
 

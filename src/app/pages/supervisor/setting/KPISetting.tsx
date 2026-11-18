@@ -34,6 +34,12 @@ import { toast } from "sonner";
 import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
+import {
+  dispatchTableFullscreen,
+  getKpiTableScaleClasses,
+  KpiTableDisplayControls,
+  type KpiTableScale,
+} from "../../../components/KpiTableDisplayControls";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
 
@@ -3919,13 +3925,14 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
 
 // ─── KPI Table ────────────────────────────────────────────────────────────────
 
-export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascading = false, onRenameSection, onUpdateSectionMeta }: {
+export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascading = false, onRenameSection, onUpdateSectionMeta, displayControls }: {
   items: KPISetting[]; editable: boolean;
   onRenameSection?: (oldSec: string, newSec: string) => void;
   onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
   onDelete?: (id: string) => void;
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
   hideCascading?: boolean;
+  displayControls?: React.ReactNode;
 }) {
   const master = useMasterKpi();
   const tablePerspektifOpts = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
@@ -4192,7 +4199,18 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
 
   return (
     <>
-    <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
+    <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
+      {displayControls && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2 bg-gray-50 border-b border-gray-200 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/5 border border-[#1A284F]/15 px-2.5 py-1 rounded-full">
+              <Edit3 className="w-3.5 h-3.5" /> {editable ? "Edit Mode" : "View Mode"}
+            </span>
+            {displayControls}
+          </div>
+        </div>
+      )}
+    <DualScrollTableContainer className="border-0 rounded-none shadow-none bg-white">
       <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1840 + (editable ? 88 : 0)}px` }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
@@ -4342,6 +4360,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
         </tbody>
       </table>
     </DualScrollTableContainer>
+    </div>
 
     {targetEditItem && (
       <TargetEditMiniModal
@@ -4481,13 +4500,14 @@ function CascadingTypePanel({
   );
 }
 
-export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection, onUpdateSectionMeta, canSubmitKpi, submitBlockReasons }: {
+export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection, onUpdateSectionMeta, canSubmitKpi, submitBlockReasons, displayControls }: {
   hideScope?: boolean;
   toolbarExtra?: React.ReactNode;
   onRenameSection?: (oldSec: string, newSec: string) => void;
   onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
   canSubmitKpi?: boolean;
   submitBlockReasons?: string[];
+  displayControls?: React.ReactNode;
   items: KPISetting[];
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
   onDeleteItem?: (id: string) => void;
@@ -4639,7 +4659,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
     <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
       {/* ── Toolbar ── */}
       <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex-wrap">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {!hideCascading && previewMode
             ? <span className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full">
                 <Eye className="w-3.5 h-3.5" /> Preview Mode — CASCADING columns hidden
@@ -4649,6 +4669,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                 <Edit3 className="w-3.5 h-3.5" /> Edit Mode
               </span>
             )}
+          {displayControls}
           {toolbarExtra}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -5555,6 +5576,26 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     setItems((prev) => renameKpiSection(prev, oldSec, newSec, !isCorporate));
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [isTableFullscreen, setIsTableFullscreen] = useState(false);
+  const [tableScale, setTableScale] = useState<KpiTableScale>("md");
+
+  const toggleTableFullscreen = () => {
+    setIsTableFullscreen((prev) => {
+      const next = !prev;
+      dispatchTableFullscreen(next);
+      return next;
+    });
+  };
+
+  const cycleTableScale = () => {
+    setTableScale((prev) => (prev === "md" ? "sm" : prev === "sm" ? "lg" : "md"));
+  };
+
+  useEffect(() => {
+    return () => {
+      dispatchTableFullscreen(false);
+    };
+  }, []);
   const readPersonalWorkflowState = () => {
     if (isCorporate) {
       const st = readStoredBusinessKpiStatus(effectiveScopeKey);
@@ -6077,7 +6118,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   };
 
   return (
-    <div className="flex flex-col gap-5">
+    <div
+      className={
+        isTableFullscreen
+          ? `fixed top-16 bottom-[41px] left-0 md:left-20 right-0 z-40 bg-white overflow-y-auto p-4 md:p-6 flex flex-col gap-4 shadow-2xl border-t border-gray-200 ${getKpiTableScaleClasses(tableScale)}`
+          : `flex flex-col gap-5 ${getKpiTableScaleClasses(tableScale)}`
+      }
+    >
       {delegationAccess && (
         <DelegatedWorkspaceBanner
           delegator={effectiveOwner}
@@ -6335,6 +6382,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           onSectionBobotChange={canEdit ? onSectionBobotChange : undefined}
           onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
           onUpdateSectionMeta={canEdit && !isViewOnly ? handleUpdateSectionMeta : undefined}
+          displayControls={
+            <KpiTableDisplayControls
+              isFullscreen={isTableFullscreen}
+              onToggleFullscreen={toggleTableFullscreen}
+              tableScale={tableScale}
+              onCycleScale={cycleTableScale}
+            />
+          }
           toolbarExtra={copySource ? (
             <button
               type="button"
@@ -6355,6 +6410,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           hideCascading={hideCascading}
           onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
           onUpdateSectionMeta={canEdit && !isViewOnly ? handleUpdateSectionMeta : undefined}
+          displayControls={
+            <KpiTableDisplayControls
+              isFullscreen={isTableFullscreen}
+              onToggleFullscreen={toggleTableFullscreen}
+              tableScale={tableScale}
+              onCycleScale={cycleTableScale}
+            />
+          }
         />
       )}
       {showCopyModal && copySource && (

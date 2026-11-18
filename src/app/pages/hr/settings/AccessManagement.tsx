@@ -2,7 +2,19 @@ import { useState, useRef, useEffect } from "react";
 import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2, Layers, CheckCircle2, Edit2 } from "lucide-react";
 import { loadPersistedState, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
 
-export type BuiltinRole = "Administrator" | "BOD" | "Director" | "GM" | "HR Unit" | "HR ICF" | "Supervisor" | "Employee";
+export type BuiltinRole =
+  | "Administrator"
+  | "BOD"
+  | "Director"
+  | "DirectorNonOpr"
+  | "GM"
+  | "vGM"
+  | "Division"
+  | "Departement"
+  | "HR Unit"
+  | "HR ICF"
+  | "Supervisor"
+  | "Employee";
 export type Role = BuiltinRole | string;
 
 export interface AccessRoleMetadata {
@@ -1113,20 +1125,44 @@ export const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
   "Administrator": applyNewMenuDefaults("Administrator", DEFAULT_ADMIN),
   "BOD":           applyNewMenuDefaults("BOD", DEFAULT_BOD),
   "Director":      applyNewMenuDefaults("Director", DEFAULT_DIRECTOR),
+  "DirectorNonOpr": applyNewMenuDefaults("DirectorNonOpr", {
+    ...DEFAULT_DIRECTOR,
+    approvals_calibration_setting: N,
+  }),
   "GM":            applyNewMenuDefaults("GM", DEFAULT_GM),
+  "vGM":           applyNewMenuDefaults("vGM", DEFAULT_GM),
+  "Division":      applyNewMenuDefaults("Division", DEFAULT_SUPERVISOR),
+  "Departement":   applyNewMenuDefaults("Departement", DEFAULT_SUPERVISOR),
   "HR Unit":       applyNewMenuDefaults("HR Unit", DEFAULT_HR_UNIT),
   "HR ICF":        applyNewMenuDefaults("HR ICF", DEFAULT_HR_ICF),
   "Supervisor":    applyNewMenuDefaults("Supervisor", DEFAULT_SUPERVISOR),
   "Employee":      applyNewMenuDefaults("Employee", DEFAULT_EMPLOYEE),
 };
 
-export const BUILTIN_ROLES: BuiltinRole[] = ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor", "Employee"];
+export const BUILTIN_ROLES: BuiltinRole[] = [
+  "Administrator",
+  "BOD",
+  "Director",
+  "DirectorNonOpr",
+  "GM",
+  "vGM",
+  "Division",
+  "Departement",
+  "HR Unit",
+  "HR ICF",
+  "Supervisor",
+  "Employee",
+];
 
 const ROLE_COLORS: Record<string, string> = {
   "Administrator": "bg-slate-100 text-slate-700 border-slate-200",
   "BOD":           "bg-red-100 text-red-800 border-red-200",
   "Director":      "bg-rose-100 text-rose-700 border-rose-200",
+  "DirectorNonOpr": "bg-pink-100 text-pink-800 border-pink-200",
   "GM":            "bg-indigo-100 text-indigo-700 border-indigo-200",
+  "vGM":           "bg-teal-100 text-teal-800 border-teal-200",
+  "Division":      "bg-sky-100 text-sky-700 border-sky-200",
+  "Departement":   "bg-cyan-100 text-cyan-800 border-cyan-200",
   "HR Unit":       "bg-purple-100 text-purple-700 border-purple-200",
   "HR ICF":        "bg-amber-100 text-amber-700 border-amber-200",
   "Supervisor":    "bg-blue-100 text-blue-700 border-blue-200",
@@ -1499,7 +1535,11 @@ export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
     "Administrator": { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "BOD":           { excludeFromCalibrationHC: true,  excludeFromVerification: true  },
     "Director":      { excludeFromCalibrationHC: true,  excludeFromVerification: true  },
+    "DirectorNonOpr": { excludeFromCalibrationHC: true, excludeFromVerification: true  },
     "GM":            { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "vGM":           { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "Division":      { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "Departement":   { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "HR Unit":       { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "HR ICF":        { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "Supervisor":    { excludeFromCalibrationHC: false, excludeFromVerification: false },
@@ -1588,7 +1628,11 @@ function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
     "Administrator": deepClone(DEFAULT_ADMIN),
     "BOD":           deepClone(DEFAULT_BOD),
     "Director":      deepClone(DEFAULT_DIRECTOR),
+    "DirectorNonOpr": deepClone(BUILTIN_DEFAULTS["DirectorNonOpr"]),
     "GM":            deepClone(DEFAULT_GM),
+    "vGM":           deepClone(DEFAULT_GM),
+    "Division":      deepClone(DEFAULT_SUPERVISOR),
+    "Departement":   deepClone(DEFAULT_SUPERVISOR),
     "HR Unit":       deepClone(DEFAULT_HR_UNIT),
     "HR ICF":        deepClone(DEFAULT_HR_ICF),
     "Supervisor":    deepClone(DEFAULT_SUPERVISOR),

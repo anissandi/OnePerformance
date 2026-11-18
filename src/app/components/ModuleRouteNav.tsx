@@ -11,7 +11,9 @@ export function ModuleRouteNav({ base, modules, allLabel = "Semua Modul", label 
       {items.map((item) => (
         <NavLink key={item.to} to={item.to} end
           className={({ isActive }) => `rounded-full border px-4 py-1.5 text-xs font-semibold transition-colors ${
-            isActive ? "border-[#1A284F] bg-[#1A284F] text-white" : "border-gray-200 bg-white text-gray-600 hover:border-[#1A284F]/40 hover:text-[#1A284F]"
+            isActive
+              ? "border-sky-300 bg-sky-100/90 text-[#1A284F] shadow-xs"
+              : "border-slate-200/90 bg-slate-50/80 text-slate-600 hover:border-sky-200 hover:bg-sky-50/70 hover:text-sky-800"
           }`}>
           {item.label}
         </NavLink>

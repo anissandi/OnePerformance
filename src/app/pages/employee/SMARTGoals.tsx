@@ -181,6 +181,7 @@ function SmartTable({
   onUpdate,
   onAdd,
   onRemove,
+  onSyncAttainablePlans,
 }: {
   goals: SmartGoal[];
   editable: boolean;
@@ -190,7 +191,17 @@ function SmartTable({
   onUpdate?: (id: number, key: RowKey, val: string) => void;
   onAdd?: () => void;
   onRemove?: (id: number) => void;
+  onSyncAttainablePlans?: (id: number, points: string[]) => void;
 }) {
+  const parseAttainablePoints = (raw: string): string[] => {
+    if (!raw || !raw.trim()) return [""];
+    const parts = raw
+      .split(/[;\n]+/)
+      .map((s) => s.replace(/^\s*\d+\.\s*/, "").trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts : [""];
+  };
+
   return (
     <div className="overflow-x-auto rounded-none">
       <table
@@ -263,7 +274,78 @@ function SmartTable({
               {/* Goal input cells */}
               {goals.map((g) => (
                 <td key={g.id} className={`border-2 border-black align-top px-3 py-3 ${row.key === "target" ? "bg-blue-50/60" : "bg-white"}`}>
-                  {editable && canEdit ? (
+                  {row.key === "attainable" ? (
+                    (() => {
+                      const pts = parseAttainablePoints(g.attainable);
+                      const commitPts = (nextPts: string[]) => {
+                        const cleaned = nextPts.length > 0 ? nextPts : [""];
+                        const formatted = cleaned
+                          .map((p, idx) => (p.trim() ? `${idx + 1}. ${p.trim()}` : ""))
+                          .filter(Boolean)
+                          .join("; ");
+                        if (onSyncAttainablePlans) {
+                          onSyncAttainablePlans(g.id, cleaned);
+                        } else {
+                          onUpdate?.(g.id, "attainable", formatted);
+                        }
+                      };
+                      return editable && canEdit ? (
+                        <div className="flex flex-col gap-1.5">
+                          {pts.map((pt, idx) => (
+                            <div key={idx} className="flex items-start gap-1.5">
+                              <span className="mt-1.5 shrink-0 text-xs font-bold text-[#1A284F] w-4 text-right">
+                                {idx + 1}.
+                              </span>
+                              <input
+                                value={pt}
+                                onChange={(e) => {
+                                  const next = [...pts];
+                                  next[idx] = e.target.value;
+                                  commitPts(next);
+                                }}
+                                placeholder="Tulis poin attainable..."
+                                className="flex-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-[#1A284F] bg-white text-gray-800"
+                              />
+                              {canDelete && pts.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => commitPts(pts.filter((_, i) => i !== idx))}
+                                  title="Hapus poin"
+                                  className="mt-1.5 text-gray-300 hover:text-red-500 transition-colors shrink-0"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                          {canCreate && (
+                            <button
+                              type="button"
+                              onClick={() => commitPts([...pts, ""])}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1A284F] hover:text-sky-700 mt-0.5 self-start"
+                            >
+                              <Plus className="w-3 h-3" /> Tambah Poin
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1 text-xs text-gray-800 leading-relaxed min-h-[96px]">
+                          {pts.filter((p) => p.trim()).length > 0 ? (
+                            pts
+                              .filter((p) => p.trim())
+                              .map((pt, idx) => (
+                                <div key={idx} className="flex items-start gap-1.5">
+                                  <span className="font-bold text-[#1A284F] shrink-0">{idx + 1}.</span>
+                                  <span>{pt}</span>
+                                </div>
+                              ))
+                          ) : (
+                            ""
+                          )}
+                        </div>
+                      );
+                    })()
+                  ) : editable && canEdit ? (
                     <textarea
                       value={g[row.key] as string}
                       onChange={(e) => onUpdate?.(g.id, row.key, e.target.value)}
@@ -295,10 +377,7 @@ function ActionPlansSection({
   editable,
   canCreate = true,
   canEdit = true,
-  canDelete = true,
   onUpdatePlan,
-  onAddPlan,
-  onRemovePlan,
 }: {
   goals: SmartGoal[];
   editable: boolean;
@@ -309,12 +388,13 @@ function ActionPlansSection({
   onAddPlan?: (goalId: number) => void;
   onRemovePlan?: (goalId: number, planId: number) => void;
 }) {
+  void canCreate;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
         <div className="w-1 h-5 bg-[#1A284F] rounded-full" />
-        <h3 className="text-sm font-bold text-[#1A284F] uppercase tracking-wide">Action Plans</h3>
-        <span className="text-xs text-gray-400 font-normal normal-case tracking-normal">— Rencana tindakan pendukung setiap SMART Goal sebagai bahan evaluasi atasan</span>
+        <h3 className="text-sm font-bold text-[#1A284F] uppercase tracking-wide">Action Plans | Attainable</h3>
+        <span className="text-xs text-gray-500 font-normal normal-case tracking-normal">— Rencana dan tindakan untuk mencapai Goal sebagai bahan evaluasi atasan</span>
       </div>
 
       <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${goals.length}, 1fr)` }}>
@@ -324,7 +404,7 @@ function ActionPlansSection({
             <div className="p-4 bg-white flex flex-col gap-2">
               {editable && (
                 <p className="text-xs text-blue-600 italic mb-1">
-                  Tuliskan rencana konkret Anda untuk mencapai {goal.label}
+                  Rencana konkret Anda untuk mencapai Goals {goal.label}
                 </p>
               )}
               {goal.actionPlans.length === 0 && !editable && (
@@ -335,41 +415,18 @@ function ActionPlansSection({
                   <span className="mt-1 shrink-0 w-5 h-5 rounded-full bg-[#1A284F]/10 text-[#1A284F] text-[10px] font-bold flex items-center justify-center">
                     {idx + 1}
                   </span>
-                  {editable && (canEdit || canDelete) ? (
-                    <>
-                      {canEdit ? (
-                        <input
-                          value={ap.description}
-                          onChange={(e) => onUpdatePlan?.(goal.id, ap.id, e.target.value)}
-                          placeholder="Tuliskan rencana tindakan..."
-                          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-[#1A284F] bg-white text-gray-800"
-                        />
-                      ) : (
-                        <p className="flex-1 text-xs text-gray-700 leading-relaxed py-1">{ap.description || "—"}</p>
-                      )}
-                      {canDelete && (
-                        <button
-                          onClick={() => onRemovePlan?.(goal.id, ap.id)}
-                          className="mt-1 text-gray-300 hover:text-red-400 transition-colors shrink-0"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </>
+                  {editable && canEdit ? (
+                    <input
+                      value={ap.description}
+                      onChange={(e) => onUpdatePlan?.(goal.id, ap.id, e.target.value)}
+                      placeholder="Tuliskan rencana tindakan..."
+                      className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-[#1A284F] bg-white text-gray-800"
+                    />
                   ) : (
                     <p className="flex-1 text-xs text-gray-700 leading-relaxed py-1">{ap.description || "—"}</p>
                   )}
                 </div>
               ))}
-              {editable && canCreate && (
-                <button
-                  onClick={() => onAddPlan?.(goal.id)}
-                  className="flex items-center gap-1.5 text-xs text-[#1A284F] hover:text-[#131d3b] font-semibold mt-1 self-start transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Tambah Action Plan
-                </button>
-              )}
             </div>
           </div>
         ))}
@@ -416,6 +473,23 @@ function InputView({
       const filtered = prev.filter((g) => g.id !== id);
       return filtered.map((g, i) => ({ ...g, label: `Goals ${i + 1}` }));
     });
+  };
+
+  const syncAttainablePlans = (id: number, points: string[]) => {
+    const formatted = points
+      .map((p, idx) => (p.trim() ? `${idx + 1}. ${p.trim()}` : ""))
+      .filter(Boolean)
+      .join("; ");
+    setGoals((prev) =>
+      prev.map((g) => {
+        if (g.id !== id) return g;
+        const nextPlans = points.map((desc, idx) => ({
+          id: g.actionPlans[idx]?.id ?? Date.now() + idx,
+          description: desc,
+        }));
+        return { ...g, attainable: formatted, actionPlans: nextPlans };
+      }),
+    );
   };
 
   const addPlan = (goalId: number) =>
@@ -501,6 +575,7 @@ function InputView({
         onUpdate={update}
         onAdd={add}
         onRemove={remove}
+        onSyncAttainablePlans={syncAttainablePlans}
       />
 
       {/* Action Plans */}
