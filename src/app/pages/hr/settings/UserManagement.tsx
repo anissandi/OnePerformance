@@ -1749,6 +1749,8 @@ export function UserManagementPage() {
   const [pageSize, setPageSize] = useState(10);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [statusFilter, setStatusFilter] = useState("All Status");
+  const [divisiFilter, setDivisiFilter] = useState("All Divisi");
+  const [deptFilter, setDeptFilter] = useState("All Departemen");
   const [search, setSearch] = useState("");
   const [viewUser, setViewUser] = useState<User | null>(null);
   const [editUser, setEditUser] = useState<User | null>(null);
@@ -1782,10 +1784,21 @@ export function UserManagementPage() {
   }
 
   const companyUsers = users.filter(u => u.company === selectedCompany);
+  const divisiOpts = Array.from(new Set(companyUsers.map(u => (u.division || "").trim()).filter(Boolean))).sort();
+  const deptOpts = Array.from(
+    new Set(
+      companyUsers
+        .filter(u => divisiFilter === "All Divisi" || (u.division || "").trim() === divisiFilter)
+        .map(u => (u.department || "").trim())
+        .filter(Boolean)
+    )
+  ).sort();
 
   const allFiltered = companyUsers.filter(u => {
     if (roleFilter !== "All Roles" && u.role !== roleFilter) return false;
     if (statusFilter !== "All Status" && u.status !== statusFilter) return false;
+    if (divisiFilter !== "All Divisi" && (u.division || "").trim() !== divisiFilter) return false;
+    if (deptFilter !== "All Departemen" && (u.department || "").trim() !== deptFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       if (!u.name.toLowerCase().includes(q) && !u.employeeId.toLowerCase().includes(q) && !u.email.toLowerCase().includes(q)) return false;
@@ -1946,6 +1959,8 @@ export function UserManagementPage() {
           {[
             { val: roleFilter, set: (v: string) => { setRoleFilter(v); setCurrentPage(1); }, opts: ["All Roles", ...accessRoles] },
             { val: statusFilter, set: (v: string) => { setStatusFilter(v); setCurrentPage(1); }, opts: ["All Status", "Active", "Inactive"] },
+            { val: divisiFilter, set: (v: string) => { setDivisiFilter(v); setDeptFilter("All Departemen"); setCurrentPage(1); }, opts: ["All Divisi", ...divisiOpts] },
+            { val: deptFilter, set: (v: string) => { setDeptFilter(v); setCurrentPage(1); }, opts: ["All Departemen", ...deptOpts] },
           ].map(({ val, set, opts }, i) => (
             <div key={i} className="relative">
               <select className="appearance-none border border-gray-200 rounded-lg pl-3 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"

@@ -111,7 +111,8 @@ export function DataSyncPage() {
   const [selectedUnit, setSelectedUnit] = useState<string>(COMPANY_UNIT_LOCATIONS[0].company);
   const [users, setUsers] = useState<ManagedUser[]>(() => loadManagedUsers());
   const [searchQuery, setSearchQuery] = useState("");
-  const [importMode, setImportMode] = useState<"merge" | "replace_all_trial">("merge");
+  const [importMode, setImportMode] = useState<"merge" | "update_clear_tx" | "replace_all_trial">("merge");
+  const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
   const [lastImportSummary, setLastImportSummary] = useState<string | null>(() =>
     loadPersistedState<string | null>("pa_last_employee_excel_import_v1", null),
   );
@@ -220,6 +221,11 @@ export function DataSyncPage() {
   const handleImportExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
+    setPendingUploadFile(file);
+  };
+
+  const executeImportExcel = (file: File) => {
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -357,13 +363,46 @@ export function DataSyncPage() {
           );
         } else {
           saveManagedUsers(existingUsers);
+          if (importMode === "update_clear_tx") {
+            const importedIds = new Set(
+              existingUsers
+                .filter((u) => u.company === targetCompany || selectedUnit === "ALL")
+                .map((u) => u.employeeId.toLowerCase()),
+            );
+            const clearEmpKeys = [
+              "pa_kpi_setting_by_emp_v2",
+              "pa_kpi_tracking_by_emp_v1",
+              "pa_smart_goals_by_emp_v1",
+              "pa_appraisal_form_by_emp_v1",
+              "pa_managerial_skill_by_emp_v1",
+            ];
+            for (const key of clearEmpKeys) {
+              try {
+                const raw = localStorage.getItem(key);
+                if (!raw) continue;
+                const map = JSON.parse(raw) as Record<string, unknown>;
+                let changed = false;
+                for (const k of Object.keys(map)) {
+                  if (importedIds.has(k.toLowerCase())) {
+                    delete map[k];
+                    changed = true;
+                  }
+                }
+                if (changed) localStorage.setItem(key, JSON.stringify(map));
+              } catch {
+                // ignore
+              }
+            }
+          }
         }
         setUsers(existingUsers);
         const now = new Date().toLocaleString("id-ID");
         const modeLabel =
           importMode === "replace_all_trial"
-            ? "Mode Trial End-to-End (Data Dummy Diganti Penuh & Transaksi Direset)"
-            : "Mode Gabung / Upsert";
+            ? "Mode: Replace / Ganti Data"
+            : importMode === "update_clear_tx"
+              ? "Mode: Update / Clear Transaksi"
+              : "Mode: Update / Gabung Data";
         const summary = `${importedCount} data karyawan berhasil di-upload ke ${targetCompany} (${modeLabel}) pada ${now}`;
         setLastImportSummary(summary);
         savePersistedState("pa_last_employee_excel_import_v1", summary, {
@@ -525,12 +564,13 @@ export function DataSyncPage() {
             <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5">
               <select
                 value={importMode}
-                onChange={(e) => setImportMode(e.target.value as "merge" | "replace_all_trial")}
+                onChange={(e) => setImportMode(e.target.value as "merge" | "update_clear_tx" | "replace_all_trial")}
                 className="text-xs font-semibold text-[#1A284F] bg-transparent focus:outline-none"
-                title="Pilih mode upload: Gabungkan dengan data saat ini atau Ganti seluruh data dummy untuk Trial End-to-End"
+                title="Pilih mode upload data karyawan"
               >
                 <option value="merge">Mode: Update / Gabung Data</option>
-                <option value="replace_all_trial">Mode: Ganti Data Dummy (Trial End-to-End)</option>
+                <option value="update_clear_tx">Mode: Update / Clear Transaksi</option>
+                <option value="replace_all_trial">Mode: Replace / Ganti Data</option>
               </select>
             </div>
 
@@ -722,6 +762,69 @@ export function DataSyncPage() {
           The sync process will fetch the latest data from the source system. Please ensure your network connection is stable before running a sync.
         </p>
       </div>
+
+      {pendingUploadFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 flex flex-col gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[#1A284F]">Konfirmasi Upload Data Karyawan</h3>
+                <p className="text-xs text-gray-500 mt-0.5">File: <span className="font-semibold text-gray-700">{pendingUploadFile.name}</span></p>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3.5 text-xs space-y-2">
+              <div className="flex justify-between gap-2">
+                <span className="text-gray-500">Mode Upload:</span>
+                <span className="font-bold text-[#1A284F]">
+                  {importMode === "replace_all_trial"
+                    ? "Replace / Ganti Data"
+                    : importMode === "update_clear_tx"
+                      ? "Update / Clear Transaksi"
+                      : "Update / Gabung Data"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-gray-500">Unit Usaha:</span>
+                <span className="font-bold text-[#1A284F]">
+                  {selectedUnit === "ALL" ? "Semua Unit Usaha" : selectedUnit}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-600 pt-1 border-t border-slate-200 leading-relaxed">
+                {importMode === "replace_all_trial"
+                  ? "Seluruh data karyawan di database (kecuali Administrator & HR ICF) termasuk history transaksi user aktif maupun arsip di semua unit usaha akan dikosongkan dan diganti dengan data terbaru."
+                  : importMode === "update_clear_tx"
+                    ? "Data karyawan akan ditambahkan/diperbarui berdasarkan Reg No terbaru dan seluruh history transaksi karyawan tersebut akan dihapus."
+                    : "Data karyawan akan ditambahkan/diperbarui berdasarkan Reg No terbaru tanpa menghapus history transaksi karyawan tersebut."}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setPendingUploadFile(null)}
+                className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const f = pendingUploadFile;
+                  setPendingUploadFile(null);
+                  if (f) executeImportExcel(f);
+                }}
+                className="px-4 py-2 rounded-xl bg-[#1A284F] text-white text-xs font-semibold hover:bg-[#131d3b]"
+              >
+                Lanjutkan Upload
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
