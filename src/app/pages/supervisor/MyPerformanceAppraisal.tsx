@@ -146,16 +146,6 @@ function KPITab() {
     return val === "Validated" || a2 === "Validated";
   }, [activeUser.employeeId, tick]);
 
-  if (!isKpiSettingValidated) {
-    return (
-      <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center">
-        <p className="text-sm font-bold text-amber-900">KPI Setting Belum Berstatus Validated</p>
-        <p className="text-xs text-amber-800 mt-1">
-          Data KPI Tracking pada halaman ini hanya muncul setelah pengajuan KPI Setting Anda selesai disetujui penuh (Validated).
-        </p>
-      </div>
-    );
-  }
   const generalA1Note =
     wfKpiMeas?.decisions.approver1?.note ||
     wfKpiMeas?.assessments.approver1?.comments?.["0"] ||
@@ -335,6 +325,17 @@ function KPITab() {
         );
       });
     });
+
+  if (!isKpiSettingValidated) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center">
+        <p className="text-sm font-bold text-amber-900">KPI Setting Belum Berstatus Validated</p>
+        <p className="text-xs text-amber-800 mt-1">
+          Data KPI Tracking pada halaman ini hanya muncul setelah pengajuan KPI Setting Anda selesai disetujui penuh (Validated).
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">

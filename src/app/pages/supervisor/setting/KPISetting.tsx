@@ -5823,6 +5823,84 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const canSubmit = canCreate || canEdit;
   const isViewOnly = Boolean(delegationAccess && !canCreate && !canEdit && !canDelete);
   const effectiveScopeKey = businessScopeKey || (isCorporate ? `corporate-${getGroupNameForUnit(effectiveOwner.company)}` : "");
+  const [kpiAttachments, setKpiAttachments] = useState<Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>(() => {
+    try {
+      const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
+      const map = raw ? (JSON.parse(raw) as Record<string, Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>) : {};
+      const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
+      return Array.isArray(map[key]) ? map[key] : [];
+    } catch {
+      return [];
+    }
+  });
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const kpiAttachInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUploadKpiAttachments = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploadingAttachment(true);
+    const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
+    const added: Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }> = [];
+    for (const f of Array.from(files)) {
+      let url = "";
+      try {
+        const up = await uploadEvidenceFileToSupabase(f, {
+          employeeId: effectiveOwner.employeeId,
+          employeeName: effectiveOwner.name,
+          companyUnit: effectiveOwner.company,
+          division: effectiveOwner.division || "-",
+          department: effectiveOwner.department || "-",
+          position: effectiveOwner.position || "-",
+          moduleType: "Lampiran KPI Setting",
+          period: "2026",
+          month: "All",
+        });
+        url = up?.url || "";
+      } catch {
+        url = "";
+      }
+      added.push({
+        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: f.name,
+        size: f.size,
+        url,
+        uploadedAt: formatTodayDDMMYYYY(),
+      });
+    }
+    setKpiAttachments((prev) => {
+      const next = [...prev, ...added];
+      try {
+        const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
+        const map = raw ? (JSON.parse(raw) as Record<string, typeof next>) : {};
+        map[key] = next;
+        safeSetLocalJson("pa_kpi_attachments_v1", map);
+      } catch {
+        // ignore
+      }
+      void mergeKvMapRecord("pa_kpi_attachments_v1", key, next);
+      return next;
+    });
+    setUploadingAttachment(false);
+    toast.success(`${added.length} file lampiran KPI berhasil diunggah.`);
+  };
+
+  const handleRemoveKpiAttachment = (attId: string) => {
+    const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
+    setKpiAttachments((prev) => {
+      const next = prev.filter((a) => a.id !== attId);
+      try {
+        const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
+        const map = raw ? (JSON.parse(raw) as Record<string, typeof next>) : {};
+        map[key] = next;
+        safeSetLocalJson("pa_kpi_attachments_v1", map);
+      } catch {
+        // ignore
+      }
+      void mergeKvMapRecord("pa_kpi_attachments_v1", key, next);
+      return next;
+    });
+  };
+
 
   const [view, setView]               = useState<PageView>(() => (isViewOnly ? "preview" : "input"));
   const [items, setItems_]            = useState<KPISetting[]>(() => {
@@ -7549,80 +7627,3 @@ function DelegatedKPISettingTabsView({
     </div>
   );
 }
-  const [kpiAttachments, setKpiAttachments] = useState<Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>(() => {
-    try {
-      const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
-      const map = raw ? (JSON.parse(raw) as Record<string, Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>) : {};
-      const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
-      return Array.isArray(map[key]) ? map[key] : [];
-    } catch {
-      return [];
-    }
-  });
-  const [uploadingAttachment, setUploadingAttachment] = useState(false);
-  const kpiAttachInputRef = useRef<HTMLInputElement>(null);
-
-  const handleUploadKpiAttachments = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setUploadingAttachment(true);
-    const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
-    const added: Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }> = [];
-    for (const f of Array.from(files)) {
-      let url = "";
-      try {
-        const up = await uploadEvidenceFileToSupabase(f, {
-          employeeId: effectiveOwner.employeeId,
-          employeeName: effectiveOwner.name,
-          companyUnit: effectiveOwner.company,
-          division: effectiveOwner.division || "-",
-          department: effectiveOwner.department || "-",
-          position: effectiveOwner.position || "-",
-          moduleType: "Lampiran KPI Setting",
-          period: "2026",
-          month: "All",
-        });
-        url = up?.url || "";
-      } catch {
-        url = "";
-      }
-      added.push({
-        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name: f.name,
-        size: f.size,
-        url,
-        uploadedAt: formatTodayDDMMYYYY(),
-      });
-    }
-    setKpiAttachments((prev) => {
-      const next = [...prev, ...added];
-      try {
-        const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
-        const map = raw ? (JSON.parse(raw) as Record<string, typeof next>) : {};
-        map[key] = next;
-        safeSetLocalJson("pa_kpi_attachments_v1", map);
-      } catch {
-        // ignore
-      }
-      void mergeKvMapRecord("pa_kpi_attachments_v1", key, next);
-      return next;
-    });
-    setUploadingAttachment(false);
-    toast.success(`${added.length} file lampiran KPI berhasil diunggah.`);
-  };
-
-  const handleRemoveKpiAttachment = (attId: string) => {
-    const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
-    setKpiAttachments((prev) => {
-      const next = prev.filter((a) => a.id !== attId);
-      try {
-        const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
-        const map = raw ? (JSON.parse(raw) as Record<string, typeof next>) : {};
-        map[key] = next;
-        safeSetLocalJson("pa_kpi_attachments_v1", map);
-      } catch {
-        // ignore
-      }
-      void mergeKvMapRecord("pa_kpi_attachments_v1", key, next);
-      return next;
-    });
-  };
