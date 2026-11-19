@@ -1233,14 +1233,32 @@ export interface StoredAuditLogEntry {
   status: "Success" | "Failed";
 }
 
+const AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function pruneAuditLogsOlderThan30Days(logs: StoredAuditLogEntry[]): StoredAuditLogEntry[] {
+  const cutoff = Date.now() - AUDIT_RETENTION_MS;
+  return logs.filter((entry) => {
+    const raw = String(entry?.timestamp ?? "").trim();
+    if (!raw) return true;
+    const ms = Date.parse(raw.includes("T") ? raw : raw.replace(" ", "T"));
+    if (Number.isNaN(ms)) return true;
+    return ms >= cutoff;
+  });
+}
+
 export function loadLocalAuditLogs(): StoredAuditLogEntry[] {
-  return loadPersistedState<StoredAuditLogEntry[]>(AUDIT_LIST_KEY, []);
+  const raw = loadPersistedState<StoredAuditLogEntry[]>(AUDIT_LIST_KEY, []);
+  const pruned = pruneAuditLogsOlderThan30Days(Array.isArray(raw) ? raw : []);
+  if (Array.isArray(raw) && pruned.length !== raw.length) {
+    safeSetLocalJson(AUDIT_LIST_KEY, pruned);
+  }
+  return pruned;
 }
 
 export function appendLocalAuditLog(entry: StoredAuditLogEntry): void {
   try {
     const existing = loadLocalAuditLogs();
-    const next = [entry, ...existing].slice(0, 200);
+    const next = pruneAuditLogsOlderThan30Days([entry, ...existing]).slice(0, 200);
     safeSetLocalJson(AUDIT_LIST_KEY, next);
     window.dispatchEvent(new Event("pa-audit-updated"));
   } catch {

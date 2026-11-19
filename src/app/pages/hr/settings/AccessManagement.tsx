@@ -9,6 +9,7 @@ export type BuiltinRole =
   | "DirectorNonOpr"
   | "GM"
   | "vGM"
+  | "Coordinator"
   | "Division"
   | "Departement"
   | "HR Unit"
@@ -1131,6 +1132,7 @@ export const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
   }),
   "GM":            applyNewMenuDefaults("GM", DEFAULT_GM),
   "vGM":           applyNewMenuDefaults("vGM", DEFAULT_GM),
+  "Coordinator":   applyNewMenuDefaults("Coordinator", DEFAULT_GM),
   "Division":      applyNewMenuDefaults("Division", DEFAULT_SUPERVISOR),
   "Departement":   applyNewMenuDefaults("Departement", DEFAULT_SUPERVISOR),
   "HR Unit":       applyNewMenuDefaults("HR Unit", DEFAULT_HR_UNIT),
@@ -1146,6 +1148,7 @@ export const BUILTIN_ROLES: BuiltinRole[] = [
   "DirectorNonOpr",
   "GM",
   "vGM",
+  "Coordinator",
   "Division",
   "Departement",
   "HR Unit",
@@ -1161,6 +1164,7 @@ const ROLE_COLORS: Record<string, string> = {
   "DirectorNonOpr": "bg-pink-100 text-pink-800 border-pink-200",
   "GM":            "bg-indigo-100 text-indigo-700 border-indigo-200",
   "vGM":           "bg-teal-100 text-teal-800 border-teal-200",
+  "Coordinator":   "bg-teal-100 text-teal-800 border-teal-200",
   "Division":      "bg-sky-100 text-sky-700 border-sky-200",
   "Departement":   "bg-cyan-100 text-cyan-800 border-cyan-200",
   "HR Unit":       "bg-purple-100 text-purple-700 border-purple-200",
@@ -1538,6 +1542,7 @@ export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
     "DirectorNonOpr": { excludeFromCalibrationHC: true, excludeFromVerification: true  },
     "GM":            { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "vGM":           { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "Coordinator":   { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "Division":      { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "Departement":   { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "HR Unit":       { excludeFromCalibrationHC: false, excludeFromVerification: false },
@@ -1631,6 +1636,7 @@ function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
     "DirectorNonOpr": deepClone(BUILTIN_DEFAULTS["DirectorNonOpr"]),
     "GM":            deepClone(DEFAULT_GM),
     "vGM":           deepClone(DEFAULT_GM),
+    "Coordinator":   deepClone(DEFAULT_GM),
     "Division":      deepClone(DEFAULT_SUPERVISOR),
     "Departement":   deepClone(DEFAULT_SUPERVISOR),
     "HR Unit":       deepClone(DEFAULT_HR_UNIT),

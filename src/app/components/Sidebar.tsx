@@ -573,7 +573,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     const list: NavTopLink[] = [];
 
     // 1. Analytics Dashboard selalu urutan pertama, dilanjutkan dengan Dashboard (untuk role yang diberi akses)
-    if (canView("analytics")) {
+    if (canView("analytics") || activeUser.isHrUnitChecker) {
       list.push({
         to: `${prefix}/analytics`,
         icon: BarChart2,

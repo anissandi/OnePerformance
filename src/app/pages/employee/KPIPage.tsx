@@ -2261,7 +2261,7 @@ function SuccessModal({ onClose }: { onClose: () => void }) {
 
 // ─── Open Lock Request Modal ─────────────────────────────────────────────────
 
-function OpenLockRequestModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+function OpenLockRequestModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: (reason: string) => void }) {
   const [reason, setReason] = useState("");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -2307,7 +2307,7 @@ function OpenLockRequestModal({ onCancel, onConfirm }: { onCancel: () => void; o
             Batal
           </button>
           <button
-            onClick={() => reason.trim() && onConfirm()}
+            onClick={() => reason.trim() && onConfirm(reason.trim())}
             disabled={!reason.trim()}
             className="flex items-center gap-2 px-5 py-2 rounded-full bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
@@ -3777,21 +3777,26 @@ function KPIWorkspace({
   const [showOpenLockModal, setShowOpenLockModal] = useState(false);
   const readOpenLockState = () => {
     try {
-      const list = loadPersistedState<Array<{ employeeId?: string; module?: string; status?: string }>>("pa_open_lock_requests_v1", []);
+      const list = loadPersistedState<Array<{ employeeId?: string; module?: string; status?: string; approvalNote?: string }>>("pa_open_lock_requests_v1", []);
       const normId = normalizeEmployeeId(activeUser.employeeId);
       const mine = (Array.isArray(list) ? list : []).filter(
         (r) => normalizeEmployeeId(String(r.employeeId ?? "")) === normId && String(r.module ?? "").toLowerCase().includes("kpi"),
       );
+      const latest = mine[0];
       return {
         requested: mine.some((r) => r.status === "pending"),
         approved: mine.some((r) => r.status === "approved"),
+        rejected: latest?.status === "rejected",
+        note: String(latest?.approvalNote ?? "").trim(),
       };
     } catch {
-      return { requested: false, approved: false };
+      return { requested: false, approved: false, rejected: false, note: "" };
     }
   };
   const [openLockRequested, setOpenLockRequested] = useState(() => readOpenLockState().requested);
   const [openLockApproved, setOpenLockApproved] = useState(() => readOpenLockState().approved);
+  const [openLockRejected, setOpenLockRejected] = useState(() => readOpenLockState().rejected);
+  const [openLockNote, setOpenLockNote] = useState(() => readOpenLockState().note);
 
   // Edit request approval flow
   const [editRequestApproved, setEditRequestApproved] = useState(false);
@@ -4743,6 +4748,22 @@ function KPIWorkspace({
         </div>
       )}
 
+      {isLockedByDeadline && !openLockRequested && !openLockApproved && openLockRejected && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-red-700">
+              Request Open Lock ditolak oleh Admin HR.
+            </p>
+            {openLockNote && (
+              <p className="text-xs text-red-600 mt-1">
+                <span className="font-semibold">Catatan untuk Karyawan:</span> {openLockNote}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {showEvidenceWarn ? (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
@@ -4759,11 +4780,18 @@ function KPIWorkspace({
           </button>
         </div>
       ) : isDeadlinePassed && openLockApproved && !submitted && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-green-200 bg-green-50">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-green-600" />
-          <span className="text-sm font-medium text-green-700">
-            Akses telah dibuka oleh Admin HR. Anda dapat melengkapi dan submit KPI Tracking.
-          </span>
+        <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-green-200 bg-green-50">
+          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-green-600" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-green-700">
+              Akses telah dibuka oleh HR ICF. Anda dapat melengkapi dan submit KPI Tracking.
+            </p>
+            {openLockNote && (
+              <p className="text-xs text-green-700 mt-1">
+                <span className="font-semibold">Catatan untuk Karyawan:</span> {openLockNote}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -5031,9 +5059,11 @@ function KPIWorkspace({
       {showOpenLockModal && (
         <OpenLockRequestModal
           onCancel={() => setShowOpenLockModal(false)}
-          onConfirm={() => {
+          onConfirm={(reasonText: string) => {
             setShowOpenLockModal(false);
             setOpenLockRequested(true);
+            setOpenLockRejected(false);
+            setOpenLockNote("");
             const list = loadPersistedState<Array<Record<string, unknown>>>("pa_open_lock_requests_v1", []);
             const reqId = `OL-${Date.now()}`;
             const newReq = {
@@ -5050,7 +5080,7 @@ function KPIWorkspace({
               period: "2026",
               originalDeadline: MOCK_DEADLINE,
               submittedAt: new Date().toISOString().slice(0, 10),
-              reason: "Permintaan Open Lock untuk pengisian KPI Tracking melewati tanggal kunci bulanan.",
+              reason: reasonText || "Permintaan Open Lock untuk pengisian KPI Tracking melewati tanggal kunci bulanan.",
               status: "pending",
             };
             savePersistedState("pa_open_lock_requests_v1", [newReq, ...(Array.isArray(list) ? list : [])], {

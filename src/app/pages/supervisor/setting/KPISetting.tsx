@@ -2378,6 +2378,7 @@ const PERSONAL_SECTION_OPTIONS = [
 
 const LIHAT_KPI_ATASAN_ROLES = new Set([
   "vGM",
+  "Coordinator",
   "Division",
   "Departement",
   "HR Unit",
@@ -2947,16 +2948,16 @@ export function AddKPIModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 sm:px-8 py-4 border-b border-gray-100 shrink-0">
+        <div className="flex items-center justify-between px-6 sm:px-8 py-4 bg-gradient-to-r from-[#1A284F] via-[#233566] to-[#2B417A] text-white shrink-0">
           <div>
-            <h3 className="font-bold text-[#1A284F] text-lg">{modalTitle}</h3>
-            <p className="text-xs text-gray-400 mt-0.5">{forDivision ? "KPI Divisi 2026" : "KPI Personal 2026"}</p>
+            <h3 className="font-bold text-white text-lg">{modalTitle}</h3>
+            <p className="text-xs text-sky-200/90 mt-0.5">{forDivision ? "KPI Divisi 2026" : "KPI Personal 2026"}</p>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Close"><X className="w-4 h-4 text-gray-500" /></button>
+          <button type="button" onClick={onClose} className="p-1.5 hover:bg-white/15 rounded-lg transition-colors" title="Close"><X className="w-4 h-4 text-white/80" /></button>
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center border-b border-gray-100 px-6 sm:px-8 pt-3 gap-1 shrink-0 flex-wrap">
+        <div className="flex items-center border-b border-slate-200/80 bg-slate-50/70 px-6 sm:px-8 pt-3 gap-1 shrink-0 flex-wrap">
           {([{ id: "section", label: "Section" }, { id: "subsection", label: "Sub Section" }] as const).map(t => (
             <button
               key={t.id}
@@ -3808,16 +3809,16 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 sm:px-8 py-4 border-b border-gray-100 shrink-0">
+        <div className="flex items-center justify-between px-6 sm:px-8 py-4 bg-gradient-to-r from-[#1A284F] via-[#233566] to-[#2B417A] text-white shrink-0">
           <div>
-            <h3 className="font-bold text-[#1A284F] text-lg">Add New KPI — {sectionLabel}</h3>
-            <p className="text-xs text-gray-400 mt-0.5">{sectionLabel === "Division" ? "KPI Divisi 2026" : "KPI Bisnis RSUP Group 2026"}</p>
+            <h3 className="font-bold text-white text-lg">Add New KPI — {sectionLabel}</h3>
+            <p className="text-xs text-sky-200/90 mt-0.5">{sectionLabel === "Division" ? "KPI Divisi 2026" : "KPI Bisnis RSUP Group 2026"}</p>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Close"><X className="w-4 h-4 text-gray-500" /></button>
+          <button type="button" onClick={onClose} className="p-1.5 hover:bg-white/15 rounded-lg transition-colors" title="Close"><X className="w-4 h-4 text-white/80" /></button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100 px-6 sm:px-8 pt-3 gap-1 shrink-0">
+        <div className="flex border-b border-slate-200/80 bg-slate-50/70 px-6 sm:px-8 pt-3 gap-1 shrink-0">
           {TABS.map(t => (
             <button
               key={t.id}
@@ -6860,17 +6861,19 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         />
       )}
 
-      {/* Lampiran KPI (Mandatory) */}
+      {/* Lampiran KPI */}
       <div className="rounded-xl border border-sky-200/80 bg-sky-50/40 p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <Paperclip className="w-4 h-4 text-sky-700" />
             <span className="text-xs font-bold text-[#1A284F] uppercase tracking-wide">
-              Lampiran KPI <span className="text-red-500">*</span>
+              Lampiran KPI
             </span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpiAttachments.length > 0 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-              {kpiAttachments.length > 0 ? `${kpiAttachments.length} file terlampir` : "Wajib minimal 1 file"}
-            </span>
+            {kpiAttachments.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+                {kpiAttachments.length} file terlampir
+              </span>
+            )}
           </div>
           {!submitted && !kpiApproved && !isViewOnly && (canCreate || canEdit) && (
             <>
@@ -6898,7 +6901,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           )}
         </div>
         <p className="text-xs text-sky-800/90 leading-relaxed">
-          Silahkan tambahkan file lampiran berupa KPI yang anda sudah buat diluar sistem atau file pendukung lainnya. Lampiran ini sebagai referensi atasan untuk tindak lanjut persetujuan atau revisi.
+          Silahkan tambahkan file lampiran KPI yang anda buat diluar sistem ini (jika ada) atau file pendukung KPI lainnya. Lampiran ini sebagai referensi Atasan untuk tindak lanjut persetujuan atau revisi.
         </p>
         {kpiAttachments.length > 0 && (
           <div className="flex flex-wrap gap-2">

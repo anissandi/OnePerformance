@@ -16,6 +16,7 @@ export type AppUserRole =
   | "Departement"
   | "Division"
   | "vGM"
+  | "Coordinator"
   | "GM"
   | "HR Unit"
   | "HR ICF"
@@ -406,7 +407,7 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
   if (user.role === "BOD") return "bod";
   if (user.role === "Director" || user.role === "DirectorNonOpr") return "director_group";
   if (user.role === "GM") return "gm_unit";
-  if (user.role === "vGM") return "vgm_unit";
+  if (user.role === "vGM" || user.role === "Coordinator") return "vgm_unit";
   if (user.role === "HR Unit") return "hr_unit";
   if (user.role === "Division") return "division";
   if (user.role === "Departement") return "department";
@@ -556,6 +557,7 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return true;
     if (isMyApprover(target)) return false;
     if (transitiveSubIds.has(target.employeeId.toLowerCase())) return true;
+    if (target.role === user.role) return false;
 
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];

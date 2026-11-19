@@ -367,7 +367,7 @@ function ApproveModal({
                 </p>
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-gray-700">Catatan Admin <span className="text-gray-400">(opsional)</span></label>
+                <label className="text-xs font-semibold text-gray-700">Catatan untuk Karyawan <span className="text-gray-400">(opsional)</span></label>
                 <textarea
                   value={note}
                   onChange={e => setNote(e.target.value)}
@@ -380,7 +380,7 @@ function ApproveModal({
                 className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
                   canApprove ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-gray-100 text-gray-400 cursor-not-allowed"
                 }`}>
-                <LockOpen className="w-4 h-4" />Approve & Buka Akses
+                <LockOpen className="w-4 h-4" />Buka Akses
               </button>
             </div>
           ) : (
@@ -487,7 +487,7 @@ function DetailModal({ request, onClose }: { request: OpenLockRequest; onClose: 
 
           {request.approvalNote && (
             <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Catatan Admin</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Catatan untuk Karyawan</p>
               <div className={`rounded-xl px-4 py-3 border ${
                 request.status === "approved" ? "bg-emerald-50/60 border-emerald-200" : "bg-red-50/60 border-red-200"
               }`}>
@@ -554,8 +554,8 @@ function RequestTable({
         <tbody>
           {rows.map((r, idx) => {
             const sm = STATUS_META[r.status];
-            const effectiveDeadline = resolveKpiMeasurementDeadlineIso(r.originalDeadline);
-            const daysLate = daysPast(effectiveDeadline);
+            const nowDay = new Date().getDate();
+            const daysLate = nowDay >= 16 ? nowDay - 16 + 1 : 0;
             const empKey = (r.employeeId || r.nip || "").toLowerCase();
             const totalReqCount = requestCountByEmp[empKey] ?? 1;
             const unitName = r.companyUnit || unitByEmp[empKey] || "—";
@@ -584,7 +584,7 @@ function RequestTable({
                 <td className="border border-gray-200 px-3 py-3 text-xs text-gray-700">{r.divisi || "—"}</td>
                 <td className="border border-gray-200 px-3 py-3 text-xs text-gray-700">{r.departemen || "—"}</td>
                 <td className="border border-gray-200 px-3 py-3 text-center text-xs text-gray-700 whitespace-nowrap">
-                  {fmtDateTime(r.submittedAt)}
+                  {fmtDate(r.submittedAt)}
                 </td>
                 <td className="border border-gray-200 px-3 py-3 text-center">
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-50 text-red-600 border border-red-200">

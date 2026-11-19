@@ -1471,11 +1471,12 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const { lockedUnits: authLockedUnits } = useAuthStore();
   // Scope Supervisor & HR Unit: terkunci pada Unit Usaha, Divisi, Departemen milik user; modul sesuai Groupings
   const scopeUser = getActiveUserForScope();
-  const isScopedRole = scopeUser.role === "Supervisor" || scopeUser.role === "HR Unit";
+  const isCheckerRole = Boolean(scopeUser.isHrUnitChecker || scopeUser.role === "HR Unit");
+  const isScopedRole = scopeUser.role === "Supervisor" || isCheckerRole;
   const scopeLevel = isScopedRole ? resolveAuthorityForScope(scopeUser) : null;
-  const lockDivision = isScopedRole && scopeLevel !== "hr_unit" && scopeLevel !== "gm_unit" ? scopeUser.division : "";
+  const lockDivision = isScopedRole && !isCheckerRole && scopeLevel !== "hr_unit" && scopeLevel !== "gm_unit" ? scopeUser.division : "";
   const lockDepartment =
-    isScopedRole && (scopeLevel === "department" || scopeLevel === "bagian" || scopeLevel === "seksi" || scopeLevel === "operational")
+    isScopedRole && !isCheckerRole && (scopeLevel === "department" || scopeLevel === "bagian" || scopeLevel === "seksi" || scopeLevel === "operational")
       ? scopeUser.department
       : "";
   const effectiveLockedUnits = isScopedRole ? [scopeUser.company] : lockedUnits ?? authLockedUnits;

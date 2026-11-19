@@ -589,18 +589,6 @@ function InputView({
         onSyncAttainablePlans={syncAttainablePlans}
       />
 
-      {/* Action Plans */}
-      <ActionPlansSection
-        goals={goals}
-        editable={true}
-        canCreate={canCreate}
-        canEdit={canEdit || canCreate}
-        canDelete={canDelete}
-        onAddPlan={addPlan}
-        onUpdatePlan={updatePlan}
-        onRemovePlan={removePlan}
-      />
-
       <div className="flex justify-end gap-3 pt-2">
         <Tooltip open={!allFilled && previewTipOpen} onOpenChange={setPreviewTipOpen}>
           <TooltipTrigger asChild>
