@@ -2656,15 +2656,6 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
           </div>
         )}
 
-        {submittedAt && pageMode !== "submitted" && (
-          <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-5 py-3">
-            <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-            <p className="text-sm text-blue-800 font-medium">
-              Data loaded from <strong>Calibration Setting</strong> submission on {formattedDate}. Select a company unit to review and adjust.
-            </p>
-          </div>
-        )}
-
         <div className="flex flex-col gap-4">
           <p className="text-sm text-gray-500">
             {submittedAt
