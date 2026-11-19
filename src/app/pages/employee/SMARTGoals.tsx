@@ -641,7 +641,6 @@ function PreviewView({
         Preview — please review all data carefully before submitting.
       </div>
       <SmartTable goals={goals} editable={false} />
-      <ActionPlansSection goals={goals} editable={false} />
       <div className="flex justify-between gap-3 pt-2">
         <button
           onClick={onBack}
@@ -683,8 +682,6 @@ function ResultsView({
       </div>
 
       <SmartTable goals={goals} editable={false} />
-      <ActionPlansSection goals={goals} editable={false} />
-
     </div>
   );
 }

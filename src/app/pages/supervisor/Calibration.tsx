@@ -535,9 +535,9 @@ export function SupervisorCalibration() {
   const [sortCurr, setSortCurr] = useState<SortDir>(null);
   const [sortProp, setSortProp] = useState<SortDir>(null);
 
-  const deptOptions     = [...new Set(TEAM_MEMBERS.map(m => m.department))];
-  const positionOptions = [...new Set(TEAM_MEMBERS.map(m => m.position))];
-  const gradeOptions    = [...new Set(TEAM_MEMBERS.flatMap(m => [m.currentGrade, m.proposedGrade]))].sort();
+  const deptOptions     = useMemo(() => [...new Set(TEAM_MEMBERS.map(m => m.department))], []);
+  const positionOptions = useMemo(() => [...new Set(TEAM_MEMBERS.map(m => m.position))], []);
+  const gradeOptions    = useMemo(() => [...new Set(TEAM_MEMBERS.flatMap(m => [m.currentGrade, m.proposedGrade]))].sort(), []);
   const statusOptions   = ["No Change", "Upgraded"];
 
   const hasFilter = !!(fDept || fPosition || fCurrGrade || fPropGrade || fStatus);

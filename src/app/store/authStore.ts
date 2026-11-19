@@ -562,6 +562,18 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];
 
+    // Jika Cakupan Wewenang Berjenjang Tambahan (Multi-Scope) memiliki ceklist Divisi/Departemen/Bagian,
+    // maka ceklist tersebut wajib menjadi filter aktif (tidak terbuka ke seluruh Unit Usaha).
+    if ((user.scopeDivisions?.length ?? 0) > 0 && !allowedDivisions.has(normOrgName(target.division))) {
+      return false;
+    }
+    if ((user.scopeDepartments?.length ?? 0) > 0 && !allowedDepartments.has(normOrgName(target.department))) {
+      return false;
+    }
+    if ((user.scopeBagians?.length ?? 0) > 0 && !allowedBagians.has(normOrgName(target.bagian))) {
+      return false;
+    }
+
     // Jika Role memiliki cakupan Unit Usaha yang diceklis di Access Management,
     // tetap patuhi batas hirarki role agar tidak membocorkan data atasan (BOD/Director/GM/dll.)
     if (
