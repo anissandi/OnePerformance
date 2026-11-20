@@ -1,3 +1,4 @@
+import { resolveGradeForScore } from "../shared/scoringWeightStore";
 // @refresh reset
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouteTab } from "../../utils/useRouteTab";
@@ -8,7 +9,8 @@ import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
 import { applyYearEndScorePolicy, isYearEndInactive, loadYearEndState } from "../shared/yearEndWorkflowStore";
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
-import { normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import { getApproverNotesHistory, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
@@ -129,136 +131,12 @@ function calcFinalScore(level: EmpLevel, s: EmpScores): number {
     + s.projectOutsideJobScope*w.projectOutsideJobScope;
 }
 
-function gradeFromScore(n: number): { grade: string; color: string } {
-  if (n >= 90) return { grade:"A+", color:"#10B981" };
-  if (n >= 80) return { grade:"A",  color:"#3B82F6" };
-  if (n >= 70) return { grade:"B",  color:"#F59E0B" };
-  if (n >= 60) return { grade:"C",  color:"#F97316" };
-  if (n >= 50) return { grade:"D",  color:"#EF4444" };
-  return          { grade:"E",  color:"#991B1B" };
+const GRADE_HEX: Record<string, string> = { "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B" };
+function gradeFromScore(n: number, companyName?: string): { grade: string; color: string } {
+  const grade = resolveGradeForScore(n, companyName);
+  return { grade, color: GRADE_HEX[grade] ?? "#6B7280" };
 }
 
-function pastYearBase(emp: Employee): EmpScores {
-  const off = (k: string) => seededInt(h16(`${emp.id}${k}py`), -10, 5);
-  const clamp = (v: number) => Math.max(30, Math.min(100, v));
-  return {
-    kpi:                    clamp(emp.base.kpi                    + off("kpi")),
-    smartGoals:             clamp(emp.base.smartGoals             + off("sg")),
-    appraisalForm:          clamp(emp.base.appraisalForm          + off("af")),
-    managerialSkill:        emp.base.managerialSkill   !== null ? clamp(emp.base.managerialSkill   + off("ms")) : null,
-    managementInterview:    emp.base.managementInterview !== null ? clamp(emp.base.managementInterview + off("mi")) : null,
-    projectOutsideJobScope: clamp(emp.base.projectOutsideJobScope + off("pj")),
-  };
-}
-
-// ─── Mock employee generator ──────────────────────────────────────────────────
-
-const FIRST_NAMES = ["Budi","Siti","Ahmad","Dewi","Eko","Fitri","Gunawan","Heni","Irfan","Joko","Kartika","Lukman","Maya","Nugroho","Purnomo","Rudi","Sri","Teguh","Wahyu","Yanto","Arif","Bagas","Cahya","Dian","Endra","Fajar","Gita","Hadi","Indra","Jeni"];
-const LAST_NAMES  = ["Santoso","Rahayu","Fauzi","Lestari","Prasetyo","Handayani","Wibowo","Kurniawati","Hidayat","Susilo","Hakim","Sari","Wicaksono","Hermawan","Wahyuni","Wijaya","Rahman","Nugroho","Kusuma","Pertiwi","Utomo","Setiawan","Adi","Purwanto","Surya"];
-
-function h16(s: string): number {
-  return s.split("").reduce((a,c) => ((a*31)+c.charCodeAt(0))&0xffff, 0);
-}
-function seededInt(seed: number, lo: number, hi: number): number {
-  return lo + (Math.abs(seed) % (hi - lo + 1));
-}
-
-// Target actual grade distribution: A+=11, A=51, B=71, C=51, D=22, E=14 → 220 total
-const GRADE_BAND_SPECS = [
-  { lo: 90, hi: 98, count: 11 }, // A+
-  { lo: 80, hi: 89, count: 24 }, // A
-  { lo: 70, hi: 79, count: 71 }, // B
-  { lo: 60, hi: 69, count: 51 }, // C
-  { lo: 50, hi: 59, count: 22 }, // D
-  { lo: 35, hi: 49, count: 14 }, // E
-] as const;
-
-const EMP_TOTAL = GRADE_BAND_SPECS.reduce((s, b) => s + b.count, 0); // 220
-
-// Bresenham-style interleaving: distributes grade bands evenly across all 220 slots
-// so each bagian gets a proportional mix of grades rather than blocks
-const EMP_BAND_LIST: { lo: number; hi: number }[] = (() => {
-  const assigned = GRADE_BAND_SPECS.map(() => 0);
-  const result: { lo: number; hi: number }[] = [];
-  for (let i = 0; i < EMP_TOTAL; i++) {
-    let bestG = 0, bestDebt = -Infinity;
-    for (let g = 0; g < GRADE_BAND_SPECS.length; g++) {
-      const debt = ((i + 1) * GRADE_BAND_SPECS[g].count) / EMP_TOTAL - assigned[g];
-      if (debt > bestDebt) { bestDebt = debt; bestG = g; }
-    }
-    result.push({ lo: GRADE_BAND_SPECS[bestG].lo, hi: GRADE_BAND_SPECS[bestG].hi });
-    assigned[bestG]++;
-  }
-  return result;
-})();
-
-// Level per position within each bagian (round-robin assignment: idx % 32 = bagian)
-const POSITION_LEVELS: [EmpLevel, boolean, boolean][] = [
-  ["Kepala Bagian", true,  false], // position 0 in bagian
-  ["Pengawas",      true,  false], // position 1
-  ["Operasional",   false, false], // position 2+
-  ["Operasional",   false, false],
-  ["Operasional",   false, false],
-  ["Operasional",   false, false],
-  ["Operasional",   false, false],
-];
-
-function generateEmployees(): Employee[] {
-  const employeeNumbers = Array.from({ length: EMP_BAND_LIST.length + 4 }, (_, index) => index + 1).filter((number) => ![2, 11, 13, 14].includes(number));
-  const nBagian = BAGIAN_DEFS.length; // 32
-  return EMP_BAND_LIST.map((band, idx) => {
-    const [bagianId, deptId] = BAGIAN_DEFS[idx % nBagian];
-    const divisiId  = DEPT_DEFS.find(([dId]) => dId === deptId)?.[1] ?? "";
-    const pos       = Math.floor(idx / nBagian);
-    const [level, hasMgr, hasIntv] = POSITION_LEVELS[Math.min(pos, POSITION_LEVELS.length - 1)];
-    const { lo, hi } = band;
-    const seed = h16(`${bagianId}x${idx}`);
-    const fn   = FIRST_NAMES[(seed + idx * 7)  % FIRST_NAMES.length];
-    const ln   = LAST_NAMES[ (seed + idx * 13) % LAST_NAMES.length];
-    const yr   = 70 + seededInt(seed, 0, 24);
-    const mo   = seededInt(seed ^ 0x1a, 1, 12);
-    const dy   = seededInt(seed ^ 0x2b, 1, 28);
-    const nip  = `19${yr}${String(mo).padStart(2,"0")}${String(dy).padStart(2,"0")}${String(seededInt(seed,100,999)).padStart(4,"0")}`;
-    return {
-      id: `emp-${bagianId}-${idx}`,
-      employeeId: `EMP-${String(employeeNumbers[idx]).padStart(3, "0")}`,
-      name: `${fn} ${ln}`, nip, level,
-      bagianId, departemenenId: deptId, divisiId,
-      base: {
-        kpi:                    seededInt(h16(`${bagianId}${idx}kpi`), lo, hi),
-        smartGoals:             seededInt(h16(`${bagianId}${idx}sg`),  lo, hi),
-        appraisalForm:          seededInt(h16(`${bagianId}${idx}af`),  lo, hi),
-        managerialSkill:        hasMgr  ? seededInt(h16(`${bagianId}${idx}ms`), lo, hi) : null,
-        managementInterview:    hasIntv ? seededInt(h16(`${bagianId}${idx}mi`), lo, hi) : null,
-        projectOutsideJobScope: seededInt(h16(`${bagianId}${idx}pj`), lo, hi),
-      },
-    };
-  });
-}
-
-// Fixed employees linked to Management Interview monitoring (E002, E011, E013, E014)
-const MI_LINKED_EMPLOYEES: Employee[] = [
-  {
-    id: "emp-mi-E002", employeeId: "EMP-002", name: "Siti Rahayu",  nip: "198505150001", level: "Kepala Divisi",
-    bagianId: "bag1", departemenenId: "dep1", divisiId: "div1",
-    base: { kpi: 82, smartGoals: 78, appraisalForm: 80, managerialSkill: 79, managementInterview: null, projectOutsideJobScope: 75 },
-  },
-  {
-    id: "emp-mi-E011", employeeId: "EMP-011", name: "Kartini Dewi", nip: "199003150002", level: "Kepala Divisi",
-    bagianId: "bag1", departemenenId: "dep1", divisiId: "div1",
-    base: { kpi: 76, smartGoals: 74, appraisalForm: 77, managerialSkill: 73, managementInterview: null, projectOutsideJobScope: 72 },
-  },
-  {
-    id: "emp-mi-E013", employeeId: "EMP-013", name: "Rini Susanti",  nip: "198807200003", level: "Kepala Divisi",
-    bagianId: "bag2", departemenenId: "dep1", divisiId: "div1",
-    base: { kpi: 85, smartGoals: 83, appraisalForm: 84, managerialSkill: 81, managementInterview: null, projectOutsideJobScope: 80 },
-  },
-  {
-    id: "emp-mi-E014", employeeId: "EMP-014", name: "Dian Permana",  nip: "199211100004", level: "Kepala Divisi",
-    bagianId: "bag2", departemenenId: "dep1", divisiId: "div1",
-    base: { kpi: 79, smartGoals: 77, appraisalForm: 78, managerialSkill: 75, managementInterview: null, projectOutsideJobScope: 74 },
-  },
-];
 
 function buildLiveCalibrationEmployees(): Employee[] {
   const users = loadManagedUsers().filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
@@ -346,23 +224,8 @@ function gradeCalcs(hc: number, grades: CalibrationGrade[]): number[] {
   return grades.map(g => hc > 0 ? Math.round(hc * (parseFloat(g.proporsi) || 0) / 100) : 0);
 }
 
-// Actual appraisal grade proportions (realistic end-of-year distribution)
-const ACTUAL_PROPS = [0.04, 0.12, 0.43, 0.28, 0.09, 0.04];
 
-function idHash(id: string): number {
-  return id.split("").reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, 0);
-}
 
-function mockActual(rowId: string, settingHC: number): { hc: number; grades: number[] } {
-  if (settingHC === 0) return { hc: 0, grades: ACTUAL_PROPS.map(() => 0) };
-  const h = idHash(rowId);
-  const variation = (h % 7) - 3; // -3 to +3
-  const actualHC = Math.max(1, settingHC + variation);
-  const grades = ACTUAL_PROPS.map(p => Math.round(actualHC * p));
-  const diff = actualHC - grades.reduce((a, b) => a + b, 0);
-  grades[2] = Math.max(0, grades[2] + diff); // absorb rounding into B (middle grade)
-  return { hc: actualHC, grades };
-}
 
 // ─── Color tokens ─────────────────────────────────────────────────────────────
 const SETTING_BG  = "bg-[#1A284F]";        // navy  – setting header
@@ -456,11 +319,11 @@ function BellCurveChart({
       s + (d.hc > 0 ? Math.round(d.hc * (parseFloat(calibrationGrades[idx]?.proporsi) || 0) / 100) : 0), 0)
   );
 
-  // Actual totals per grade — use provided counts if available, else mockActual
+  // Actual totals per grade — dari data live (actualCounts); 0 bila belum tersedia
   const actualTotals = actualCounts
     ? actualCounts
     : calibrationGrades.map((_, gi) =>
-        safeDivisions.reduce((s, d) => s + mockActual(d.id, d.hc).grades[gi], 0)
+        0
       );
 
   const totalSetting = settingTotals.reduce((a, b) => a + b, 0);
@@ -617,7 +480,7 @@ function GradeDistributionTable({
   const actualPerGrade = actualCounts
     ? actualCounts
     : calibrationGrades.map((_, gi) =>
-        safeDivisions.reduce((s, d) => s + mockActual(d.id, d.hc).grades[gi], 0)
+        0
       );
 
   const totalSettingKaryawan = settingKaryawan.reduce((a, b) => a + b, 0);
@@ -900,33 +763,47 @@ function CatatanKalibrasi({ comment, evidenceFiles, onLightbox, emptyLabel }: {
 }
 
 // ─── Supporting Data Helpers ──────────────────────────────────────────────────
+// Data kedisiplinan, pelanggaran, dan kecelakaan kerja bersumber dari HRIS yang belum terintegrasi,
+// sehingga bernilai null (ditampilkan "—"). Jumlah project dihitung dari data Project Outside Job Scope.
 
-function empKedisiplinan(emp: Employee) {
-  const h = idHash(emp.id);
-  return [
-    { label: "Mangkir",                      value: seededInt(h ^ 0x11, 5,  25) },
-    { label: "Terlambat",                    value: seededInt(h ^ 0x22, 10, 35) },
-    { label: "Istirahat Cepat",              value: seededInt(h ^ 0x33, 5,  20) },
-    { label: "Pulang Istirahat Terlambat", value: seededInt(h ^ 0x44, 10, 30) },
-  ];
+const KEDISIPLINAN_LABELS = ["Mangkir", "Terlambat", "Istirahat Cepat", "Pulang Istirahat Terlambat"];
+
+function empKedisiplinan(_emp: Employee): Array<{ label: string; value: number | null }> {
+  return KEDISIPLINAN_LABELS.map((label) => ({ label, value: null }));
 }
-function empPelanggaran(emp: Employee) { return seededInt(idHash(emp.id) ^ 0x55, 0, 40); }
-function empKecelakaanKerja(emp: Employee) { return seededInt(idHash(emp.id) ^ 0x99, 0, 3); }
-function empProject(emp: Employee)    { return seededInt(idHash(emp.id) ^ 0x66, 0, 3); }
+function empPelanggaran(_emp: Employee): number | null { return null; }
+function empKecelakaanKerja(_emp: Employee): number | null { return null; }
+function empProject(emp: Employee): number {
+  const byEmp = loadAllIcfProjectsByEmployee();
+  const norm = normalizeEmployeeId(emp.employeeId);
+  const state = byEmp[norm] ?? byEmp[emp.employeeId];
+  return Array.isArray(state?.rows) ? state.rows.length : 0;
+}
 
 const SUPPORTING_COLUMNS = [
-  { key: "mangkir", label: "Mangkir", value: (emp: Employee) => empKedisiplinan(emp).find((item) => item.label === "Mangkir")?.value ?? 0 },
+  { key: "mangkir", label: "Mangkir", value: (emp: Employee): number | null => empKedisiplinan(emp).find((item) => item.label === "Mangkir")?.value ?? null },
   { key: "pelanggaran", label: "Pelanggaran", value: empPelanggaran },
   { key: "kecelakaanKerja", label: "Kecelakaan Kerja", value: empKecelakaanKerja },
-  { key: "projek", label: "Projek", value: empProject },
+  { key: "projek", label: "Projek", value: (emp: Employee): number | null => empProject(emp) },
 ] as const;
 
-const APPROVER_NOTE_POOL = [
-  { module: "KPI",              note: "Pencapaian KPI sangat baik. Target produksi 108% dari rencana tahunan." },
-  { module: "Smart Goals",      note: "Semua goal tercapai tepat waktu. Inisiatif pengembangan proses mendapat apresiasi tim manajemen." },
-  { module: "Appraisal Form",   note: "Karyawan menunjukkan sikap kerja yang profesional dan kooperatif sepanjang tahun." },
-  { module: "Managerial Skill", note: "Kepemimpinan cukup baik. Perlu peningkatan dalam delegasi tugas dan coaching anggota tim." },
+const NOTE_MODULES: Array<{ module: string; label: string }> = [
+  { module: "KPI", label: "KPI" },
+  { module: "SMART Goals", label: "SMART Goals" },
+  { module: "Appraisal Form", label: "Appraisal Form" },
+  { module: "Managerial Skill", label: "Managerial Skill" },
+  { module: "Project", label: "Project Outside Job Scope" },
 ];
+
+/** Catatan approver terbaru per modul (Measurement) dari riwayat keputusan approval karyawan. */
+function empApproverNotes(emp: Employee): Array<{ module: string; note: string; by: string; date: string }> {
+  const out: Array<{ module: string; note: string; by: string; date: string }> = [];
+  for (const m of NOTE_MODULES) {
+    const latest = getApproverNotesHistory(emp.employeeId, m.module, "measurement").find((e) => e.note?.trim());
+    if (latest) out.push({ module: m.label, note: latest.note!.trim(), by: `${latest.approverName} (${latest.stageLabel})`, date: latest.date });
+  }
+  return out;
+}
 
 type RCAEntry = { id: string; masalah: string; status: "Open" | "Closed"; periode: string; factors: string[] };
 
@@ -978,12 +855,12 @@ function AppraisalDetailCard({
   const deptName    = DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "—";
   const bagianName  = BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "—";
 
-  // Supporting data (seeded)
+  // Supporting data (live / belum terintegrasi = null)
   const kedisiplinan       = empKedisiplinan(emp);
   const pelanggaran        = empPelanggaran(emp);
   const projectCount       = empProject(emp);
-  const otherProjectCount  = seededInt(idHash(emp.id) ^ 0x88, 0, 2);
   const rcaItems           = empRCAItems(emp);
+  const approverNotes      = empApproverNotes(emp);
 
   // Grade order for color logic (index = rank, higher = better)
   const GRADE_ORDER = ["E", "D", "C", "B", "A", "A+"];
@@ -1042,73 +919,12 @@ function AppraisalDetailCard({
           </div>
 
           {/* Year content */}
-          {!isCurrentYear ? (() => {
-            const pyScores  = pastYearBase(emp);
-            const pyScore   = parseFloat(calcFinalScore(emp.level, pyScores).toFixed(2));
-            const pyGrade   = gradeFromScore(pyScore);
-            // Seeded "final after past calibration" — slight offset
-            const pyFinal   = parseFloat((pyScore + seededInt(idHash(emp.id) ^ 0x99, -3, 4)).toFixed(2));
-            const pyFGrade  = gradeFromScore(pyFinal);
-            const pyDiff    = parseFloat((pyFinal - pyScore).toFixed(2));
-            return (
-              <>
-                {/* Score panel — past year */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-gray-50 border border-gray-200 rounded-2xl px-5 py-4 flex flex-col gap-3">
-                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Current — {selYear}</p>
-                    <div>
-                      <div className="flex items-end gap-2">
-                        <span className="text-3xl font-black tabular-nums" style={{ color: pyGrade.color }}>{pyScore.toFixed(1)}%</span>
-                        <span className="text-lg font-black mb-0.5" style={{ color: pyGrade.color }}>{pyGrade.grade}</span>
-                      </div>
-                      <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${Math.min(pyScore, 100)}%`, background: pyGrade.color }} />
-                      </div>
-                    </div>
-                  </div>
-                  {(() => {
-                    const { scoreColor: pyScoreColor, gradeColor: pyGradeColor } = finalCardColors(pyFinal, pyScore, pyFGrade, pyGrade);
-                    return (
-                      <div className="bg-green-50/60 border border-green-200 rounded-2xl px-5 py-4 flex flex-col gap-3">
-                        <div className="flex items-center justify-between">
-                          <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide">Final — Setelah Kalibrasi</p>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-300">Final</span>
-                        </div>
-                        <div>
-                          <div className="flex items-end gap-2">
-                            <span className="text-3xl font-black tabular-nums" style={{ color: pyScoreColor }}>{pyFinal.toFixed(1)}%</span>
-                            <span className="text-lg font-black mb-0.5" style={{ color: pyGradeColor }}>{pyFGrade.grade}</span>
-                            {pyDiff !== 0 && (
-                              <span className="text-sm font-bold tabular-nums mb-0.5" style={{ color: pyScoreColor }}>
-                                {pyDiff > 0 ? "+" : ""}{pyDiff.toFixed(1)}
-                              </span>
-                            )}
-                          </div>
-                          <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div className="h-full rounded-full" style={{ width: `${Math.min(pyFinal, 100)}%`, background: pyScoreColor }} />
-                          </div>
-                          {pyFGrade.grade !== pyGrade.grade && (
-                            <p className="text-[10px] mt-1.5 font-semibold" style={{ color: pyGradeColor }}>
-                              Grade berubah: <span className="line-through text-gray-400">{pyGrade.grade}</span> → {pyFGrade.grade}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* Supporting Data — placeholder */}
-                <div className="flex flex-col gap-3">
-                  <p className="text-xs font-bold text-gray-700 uppercase tracking-wide border-b border-gray-100 pb-2">Supporting Data</p>
-                  <div className="flex items-center justify-center gap-3 py-8 bg-gray-50 border border-gray-100 rounded-xl">
-                    <Clock className="w-5 h-5 text-gray-300 shrink-0" />
-                    <p className="text-sm text-gray-400 font-medium">Data pendukung belum tersedia</p>
-                  </div>
-                </div>
-              </>
-            );
-          })() : (
+          {!isCurrentYear ? (
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-5 py-8 text-center">
+              <p className="text-sm font-semibold text-gray-600">Belum ada data riwayat penilaian {selYear}</p>
+              <p className="mt-1 text-xs text-gray-400">Riwayat tahun sebelumnya akan tampil setelah siklus PA tahun tersebut tersimpan di sistem.</p>
+            </div>
+          ) : (
             <>
               {/* Score panel */}
               <div className="grid grid-cols-2 gap-3">
@@ -1199,22 +1015,22 @@ function AppraisalDetailCard({
                     </div>
                     <div className="bg-white rounded-xl border border-blue-100 px-3 py-3 flex flex-col gap-1">
                       <p className="text-[10px] font-semibold text-blue-400 uppercase tracking-wide">Other Project</p>
-                      <p className="text-2xl font-black text-blue-600 tabular-nums">{otherProjectCount}</p>
+                      <p className="text-2xl font-black text-blue-600 tabular-nums">—</p>
                       <p className="text-[10px] text-gray-400">project</p>
                     </div>
                     <div className="bg-white rounded-xl border border-orange-100 px-3 py-3 flex flex-col gap-1">
                       <p className="text-[10px] font-semibold text-orange-400 uppercase tracking-wide">Pelanggaran</p>
-                      <p className="text-2xl font-black text-orange-600 tabular-nums">{pelanggaran}</p>
+                      <p className="text-2xl font-black text-orange-600 tabular-nums">{pelanggaran ?? "—"}</p>
                       <p className="text-[10px] text-gray-400">point matrix</p>
                     </div>
                     <div className="bg-white rounded-xl border border-amber-200 px-3 py-3 flex flex-col gap-1">
                       <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Kecelakaan Kerja</p>
-                      <p className="text-2xl font-black text-amber-700 tabular-nums">{empKecelakaanKerja(emp)}</p>
+                      <p className="text-2xl font-black text-amber-700 tabular-nums">{empKecelakaanKerja(emp) ?? "—"}</p>
                       <p className="text-[10px] text-gray-400">kejadian</p>
                     </div>
                     <div className="bg-white rounded-xl border border-red-100 px-3 py-3 flex flex-col gap-1">
                       <p className="text-[10px] font-semibold text-red-400 uppercase tracking-wide">Kedisiplinan</p>
-                      <p className="text-2xl font-black text-red-500 tabular-nums">{kedisiplinan.reduce((s, k) => s + k.value, 0)}</p>
+                      <p className="text-2xl font-black text-red-500 tabular-nums">{kedisiplinan.some((k) => k.value !== null) ? kedisiplinan.reduce((s, k) => s + (k.value ?? 0), 0) : "—"}</p>
                       <p className="text-[10px] text-gray-400">total kejadian</p>
                     </div>
                   </div>
@@ -1222,7 +1038,7 @@ function AppraisalDetailCard({
                     {kedisiplinan.map(k => (
                       <div key={k.label} className="flex items-center justify-between bg-white rounded-lg border border-gray-100 px-3 py-2">
                         <span className="text-xs text-gray-600">{k.label}</span>
-                        <span className="text-xs font-bold text-gray-800 tabular-nums">{k.value}×</span>
+                        <span className="text-xs font-bold text-gray-800 tabular-nums">{k.value === null ? "—" : `${k.value}×`}</span>
                       </div>
                     ))}
                   </div>
@@ -1232,10 +1048,13 @@ function AppraisalDetailCard({
                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
                   <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Summary Note — All Approver · All Modul</p>
                   <div className="flex flex-col gap-2">
-                    {APPROVER_NOTE_POOL.filter(n => n.module !== "Managerial Skill" || emp.base.managerialSkill !== null).map(n => (
+                    {approverNotes.length === 0 ? (
+                      <p className="text-xs text-gray-400">Belum ada catatan approver pada modul Measurement.</p>
+                    ) : approverNotes.map(n => (
                       <div key={n.module} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5 flex flex-col gap-1">
                         <span className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide">{n.module}</span>
                         <p className="text-xs text-gray-700 leading-relaxed">{n.note}</p>
+                        <span className="text-[10px] text-gray-400">{n.by} · {n.date}</span>
                       </div>
                     ))}
                   </div>
@@ -1516,7 +1335,7 @@ function EmployeeAdjustmentSection({
       else if (sortKey === "grade")           { va = GRADE_ORDER[gradeFromScore(getFinal(a)).grade] ?? 0; vb = GRADE_ORDER[gradeFromScore(getFinal(b)).grade] ?? 0; }
       else {
         const column = SUPPORTING_COLUMNS.find((item) => item.key === sortKey);
-        if (column) { va = column.value(a); vb = column.value(b); }
+        if (column) { va = column.value(a) ?? -1; vb = column.value(b) ?? -1; }
       }
       return sortDir === "asc" ? va - vb : vb - va;
     });
@@ -2005,7 +1824,7 @@ function EmployeeAdjustmentSection({
                     )}
                   </td>
 
-                  {supportingColumns.map((column) => <td key={column.key} className="border border-gray-100 px-3 py-2 text-center text-xs tabular-nums text-gray-700">{column.value(emp)}</td>)}
+                  {supportingColumns.map((column) => <td key={column.key} className="border border-gray-100 px-3 py-2 text-center text-xs tabular-nums text-gray-700">{column.value(emp) ?? "—"}</td>)}
 
                   {/* Aksi */}
                   <td className="border border-gray-100 px-2 py-2 align-top">
@@ -2224,7 +2043,7 @@ function CalibrationPanel({
     ALL_EMPLOYEES.filter(emp => !unitName || emp.companyUnit === unitName).forEach(emp => {
       if (isYearEndInactive(emp.employeeId)) return;
       const finalScore = effectiveAdj[emp.id] ?? calcFinalScore(emp.level, applyYearEndScorePolicy(emp.employeeId, emp.base));
-      const { grade } = gradeFromScore(finalScore);
+      const { grade } = gradeFromScore(finalScore, unitName || emp.companyUnit);
       const gi = gradeIdx[grade] ?? -1;
       if (gi < 0) return;
       globalCounts[gi]++;

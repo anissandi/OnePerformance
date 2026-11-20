@@ -1,3 +1,4 @@
+import { resolveEditRequestApprovers } from "../../store/kpiTargetEditStore";
 // @refresh reset
 import React, { useState, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
@@ -659,6 +660,7 @@ export function saveKPITracking(data: KPITrackingSnapshot, ownerOverride?: { emp
       period: "2026",
       months: data.months,
       cellsMap: data.cellsMap,
+      monthlyNotes: loadAllMonthlyNotes(),
       comments: loadAllKPIComments(),
       audit: {
         userId: actor.employeeId,
@@ -2321,10 +2323,12 @@ function OpenLockRequestModal({ onCancel, onConfirm }: { onCancel: () => void; o
 
 // ─── Edit Request Modals ─────────────────────────────────────────────────────
 
-const EDIT_REQUEST_APPROVERS = [
-  { label: "Approver 1", name: "Ahmad Fauzi",  role: "Supervisor / Atasan Langsung" },
-  { label: "Approver 2", name: "Dewi Rahayu", role: "HR Manager" },
-];
+function getEditRequestApprovers() {
+  const list = resolveEditRequestApprovers();
+  return list.length > 0
+    ? list
+    : [{ label: "Approver", name: "Belum ada approver terdaftar", role: "Reg No AP1/AP2 kosong — hubungi HR ICF" }];
+}
 
 function EditRequestModal({
   months,
@@ -2383,7 +2387,7 @@ function EditRequestModal({
           <div className="flex flex-col gap-2">
             <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Request akan dikirim ke</p>
             <div className="flex flex-col gap-2">
-              {EDIT_REQUEST_APPROVERS.map((a) => (
+              {getEditRequestApprovers().map((a) => (
                 <div key={a.label} className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[#1A284F]/5 border border-[#1A284F]/10">
                   <div className="w-8 h-8 rounded-full bg-[#1A284F] flex items-center justify-center shrink-0">
                     <UserCircle2 className="w-4 h-4 text-white" />
@@ -2510,7 +2514,7 @@ function EditRequestSuccessModal({ onClose }: { onClose: () => void }) {
         <h3 className="font-bold text-gray-900 text-lg mb-2">Request Terkirim</h3>
         <p className="text-gray-500 text-sm mb-1">Permintaan edit KPI Tracking telah dikirimkan ke</p>
         <div className="flex flex-col gap-1 mb-6">
-          {EDIT_REQUEST_APPROVERS.map((a) => (
+          {getEditRequestApprovers().map((a) => (
             <p key={a.label} className="text-[#1A284F] font-semibold text-sm">
               {a.name} <span className="text-gray-400 font-normal text-xs">({a.label})</span>
             </p>
@@ -4349,6 +4353,16 @@ function KPIWorkspace({
       // ignore
     }
     void mergeKvMapRecord("kpi_business_tracking_cells_v2", businessScopeKey, next);
+    void syncToSupabase({
+      kind: "kpi-tracking",
+      docKey: `business:${businessScopeKey}:2026`,
+      employeeId: businessScopeKey,
+      period: "2026",
+      months,
+      cellsMap: next,
+      monthlyNotes: loadAllMonthlyNotes(),
+      comments: loadAllKPIComments(),
+    });
     savePersistedState("kpi_business_tracking_cells_v1", next);
   };
   const updateBusinessCell = (monthId: string, key: CellKey, val: string) => {

@@ -1,3 +1,4 @@
+import { resolveGradeForScore } from "../shared/scoringWeightStore";
 // @refresh reset
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import React, { useEffect, useState } from "react";
@@ -1554,13 +1555,18 @@ function getKPIScore2026(): number | null {
   return total > 0 ? parseFloat(total.toFixed(1)) : null;
 }
 
-function getGrade(score: number): { letter: string; color: string; bg: string } {
-  if (score >= 90) return { letter: "A+", color: "text-purple-700",  bg: "bg-purple-100"  };
-  if (score >= 80) return { letter: "A",  color: "text-emerald-700", bg: "bg-emerald-100" };
-  if (score >= 70) return { letter: "B",  color: "text-blue-700",    bg: "bg-blue-100"    };
-  if (score >= 60) return { letter: "C",  color: "text-yellow-700",  bg: "bg-yellow-100"  };
-  if (score >= 50) return { letter: "D",  color: "text-orange-700",  bg: "bg-orange-100"  };
-  return             { letter: "E",  color: "text-red-700",     bg: "bg-red-100"     };
+const GRADE_STYLE: Record<string, { color: string; bg: string }> = {
+  "A+": { color: "text-purple-700", bg: "bg-purple-100" },
+  A: { color: "text-emerald-700", bg: "bg-emerald-100" },
+  B: { color: "text-blue-700", bg: "bg-blue-100" },
+  C: { color: "text-yellow-700", bg: "bg-yellow-100" },
+  D: { color: "text-orange-700", bg: "bg-orange-100" },
+  E: { color: "text-red-700", bg: "bg-red-100" },
+};
+function getGrade(score: number, companyName?: string): { letter: string; color: string; bg: string } {
+  const letter = resolveGradeForScore(score, companyName);
+  const st = GRADE_STYLE[letter] ?? { color: "text-gray-700", bg: "bg-gray-100" };
+  return { letter, ...st };
 }
 
 function ScoreSummaryBanner({ year }: { year: string }) {

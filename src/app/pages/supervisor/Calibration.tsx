@@ -1,71 +1,62 @@
+import { resolveGradeForScore } from "../shared/scoringWeightStore";
 import { useState, useMemo, useEffect } from "react";
 import { AlertTriangle, Eye, X, FileText, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadPersistedState } from "../../services/supabaseClient";
 import { getActiveUser, getStrictSubordinateUsers } from "../../store/authStore";
+import { getApproverNotesHistory, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
+import { loadMeasurementRCARecords } from "../employee/RCAPage";
 
-// ─── Seeded helpers (mirrors CalibrationAdjustment) ───────────────────────────
+// ─── Supporting data (live) ───────────────────────────────────────────────────
+// Kedisiplinan & pelanggaran bersumber dari HRIS yang belum terintegrasi → null (ditampilkan "—").
 
-function idHash(s: string): number {
-  return s.split("").reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, 0);
+const KEDISIPLINAN_LABELS = ["Mangkir", "Terlambat", "Istirahat Cepat", "Pulang Istirahat Terlambat"];
+function empKedisiplinan(_id: string): Array<{ label: string; value: number | null }> {
+  return KEDISIPLINAN_LABELS.map((label) => ({ label, value: null }));
 }
-function seededInt(seed: number, lo: number, hi: number): number {
-  return lo + (Math.abs(seed) % (hi - lo + 1));
+function empPelanggaran(_id: string): number | null { return null; }
+function empProject(id: string): number {
+  const byEmp = loadAllIcfProjectsByEmployee();
+  const state = byEmp[normalizeEmployeeId(id)] ?? byEmp[id];
+  return Array.isArray(state?.rows) ? state.rows.length : 0;
 }
 
-// ─── Supporting-data generators ───────────────────────────────────────────────
-
-function empKedisiplinan(id: string) {
-  const h = idHash(id);
-  return [
-    { label: "Mangkir",                      value: seededInt(h ^ 0x11, 5,  25) },
-    { label: "Terlambat",                     value: seededInt(h ^ 0x22, 10, 35) },
-    { label: "Istirahat Cepat",               value: seededInt(h ^ 0x33, 5,  20) },
-    { label: "Pulang Istirahat Terlambat",    value: seededInt(h ^ 0x44, 10, 30) },
-  ];
-}
-function empPelanggaran(id: string) { return seededInt(idHash(id) ^ 0x55, 0, 40); }
-function empProject(id: string)     { return seededInt(idHash(id) ^ 0x66, 0, 3); }
-function empOtherProject(id: string){ return seededInt(idHash(id) ^ 0x88, 0, 2); }
-
-const APPROVER_NOTE_POOL = [
-  { module: "KPI",              note: "Pencapaian KPI sangat baik. Target produksi 108% dari rencana tahunan." },
-  { module: "Smart Goals",      note: "Semua goal tercapai tepat waktu. Inisiatif pengembangan proses mendapat apresiasi tim manajemen." },
-  { module: "Appraisal Form",   note: "Karyawan menunjukkan sikap kerja yang profesional dan kooperatif sepanjang tahun." },
-  { module: "Managerial Skill", note: "Kepemimpinan cukup baik. Perlu peningkatan dalam delegasi tugas dan coaching anggota tim." },
+const NOTE_MODULES: Array<{ module: string; label: string }> = [
+  { module: "KPI", label: "KPI" },
+  { module: "SMART Goals", label: "SMART Goals" },
+  { module: "Appraisal Form", label: "Appraisal Form" },
+  { module: "Managerial Skill", label: "Managerial Skill" },
+  { module: "Project", label: "Project Outside Job Scope" },
 ];
+function empApproverNotes(id: string): Array<{ module: string; note: string; by: string; date: string }> {
+  const out: Array<{ module: string; note: string; by: string; date: string }> = [];
+  for (const m of NOTE_MODULES) {
+    const latest = getApproverNotesHistory(id, m.module, "measurement").find((e) => e.note?.trim());
+    if (latest) out.push({ module: m.label, note: latest.note!.trim(), by: `${latest.approverName} (${latest.stageLabel})`, date: latest.date });
+  }
+  return out;
+}
 
-const RCA_MASALAH_POOL = [
-  "Keterlambatan pengiriman bahan baku","Downtime mesin melebihi target","Capaian KPI di bawah 90%",
-  "Kualitas produk tidak sesuai standar","Absensi tinggi","Vendor terlambat",
-  "Ketidaksesuaian laporan produksi","Overconsumption bahan bakar","Error sistem ERP",
-];
-const MONTHS_POOL = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
-
-type RCAEntry = { id: number; masalah: string; status: "Open" | "Closed"; periode: string };
+type RCAEntry = { id: string; masalah: string; status: "Open" | "Closed"; periode: string };
 function empRCAItems(id: string): RCAEntry[] {
-  const h = idHash(id);
-  const openCount   = seededInt(h ^ 0x77, 0, 3);
-  const closedCount = seededInt(h ^ 0x88, 1, 6);
-  const items: RCAEntry[] = [];
-  for (let i = 0; i < openCount; i++) {
-    items.push({ id: i + 1, masalah: RCA_MASALAH_POOL[(h + i) % RCA_MASALAH_POOL.length], status: "Open", periode: MONTHS_POOL[(h + i * 3) % 12] + " 2026" });
-  }
-  for (let i = 0; i < closedCount; i++) {
-    items.push({ id: openCount + i + 1, masalah: RCA_MASALAH_POOL[(h + i + 4) % RCA_MASALAH_POOL.length], status: "Closed", periode: MONTHS_POOL[(h + i * 2 + 1) % 12] + " 2025" });
-  }
-  return items;
+  const norm = normalizeEmployeeId(id);
+  return loadMeasurementRCARecords()
+    .filter((row) => normalizeEmployeeId(String(row.employeeId)) === norm)
+    .map((row) => ({
+      id: String(row.id),
+      status: row.status,
+      periode: row.periode,
+      masalah: row.problems.map((p) => p.replace(/^\[Faktor (Internal|Eksternal)\]\s*/, "")).join("; ") || "—",
+    }));
 }
 
 // ─── Grade helpers ─────────────────────────────────────────────────────────────
 
-function gradeFromScore(n: number): { grade: string; color: string } {
-  if (n >= 90) return { grade: "A+", color: "#10B981" };
-  if (n >= 80) return { grade: "A",  color: "#3B82F6" };
-  if (n >= 70) return { grade: "B",  color: "#F59E0B" };
-  if (n >= 60) return { grade: "C",  color: "#F97316" };
-  if (n >= 50) return { grade: "D",  color: "#EF4444" };
-  return             { grade: "E",  color: "#991B1B" };
+const GRADE_HEX: Record<string, string> = { "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B" };
+function gradeFromScore(n: number, companyName?: string): { grade: string; color: string } {
+  const grade = resolveGradeForScore(n, companyName);
+  return { grade, color: GRADE_HEX[grade] ?? "#6B7280" };
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
@@ -173,22 +164,12 @@ function EmployeeDetailCard({ member, onClose }: { member: TeamMember; onClose: 
         { label: "Project Outside",  score: member.projectOutside, weight: 15 },
       ];
 
-  // Past year scores (seeded offset)
-  const h = idHash(member.idEmployee);
-  const pastWeights = weights.map(w => ({
-    ...w,
-    score: Math.max(30, Math.min(100, w.score + seededInt(h ^ (w.label.charCodeAt(0)), -10, 5))),
-  }));
-  const pastTotal = parseFloat(pastWeights.reduce((s, w) => s + w.score * (w.weight / 100), 0).toFixed(2));
-  const pastFinal = parseFloat((pastTotal + seededInt(h ^ 0x99, -3, 4)).toFixed(2));
-  const pastGrade = gradeFromScore(pastTotal);
-  const pastFGrade = gradeFromScore(pastFinal);
 
   const kedisiplinan   = empKedisiplinan(member.idEmployee);
   const pelanggaran    = empPelanggaran(member.idEmployee);
   const projectCount   = empProject(member.idEmployee);
-  const otherProject   = empOtherProject(member.idEmployee);
   const rcaItems       = empRCAItems(member.idEmployee);
+  const approverNotes  = empApproverNotes(member.idEmployee);
   const rcaOpen        = rcaItems.filter(r => r.status === "Open").length;
   const rcaClosed      = rcaItems.filter(r => r.status === "Closed").length;
 
@@ -239,56 +220,10 @@ function EmployeeDetailCard({ member, onClose }: { member: TeamMember; onClose: 
 
           {/* ── Past year view ── */}
           {!isCurrentYear ? (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-gray-50 border border-gray-200 rounded-2xl px-5 py-4 flex flex-col gap-3">
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Current — {selYear}</p>
-                  <div>
-                    <div className="flex items-end gap-2">
-                      <span className="text-3xl font-black tabular-nums" style={{ color: pastGrade.color }}>{pastTotal.toFixed(1)}%</span>
-                      <span className="text-lg font-black mb-0.5" style={{ color: pastGrade.color }}>{pastGrade.grade}</span>
-                    </div>
-                    <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${Math.min(pastTotal, 100)}%`, background: pastGrade.color }} />
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-1 pt-1 border-t border-gray-200">
-                    {pastWeights.map(w => (
-                      <div key={w.label} className="flex items-center justify-between text-[10px]">
-                        <span className="text-gray-500">{w.label} <span className="text-gray-300">({w.weight}%)</span></span>
-                        <span className="font-bold text-gray-700 tabular-nums">{w.score.toFixed(1)}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="bg-green-50/60 border border-green-200 rounded-2xl px-5 py-4 flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide">Final — Setelah Kalibrasi</p>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-300">Final</span>
-                  </div>
-                  <div>
-                    <div className="flex items-end gap-2">
-                      <span className="text-3xl font-black tabular-nums" style={{ color: "#10B981" }}>{pastFinal.toFixed(1)}%</span>
-                      <span className="text-lg font-black mb-0.5" style={{ color: "#10B981" }}>{pastFGrade.grade}</span>
-                    </div>
-                    <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${Math.min(pastFinal, 100)}%`, background: "#10B981" }} />
-                    </div>
-                    {pastFGrade.grade !== pastGrade.grade && (
-                      <p className="text-[10px] mt-1.5 font-semibold text-green-700">
-                        Grade berubah: <span className="line-through text-gray-400">{pastGrade.grade}</span> → {pastFGrade.grade}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-col gap-3">
-                <p className="text-xs font-bold text-gray-700 uppercase tracking-wide border-b border-gray-100 pb-2">Supporting Data</p>
-                <div className="flex items-center justify-center gap-3 py-8 bg-gray-50 border border-gray-100 rounded-xl">
-                  <p className="text-sm text-gray-400 font-medium">Data pendukung belum tersedia untuk tahun ini</p>
-                </div>
-              </div>
-            </>
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-5 py-8 text-center">
+              <p className="text-sm font-semibold text-gray-600">Belum ada data riwayat penilaian {selYear}</p>
+              <p className="mt-1 text-xs text-gray-400">Riwayat tahun sebelumnya akan tampil setelah siklus PA tahun tersebut tersimpan di sistem.</p>
+            </div>
           ) : (
             <>
               {/* ── Current year: score panel ── */}
@@ -383,17 +318,17 @@ function EmployeeDetailCard({ member, onClose }: { member: TeamMember; onClose: 
                     </div>
                     <div className="bg-white rounded-xl border border-blue-100 px-3 py-3 flex flex-col gap-1">
                       <p className="text-[10px] font-semibold text-blue-400 uppercase tracking-wide">Other Project</p>
-                      <p className="text-2xl font-black text-blue-600 tabular-nums">{otherProject}</p>
+                      <p className="text-2xl font-black text-blue-600 tabular-nums">—</p>
                       <p className="text-[10px] text-gray-400">project</p>
                     </div>
                     <div className="bg-white rounded-xl border border-orange-100 px-3 py-3 flex flex-col gap-1">
                       <p className="text-[10px] font-semibold text-orange-400 uppercase tracking-wide">Pelanggaran</p>
-                      <p className="text-2xl font-black text-orange-600 tabular-nums">{pelanggaran}</p>
+                      <p className="text-2xl font-black text-orange-600 tabular-nums">{pelanggaran ?? "—"}</p>
                       <p className="text-[10px] text-gray-400">point matrix</p>
                     </div>
                     <div className="bg-white rounded-xl border border-red-100 px-3 py-3 flex flex-col gap-1">
                       <p className="text-[10px] font-semibold text-red-400 uppercase tracking-wide">Kedisiplinan</p>
-                      <p className="text-2xl font-black text-red-500 tabular-nums">{kedisiplinan.reduce((s, k) => s + k.value, 0)}</p>
+                      <p className="text-2xl font-black text-red-500 tabular-nums">{kedisiplinan.some((k) => k.value !== null) ? kedisiplinan.reduce((s, k) => s + (k.value ?? 0), 0) : "—"}</p>
                       <p className="text-[10px] text-gray-400">total kejadian</p>
                     </div>
                   </div>
@@ -401,7 +336,7 @@ function EmployeeDetailCard({ member, onClose }: { member: TeamMember; onClose: 
                     {kedisiplinan.map(k => (
                       <div key={k.label} className="flex items-center justify-between bg-white rounded-lg border border-gray-100 px-3 py-2">
                         <span className="text-xs text-gray-600">{k.label}</span>
-                        <span className="text-xs font-bold text-gray-800 tabular-nums">{k.value}×</span>
+                        <span className="text-xs font-bold text-gray-800 tabular-nums">{k.value === null ? "—" : `${k.value}×`}</span>
                       </div>
                     ))}
                   </div>
@@ -411,10 +346,13 @@ function EmployeeDetailCard({ member, onClose }: { member: TeamMember; onClose: 
                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
                   <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Summary Note — All Approver · All Modul</p>
                   <div className="flex flex-col gap-2">
-                    {APPROVER_NOTE_POOL.filter(n => n.module !== "Managerial Skill" || member.managerialSkill !== null).map(n => (
+                    {approverNotes.length === 0 ? (
+                      <p className="text-xs text-gray-400">Belum ada catatan approver pada modul Measurement.</p>
+                    ) : approverNotes.map(n => (
                       <div key={n.module} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5 flex flex-col gap-1">
                         <span className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide">{n.module}</span>
                         <p className="text-xs text-gray-700 leading-relaxed">{n.note}</p>
+                        <span className="text-[10px] text-gray-400">{n.by} · {n.date}</span>
                       </div>
                     ))}
                   </div>

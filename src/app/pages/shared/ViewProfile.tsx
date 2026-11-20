@@ -1,3 +1,4 @@
+import { resolveGradeForScore } from "./scoringWeightStore";
 // @refresh reset
 import { getKpiMonthVisuals, lastFullyApprovedMonth, monthNameId } from "../../components/KpiMonthlyApprovalBar";
 import React, { useState, useMemo, useEffect, useRef } from "react";
@@ -302,12 +303,12 @@ const HIST_SCORES_2024: Record<string, number> = {};
 
 const FINAL_MODULE_RESULTS_2025: (typeof MODULE_RESULTS[0])[] = MODULE_RESULTS.map((m) => {
   const s = HIST_SCORES_2025[m.module] ?? m.score;
-  return { ...m, status: "approved" as const, score: s, grade: s === 0 ? "N/A" : s >= 90 ? "A+" : s >= 80 ? "A" : s >= 70 ? "B" : "C", weightedScore: parseFloat((s * m.weight / 100).toFixed(2)), completedDate: "2025-12-30" };
+  return { ...m, status: "approved" as const, score: s, grade: s === 0 ? "N/A" : resolveGradeForScore(s), weightedScore: parseFloat((s * m.weight / 100).toFixed(2)), completedDate: "2025-12-30" };
 });
 
 const FINAL_MODULE_RESULTS_2024: (typeof MODULE_RESULTS[0])[] = MODULE_RESULTS.map((m) => {
   const s = HIST_SCORES_2024[m.module] ?? m.score;
-  return { ...m, status: "approved" as const, score: s, grade: s === 0 ? "N/A" : s >= 90 ? "A+" : s >= 80 ? "A" : s >= 70 ? "B" : "C", weightedScore: parseFloat((s * m.weight / 100).toFixed(2)), completedDate: "2024-12-28" };
+  return { ...m, status: "approved" as const, score: s, grade: s === 0 ? "N/A" : resolveGradeForScore(s), weightedScore: parseFloat((s * m.weight / 100).toFixed(2)), completedDate: "2024-12-28" };
 });
 
 function getModuleResults(year: number) {
@@ -470,12 +471,7 @@ export function ViewProfile() {
   // For current year, derive display score/grade from live module scores
   function scoreToGrade(s: number) {
     if (s <= 0) return "N/A";
-    if (s >= 90) return "A+";
-    if (s >= 80) return "A";
-    if (s >= 70) return "B";
-    if (s >= 60) return "C";
-    if (s >= 50) return "D";
-    return "E";
+    return resolveGradeForScore(s);
   }
   const liveMe = getLiveTransactionalEmployees().find(
     (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),

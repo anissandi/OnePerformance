@@ -88,7 +88,6 @@ export function listPendingTransactions(): PendingTransaction[] {
 
   for (const rec of loadWorkflowRecords()) {
     const st = workflowStatus(rec);
-    if (st.final) continue;
     const u = find(rec.employeeId);
     out.push({
       id: `workflow::${rec.key}`,
@@ -110,7 +109,7 @@ export function listPendingTransactions(): PendingTransaction[] {
     {},
   );
   for (const [scope, st] of Object.entries(bizStatus)) {
-    if (!st?.submitted || st.approved) continue;
+    if (!st?.submitted && !st?.approved) continue;
     out.push({
       id: `kpi-business::${scope}`,
       source: "kpi-business",
@@ -118,7 +117,7 @@ export function listPendingTransactions(): PendingTransaction[] {
       employeeName: st.submittedBy ?? "—",
       company: scope,
       moduleLabel: `KPI Business (${scope.startsWith("corporate-unit") || scope.includes("unit") ? "KPI Unit" : "KPI Group"})`,
-      status: "Pending Approval",
+      status: st.approved ? "Validated" : "Pending Approval",
       submittedDate: st.submittedDate ?? "—",
       resetTo: "Unsubmitted",
     });
@@ -375,6 +374,40 @@ export function cancelPendingTransactions(ids: string[]): number {
     for (const rec of cancelled) {
       const u = find(rec.employeeId);
       if (u) notifyIds.add(u.employeeId);
+      if (rec.module === "KPI" && rec.phase === "measurement") {
+        const normId = normalizeEmployeeId(rec.employeeId);
+        const emptySnap = { months: [], cellsMap: {} };
+        safeSetLocalJson(`kpi_tracking_v1_${normId}`, emptySnap);
+        void syncToSupabase({
+          kind: "kpi-tracking",
+          docKey: `${rec.employeeId}:2026`,
+          employeeId: rec.employeeId,
+          period: "2026",
+          months: [],
+          cellsMap: {},
+          monthlyNotes: {},
+          comments: {},
+        });
+        try {
+          const evByEmp = readJson<Record<string, unknown[]>>("kpi_evidence_files_by_emp_v1", {});
+          if (evByEmp[normId] || evByEmp[rec.employeeId]) {
+            delete evByEmp[normId];
+            delete evByEmp[rec.employeeId];
+            safeSetLocalJson("kpi_evidence_files_by_emp_v1", evByEmp);
+          }
+        } catch {
+          // ignore
+        }
+        try {
+          const rcaList = readJson<Array<{ employeeId?: string }>>("kpi_rca_submissions", []);
+          const filteredRca = rcaList.filter((r) => normalizeEmployeeId(String(r.employeeId ?? "")) !== normId);
+          if (filteredRca.length !== rcaList.length) {
+            savePersistedState("kpi_rca_submissions", filteredRca);
+          }
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 

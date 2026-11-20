@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { DatePickerID } from "../../../components/DatePickerID";
 import { Search, RefreshCw, ChevronDown, Eye, X, Download, Filter } from "lucide-react";
-import { loadLocalAuditLogs, hydrateAllStoresFromSupabase } from "../../../services/supabaseClient";
+import { fetchServerAuditLogs, hydrateAllStoresFromSupabase, loadLocalAuditLogs, type StoredAuditLogEntry } from "../../../services/supabaseClient";
 
 type ActionType = "Login" | "Logout" | "Create" | "Update" | "Delete" | "Approve" | "Reject" | "Export";
 
@@ -193,18 +193,36 @@ export function AuditTrailPage() {
   const [viewLog, setViewLog] = useState<AuditLog | null>(null);
   const [showFilters, setShowFilters] = useState(false);
 
+  const [serverLogs, setServerLogs] = useState<StoredAuditLogEntry[]>([]);
+
   useEffect(() => {
-    const refresh = () => setDynamicLogs(loadLocalAuditLogs());
+    let alive = true;
+    const loadServer = async () => {
+      const rows = await fetchServerAuditLogs(30);
+      if (!alive) return;
+      setServerLogs(rows);
+    };
+    void loadServer();
+    const refresh = () => {
+      setDynamicLogs(loadLocalAuditLogs());
+      void loadServer();
+    };
     window.addEventListener("pa-audit-updated", refresh);
     window.addEventListener("pa-db-hydrated", refresh);
     return () => {
+      alive = false;
       window.removeEventListener("pa-audit-updated", refresh);
       window.removeEventListener("pa-db-hydrated", refresh);
     };
   }, []);
 
   const allLogs = useMemo<AuditLog[]>(() => {
-    const mappedDynamic: AuditLog[] = dynamicLogs.map((d) => ({
+    // Sumber utama: server (pa_audit_trail, retensi 30 hari). Log lokal hanya ditambahkan bila belum tercatat di server.
+    const sig = (d: StoredAuditLogEntry) => `${d.timestamp.slice(0, 16)}|${d.userId}|${d.description}`;
+    const serverSigs = new Set(serverLogs.map(sig));
+    const merged = [...serverLogs, ...dynamicLogs.filter((d) => !serverSigs.has(sig(d)))];
+    merged.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    const mappedDynamic: AuditLog[] = merged.map((d) => ({
       id: d.id,
       timestamp: d.timestamp,
       userId: d.userId,
@@ -214,11 +232,11 @@ export function AuditTrailPage() {
       module: (MAIN_MODULES.includes(d.module as MainModule) ? d.module : "Performance Appraisal") as MainModule,
       subModule: d.subModule && d.subModule !== "-" ? d.subModule : undefined,
       description: d.description,
-      ipAddress: d.ipAddress || "10.0.1.15",
+      ipAddress: d.ipAddress || "—",
       status: d.status,
     }));
     return mappedDynamic;
-  }, [dynamicLogs]);
+  }, [dynamicLogs, serverLogs]);
 
   // available sub-modules based on selected main module
   const availableSubModules =

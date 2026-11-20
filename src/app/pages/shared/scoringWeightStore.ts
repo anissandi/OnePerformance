@@ -1,5 +1,5 @@
 import { loadPersistedState, safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
-import { canonicalizeCompanyUnitName } from "../../store/authStore";
+import { canonicalizeCompanyUnitName, getActiveUser } from "../../store/authStore";
 
 export const BUILTIN_WEIGHT_COLUMNS = [
   { key: "operasional", label: "Operasional", groupName: "Operasional" },
@@ -283,6 +283,56 @@ export function loadUnitScoreRanges<T>(companyName: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+export interface GradeRange {
+  id?: string;
+  min: number;
+  max: number;
+  grade: string;
+  label?: string;
+  color?: string;
+}
+
+/** Rentang grade default, sama dengan default Scores Setting. */
+export const DEFAULT_GRADE_RANGES: GradeRange[] = [
+  { id: "1", min: 90, max: 100, grade: "A+", label: "Outstanding" },
+  { id: "2", min: 80, max: 89, grade: "A", label: "Good" },
+  { id: "3", min: 70, max: 79, grade: "B", label: "Average" },
+  { id: "4", min: 60, max: 69, grade: "C", label: "Below Average" },
+  { id: "5", min: 50, max: 59, grade: "D", label: "Unsatisfactory" },
+  { id: "6", min: 0, max: 49, grade: "E", label: "Fail" },
+];
+
+const gradeRangeCache = new Map<string, GradeRange[]>();
+
+/** Rentang grade aktif untuk Unit Usaha (dari Scores Setting), terurut dari min tertinggi. */
+export function loadGradeRanges(companyName?: string): GradeRange[] {
+  let company = companyName;
+  if (!company) {
+    try { company = getActiveUser().company; } catch { company = ""; }
+  }
+  const cacheKey = `${company ?? ""}::${safeGetLocalRaw(SCORE_RANGES_KEY) ?? ""}`;
+  const cached = gradeRangeCache.get(cacheKey);
+  if (cached) return cached;
+  const raw = company ? loadUnitScoreRanges<GradeRange[]>(company, DEFAULT_GRADE_RANGES) : DEFAULT_GRADE_RANGES;
+  const cleaned = (Array.isArray(raw) ? raw : DEFAULT_GRADE_RANGES)
+    .map((r) => ({ ...r, min: Number(r.min), max: Number(r.max), grade: String(r.grade ?? "").trim() }))
+    .filter((r) => r.grade && Number.isFinite(r.min));
+  const list = cleaned.length > 0 ? cleaned : DEFAULT_GRADE_RANGES;
+  const sorted = [...list].sort((a, b) => b.min - a.min);
+  if (gradeRangeCache.size > 50) gradeRangeCache.clear();
+  gradeRangeCache.set(cacheKey, sorted);
+  return sorted;
+}
+
+/** Grade untuk skor (0-100) berdasarkan rentang Scores Setting milik Unit Usaha. */
+export function resolveGradeForScore(score: number, companyName?: string): string {
+  const ranges = loadGradeRanges(companyName);
+  const s = Number(score);
+  if (!Number.isFinite(s)) return ranges[ranges.length - 1]?.grade ?? "E";
+  const hit = ranges.find((r) => s >= r.min);
+  return (hit ?? ranges[ranges.length - 1])?.grade ?? "E";
 }
 
 export function saveUnitScoreRanges<T>(companyName: string, ranges: T): void {

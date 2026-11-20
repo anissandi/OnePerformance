@@ -1,3 +1,4 @@
+import { resolveGradeForScore } from "../shared/scoringWeightStore";
 import React, { useState, useMemo, useEffect } from "react";
 import {
   CheckCircle2, RotateCcw, ChevronDown, ChevronUp, X, Info,
@@ -19,21 +20,12 @@ import {
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { BellCurveTagButton, GradeBellCurveModal } from "../../components/GradeBellCurveModal";
 
-// ─── Seeded helpers ────────────────────────────────────────────────────────────
+// ─── Grade helpers ─────────────────────────────────────────────────────────────
 
-function h16(s: string): number {
-  return s.split("").reduce((a, c) => ((a * 31) + c.charCodeAt(0)) & 0xffff, 0);
-}
-function seededInt(seed: number, lo: number, hi: number): number {
-  return lo + (Math.abs(seed) % (hi - lo + 1));
-}
-function gradeFromScore(n: number): { grade: string; color: string } {
-  if (n >= 90) return { grade: "A+", color: "#10B981" };
-  if (n >= 80) return { grade: "A",  color: "#3B82F6" };
-  if (n >= 70) return { grade: "B",  color: "#F59E0B" };
-  if (n >= 60) return { grade: "C",  color: "#F97316" };
-  if (n >= 50) return { grade: "D",  color: "#EF4444" };
-  return             { grade: "E",  color: "#991B1B" };
+const GRADE_HEX: Record<string, string> = { "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B" };
+function gradeFromScore(n: number, companyName?: string): { grade: string; color: string } {
+  const grade = resolveGradeForScore(n, companyName);
+  return { grade, color: GRADE_HEX[grade] ?? "#6B7280" };
 }
 
 // ─── Company units (mirrors CalibrationAdjustment) ────────────────────────────
@@ -58,57 +50,14 @@ const COMPANY_UNITS: CompanyUnit[] = [
   { id: "8", name: "PT Pulau Sambu (Kuala Enok)", code: "PSKE",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
 ];
 
-// ─── Seeded grade distribution per unit ──────────────────────────────────────
+// ─── Grade distribution (live) ──────────────────────────────────────
 
 const GRADE_KEYS = ["A+","A","B","C","D","E"];
 const GRADE_COLORS: Record<string, string> = {
   "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B",
 };
 
-function getGradeDist(unitId: string, totalHC: number) {
-  const seed = h16(unitId);
-  const props = [
-    seededInt(seed ^ 0x1, 4, 7),   // A+ ~5%
-    seededInt(seed ^ 0x2, 13, 18), // A  ~15%
-    seededInt(seed ^ 0x3, 38, 45), // B  ~40%
-    seededInt(seed ^ 0x4, 23, 28), // C  ~25%
-    seededInt(seed ^ 0x5, 8, 12),  // D  ~10%
-    seededInt(seed ^ 0x6, 3, 6),   // E  ~5%
-  ];
-  const total = props.reduce((s, p) => s + p, 0);
-  return GRADE_KEYS.map((grade, i) => {
-    const pct = props[i] / total;
-    const aktual   = Math.round(totalHC * pct);
-    const setting  = Math.round(aktual + seededInt(h16(unitId + grade + "s"), -3, 3));
-    const proposed = aktual + seededInt(h16(unitId + grade + "p"), -2, 4);
-    return { grade, color: GRADE_COLORS[grade], setting: Math.max(0, setting), aktual, proposed: Math.max(0, proposed) };
-  });
-}
 
-// ─── Division defs for each unit (seeded from unit id) ───────────────────────
-
-const DIV_NAMES = ["Staff Management","Generals","Finance & Accounting","Logistic / Materials","Quality Management","Production","Utility & Supports"];
-const DEPT_BY_DIV: Record<string, string[]> = {
-  "Staff Management":     ["Sumber Daya Manusia","Umum & Administrasi"],
-  "Generals":             ["Legal & Compliance","Teknologi Informasi"],
-  "Finance & Accounting": ["Keuangan","Akuntansi","Pajak & Audit"],
-  "Logistic / Materials": ["Warehouse & Inventory","Purchasing"],
-  "Quality Management":   ["Quality Control","Quality Assurance"],
-  "Production":           ["Produksi A","Produksi B"],
-  "Utility & Supports":   ["Maintenance","Utilitas & Energi"],
-};
-const POSITIONS = ["Kepala Divisi","Kepala Departemen","Kepala Bagian","Pengawas","Operasional"];
-const FIRST_NAMES = ["Budi","Siti","Ahmad","Dewi","Eko","Fitri","Gunawan","Heni","Irfan","Joko","Kartika","Lukman","Maya","Nugroho","Purnomo","Rudi","Sri","Teguh","Wahyu","Yanto","Arif","Bagas","Cahya","Dian","Endra","Fajar","Gita","Hadi","Indra","Jeni","Kiki","Lina"];
-const LAST_NAMES  = ["Santoso","Rahayu","Fauzi","Lestari","Prasetyo","Handayani","Wibowo","Kurniawati","Hidayat","Susilo","Hakim","Sari","Wicaksono","Hermawan","Wahyuni","Wijaya","Rahman","Nugroho","Kusuma","Pertiwi"];
-
-const GRADE_BAND_PROPS = [
-  { lo: 91, hi: 98, pct: 0.05 },
-  { lo: 80, hi: 90, pct: 0.15 },
-  { lo: 70, hi: 79, pct: 0.40 },
-  { lo: 60, hi: 69, pct: 0.25 },
-  { lo: 50, hi: 59, pct: 0.10 },
-  { lo: 35, hi: 49, pct: 0.05 },
-];
 const GRADE_ORDER = ["E", "D", "C", "B", "A", "A+"];
 
 type EmpRow = {
@@ -128,9 +77,9 @@ function generateEmployees(unitId: string, _totalHC: number): EmpRow[] {
 
   return liveEmps.map((e) => {
     const score = e.totalScore;
-    const { grade: cg, color: cc } = gradeFromScore(score);
+    const { grade: cg, color: cc } = gradeFromScore(score, unitName || e.companyUnit);
     const pScore = adjScores[e.id] ?? adjScores[`emp-${e.id}`] ?? score;
-    const { grade: pg, color: pc } = gradeFromScore(pScore);
+    const { grade: pg, color: pc } = gradeFromScore(pScore, unitName || e.companyUnit);
     const statusVal: EmpRow["status"] =
       GRADE_ORDER.indexOf(pg) > GRADE_ORDER.indexOf(cg)
         ? "Upgraded"
@@ -153,56 +102,6 @@ function generateEmployees(unitId: string, _totalHC: number): EmpRow[] {
       justification: adjComments[e.id] ?? adjComments[`emp-${e.id}`] ?? "",
     };
   });
-}
-function _unusedGenerateEmployees(unitId: string, totalHC: number): EmpRow[] {
-  const rows: EmpRow[] = [];
-  const divs = DIV_NAMES;
-
-  for (let i = 0; i < Math.min(totalHC, 60); i++) {
-    const s    = h16(unitId + String(i));
-    const div  = divs[s % divs.length];
-    const depts = DEPT_BY_DIV[div] ?? ["General"];
-    const dept = depts[(s ^ 0x3) % depts.length];
-    const pos  = POSITIONS[Math.min(Math.floor(i / 10), POSITIONS.length - 1)];
-    const band = GRADE_BAND_PROPS[seededInt(s ^ 0x5, 0, GRADE_BAND_PROPS.length - 1)];
-    const score = seededInt(s ^ 0x6, band.lo, band.hi);
-    const { grade: cg, color: cc } = gradeFromScore(score);
-
-    const shift = seededInt(s ^ 0x7, 0, 9);
-    let pScore = score;
-    if (shift === 0) pScore = Math.min(score + seededInt(s ^ 0x8, 3, 8), 99);
-    if (shift === 9) pScore = Math.max(score - seededInt(s ^ 0x9, 3, 6), 30);
-    const { grade: pg, color: pc } = gradeFromScore(pScore);
-
-    const statusVal: EmpRow["status"] =
-      GRADE_ORDER.indexOf(pg) > GRADE_ORDER.indexOf(cg) ? "Upgraded" :
-      GRADE_ORDER.indexOf(pg) < GRADE_ORDER.indexOf(cg) ? "Downgraded" : "No Change";
-
-    const fn = FIRST_NAMES[(s + i * 3) % FIRST_NAMES.length];
-    const ln = LAST_NAMES[(s + i * 7) % LAST_NAMES.length];
-    const empNo = String(parseInt(unitId) * 100 + i + 1).padStart(3, "0");
-
-    rows.push({
-      id: `E${empNo}`,
-      name: `${fn} ${ln}`,
-      division: div,
-      department: dept,
-      position: pos,
-      currentScore: score,
-      currentGrade: cg,
-      currentColor: cc,
-      proposedScore: pScore,
-      proposedGrade: pg,
-      proposedColor: pc,
-      status: statusVal,
-      justification: statusVal === "Upgraded"
-        ? "Consistent performance improvement across all PA modules"
-        : statusVal === "Downgraded"
-        ? "Below target KPI, open RCA items in H2 2026"
-        : "",
-    });
-  }
-  return rows;
 }
 
 function getDivisionSummary(emps: EmpRow[]) {

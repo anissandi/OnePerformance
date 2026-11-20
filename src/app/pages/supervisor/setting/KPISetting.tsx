@@ -23,7 +23,7 @@ import {
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
 import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, syncToSupabase, uploadEvidenceFileToSupabase } from "../../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../../store/notificationStore";
-import { cancelTargetEditPhase1, getTargetEditRequestForEmployee, KPI_TARGET_EDIT_EVENT, submitTargetEditPhase1, submitTargetEditPhase2, type TargetEditAttachment } from "../../../store/kpiTargetEditStore";
+import { cancelTargetEditPhase1, getTargetEditRequestForEmployee, KPI_TARGET_EDIT_EVENT, submitTargetEditPhase1, submitTargetEditPhase2, resolveEditRequestApprovers, resolveTargetEditPhase1Approver, resolveTargetEditPhase2Chain, type TargetEditAttachment } from "../../../store/kpiTargetEditStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
@@ -1255,12 +1255,10 @@ function SuccessModal({ onClose, validateMode = false }: { onClose: () => void; 
 
 // ─── Edit Request Modals ─────────────────────────────────────────────────────
 
-const EDIT_APPROVERS = [
-  { label: "Approver 1", name: "Ahmad Fauzi",  role: "Supervisor / Atasan Langsung" },
-  { label: "Approver 2", name: "Dewi Rahayu", role: "HR Manager" },
-];
 
-function EditRequestModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: (reason: string) => void }) {
+function EditRequestModal({ onCancel, onConfirm, owner }: { onCancel: () => void; onConfirm: (reason: string) => void; owner?: ManagedUser }) {
+  const resolvedEditApprovers = resolveEditRequestApprovers(owner);
+  const EDIT_APPROVERS = resolvedEditApprovers.length > 0 ? resolvedEditApprovers : [{ label: "Approver", name: "Belum ada approver terdaftar", role: "Reg No AP1/AP2 kosong — hubungi HR ICF" }];
   const [reason, setReason] = useState("");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -1337,7 +1335,9 @@ function EditRequestModal({ onCancel, onConfirm }: { onCancel: () => void; onCon
   );
 }
 
-function EditRequestSuccessModal({ onClose }: { onClose: () => void }) {
+function EditRequestSuccessModal({ onClose, owner }: { onClose: () => void; owner?: ManagedUser }) {
+  const resolvedEditApprovers = resolveEditRequestApprovers(owner);
+  const EDIT_APPROVERS = resolvedEditApprovers.length > 0 ? resolvedEditApprovers : [{ label: "Approver", name: "Belum ada approver terdaftar", role: "Reg No AP1/AP2 kosong — hubungi HR ICF" }];
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center">
@@ -1363,16 +1363,7 @@ function EditRequestSuccessModal({ onClose }: { onClose: () => void }) {
 
 const CURRENT_MONTH_IDX = new Date().getMonth(); // 6 = July 2026
 
-// Phase 1: single approver for the Edit Request itself
-const TARGET_EDIT_REQUEST_APPROVER = { name: "HR ICF", role: "HR ICF", label: "Approver" };
 
-// Phase 2: 4-layer approval after user submits the edited target
-const TARGET_EDIT_APPROVERS = [
-  { label: "Approver 1", name: "Ahmad Fauzi",     role: "Supervisor / Atasan Langsung" },
-  { label: "Approver 2", name: "Dewi Rahayu",     role: "HR Manager"                   },
-  { label: "Approver 3", name: "Made Astanawa",   role: "General Manager"              },
-  { label: "Validate",   name: "HR ICF",          role: "HR ICF"                       },
-];
 
 const TARGET_EDIT_CATEGORIES = ["Faktor Internal", "Faktor Eksternal", "Other"] as const;
 
@@ -1398,11 +1389,15 @@ function kpiSectionText(section: string): string {
   return palette[idx];
 }
 
-function EditTargetRequestModal({ items, onCancel, onConfirm }: {
+function EditTargetRequestModal({ items, onCancel, onConfirm, owner }: {
+  owner?: ManagedUser;
   items: KPISetting[];
+
   onCancel: () => void;
   onConfirm: (category: string, reason: string, files: File[], selectedKpis: string[]) => void;
 }) {
+  const TARGET_EDIT_REQUEST_APPROVER = resolveTargetEditPhase1Approver();
+  const TARGET_EDIT_APPROVERS = resolveTargetEditPhase2Chain(owner);
   const [selectedKpis, setSelectedKpis] = useState<string[]>([]);
   const [category, setCategory] = useState("");
   const [reason, setReason] = useState("");
@@ -1485,7 +1480,7 @@ function EditTargetRequestModal({ items, onCancel, onConfirm }: {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[10px] font-bold text-blue-700">Fase 2 — Submit Target yang Diedit</p>
-                <p className="text-[10px] text-blue-500">4 layer approval (Approver 1 → 2 → GM → Validate)</p>
+                <p className="text-[10px] text-blue-500">{TARGET_EDIT_APPROVERS.map((a) => a.label).join(" → ")}</p>
               </div>
             </div>
 
@@ -1618,6 +1613,7 @@ function EditTargetRequestModal({ items, onCancel, onConfirm }: {
 }
 
 function EditTargetSuccessModal({ onClose }: { onClose: () => void }) {
+  const TARGET_EDIT_REQUEST_APPROVER = resolveTargetEditPhase1Approver();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center">
@@ -1692,6 +1688,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
   onClose: () => void;
   onSubmitted?: () => void;
 }) {
+  const TARGET_EDIT_APPROVERS = resolveTargetEditPhase2Chain(ownerUser);
   // Show only selected KPIs when a selection exists; otherwise show all
   const visibleItems = selectedKpiIds && selectedKpiIds.length > 0
     ? items.filter((i) => selectedKpiIds.includes(i.id))
@@ -1965,7 +1962,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
                       <div className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 ${isValidate ? "bg-emerald-500" : "bg-[#1A284F]"}`}>
                         {isValidate ? "✓" : i + 1}
                       </div>
-                      <span>{a.label === "Approver 3" ? "GM" : a.label}</span>
+                      <span>{a.label}</span>
                     </div>
                   </React.Fragment>
                 );
@@ -7017,16 +7014,16 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         </div>
       )}
       {showEditRequest && (
-        <EditRequestModal
+        <EditRequestModal owner={effectiveOwner}
           onCancel={() => setShowEditRequest(false)}
           onConfirm={() => { setShowEditRequest(false); setShowEditRequestSuccess(true); }}
         />
       )}
       {showEditRequestSuccess && (
-        <EditRequestSuccessModal onClose={() => { setShowEditRequestSuccess(false); setPendingEditRequest(true); }} />
+        <EditRequestSuccessModal owner={effectiveOwner} onClose={() => { setShowEditRequestSuccess(false); setPendingEditRequest(true); }} />
       )}
       {showTargetEditRequest && (
-        <EditTargetRequestModal
+        <EditTargetRequestModal owner={effectiveOwner}
           items={items}
           onCancel={() => setShowTargetEditRequest(false)}
           onConfirm={async (cat, reason, files, kpis) => {

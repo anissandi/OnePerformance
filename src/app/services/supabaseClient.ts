@@ -896,6 +896,33 @@ export function mergePasswordSecurityMapsClient<T extends Record<string, any>>(
   return out;
 }
 
+async function mirrorKvStateToDedicatedTable(stateKey: string, stateValue: unknown): Promise<void> {
+  try {
+    if (!stateKey || stateValue === undefined || stateValue === null) return;
+    if (stateKey === "pa_menu_configs_v1" && Array.isArray(stateValue)) {
+      await syncDirectToPostgrest({ kind: "menu-configs", menus: stateValue });
+    } else if (stateKey === "pa_cycle_mgmt_v1") {
+      await syncDirectToPostgrest({ kind: "cycle-config", cycleId: "2026", data: stateValue });
+    } else if (stateKey === "pa_data_sync_items_v1" && Array.isArray(stateValue)) {
+      await syncDirectToPostgrest({ kind: "data-sync", items: stateValue });
+    } else if (stateKey === "pa_year_end_verifications" || stateKey === "year_end_workflow_2026") {
+      await syncDirectToPostgrest({ kind: "year-end-verification", period: "2026", state: stateValue });
+    } else if (stateKey === "pa_access_permissions_v3" && typeof stateValue === "object") {
+      for (const [role, permissions] of Object.entries(stateValue as Record<string, unknown>)) {
+        await syncDirectToPostgrest({ kind: "role-permissions", role, permissions });
+      }
+    } else if (stateKey === "pa_open_lock_requests_v1" && Array.isArray(stateValue)) {
+      for (const req of stateValue.slice(0, 20)) {
+        if (req && typeof req === "object" && "id" in req) {
+          await syncDirectToPostgrest({ kind: "open-lock", request: req });
+        }
+      }
+    }
+  } catch {
+    // non-blocking best-effort mirror
+  }
+}
+
 export async function syncToSupabase(payload: Record<string, unknown>): Promise<void> {
   try {
     if (payload.audit && typeof payload.audit === "object") {
@@ -915,6 +942,9 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
       });
     }
     const kind = String(payload.kind ?? "");
+    if (kind === "kv-state" && payload.stateKey) {
+      void mirrorKvStateToDedicatedTable(String(payload.stateKey), payload.stateValue);
+    }
     const isCriticalDualWrite =
       kind === "kv-map-merge" ||
       kind === "user-upsert" ||
@@ -1261,6 +1291,48 @@ export function appendLocalAuditLog(entry: StoredAuditLogEntry): void {
     const next = pruneAuditLogsOlderThan30Days([entry, ...existing]).slice(0, 200);
     safeSetLocalJson(AUDIT_LIST_KEY, next);
     window.dispatchEvent(new Event("pa-audit-updated"));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Ambil Audit Trail 30 hari terakhir dari server (tabel pa_audit_trail).
+ * Retensi 30 hari dijaga di server (migrasi 202611200001_audit_trail_retention_30d.sql).
+ */
+export async function fetchServerAuditLogs(days = 30, limit = 5000): Promise<StoredAuditLogEntry[]> {
+  const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const rows = await restSelect<Record<string, unknown>>(
+    "pa_audit_trail",
+    `select=*&created_at=gte.${encodeURIComponent(sinceIso)}&order=id.desc&limit=${limit}`,
+  );
+  return rows.map((r) => ({
+    id: `S-${String(r.id ?? "")}`,
+    timestamp: String(r.timestamp ?? String(r.created_at ?? "").slice(0, 19).replace("T", " ")),
+    userId: String(r.user_id ?? ""),
+    userName: String(r.user_name ?? ""),
+    role: String(r.role ?? ""),
+    action: String(r.action ?? "Update") as StoredAuditLogEntry["action"],
+    module: String(r.module ?? ""),
+    subModule: String(r.sub_module ?? "-"),
+    description: String(r.description ?? ""),
+    ipAddress: "",
+    status: (String(r.status ?? "Success") === "Failed" ? "Failed" : "Success") as StoredAuditLogEntry["status"],
+  }));
+}
+
+/** Panggil purge retensi 30 hari di server (opsional; server juga menjalankannya otomatis). */
+export async function purgeServerAuditLogs(days = 30): Promise<void> {
+  try {
+    await fetch(`${SUPABASE_REST_BASE}/rpc/pa_purge_audit_trail`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ retention_days: days }),
+    });
   } catch {
     // ignore
   }
@@ -2505,7 +2577,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         if (!rawEmp || items.length === 0 || tab !== "personal") continue;
         const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
         const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp;
-        if (!byEmp[normId]) byEmp[normId] = items;
+        byEmp[normId] = items;
       }
       safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
     }
@@ -2523,7 +2595,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const scopeId = String(row.id ?? "").trim();
         const items = Array.isArray(row.items) ? row.items : [];
         if (!scopeId || items.length === 0) continue;
-        if (!byScope[scopeId]) byScope[scopeId] = items;
+        byScope[scopeId] = items;
       }
       safeSetLocalJson("pa_kpi_business_by_scope_v1", byScope);
     }

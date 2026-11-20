@@ -19,6 +19,17 @@ Read and always follow the instructions in the [project guidelines](guidelines/G
 
 ---
 
+## Aturan Wajib Persiapan Live Production (Selalu Dibaca Sebelum Eksekusi)
+
+1. **Tanpa Hardcode & Tanpa Penyimpanan `localStorage` Sementara**:
+   - Setiap request perubahan, penambahan, atau perbaikan dilarang menggunakan data *hardcode* (nama dummy, nilai statis, atau konstanta contoh) maupun penyimpanan `localStorage` sementara sebagai sumber utama.
+2. **Terhubung ke Backend & Database**:
+   - Setiap request perubahan, penambahan, atau perbaikan wajib dihubungkan ke backend (`api/pa-sync.js`, Supabase Edge Function) dan database Supabase (tabel `pa_*` / Storage `pa-evidence`) apabila memiliki kebutuhan atau keterkaitan data persisten.
+3. **Analisis & Implementasi Tepat Tanpa Kendala**:
+   - Pastikan setiap perubahan dianalisis secara menyeluruh (alur data, tipe, validasi, dan dampak lintas modul) sebelum diimplementasikan agar sistem berjalan lancar menuju *Live Production*.
+
+---
+
 ## Aturan & Referensi Proses Sistem Performance Appraisal (PA) — End-to-End
 
 Seluruh pengembangan dan logika bisnis pada sistem Performance Appraisal (PA) wajib mengacu pada aturan proses dari awal sampai akhir berikut ini:

@@ -428,6 +428,173 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: delOk });
       }
 
+      if (kind === "kpi-setting" && body.docKey) {
+        const r = await pgRest(cfg, "pa_kpi_settings?on_conflict=doc_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            doc_key: String(body.docKey),
+            employee_id: String(body.employeeId ?? "E002"),
+            company_unit: String(body.companyUnit ?? "PT RSUP (Industry)"),
+            tab: String(body.tab ?? "personal"),
+            period: String(body.period ?? "2026"),
+            items: body.items ?? [],
+            status: String(body.status ?? "Submitted"),
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "kpi-tracking" && body.docKey) {
+        const r = await pgRest(cfg, "pa_kpi_trackings?on_conflict=doc_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            doc_key: String(body.docKey),
+            employee_id: String(body.employeeId ?? "E002"),
+            period: String(body.period ?? "2026"),
+            months: body.months ?? [],
+            cells_map: body.cellsMap ?? {},
+            monthly_notes: body.monthlyNotes ?? {},
+            comments: body.comments ?? {},
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "kpi-business" && Array.isArray(body.items)) {
+        const r = await pgRest(cfg, "pa_kpi_business?on_conflict=id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            id: String(body.id ?? "corporate-2026"),
+            period: String(body.period ?? "2026"),
+            items: body.items ?? [],
+            status: String(body.status ?? "Submitted"),
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "smart-goals") {
+        const r = await pgRest(cfg, "pa_smart_goals?on_conflict=employee_id,period", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            employee_id: String(body.employeeId ?? "E002"),
+            period: String(body.period ?? "2026"),
+            goals: body.goals ?? [],
+            checkin_entries: body.checkinEntries ?? [],
+            approval_decisions: body.approvalDecisions ?? [],
+            status: String(body.status ?? "Submitted"),
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "appraisal-form") {
+        const r = await pgRest(cfg, "pa_appraisal_forms?on_conflict=employee_id,period", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            employee_id: String(body.employeeId ?? "E002"),
+            period: String(body.period ?? "2026"),
+            self_ratings: body.selfRatings ?? null,
+            approver_ratings: body.approverRatings ?? [],
+            status: String(body.status ?? "Submitted"),
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "managerial-skill") {
+        const r = await pgRest(cfg, "pa_managerial_skills?on_conflict=employee_id,period", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            employee_id: String(body.employeeId ?? "E002"),
+            period: String(body.period ?? "2026"),
+            self_ratings: body.selfRatings ?? null,
+            approver_ratings: body.approverRatings ?? [],
+            status: String(body.status ?? "Submitted"),
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "project-records" && body.employeeId) {
+        const r = await pgRest(cfg, "pa_project_records?on_conflict=employee_id,period", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            employee_id: String(body.employeeId),
+            period: String(body.period ?? "2026"),
+            file_name: String(body.fileName ?? "Project_ICF_2026.xlsx"),
+            submitted: Boolean(body.submitted ?? true),
+            submitted_date: String(body.submittedDate ?? now.slice(0, 10)),
+            rows: body.rows ?? [],
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "rca-submission" && body.submission) {
+        const sub = body.submission;
+        const r = await pgRest(cfg, "pa_rca_submissions?on_conflict=doc_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            doc_key: String(sub.key ?? sub.id),
+            employee_id: String(sub.employeeId ?? "E002"),
+            period: String(sub.year ?? "2026"),
+            kpi_indicator: String(sub.kpiIndicator ?? ""),
+            periode: String(sub.periode ?? ""),
+            submission: sub,
+            approval_decisions: body.approvalDecisions ?? [],
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "open-lock" && body.request) {
+        const reqObj = body.request;
+        const r = await pgRest(cfg, "pa_open_lock_requests?on_conflict=id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            id: String(reqObj.id),
+            employee_id: String(reqObj.employeeId ?? "E002"),
+            employee_name: String(reqObj.employeeName ?? ""),
+            company_unit: String(reqObj.companyUnit ?? "PT RSUP (Industry)"),
+            divisi: String(reqObj.divisi ?? ""),
+            departemen: String(reqObj.departemen ?? ""),
+            bagian: String(reqObj.bagian ?? ""),
+            posisi: String(reqObj.posisi ?? ""),
+            module: String(reqObj.module ?? "KPI Tracking"),
+            period: String(reqObj.period ?? "2026"),
+            original_deadline: String(reqObj.originalDeadline ?? "2026-06-30"),
+            submitted_at: String(reqObj.submittedAt ?? now.slice(0, 10)),
+            reason: String(reqObj.reason ?? ""),
+            status: String(reqObj.status ?? "pending"),
+            approved_until: reqObj.approvedUntil ?? null,
+            approved_at: reqObj.approvedAt ?? null,
+            approval_note: reqObj.approvalNote ?? null,
+            rejected_at: reqObj.rejectedAt ?? null,
+            decided_by: reqObj.decidedBy ?? null,
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
       return res.status(200).json({ ok: false, reason: "UNHANDLED_KIND" });
     }
 

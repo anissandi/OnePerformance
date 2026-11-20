@@ -668,17 +668,20 @@ function ResultsView({
   statusLabel,
   statusTone,
   wfRecord,
+  onExport,
 }: {
   goals: SmartGoal[];
   statusLabel: string;
   statusTone: "validated" | "in_progress" | "revision" | "submitted";
   wfRecord?: WorkflowRecord;
+  onExport?: () => void;
 }) {
   void wfRecord;
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h3 className="text-sm font-bold text-[#1A284F]">SMART Goals — 2026 Performance Appraisal</h3>
+        {onExport && <ExportImportButton onExport={onExport} size="sm" />}
       </div>
 
       <SmartTable goals={goals} editable={false} />
@@ -1191,6 +1194,7 @@ function SMARTGoalsWorkspace({
           statusLabel={statusLabel}
           statusTone={statusTone}
           wfRecord={wfRecState}
+          onExport={handleExport}
         />
       )}
 

@@ -1,3 +1,4 @@
+import { resolveGradeForScore } from "../pages/shared/scoringWeightStore";
 import { TrendingUp, Lightbulb, ClipboardList, Briefcase, FolderKanban, MessageSquare } from "lucide-react";
 import React from "react";
 import {
@@ -42,13 +43,10 @@ export const GRADE_COLORS: Record<string, string> = {
 
 export const GRADE_ORDER = ["A+", "A", "B", "C", "D", "E"];
 
-export function gradeFromScore(n: number): { grade: string; color: string } {
-  if (n >= 90) return { grade: "A+", color: "#10B981" };
-  if (n >= 80) return { grade: "A",  color: "#3B82F6" };
-  if (n >= 70) return { grade: "B",  color: "#F59E0B" };
-  if (n >= 60) return { grade: "C",  color: "#F97316" };
-  if (n >= 50) return { grade: "D",  color: "#EF4444" };
-  return            { grade: "E",  color: "#991B1B" };
+const GRADE_HEX: Record<string, string> = { "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B" };
+export function gradeFromScore(n: number, companyName?: string): { grade: string; color: string } {
+  const grade = resolveGradeForScore(n, companyName);
+  return { grade, color: GRADE_HEX[grade] ?? "#6B7280" };
 }
 
 export function gradeColor(grade: string): string {
@@ -287,20 +285,20 @@ export function getLiveTransactionalEmployees(): Employee[] {
         ).toFixed(1),
       );
       const totalScore = typeof adjOverride === "number" && adjOverride > 0 ? adjOverride : computedScore;
-      const grade = totalScore > 0 ? gradeFromScore(totalScore).grade : "N/A";
+      const grade = totalScore > 0 ? gradeFromScore(totalScore, u.company).grade : "N/A";
 
       const joinYear = u.joinDate ? parseInt(u.joinDate.slice(0, 4), 10) : 2026;
       const tenureYrs = Math.max(0, 2026 - (Number.isFinite(joinYear) ? joinYear : 2026));
 
       const modules: ModuleScore[] = [
-        { name: "KPI", icon: React.createElement(TrendingUp, { className: "w-4 h-4" }), score: kpiScore, grade: kpiScore > 0 ? gradeFromScore(kpiScore).grade : "—", weight: Math.round(wKpi * 100) },
-        { name: "SMART Goals", icon: React.createElement(Lightbulb, { className: "w-4 h-4" }), score: sgScore, grade: sgScore > 0 ? gradeFromScore(sgScore).grade : "—", weight: Math.round(wSg * 100) },
-        { name: "Appraisal Form (A)", icon: React.createElement(ClipboardList, { className: "w-4 h-4" }), score: afScore, grade: afScore > 0 ? gradeFromScore(afScore).grade : "—", weight: Math.round((wAf * 100) / 3) },
-        { name: "Appraisal Form (B)", icon: React.createElement(ClipboardList, { className: "w-4 h-4" }), score: afScore, grade: afScore > 0 ? gradeFromScore(afScore).grade : "—", weight: Math.round((wAf * 100) / 3) },
-        { name: "Appraisal Form (C)", icon: React.createElement(ClipboardList, { className: "w-4 h-4" }), score: afScore, grade: afScore > 0 ? gradeFromScore(afScore).grade : "—", weight: Math.round((wAf * 100) / 3) },
-        { name: "Project Outside Job Scope", icon: React.createElement(FolderKanban, { className: "w-4 h-4" }), score: prjScore, grade: prjScore > 0 ? gradeFromScore(prjScore).grade : "—", weight: Math.round(wPrj * 100) },
-        ...(hasManagerial ? [{ name: "Managerial Skill", icon: React.createElement(Briefcase, { className: "w-4 h-4" }), score: msScore, grade: msScore > 0 ? gradeFromScore(msScore).grade : "—", weight: Math.round(wMs * 100) }] : []),
-        ...(hasInterview ? [{ name: "Management Interview", icon: React.createElement(MessageSquare, { className: "w-4 h-4" }), score: miScore, grade: miScore > 0 ? gradeFromScore(miScore).grade : "—", weight: Math.round(wMi * 100) }] : []),
+        { name: "KPI", icon: React.createElement(TrendingUp, { className: "w-4 h-4" }), score: kpiScore, grade: kpiScore > 0 ? gradeFromScore(kpiScore, u.company).grade : "—", weight: Math.round(wKpi * 100) },
+        { name: "SMART Goals", icon: React.createElement(Lightbulb, { className: "w-4 h-4" }), score: sgScore, grade: sgScore > 0 ? gradeFromScore(sgScore, u.company).grade : "—", weight: Math.round(wSg * 100) },
+        { name: "Appraisal Form (A)", icon: React.createElement(ClipboardList, { className: "w-4 h-4" }), score: afScore, grade: afScore > 0 ? gradeFromScore(afScore, u.company).grade : "—", weight: Math.round((wAf * 100) / 3) },
+        { name: "Appraisal Form (B)", icon: React.createElement(ClipboardList, { className: "w-4 h-4" }), score: afScore, grade: afScore > 0 ? gradeFromScore(afScore, u.company).grade : "—", weight: Math.round((wAf * 100) / 3) },
+        { name: "Appraisal Form (C)", icon: React.createElement(ClipboardList, { className: "w-4 h-4" }), score: afScore, grade: afScore > 0 ? gradeFromScore(afScore, u.company).grade : "—", weight: Math.round((wAf * 100) / 3) },
+        { name: "Project Outside Job Scope", icon: React.createElement(FolderKanban, { className: "w-4 h-4" }), score: prjScore, grade: prjScore > 0 ? gradeFromScore(prjScore, u.company).grade : "—", weight: Math.round(wPrj * 100) },
+        ...(hasManagerial ? [{ name: "Managerial Skill", icon: React.createElement(Briefcase, { className: "w-4 h-4" }), score: msScore, grade: msScore > 0 ? gradeFromScore(msScore, u.company).grade : "—", weight: Math.round(wMs * 100) }] : []),
+        ...(hasInterview ? [{ name: "Management Interview", icon: React.createElement(MessageSquare, { className: "w-4 h-4" }), score: miScore, grade: miScore > 0 ? gradeFromScore(miScore, u.company).grade : "—", weight: Math.round(wMi * 100) }] : []),
       ];
 
       const latestWorkflowDate = empWorkflows
@@ -330,17 +328,17 @@ export function getLiveTransactionalEmployees(): Employee[] {
         totalScore,
         grade,
         modules,
-        kpi: { score: kpiScore, grade: kpiScore > 0 ? gradeFromScore(kpiScore).grade : "—" },
-        smartGoals: { score: sgScore, grade: sgScore > 0 ? gradeFromScore(sgScore).grade : "—" },
-        formA: { score: afScore, grade: afScore > 0 ? gradeFromScore(afScore).grade : "—" },
-        formB: { score: afScore, grade: afScore > 0 ? gradeFromScore(afScore).grade : "—" },
-        formC: { score: afScore, grade: afScore > 0 ? gradeFromScore(afScore).grade : "—" },
-        project: { score: prjScore, grade: prjScore > 0 ? gradeFromScore(prjScore).grade : "—" },
-        managerialSkill: hasManagerial ? { score: msScore, grade: msScore > 0 ? gradeFromScore(msScore).grade : "—" } : null,
+        kpi: { score: kpiScore, grade: kpiScore > 0 ? gradeFromScore(kpiScore, u.company).grade : "—" },
+        smartGoals: { score: sgScore, grade: sgScore > 0 ? gradeFromScore(sgScore, u.company).grade : "—" },
+        formA: { score: afScore, grade: afScore > 0 ? gradeFromScore(afScore, u.company).grade : "—" },
+        formB: { score: afScore, grade: afScore > 0 ? gradeFromScore(afScore, u.company).grade : "—" },
+        formC: { score: afScore, grade: afScore > 0 ? gradeFromScore(afScore, u.company).grade : "—" },
+        project: { score: prjScore, grade: prjScore > 0 ? gradeFromScore(prjScore, u.company).grade : "—" },
+        managerialSkill: hasManagerial ? { score: msScore, grade: msScore > 0 ? gradeFromScore(msScore, u.company).grade : "—" } : null,
         managementInterview: hasInterview
           ? {
               score: miScore,
-              grade: miScore > 0 ? gradeFromScore(miScore).grade : "—",
+              grade: miScore > 0 ? gradeFromScore(miScore, u.company).grade : "—",
               weightedScore: miScore > 0 ? miWeightedScore : undefined,
               weightPct: Math.round(wMi * 100),
             }

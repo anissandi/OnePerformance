@@ -614,3 +614,56 @@ export function getPendingTargetEditRequestsForViewer(
   }
   return out;
 }
+
+export interface ApproverChainEntry {
+  label: string;
+  name: string;
+  role: string;
+  employeeId?: string;
+}
+
+function describeUser(u: ManagedUser): string {
+  return u.position?.trim() || String(u.role || "");
+}
+
+/**
+ * Approver Edit [KPI] Request (Approver 1 & Approver 2) diambil dari Reg No AP1 / Reg No AP2 owner.
+ * Bila AP1 & AP2 orang yang sama, hanya ditampilkan satu kali.
+ */
+export function resolveEditRequestApprovers(owner?: ManagedUser): ApproverChainEntry[] {
+  const users = loadManagedUsers();
+  const target = owner ?? getActiveUser();
+  const ap1 = findUserByRef(users, target.regNoAp1);
+  const ap2 = findUserByRef(users, target.regNoAp2);
+  const out: ApproverChainEntry[] = [];
+  if (ap1) out.push({ label: "Approver 1", name: ap1.name, role: describeUser(ap1), employeeId: ap1.employeeId });
+  if (ap2 && (!ap1 || normalizeEmployeeId(ap2.employeeId) !== normalizeEmployeeId(ap1.employeeId))) {
+    out.push({ label: "Approver 2", name: ap2.name, role: describeUser(ap2), employeeId: ap2.employeeId });
+  }
+  return out;
+}
+
+/** Approver Fase 1 Edit [Target] Request: Role HR ICF. */
+export function resolveTargetEditPhase1Approver(): ApproverChainEntry {
+  const users = loadManagedUsers();
+  const ids = findHrIcfIds(users);
+  const first = users.find((u) => ids.includes(u.employeeId));
+  return { label: "Approver", name: first?.name ?? "HR ICF", role: "HR ICF", employeeId: first?.employeeId };
+}
+
+/** Rantai Fase 2 Edit [Target] Request: Approver 1 -> Approver 2 -> GM (Unit Usaha) -> Validate (HR ICF). */
+export function resolveTargetEditPhase2Chain(owner?: ManagedUser): ApproverChainEntry[] {
+  const users = loadManagedUsers();
+  const target = owner ?? getActiveUser();
+  const chain: ApproverChainEntry[] = [...resolveEditRequestApprovers(target)];
+  const usedIds = new Set(chain.map((c) => normalizeEmployeeId(c.employeeId ?? "")));
+  const gms = findUnitGmUsers(users, target.company, target.employeeId).filter(
+    (g) => !usedIds.has(normalizeEmployeeId(g.employeeId)),
+  );
+  if (gms.length > 0) {
+    chain.push({ label: "GM", name: gms.map((g) => g.name).join(", "), role: `General Manager (${target.company})`, employeeId: gms[0].employeeId });
+  }
+  const validator = resolveTargetEditPhase1Approver();
+  chain.push({ label: "Validate", name: validator.name, role: "HR ICF", employeeId: validator.employeeId });
+  return chain;
+}

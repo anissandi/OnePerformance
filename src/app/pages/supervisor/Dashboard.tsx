@@ -1,3 +1,4 @@
+import { resolveGradeForScore } from "../shared/scoringWeightStore";
 // @refresh reset
 import { KpiMonthlyApprovalBar } from "../../components/KpiMonthlyApprovalBar";
 import React, { useState, useMemo, useEffect } from "react";
@@ -1137,9 +1138,8 @@ function ModuleApprovalPopup({ onClose }: { onClose: () => void }) {
   );
 }
 
-function scoreToGrade(s: number) {
-  if (s >= 90) return "A+"; if (s >= 80) return "A"; if (s >= 70) return "B";
-  if (s >= 60) return "C"; if (s >= 50) return "D"; return "E";
+function scoreToGrade(s: number, companyName?: string) {
+  return resolveGradeForScore(s, companyName);
 }
 
 function AppraisalSummaryCards() {

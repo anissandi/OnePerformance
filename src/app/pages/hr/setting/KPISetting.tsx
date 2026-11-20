@@ -689,6 +689,22 @@ export function HRSettingKPIPage() {
     });
     setBizRefreshTick((t) => t + 1);
     window.dispatchEvent(new Event("appraisal-updated"));
+    if (submittedItems.length > 0) {
+      const statusText = mergedEntry.approved
+        ? "Validated"
+        : mergedEntry.stage === "revision"
+          ? "Revision"
+          : mergedEntry.directorApproved
+            ? "Approved by Director"
+            : "Submitted";
+      void syncToSupabase({
+        kind: "kpi-business",
+        id: scopeKey,
+        period: "2026",
+        items: submittedItems,
+        status: statusText,
+      });
+    }
   };
 
   const [pendingAction, setPendingAction] = useState<"approve" | "revision" | null>(null);
