@@ -957,33 +957,6 @@ function SMARTGoalsWorkspace({
     rowsOut.push(Array.from({ length: colCount }, () => ({ value: "" })));
 
     // Section Banner ACTION PLANS berwarna biru persis UI
-    const apBannerIdx = rowsOut.length;
-    rowsOut.push(
-      Array.from({ length: colCount }, (_, ci) => ({
-        value: ci === 0 ? "ACTION PLANS" : "",
-        style: { bg: "1565C0", fg: EXCEL_THEME.white, bold: true, align: "left", borderColor: "1565C0" },
-      })),
-    );
-    rowHeights[apBannerIdx] = 24;
-    merges.push({ sRow: apBannerIdx, sCol: 0, eRow: apBannerIdx, eCol: colCount - 1 });
-
-    const maxApCount = Math.max(1, ...exportGoals.map((g) => g.actionPlans.length));
-    for (let ai = 0; ai < maxApCount; ai++) {
-      const zebra = ai % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
-      const rIdx = rowsOut.length;
-      rowsOut.push([
-        {
-          value: `Action Plan ${ai + 1}`,
-          style: { bg: "F1F5F9", fg: EXCEL_THEME.headerNavyBg, bold: true, align: "left" },
-        },
-        ...exportGoals.map((g): StyledExcelCell => ({
-          value: g.actionPlans[ai]?.description ?? "",
-          style: { bg: zebra, fg: EXCEL_THEME.textDark, align: "left" },
-        })),
-      ]);
-      rowHeights[rIdx] = 26;
-    }
-
     exportStyledXLSX(`SMART_Goals_2026_${ownerUser.employeeId}.xlsx`, {
       sheetName: "SMART Goals",
       colWidths,

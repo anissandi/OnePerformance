@@ -815,8 +815,8 @@ const inputCls = "text-sm border border-gray-200 rounded-lg px-3 py-2 outline-no
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">{label}</label>
+    <div className="flex flex-col gap-1.5 rounded-xl bg-slate-50/70 border border-slate-200/80 p-3 focus-within:border-[#1A284F]/40 focus-within:bg-sky-50/30 transition-colors">
+      <label className="text-[11px] font-bold uppercase tracking-wide text-[#1A284F]/80">{label}</label>
       {children}
     </div>
   );
@@ -4305,6 +4305,8 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
     : ["Bulanan", "Triwulan", "Semesteran", "Tahunan"];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<KPISetting | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [pendingSwitchRow, setPendingSwitchRow] = useState<KPISetting | null>(null);
   const [targetEditItem, setTargetEditItem] = useState<KPISetting | null>(null);
   const [sectionLabelOverrides, setSectionLabelOverrides] = useState<Record<string, string>>({});
   const [editingSection, setEditingSection] = useState<string | null>(null);
@@ -4544,10 +4546,22 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
                   </div>
                 : <div className="flex items-center justify-center gap-1">
                     {onUpdateItem && (
-                      <button onClick={() => startEdit(item)} className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F]" title="Edit"><Edit3 className="w-3.5 h-3.5" /></button>
+                      <button
+                        onClick={() => {
+                          if (editingId && editingId !== item.id && draft) {
+                            setPendingSwitchRow(item);
+                          } else {
+                            startEdit(item);
+                          }
+                        }}
+                        className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F]"
+                        title="Edit"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
                     )}
                     {onDelete && (
-                      <button onClick={() => onDelete(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setDeleteConfirmId(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                     )}
                   </div>}
             </td>
@@ -4563,7 +4577,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
         <div className="flex items-center justify-between gap-3 px-4 py-2 bg-gray-50 border-b border-gray-200 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/5 border border-[#1A284F]/15 px-2.5 py-1 rounded-full">
-              <Edit3 className="w-3.5 h-3.5" /> {editable ? "Edit Mode" : "View Mode"}
+              <Edit3 className="w-3.5 h-3.5" /> {editable ? "Global Edit" : "View Mode"}
             </span>
             {displayControls}
           </div>

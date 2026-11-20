@@ -567,57 +567,6 @@ function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
         </table>
       </div>
 
-      {/* Action Plans section — collapsible per goal */}
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 mt-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Action Plans</span>
-          <div className="flex-1 border-t border-gray-200" />
-        </div>
-        {goals.map((goal) => {
-          const isOpen = openGoal === goal.id;
-          const apCount = goal.actionPlans.length;
-          return (
-            <div key={goal.id} className="border border-gray-200 rounded-xl overflow-hidden">
-              <button
-                onClick={() => setOpenGoal(isOpen ? null : goal.id)}
-                className="w-full flex items-center gap-3 px-4 py-3 bg-[#1A284F] text-left hover:bg-[#1e3060] transition-colors"
-              >
-                <span className="text-white text-sm font-bold flex-1">{goal.label}</span>
-                <span className="text-[10px] text-white/60 font-semibold">{apCount} Action Plan{apCount !== 1 ? "s" : ""}</span>
-                {isOpen ? <ChevronUp className="w-4 h-4 text-white/60 shrink-0" /> : <ChevronDown className="w-4 h-4 text-white/60 shrink-0" />}
-              </button>
-              {isOpen && (
-                <div className="p-4 bg-white">
-                  {apCount === 0 ? (
-                    <p className="text-xs text-gray-300 italic text-center py-4">Belum ada action plan.</p>
-                  ) : (
-                    <div className="overflow-x-auto rounded-xl border border-gray-200">
-                      <table className="w-full text-xs border-collapse">
-                        <thead>
-                          <tr>
-                            <th className="bg-[#1A284F] text-white text-center px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide w-12 border-r border-white/20">No</th>
-                            <th className="bg-[#1A284F] text-white text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide">Action Plan</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {goal.actionPlans.map((ap, idx) => (
-                            <tr key={ap.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
-                              <td className="border-t border-gray-100 border-r border-gray-100 px-3 py-2.5 text-center align-middle">
-                                <span className="w-5 h-5 rounded-full bg-[#1A284F]/10 text-[#1A284F] text-[9px] font-bold flex items-center justify-center mx-auto">{idx + 1}</span>
-                              </td>
-                              <td className="border-t border-gray-100 px-4 py-2.5 align-middle text-[11px] text-gray-700 leading-relaxed">{ap.description}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
