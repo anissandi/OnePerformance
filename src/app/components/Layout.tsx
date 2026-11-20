@@ -16,7 +16,7 @@ import {
 
 export function AppLayout() {
   const location = useLocation();
-  const { portalPath } = useAuthStore();
+  const { activeUser, portalPath } = useAuthStore();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [, setSessionTick] = useState(0);
 
@@ -139,7 +139,9 @@ export function AppLayout() {
               sidebarCollapsed={sidebarCollapsed}
               onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
             />}>
-        <Outlet />
+        <div key={activeUser.employeeId} className="contents">
+          <Outlet />
+        </div>
       </AppFrame>
     </LangProvider>
   );

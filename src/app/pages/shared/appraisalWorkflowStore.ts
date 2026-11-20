@@ -63,8 +63,10 @@ function read<T>(key: string, fallback: T): T {
   try { return JSON.parse(safeGetLocalRaw(key) ?? "null") ?? fallback; } catch { return fallback; }
 }
 export function normalizeEmployeeId(id: string) {
-  const number = id.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
-  return number ? `EMP-${number.padStart(3, "0")}` : id;
+  const trimmed = String(id ?? "").trim();
+  if (!trimmed) return "";
+  const number = trimmed.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+  return number ? `EMP-${number.padStart(3, "0")}` : trimmed.toUpperCase();
 }
 function keyFor(employeeId: string, module: string, phase: WorkflowRecord["phase"], year = "2026") {
   return `${normalizeEmployeeId(employeeId)}:${phase}:${module}:${year}`;

@@ -29,7 +29,7 @@ import { DelegatedWorkspaceBanner } from "../../../components/approval/Delegated
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../../components/ApproverNotesHistory";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
-import { Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers } from "lucide-react";
+import { AlertCircle, Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
 import ExportImportButton from "../../../components/ExportImportButton";
@@ -185,6 +185,8 @@ export interface KPISetting {
   _cascadeType?: "FC" | "PC" | "CC";
   /** ID baris sumber bila KPI ini hasil copy dari KPI (Group) / KPI (Unit) */
   copiedFromId?: string;
+  /** Penanda bahwa baris berasal dari Upload Excel sehingga divalidasi kesesuaian format standarnya secara live */
+  _uploadedCheck?: boolean;
 }
 
 // ─── Personal KPI data (existing SettingKPIPage data) ─────────────────────────
@@ -809,14 +811,41 @@ const PERSP_COLOR: Record<string, string> = {
 const W_NO = 52;
 const W_PERSP = 140;
 const W_KPI = 270;
-const inputCls = "text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] w-full";
+const W_AKSI = 88;
+const inputCls = "text-sm bg-white border border-slate-200/90 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] focus:ring-2 focus:ring-[#1A284F]/10 w-full shadow-2xs transition-all";
 
 // ─── Shared field wrapper ─────────────────────────────────────────────────────
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+type FieldTone = "indigo" | "sky" | "violet" | "emerald" | "amber" | "teal" | "rose";
+
+const FIELD_TONE_STYLES: Record<FieldTone, { wrap: string; dot: string; label: string }> = {
+  indigo:  { wrap: "bg-gradient-to-br from-indigo-50/70 via-white to-indigo-50/30 border-indigo-200/80 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-500/10", dot: "bg-indigo-500", label: "text-indigo-950/85" },
+  sky:     { wrap: "bg-gradient-to-br from-sky-50/70 via-white to-sky-50/30 border-sky-200/80 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-500/10", dot: "bg-sky-500", label: "text-sky-950/85" },
+  violet:  { wrap: "bg-gradient-to-br from-violet-50/65 via-white to-violet-50/25 border-violet-200/80 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-500/10", dot: "bg-violet-500", label: "text-violet-950/85" },
+  emerald: { wrap: "bg-gradient-to-br from-emerald-50/70 via-white to-emerald-50/25 border-emerald-200/80 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-500/10", dot: "bg-emerald-500", label: "text-emerald-950/85" },
+  amber:   { wrap: "bg-gradient-to-br from-amber-50/70 via-white to-amber-50/25 border-amber-200/80 focus-within:border-amber-400 focus-within:ring-2 focus-within:ring-amber-500/10", dot: "bg-amber-500", label: "text-amber-950/85" },
+  teal:    { wrap: "bg-gradient-to-br from-teal-50/70 via-white to-teal-50/25 border-teal-200/80 focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-500/10", dot: "bg-teal-500", label: "text-teal-950/85" },
+  rose:    { wrap: "bg-gradient-to-br from-rose-50/60 via-white to-rose-50/20 border-rose-200/80 focus-within:border-rose-400 focus-within:ring-2 focus-within:ring-rose-500/10", dot: "bg-rose-500", label: "text-rose-950/85" },
+};
+
+function inferFieldTone(label: string): FieldTone {
+  const l = label.toLowerCase();
+  if (l.includes("bobot")) return "emerald";
+  if (l.includes("baseline") || l.includes("target")) return "amber";
+  if (l.includes("formula") || l.includes("polaritas") || l.includes("periode")) return "violet";
+  if (l.includes("source") || l.includes("keterangan") || l.includes("cascad") || l.includes("scope")) return "teal";
+  if (l.includes("kpi") || l.includes("definisi")) return "sky";
+  return "indigo";
+}
+
+function Field({ label, tone, children }: { label: string; tone?: FieldTone; children: React.ReactNode }) {
+  const t = FIELD_TONE_STYLES[tone ?? inferFieldTone(label)];
   return (
-    <div className="flex flex-col gap-1.5 rounded-xl bg-slate-50/70 border border-slate-200/80 p-3 focus-within:border-[#1A284F]/40 focus-within:bg-sky-50/30 transition-colors">
-      <label className="text-[11px] font-bold uppercase tracking-wide text-[#1A284F]/80">{label}</label>
+    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${t.wrap}`}>
+      <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${t.label}`}>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.dot}`} />
+        <span>{label}</span>
+      </label>
       {children}
     </div>
   );
@@ -835,8 +864,11 @@ function SatuanField({ value, onChange, unitOptions, periodeOptions }: {
   const pOpts = (periodeOptions ?? SATUAN_PERIODE_OPTIONS).filter((p) => p.toLowerCase() !== "hari");
 
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Satuan</label>
+    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.violet.wrap}`}>
+      <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.violet.label}`}>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.violet.dot}`} />
+        <span>Satuan *</span>
+      </label>
       <div className="grid grid-cols-2 gap-2">
         <select
           value={unit}
@@ -2117,9 +2149,12 @@ function ColorIndicatorRadio({ value, onChange }: { value: IndicatorMode; onChan
     { mode: "ratio",   label: "Ratio",    desc: "Monthly target as ratio (e.g. 10:1)" },
   ];
   return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Indicator</label>
-      <div className="flex items-center gap-4 px-4 py-3 rounded-xl border border-gray-200 bg-gray-50">
+    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.amber.wrap}`}>
+      <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
+        <span>Indicator Mode</span>
+      </label>
+      <div className="flex items-center gap-4 px-4 py-2.5 rounded-xl border border-amber-200/70 bg-white/90">
         {options.map(({ mode, label, desc }) => (
           <label key={mode} className="flex items-start gap-2.5 cursor-pointer flex-1">
             <input
@@ -2143,8 +2178,11 @@ function ColorIndicatorRadio({ value, onChange }: { value: IndicatorMode; onChan
 function BaselineColorField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const meta = baselineColorMeta(value);
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Baseline 2025</label>
+    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.amber.wrap}`}>
+      <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
+        <span>Baseline 2025</span>
+      </label>
       <div className="relative">
         <select
           value={value}
@@ -2197,8 +2235,11 @@ function Target2026Field({ value, colorMode, ratioMode, monthlyTargets }: {
   }
 
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Target 2026</label>
+    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.amber.wrap}`}>
+      <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
+        <span>Target 2026</span>
+      </label>
       {colorMode ? (
         <div
           className="flex items-center gap-2.5 px-4 py-2.5 rounded-lg border text-sm font-bold"
@@ -3272,7 +3313,7 @@ export function AddKPIModal({
               </TooltipTrigger>
               {!canClickAddPersonal && (
                 <TooltipContent side="top" align="end" className="max-w-sm bg-[#1A284F] text-white p-3 rounded-xl shadow-xl z-[80]">
-                  <p className="text-xs font-bold text-amber-300 mb-1">Lengkapi field mandatory berikut (kecuali Keterangan):</p>
+                  <p className="text-xs font-bold text-amber-300 mb-1">Lengkapi field mandatory berikut:</p>
                   <p className="text-[11px] leading-relaxed text-white/95">{missingSubFields.join(", ") || "Periksa kuota bobot Section."}</p>
                 </TooltipContent>
               )}
@@ -4230,7 +4271,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-4">
+    <div data-kpi-modal="true" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
@@ -4284,12 +4325,202 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
 
 // ─── KPI Table ────────────────────────────────────────────────────────────────
 
-export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideCascading = false, onRenameSection, onUpdateSectionMeta, displayControls }: {
+function isKpiDraftDirty(draft: KPISetting | null, original: KPISetting | undefined): boolean {
+  if (!draft || !original) return false;
+  const keys: (keyof KPISetting)[] = [
+    "no", "section", "perspektif", "kpi", "satuan", "formula", "scope",
+    "bobot", "definisi", "source", "baseline2025", "target2026",
+    "polaritas", "detailFormula", "keterangan", "trackingPeriod", "cascading",
+    "coo", "gmVgmIndustry", "gmVgmPerkebunan", "gmAsd", "gmRstm", "gmGhs",
+  ];
+  for (const k of keys) {
+    if (String(draft[k] ?? "") !== String(original[k] ?? "")) return true;
+  }
+  if (JSON.stringify(draft.monthlyTargets ?? {}) !== JSON.stringify(original.monthlyTargets ?? {})) return true;
+  if (JSON.stringify(draft.cascadingMap ?? {}) !== JSON.stringify(original.cascadingMap ?? {})) return true;
+  return false;
+}
+
+function detectNumSepStyle(raw: string): "id" | "en" | "plain" {
+  const s = String(raw ?? "").replace(/%/g, "").trim();
+  if (!s) return "plain";
+  if (/\d+\.\d{3}(?:\D|$)/.test(s) || /,\d+$/.test(s)) return "id";
+  if (/\d+,\d{3}(?:\D|$)/.test(s) || /\.\d+$/.test(s)) return "en";
+  return "plain";
+}
+
+/**
+ * Validasi kesesuaian format penulisan baris KPI terhadap standar sistem (aktif untuk baris hasil Upload Excel).
+ * Begitu baris diedit hingga sesuai standar, array alasan otomatis kosong -> mark merah lembut hilang.
+ */
+export function validateKpiRowStandard(item: KPISetting, master: MasterKpiStore): string[] {
+  if (!item._uploadedCheck) return [];
+  const issues: string[] = [];
+  const validPersp = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
+  const validUnits = master.satuan?.length ? master.satuan : SATUAN_UNIT_OPTIONS;
+  const validPeriodes = (master.period?.length ? master.period : SATUAN_PERIODE_OPTIONS).filter((p) => p.toLowerCase() !== "hari");
+  const validFormulas = master.formula?.length ? master.formula : FORMULA_OPTIONS;
+  const validPolaritas = master.polaritas?.length ? master.polaritas : ["Maximize", "Minimize", "Stabilize"];
+
+  if (!item.kpi?.trim()) issues.push("Nama KPI kosong");
+  if (!item.perspektif?.trim() || !validPersp.includes(item.perspektif.trim())) {
+    issues.push(`Perspektif "${item.perspektif || "—"}" tidak sesuai master`);
+  }
+  const satRaw = (item.satuan ?? "").trim();
+  if (!satRaw) {
+    issues.push("Satuan kosong");
+  } else {
+    const sep = satRaw.indexOf("/");
+    const uPart = sep >= 0 ? satRaw.slice(0, sep).trim() : satRaw;
+    const pPart = sep >= 0 ? satRaw.slice(sep + 1).trim() : "";
+    if (!validUnits.includes(uPart) || (pPart && !validPeriodes.includes(pPart)) || sep < 0) {
+      issues.push(`Satuan "${satRaw}" wajib format Satuan/Periode standar`);
+    }
+  }
+  if (!item.formula?.trim() || !validFormulas.includes(item.formula.trim())) {
+    issues.push(`Formula "${item.formula || "—"}" tidak sesuai standar`);
+  }
+  const bobotTrim = (item.bobot ?? "").trim();
+  const bobotNum = parsePctNum(bobotTrim);
+  if (!/^\d+(?:\.\d+)?%$/.test(bobotTrim) || bobotNum <= 0 || bobotNum > 100) {
+    issues.push(`Bobot "${bobotTrim || "—"}" wajib format % (1%–100%)`);
+  }
+  if (!item.polaritas || !validPolaritas.includes(item.polaritas)) {
+    issues.push(`Polaritas "${item.polaritas || "—"}" tidak sesuai standar`);
+  }
+  if (!item.definisi?.trim()) {
+    issues.push("Definisi belum diisi");
+  }
+  if (!item.target2026?.trim()) {
+    issues.push("Target 2026 belum diisi");
+  }
+  const bStyle = detectNumSepStyle(item.baseline2025);
+  const tStyle = detectNumSepStyle(item.target2026);
+  if (bStyle !== "plain" && tStyle !== "plain" && bStyle !== tStyle) {
+    issues.push("Pemisah ribuan/desimal Baseline & Target tidak konsisten");
+  }
+  return issues;
+}
+
+function DeleteKpiRowConfirmModal({
+  item,
+  onCancel,
+  onConfirm,
+}: {
+  item: KPISetting;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div data-kpi-modal="true" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 backdrop-blur-xs p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl shadow-2xl border border-rose-100 max-w-sm w-full p-6 text-center" onClick={(e) => e.stopPropagation()}>
+        <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center mx-auto mb-3.5">
+          <Trash2 className="w-5 h-5 text-rose-600" />
+        </div>
+        <h4 className="font-bold text-gray-900 text-base mb-1.5">Konfirmasi Hapus KPI</h4>
+        <p className="text-xs text-gray-500 leading-relaxed mb-5">
+          Apakah Anda yakin ingin menghapus baris KPI <strong className="text-[#1A284F]">No. {item.no} — {item.kpi.split("\n")[0]}</strong>? Tindakan ini akan menghapus baris dari daftar KPI.
+        </p>
+        <div className="flex items-center justify-center gap-2.5">
+          <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+            Batal
+          </button>
+          <button type="button" onClick={onConfirm} className="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 transition-colors">
+            Ya, Hapus
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UnsavedRowEditPopup({
+  kpiNo,
+  onSave,
+  onDiscard,
+  onContinueEdit,
+}: {
+  kpiNo: string;
+  onSave: () => void;
+  onDiscard: () => void;
+  onContinueEdit: () => void;
+}) {
+  return (
+    <div data-kpi-modal="true" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 backdrop-blur-xs p-4" onClick={onContinueEdit}>
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xs w-full p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-3.5">
+          <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+            <Edit3 className="w-4 h-4 text-amber-600" />
+          </div>
+          <div>
+            <h4 className="font-bold text-[#1A284F] text-sm leading-snug">Simpan Perubahan Baris?</h4>
+            <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed">
+              Terdapat perubahan belum disimpan pada <strong>KPI No. {kpiNo}</strong>.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onContinueEdit} className="px-3 py-1.5 rounded-lg text-[11px] font-semibold text-gray-500 hover:bg-gray-100 transition-colors">
+            Kembali
+          </button>
+          <button type="button" onClick={onDiscard} className="px-3 py-1.5 rounded-lg border border-rose-200 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors">
+            Buang
+          </button>
+          <button type="button" onClick={onSave} className="px-3.5 py-1.5 rounded-lg bg-[#1A284F] text-white text-[11px] font-bold hover:bg-[#131d3b] transition-colors">
+            Simpan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GlobalEditUnsavedModal({
+  onSaveAll,
+  onDiscardAll,
+  onContinueEdit,
+}: {
+  onSaveAll: () => void;
+  onDiscardAll: () => void;
+  onContinueEdit: () => void;
+}) {
+  return (
+    <div data-kpi-modal="true" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-xs p-4" onClick={onContinueEdit}>
+      <div className="bg-white rounded-2xl shadow-2xl border border-indigo-100 max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start gap-3.5 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center shrink-0">
+            <Edit3 className="w-5 h-5 text-[#1A284F]" />
+          </div>
+          <div>
+            <h4 className="font-bold text-[#1A284F] text-base">Konfirmasi Perubahan Global Edit</h4>
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+              Anda mengklik di luar tabel saat terdapat perubahan pada mode <strong>Global Edit</strong>. Apakah Anda ingin menyimpan perubahan tersebut?
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button type="button" onClick={onContinueEdit} className="px-3.5 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+            Lanjut Edit
+          </button>
+          <button type="button" onClick={onDiscardAll} className="px-3.5 py-2 rounded-xl border border-rose-200 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors">
+            Buang Perubahan
+          </button>
+          <button type="button" onClick={onSaveAll} className="px-4 py-2 rounded-xl bg-[#1A284F] text-white text-xs font-bold hover:bg-[#131d3b] transition-colors">
+            Simpan Perubahan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBatchUpdateItems, hideCascading = false, onRenameSection, onUpdateSectionMeta, displayControls }: {
   items: KPISetting[]; editable: boolean;
   onRenameSection?: (oldSec: string, newSec: string) => void;
   onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
   onDelete?: (id: string) => void;
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
+  onBatchUpdateItems?: (nextItems: KPISetting[]) => void;
   hideCascading?: boolean;
   displayControls?: React.ReactNode;
 }) {
@@ -4305,20 +4536,86 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
     : ["Bulanan", "Triwulan", "Semesteran", "Tahunan"];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<KPISetting | null>(null);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteConfirmItem, setDeleteConfirmItem] = useState<KPISetting | null>(null);
   const [pendingSwitchRow, setPendingSwitchRow] = useState<KPISetting | null>(null);
+  const [showUnsavedRowPopup, setShowUnsavedRowPopup] = useState(false);
+  const [globalEdit, setGlobalEdit] = useState(false);
+  const [globalDrafts, setGlobalDrafts] = useState<Record<string, KPISetting>>({});
+  const [showGlobalExitConfirm, setShowGlobalExitConfirm] = useState(false);
+  const tableWrapRef = useRef<HTMLDivElement>(null);
   const [targetEditItem, setTargetEditItem] = useState<KPISetting | null>(null);
   const [sectionLabelOverrides, setSectionLabelOverrides] = useState<Record<string, string>>({});
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [editingSectionDraftName, setEditingSectionDraftName] = useState<string>("");
   const [bobotOverErrorPersonal, setBobotOverErrorPersonal] = useState<{ sectionLabel: string; sectionBobot: number; totalBobot: number; kind: "section" | "total" } | null>(null);
 
+  useEffect(() => {
+    if (!editable && globalEdit) {
+      setGlobalEdit(false);
+      setGlobalDrafts({});
+    }
+  }, [editable, globalEdit]);
+
+  const enterGlobalEdit = () => {
+    if (!editable || !onUpdateItem) return;
+    setEditingId(null);
+    setDraft(null);
+    const nextMap: Record<string, KPISetting> = {};
+    items.forEach((it) => { nextMap[it.id] = { ...it }; });
+    setGlobalDrafts(nextMap);
+    setGlobalEdit(true);
+  };
+
+  const isGlobalDirty = items.some((it) => isKpiDraftDirty(globalDrafts[it.id] ?? null, it));
+
+  const commitGlobalEdit = (): boolean => {
+    const mergedList = items.map((it) => {
+      const d = globalDrafts[it.id];
+      if (!d) return it;
+      const cleared = validateKpiRowStandard(d, master).length === 0 ? { ...d, _uploadedCheck: false } : d;
+      return cleared;
+    });
+    const uniqueSecs = Array.from(new Set(mergedList.map((i) => i.section)));
+    for (const sec of uniqueSecs) {
+      const secLim = resolveEffectiveSectionBobotNum(mergedList, sec, false);
+      const secSum = mergedList.filter((i) => i.section === sec).reduce((s, i) => s + parsePctNum(i.bobot), 0);
+      if (secSum > secLim + 1e-6) {
+        const lbl = mergedList.find((i) => i.section === sec)?.sectionLabel ?? `Section ${sec}`;
+        setBobotOverErrorPersonal({ sectionLabel: lbl, sectionBobot: secLim, totalBobot: secSum, kind: "section" });
+        return false;
+      }
+    }
+    const allSum = mergedList.reduce((s, i) => s + parsePctNum(i.bobot), 0);
+    if (allSum > 100 + 1e-6) {
+      setBobotOverErrorPersonal({ sectionLabel: "Semua Section", sectionBobot: 100, totalBobot: allSum, kind: "total" });
+      return false;
+    }
+    if (onBatchUpdateItems) {
+      onBatchUpdateItems(mergedList);
+    } else if (onUpdateItem) {
+      mergedList.forEach((m) => onUpdateItem(m.id, m));
+    }
+    setGlobalEdit(false);
+    setGlobalDrafts({});
+    setShowGlobalExitConfirm(false);
+    toast.success("Perubahan Global Edit berhasil disimpan.");
+    return true;
+  };
+
+  const discardGlobalEdit = () => {
+    setGlobalEdit(false);
+    setGlobalDrafts({});
+    setShowGlobalExitConfirm(false);
+  };
+
   const sections = Array.from(new Set(items.map((k) => k.section))).sort();
   const secItems = (sec: string) => items.filter((k) => k.section === sec);
+  const leftActionOffset = editable ? W_AKSI : 0;
   const headerDefs = [
-    { label: "No",                       style: { position: "sticky" as const, left: 0,               zIndex: 25, background: "#1A284F", minWidth: W_NO,    maxWidth: W_NO    } },
-    { label: "Perspektif",               style: { position: "sticky" as const, left: W_NO,            zIndex: 25, background: "#1A284F", minWidth: W_PERSP, maxWidth: W_PERSP } },
-    { label: "KPI",                      style: { position: "sticky" as const, left: W_NO + W_PERSP,  zIndex: 25, background: "#1A284F", minWidth: W_KPI,   maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" } },
+    ...(editable ? [{ label: "Aksi", style: { position: "sticky" as const, left: 0, zIndex: 26, background: "#1A284F", minWidth: W_AKSI, maxWidth: W_AKSI } }] : []),
+    { label: "No",                       style: { position: "sticky" as const, left: leftActionOffset,                   zIndex: 25, background: "#1A284F", minWidth: W_NO,    maxWidth: W_NO    } },
+    { label: "Perspektif",               style: { position: "sticky" as const, left: leftActionOffset + W_NO,            zIndex: 25, background: "#1A284F", minWidth: W_PERSP, maxWidth: W_PERSP } },
+    { label: "KPI",                      style: { position: "sticky" as const, left: leftActionOffset + W_NO + W_PERSP,  zIndex: 25, background: "#1A284F", minWidth: W_KPI,   maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" } },
     { label: "Satuan",                   style: { minWidth: 180  } },
     { label: "Formula Setahun",          style: { minWidth: 100  } },
     { label: "Bobot",                    style: { minWidth: 72   } },
@@ -4331,13 +4628,12 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
     { label: "Keterangan",               style: { minWidth: 180  } },
     { label: "Periode Tracking",         style: { minWidth: 120  } },
     ...(!hideCascading ? [{ label: "CASCADING (FC; PC; CC)", style: { minWidth: 100 } }] : []),
-    ...(editable ? [{ label: "Aksi", style: { minWidth: 88 } }] : []),
   ];
   const totalCols = headerDefs.length;
 
   const startEdit = (item: KPISetting) => { setEditingId(item.id); setDraft({ ...item }); };
-  const cancelEdit = () => { setEditingId(null); setDraft(null); };
-  const saveEdit = () => {
+  const cancelEdit = () => { setEditingId(null); setDraft(null); setPendingSwitchRow(null); setShowUnsavedRowPopup(false); };
+  const saveEdit = (): boolean => {
     if (draft) {
       const sec = draft.section;
       // Rule 6: KPI item bobots in section must not exceed section bobot
@@ -4349,7 +4645,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
       if (secTotal > sectionBobot + 1e-6) {
         const lbl = items.find(i => i.section === sec)?.sectionLabel ?? `Section ${sec}`;
         setBobotOverErrorPersonal({ sectionLabel: lbl, sectionBobot, totalBobot: secTotal, kind: "section" });
-        return;
+        return false;
       }
       // Rule 7: Total all KPI item bobots must not exceed 100%
       const allTotal = items
@@ -4358,24 +4654,76 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
         + parsePctNum(draft.bobot);
       if (allTotal > 100 + 1e-6) {
         setBobotOverErrorPersonal({ sectionLabel: "Semua Section", sectionBobot: 100, totalBobot: allTotal, kind: "total" });
-        return;
+        return false;
       }
-      onUpdateItem?.(draft.id, draft);
+      const cleaned = validateKpiRowStandard(draft, master).length === 0 ? { ...draft, _uploadedCheck: false } : draft;
+      onUpdateItem?.(draft.id, cleaned);
     }
     setEditingId(null);
     setDraft(null);
+    return true;
   };
-  const setD = (patch: Partial<KPISetting>) => setDraft((d) => d ? { ...d, ...patch } : d);
+  const setRowPatch = (rowId: string, patch: Partial<KPISetting>) => {
+    if (globalEdit) {
+      setGlobalDrafts((prev) => {
+        const base = prev[rowId] ?? items.find((i) => i.id === rowId);
+        if (!base) return prev;
+        return { ...prev, [rowId]: { ...base, ...patch } };
+      });
+    } else {
+      setDraft((d) => (d ? { ...d, ...patch } : d));
+    }
+  };
+
+  // Deteksi klik di luar tabel (untuk Global Edit) & klik pindah baris/luar baris (untuk Edit per Baris)
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-kpi-modal="true"]') || target.closest("[data-radix-popper-content-wrapper]")) return;
+      if (targetEditItem || bobotOverErrorPersonal || deleteConfirmItem || showUnsavedRowPopup || showGlobalExitConfirm) return;
+
+      if (globalEdit) {
+        if (tableWrapRef.current && !tableWrapRef.current.contains(target)) {
+          if (isGlobalDirty) {
+            setShowGlobalExitConfirm(true);
+          } else {
+            setGlobalEdit(false);
+            setGlobalDrafts({});
+          }
+        }
+        return;
+      }
+
+      if (editingId && draft) {
+        const activeTr = target.closest('[data-kpi-editing-row="true"]');
+        if (!activeTr) {
+          const orig = items.find((i) => i.id === editingId);
+          if (isKpiDraftDirty(draft, orig)) {
+            setShowUnsavedRowPopup(true);
+          } else {
+            setEditingId(null);
+            setDraft(null);
+          }
+        }
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [globalEdit, isGlobalDirty, editingId, draft, items, targetEditItem, bobotOverErrorPersonal, deleteConfirmItem, showUnsavedRowPopup, showGlobalExitConfirm]);
 
   const ci = "w-full text-[11px] border border-gray-200 rounded px-1.5 py-1 outline-none focus:border-[#1A284F] bg-white resize-none leading-relaxed";
+  const activeDisplayItems = globalEdit ? items.map((it) => globalDrafts[it.id] ?? it) : items;
 
   const renderRows = (sec: string) =>
     secItems(sec).map((item, rowIdx) => {
-      const isEditing = editingId === item.id;
-      const row = isEditing && draft ? draft : item;
-      const stickyBg = isEditing ? "#f0f7ff" : rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc";
-      const secLimitNum = resolveEffectiveSectionBobotNum(items, sec, false);
-      const otherSubBobot = calcSubSectionBobot(items, sec, item.id);
+      const isEditing = globalEdit || editingId === item.id;
+      const row = globalEdit ? (globalDrafts[item.id] ?? item) : (editingId === item.id && draft ? draft : item);
+      const formatIssues = validateKpiRowStandard(row, master);
+      const hasFormatIssue = formatIssues.length > 0;
+      const stickyBg = hasFormatIssue ? "#fff1f2" : isEditing ? "#f0f7ff" : rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc";
+      const secLimitNum = resolveEffectiveSectionBobotNum(activeDisplayItems, sec, false);
+      const otherSubBobot = calcSubSectionBobot(activeDisplayItems, sec, item.id);
       const maxAllowedSubBobot = Math.max(0, Math.round((secLimitNum - otherSubBobot) * 100) / 100);
       const rowSubBobotOpts = buildRemainingBobotOptions(
         secLimitNum === 0 ? 0 : 1,
@@ -4383,27 +4731,94 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
         row.bobot,
         true,
       );
+      const setD = (patch: Partial<KPISetting>) => setRowPatch(item.id, patch);
       return (
-        <tr key={item.id} className={`border-t border-gray-200 transition-colors ${isEditing ? "bg-blue-50/20 ring-1 ring-inset ring-[#1A284F]/20" : rowIdx % 2 === 0 ? "bg-white hover:bg-gray-50/50" : "bg-slate-50/60 hover:bg-gray-50"}`}>
+        <tr
+          key={item.id}
+          data-kpi-editing-row={!globalEdit && editingId === item.id ? "true" : undefined}
+          className={`border-t border-gray-200 transition-colors ${
+            hasFormatIssue
+              ? "bg-rose-50/80 ring-1 ring-inset ring-rose-300/70"
+              : isEditing
+              ? "bg-blue-50/20 ring-1 ring-inset ring-[#1A284F]/20"
+              : rowIdx % 2 === 0
+              ? "bg-white hover:bg-gray-50/50"
+              : "bg-slate-50/60 hover:bg-gray-50"
+          }`}
+        >
+          {/* Aksi — Paling Kiri */}
+          {editable && (
+            <td
+              className="border border-gray-200 py-3 px-2 text-center"
+              style={{ position: "sticky", left: 0, zIndex: 13, background: stickyBg, minWidth: W_AKSI, maxWidth: W_AKSI }}
+            >
+              {globalEdit ? (
+                <div className="flex items-center justify-center">
+                  {onDelete && (
+                    <button type="button" onClick={() => setDeleteConfirmItem(item)} className="p-1.5 rounded-lg hover:bg-rose-100 text-rose-500 hover:text-rose-700 transition-colors" title="Hapus KPI">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ) : editingId === item.id ? (
+                <div className="flex flex-col gap-1">
+                  <button type="button" onClick={() => { void saveEdit(); }} className="w-full px-2 py-1 rounded text-[10px] font-bold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">Save</button>
+                  <button type="button" onClick={cancelEdit} className="w-full px-2 py-1 rounded text-[10px] font-semibold border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 transition-colors">Cancel</button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center gap-1">
+                  {onUpdateItem && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (editingId && editingId !== item.id && draft) {
+                          const orig = items.find((i) => i.id === editingId);
+                          if (isKpiDraftDirty(draft, orig)) {
+                            setPendingSwitchRow(item);
+                            setShowUnsavedRowPopup(true);
+                          } else {
+                            startEdit(item);
+                          }
+                        } else {
+                          startEdit(item);
+                        }
+                      }}
+                      className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F]"
+                      title="Edit Baris"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {onDelete && (
+                    <button type="button" onClick={() => setDeleteConfirmItem(item)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600" title="Hapus KPI">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </td>
+          )}
           {/* No */}
           <td className="border border-gray-200 text-center text-xs font-semibold text-gray-600 py-3 px-2"
-            style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
+            style={{ position: "sticky", left: leftActionOffset, zIndex: 12, background: stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
             {isEditing
               ? <input value={row.no} onChange={(e) => setD({ no: e.target.value })} className={ci + " text-center font-bold"} />
               : item.no}
           </td>
           {/* Perspektif */}
           <td className="border border-gray-200 py-3 px-3"
-            style={{ position: "sticky", left: W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
+            style={{ position: "sticky", left: leftActionOffset + W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
             {isEditing
               ? <select value={row.perspektif} onChange={(e) => setD({ perspektif: e.target.value })} className={ci}>
+                  <option value="">— Pilih Perspektif —</option>
                   {tablePerspektifOpts.map((p) => <option key={p}>{p}</option>)}
                 </select>
               : <span className={`text-xs font-bold ${PERSP_COLOR[item.perspektif] ?? "text-gray-700"}`}>{item.perspektif}</span>}
           </td>
           {/* KPI */}
           <td className="border border-gray-200 py-3 px-3"
-            style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
+            style={{ position: "sticky", left: leftActionOffset + W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
             {isEditing
               ? (item._cascadeType === "FC" || item._cascadeType === "PC")
                 ? <div className="flex flex-col gap-1">
@@ -4412,6 +4827,11 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
                   </div>
                 : <textarea rows={3} value={row.kpi} onChange={(e) => setD({ kpi: e.target.value })} className={ci} />
               : <p className="text-xs font-medium text-gray-800 whitespace-pre-line leading-relaxed">{item.kpi}</p>}
+            {hasFormatIssue && (
+              <div className="mt-1.5 px-2 py-1 rounded-md bg-rose-100/80 border border-rose-200 text-[10px] text-rose-700 font-medium leading-snug">
+                Format belum sesuai: {formatIssues.join(" · ")}
+              </div>
+            )}
           </td>
           {/* Satuan */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600" style={{ minWidth: 180 }}>
@@ -4440,6 +4860,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 100 }}>
             {isEditing
               ? <select value={row.formula} onChange={(e) => setD({ formula: e.target.value })} className={ci}>
+                  <option value="">— Formula —</option>
                   {tableFormulaOpts.map((f) => <option key={f}>{f}</option>)}
                 </select>
               : item.formula}
@@ -4497,6 +4918,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
           <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 96 }}>
             {isEditing
               ? <select value={row.polaritas} onChange={(e) => setD({ polaritas: e.target.value as Polaritas })} className={ci}>
+                  <option value="">— Polaritas —</option>
                   {tablePolaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
               : <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${item.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : item.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
@@ -4536,55 +4958,67 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
                 : <span className="text-gray-300">—</span>}
           </td>
           )}
-          {/* Aksi */}
-          {editable && (
-            <td className="border border-gray-200 bg-white py-3 px-2 text-center" style={{ minWidth: 88 }}>
-              {isEditing
-                ? <div className="flex flex-col gap-1">
-                    <button onClick={saveEdit} className="w-full px-2 py-1 rounded text-[10px] font-bold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">Save</button>
-                    <button onClick={cancelEdit} className="w-full px-2 py-1 rounded text-[10px] font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors">Cancel</button>
-                  </div>
-                : <div className="flex items-center justify-center gap-1">
-                    {onUpdateItem && (
-                      <button
-                        onClick={() => {
-                          if (editingId && editingId !== item.id && draft) {
-                            setPendingSwitchRow(item);
-                          } else {
-                            startEdit(item);
-                          }
-                        }}
-                        className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F]"
-                        title="Edit"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    {onDelete && (
-                      <button onClick={() => setDeleteConfirmId(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                    )}
-                  </div>}
-            </td>
-          )}
         </tr>
       );
     });
 
   return (
     <>
-    <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
+    <div ref={tableWrapRef} className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
       {displayControls && (
         <div className="flex items-center justify-between gap-3 px-4 py-2 bg-gray-50 border-b border-gray-200 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/5 border border-[#1A284F]/15 px-2.5 py-1 rounded-full">
-              <Edit3 className="w-3.5 h-3.5" /> {editable ? "Global Edit" : "View Mode"}
-            </span>
+            {editable && onUpdateItem ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (globalEdit) {
+                      if (isGlobalDirty) setShowGlobalExitConfirm(true);
+                      else discardGlobalEdit();
+                    } else {
+                      enterGlobalEdit();
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-colors ${
+                    globalEdit
+                      ? "bg-[#1A284F] text-white border-[#1A284F] shadow-xs"
+                      : "text-[#1A284F] bg-white hover:bg-[#1A284F]/10 border-[#1A284F]/25"
+                  }`}
+                  title="Klik untuk membuka/menutup edit seluruh baris, kolom, dan section sekaligus"
+                >
+                  <Edit3 className="w-3.5 h-3.5" /> Global Edit
+                </button>
+                {globalEdit && (
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => { commitGlobalEdit(); }}
+                      className="px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                    >
+                      Simpan Semua
+                    </button>
+                    <button
+                      type="button"
+                      onClick={discardGlobalEdit}
+                      className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 transition-colors"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 bg-gray-100 border border-gray-200 px-2.5 py-1 rounded-full">
+                <Eye className="w-3.5 h-3.5" /> View Mode
+              </span>
+            )}
             {displayControls}
           </div>
         </div>
       )}
     <DualScrollTableContainer className="border-0 rounded-none shadow-none bg-white">
-      <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1840 + (editable ? 88 : 0)}px` }}>
+      <table className="border-collapse text-xs" style={{ minWidth: `${W_NO + W_PERSP + W_KPI + 1840 + (editable ? W_AKSI : 0)}px` }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
             {headerDefs.map(({ label, style }) => (
@@ -4738,8 +5172,47 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, hideC
     {targetEditItem && (
       <TargetEditMiniModal
         item={targetEditItem}
-        onSave={(updates) => { setD(updates); setTargetEditItem(null); }}
+        onSave={(updates) => { setRowPatch(targetEditItem.id, updates); setTargetEditItem(null); }}
         onClose={() => setTargetEditItem(null)}
+      />
+    )}
+    {deleteConfirmItem && (
+      <DeleteKpiRowConfirmModal
+        item={deleteConfirmItem}
+        onCancel={() => setDeleteConfirmItem(null)}
+        onConfirm={() => {
+          onDelete?.(deleteConfirmItem.id);
+          if (editingId === deleteConfirmItem.id) cancelEdit();
+          setDeleteConfirmItem(null);
+        }}
+      />
+    )}
+    {showUnsavedRowPopup && draft && (
+      <UnsavedRowEditPopup
+        kpiNo={draft.no || "—"}
+        onContinueEdit={() => {
+          setShowUnsavedRowPopup(false);
+          setPendingSwitchRow(null);
+        }}
+        onDiscard={() => {
+          const nextTarget = pendingSwitchRow;
+          cancelEdit();
+          if (nextTarget) startEdit(nextTarget);
+        }}
+        onSave={() => {
+          const nextTarget = pendingSwitchRow;
+          const ok = saveEdit();
+          setShowUnsavedRowPopup(false);
+          setPendingSwitchRow(null);
+          if (ok && nextTarget) startEdit(nextTarget);
+        }}
+      />
+    )}
+    {showGlobalExitConfirm && (
+      <GlobalEditUnsavedModal
+        onContinueEdit={() => setShowGlobalExitConfirm(false)}
+        onDiscardAll={discardGlobalEdit}
+        onSaveAll={() => { commitGlobalEdit(); }}
       />
     )}
     {bobotOverErrorPersonal && (
@@ -4873,7 +5346,7 @@ function CascadingTypePanel({
   );
 }
 
-export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection, onUpdateSectionMeta, canSubmitKpi, submitBlockReasons, displayControls }: {
+export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection, onUpdateSectionMeta, canSubmitKpi, submitBlockReasons, displayControls }: {
   hideScope?: boolean;
   toolbarExtra?: React.ReactNode;
   onRenameSection?: (oldSec: string, newSec: string) => void;
@@ -4883,6 +5356,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   displayControls?: React.ReactNode;
   items: KPISetting[];
   onUpdateItem?: (id: string, updates: Partial<KPISetting>) => void;
+  onBatchUpdateItems?: (nextItems: KPISetting[]) => void;
   onDeleteItem?: (id: string) => void;
   onAddClick?: () => void;
   onSubmit?: () => void;
@@ -4902,6 +5376,13 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   const master = useMasterKpi();
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [draft, setDraft] = useState<KPISetting | null>(null);
+  const [corpDeleteItem, setCorpDeleteItem] = useState<KPISetting | null>(null);
+  const [corpPendingSwitch, setCorpPendingSwitch] = useState<KPISetting | null>(null);
+  const [corpUnsavedPopup, setCorpUnsavedPopup] = useState(false);
+  const [corpGlobalEdit, setCorpGlobalEdit] = useState(false);
+  const [corpGlobalDrafts, setCorpGlobalDrafts] = useState<Record<string, KPISetting>>({});
+  const [corpGlobalExitConfirm, setCorpGlobalExitConfirm] = useState(false);
+  const corpWrapRef = useRef<HTMLDivElement>(null);
   const [previewMode, setPreviewMode] = useState(false);
   const [bobotOverError, setBobotOverError] = useState<{ section: string; sectionLabel: string; sectionBobot: number; totalBobot: number; kind?: "section" | "total" } | null>(null);
   const [corpTargetEdit, setCorpTargetEdit] = useState<KPISetting | null>(null);
@@ -4911,8 +5392,8 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   const [renamingSecDraft, setRenamingSecDraft] = useState<string>("");
 
   const startEdit = (item: KPISetting) => { if (submitted || kpiApproved) return; setEditingRowId(item.id); setDraft({ ...item }); };
-  const cancelEdit = () => { setEditingRowId(null); setDraft(null); };
-  const saveEdit = () => {
+  const cancelEdit = () => { setEditingRowId(null); setDraft(null); setCorpPendingSwitch(null); setCorpUnsavedPopup(false); };
+  const saveEdit = (): boolean => {
     if (draft) {
       const sec = draft.section;
       // Rule 6: total KPI bobot in section must not exceed section bobot
@@ -4930,7 +5411,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
           totalBobot: sectionTotal,
           kind: "section",
         });
-        return;
+        return false;
       }
       // Rule 7: total of all KPI item bobots across all sections must not exceed 100%
       const allTotal = items
@@ -4945,18 +5426,136 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
           totalBobot: allTotal,
           kind: "total",
         });
-        return;
+        return false;
       }
-      onUpdateItem?.(draft.id, draft);
+      const cleaned = validateKpiRowStandard(draft, master).length === 0 ? { ...draft, _uploadedCheck: false } : draft;
+      onUpdateItem?.(draft.id, cleaned);
     }
     setEditingRowId(null);
     setDraft(null);
+    return true;
   };
-  const setDraftField = (updates: Partial<KPISetting>) => setDraft((d) => d ? { ...d, ...updates } : d);
+  const setCorpRowPatch = (rowId: string, updates: Partial<KPISetting>) => {
+    if (corpGlobalEdit) {
+      setCorpGlobalDrafts((prev) => {
+        const base = prev[rowId] ?? items.find((i) => i.id === rowId);
+        if (!base) return prev;
+        return { ...prev, [rowId]: { ...base, ...updates } };
+      });
+    } else {
+      setDraft((d) => (d ? { ...d, ...updates } : d));
+    }
+  };
+
+  const isCorpGlobalDirty = items.some((it) => isKpiDraftDirty(corpGlobalDrafts[it.id] ?? null, it));
+
+  const enterCorpGlobalEdit = () => {
+    if (submitted || kpiApproved || previewMode || !onUpdateItem) return;
+    setEditingRowId(null);
+    setDraft(null);
+    const nextMap: Record<string, KPISetting> = {};
+    items.forEach((it) => { nextMap[it.id] = { ...it }; });
+    setCorpGlobalDrafts(nextMap);
+    setCorpGlobalEdit(true);
+  };
+
+  const discardCorpGlobalEdit = () => {
+    setCorpGlobalEdit(false);
+    setCorpGlobalDrafts({});
+    setCorpGlobalExitConfirm(false);
+  };
+
+  const commitCorpGlobalEdit = (): boolean => {
+    const mergedList = items.map((it) => {
+      const d = corpGlobalDrafts[it.id];
+      if (!d) return it;
+      return validateKpiRowStandard(d, master).length === 0 ? { ...d, _uploadedCheck: false } : d;
+    });
+    const uniqueSecs = Array.from(new Set(mergedList.map((i) => i.section)));
+    for (const sec of uniqueSecs) {
+      const secLim = resolveEffectiveSectionBobotNum(mergedList, sec, true, editedSectionBobots);
+      const secSum = mergedList.filter((i) => i.section === sec).reduce((s, i) => s + parsePctNum(i.bobot), 0);
+      if (secSum > secLim + 1e-6) {
+        const secMeta = CORP_SECTION_META[sec];
+        setBobotOverError({
+          section: sec,
+          sectionLabel: mergedList.find((i) => i.section === sec)?.sectionLabel || secMeta?.label || `Section ${sec}`,
+          sectionBobot: secLim,
+          totalBobot: secSum,
+          kind: "section",
+        });
+        return false;
+      }
+    }
+    const allSum = mergedList.reduce((s, i) => s + parsePctNum(i.bobot), 0);
+    if (allSum > 100 + 1e-6) {
+      setBobotOverError({
+        section: uniqueSecs[0] ?? "A",
+        sectionLabel: "Semua Section",
+        sectionBobot: 100,
+        totalBobot: allSum,
+        kind: "total",
+      });
+      return false;
+    }
+    if (onBatchUpdateItems) {
+      onBatchUpdateItems(mergedList);
+    } else if (onUpdateItem) {
+      mergedList.forEach((m) => onUpdateItem(m.id, m));
+    }
+    setCorpGlobalEdit(false);
+    setCorpGlobalDrafts({});
+    setCorpGlobalExitConfirm(false);
+    toast.success("Perubahan Global Edit berhasil disimpan.");
+    return true;
+  };
+
+  useEffect(() => {
+    if ((submitted || kpiApproved || previewMode) && corpGlobalEdit) {
+      setCorpGlobalEdit(false);
+      setCorpGlobalDrafts({});
+    }
+  }, [submitted, kpiApproved, previewMode, corpGlobalEdit]);
+
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-kpi-modal="true"]') || target.closest("[data-radix-popper-content-wrapper]")) return;
+      if (corpTargetEdit || bobotOverError || corpDeleteItem || corpUnsavedPopup || corpGlobalExitConfirm) return;
+
+      if (corpGlobalEdit) {
+        if (corpWrapRef.current && !corpWrapRef.current.contains(target)) {
+          if (isCorpGlobalDirty) {
+            setCorpGlobalExitConfirm(true);
+          } else {
+            setCorpGlobalEdit(false);
+            setCorpGlobalDrafts({});
+          }
+        }
+        return;
+      }
+
+      if (editingRowId && draft) {
+        const activeTr = target.closest('[data-kpi-editing-row="true"]');
+        if (!activeTr) {
+          const orig = items.find((i) => i.id === editingRowId);
+          if (isKpiDraftDirty(draft, orig)) {
+            setCorpUnsavedPopup(true);
+          } else {
+            setEditingRowId(null);
+            setDraft(null);
+          }
+        }
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [corpGlobalEdit, isCorpGlobalDirty, editingRowId, draft, items, corpTargetEdit, bobotOverError, corpDeleteItem, corpUnsavedPopup, corpGlobalExitConfirm]);
 
   // FC/PC/CC editability rules applied to the row currently being edited
-  const isFieldEditable = (field: string): boolean => {
-    const ct = draft?._cascadeType;
+  const isRowFieldEditable = (r: KPISetting, field: string): boolean => {
+    const ct = r._cascadeType;
     if (!ct) return true;           // custom row — all editable
     if (ct === "CC") return true;   // Contributing — fully editable
     if (field === "no") return true; // No column always editable for all cascade types
@@ -4964,11 +5563,13 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
     return false;                   // FC — all other data fields read-only
   };
 
+  const activeCorpItems = corpGlobalEdit ? items.map((it) => corpGlobalDrafts[it.id] ?? it) : items;
   const sections = Array.from(new Set(items.map((k) => k.section))).sort();
   const corpPerspOpts = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
   const corpPolaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
     : POLARITAS_OPTIONS;
+  const W_CORP_AKSI = 84;
   const W_CORP_CASC = 62;
   const W_CORP_NO = 48;
   const W_CORP_PERSP = 120;
@@ -5009,8 +5610,9 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
   const showAksi = !previewMode && !kpiApproved && !submitted && Boolean(onUpdateItem || onDeleteItem);
   const visibleMainCols = hideScope ? COLS.slice(0, 15).filter((c) => c.label !== "Scope") : COLS.slice(0, 15);
   const showCascadeCol = hasCascadedRows && !previewMode;
-  const leftOffsetBase = showCascadeCol ? W_CORP_CASC : 0;
-  const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? 80 : 0) - (hideCascading ? cascadingWidth : 0) - (hideScope ? 180 : 0) + (showCascadeCol ? W_CORP_CASC : 0);
+  const aksiOffset = showAksi ? W_CORP_AKSI : 0;
+  const leftOffsetBase = aksiOffset + (showCascadeCol ? W_CORP_CASC : 0);
+  const totalWidth = COLS.reduce((s, c) => s + c.w, 0) + (showAksi ? W_CORP_AKSI : 0) - (hideCascading ? cascadingWidth : 0) - (hideScope ? 180 : 0) + (showCascadeCol ? W_CORP_CASC : 0);
   const totalCols = visibleMainCols.length
     + (showAksi ? 1 : 0)
     + (showCascadeCol ? 1 : 0)
@@ -5029,7 +5631,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
 
   return (
     <>
-    <div className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
+    <div ref={corpWrapRef} className="flex flex-col rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
       {/* ── Toolbar ── */}
       <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -5038,9 +5640,51 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                 <Eye className="w-3.5 h-3.5" /> Preview Mode — CASCADING columns hidden
               </span>
             : (!kpiApproved && !submitted) && (
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/5 border border-[#1A284F]/15 px-2.5 py-1 rounded-full">
-                <Edit3 className="w-3.5 h-3.5" /> Edit Mode
-              </span>
+              onUpdateItem ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (corpGlobalEdit) {
+                        if (isCorpGlobalDirty) setCorpGlobalExitConfirm(true);
+                        else discardCorpGlobalEdit();
+                      } else {
+                        enterCorpGlobalEdit();
+                      }
+                    }}
+                    className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-colors ${
+                      corpGlobalEdit
+                        ? "bg-[#1A284F] text-white border-[#1A284F] shadow-xs"
+                        : "text-[#1A284F] bg-white hover:bg-[#1A284F]/10 border-[#1A284F]/25"
+                    }`}
+                    title="Klik untuk membuka/menutup edit seluruh baris, kolom, dan section sekaligus"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" /> Global Edit
+                  </button>
+                  {corpGlobalEdit && (
+                    <div className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => { commitCorpGlobalEdit(); }}
+                        className="px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                      >
+                        Simpan Semua
+                      </button>
+                      <button
+                        type="button"
+                        onClick={discardCorpGlobalEdit}
+                        className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 transition-colors"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/5 border border-[#1A284F]/15 px-2.5 py-1 rounded-full">
+                  <Eye className="w-3.5 h-3.5" /> View Mode
+                </span>
+              )
             )}
           {displayControls}
           {toolbarExtra}
@@ -5087,9 +5731,13 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
       <table className="border-collapse text-xs" style={{ minWidth: totalWidth + "px" }}>
         <thead>
           <tr className="bg-[#1A284F] text-white">
+            {showAksi && (
+              <th rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px] align-middle"
+                style={{ position: "sticky", left: 0, zIndex: 26, background: "#1A284F", minWidth: W_CORP_AKSI, maxWidth: W_CORP_AKSI }}>Aksi</th>
+            )}
             {showCascadeCol && (
               <th rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-1.5 text-center font-semibold text-[10px] align-middle"
-                style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: W_CORP_CASC, maxWidth: W_CORP_CASC }}>
+                style={{ position: "sticky", left: aksiOffset, zIndex: 25, background: "#1A284F", minWidth: W_CORP_CASC, maxWidth: W_CORP_CASC }}>
                 Cascade
               </th>
             )}
@@ -5101,10 +5749,6 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
               <th colSpan={3} className="border border-[#1A284F]/30 py-2 px-2 text-center font-semibold text-[11px]">
                 CASCADING
               </th>
-            )}
-            {showAksi && (
-              <th rowSpan={2} className="border border-[#1A284F]/30 py-2.5 px-2 text-center font-semibold text-[11px] align-middle"
-                style={{ minWidth: 80 }}>Aksi</th>
             )}
           </tr>
           <tr className="bg-[#243860] text-white">
@@ -5282,12 +5926,14 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                   </td>
                 </tr>
                 {secRows.map((item, idx) => {
-                  const isEditing = editingRowId === item.id;
-                  const row = isEditing && draft ? draft : item;
+                  const isEditing = corpGlobalEdit || editingRowId === item.id;
+                  const row = corpGlobalEdit ? (corpGlobalDrafts[item.id] ?? item) : (editingRowId === item.id && draft ? draft : item);
+                  const formatIssues = validateKpiRowStandard(row, master);
+                  const hasFormatIssue = formatIssues.length > 0;
                   const rowBg = idx % 2 === 0 ? "bg-white" : "bg-slate-50/70";
-                  const stickyBg = isEditing ? "#f0f7ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+                  const stickyBg = hasFormatIssue ? "#fff1f2" : isEditing ? "#f0f7ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
                   const ct = item._cascadeType;
-                  const otherSubUsed = calcSubSectionBobot(items, sec, item.id);
+                  const otherSubUsed = calcSubSectionBobot(activeCorpItems, sec, item.id);
                   const maxAllowedRowSubBobot = Math.max(0, Math.round((secBobotNum - otherSubUsed) * 100) / 100);
                   const corpRowSubBobotOpts = buildRemainingBobotOptions(
                     secBobotNum === 0 ? 0 : 1,
@@ -5296,17 +5942,83 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                     true,
                   );
                   const canQuickEditBobot = showAksi && Boolean(onUpdateItem) && (!ct || ct === "PC" || ct === "CC");
+                  const setDraftField = (updates: Partial<KPISetting>) => setCorpRowPatch(item.id, updates);
+                  const isFieldEditable = (field: string) => isRowFieldEditable(row, field);
                   const CASCADE_BADGE: Record<string, { label: string; cls: string }> = {
                     FC: { label: "FC", cls: "bg-indigo-100 text-indigo-800 border border-indigo-300" },
                     PC: { label: "PC", cls: "bg-amber-100 text-amber-800 border border-amber-300" },
                     CC: { label: "CC", cls: "bg-teal-100 text-teal-800 border border-teal-300" },
                   };
                   return (
-                    <tr key={item.id} className={`border-t border-gray-100 ${rowBg} ${isEditing ? "ring-1 ring-inset ring-[#1A284F]/20 bg-blue-50/10" : "hover:bg-blue-50/20"} transition-colors`}>
+                    <tr
+                      key={item.id}
+                      data-kpi-editing-row={!corpGlobalEdit && editingRowId === item.id ? "true" : undefined}
+                      className={`border-t border-gray-100 ${
+                        hasFormatIssue
+                          ? "bg-rose-50/80 ring-1 ring-inset ring-rose-300/70"
+                          : isEditing
+                          ? "ring-1 ring-inset ring-[#1A284F]/20 bg-blue-50/10"
+                          : `${rowBg} hover:bg-blue-50/20`
+                      } transition-colors`}
+                    >
+                      {/* Aksi — Paling Kiri */}
+                      {showAksi && (
+                        <td
+                          className="border border-gray-200 py-2 px-1.5 text-center"
+                          style={{ position: "sticky", left: 0, zIndex: 13, background: stickyBg, minWidth: W_CORP_AKSI, maxWidth: W_CORP_AKSI }}
+                        >
+                          {corpGlobalEdit ? (
+                            <div className="flex items-center justify-center">
+                              {(!ct || ct === "CC") && onDeleteItem && (
+                                <button type="button" onClick={() => setCorpDeleteItem(item)} title="Hapus KPI"
+                                  className="p-1.5 rounded-lg hover:bg-rose-100 text-rose-500 hover:text-rose-700 transition-colors">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ) : editingRowId === item.id ? (
+                            <div className="flex flex-col gap-1 items-center">
+                              <button type="button" onClick={() => { void saveEdit(); }} className="w-full px-2 py-1 rounded text-[10px] font-bold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">Save</button>
+                              <button type="button" onClick={cancelEdit} className="w-full px-2 py-1 rounded text-[10px] font-semibold border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 transition-colors">Cancel</button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1">
+                              {onUpdateItem && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (editingRowId && editingRowId !== item.id && draft) {
+                                      const orig = items.find((i) => i.id === editingRowId);
+                                      if (isKpiDraftDirty(draft, orig)) {
+                                        setCorpPendingSwitch(item);
+                                        setCorpUnsavedPopup(true);
+                                      } else {
+                                        startEdit(item);
+                                      }
+                                    } else {
+                                      startEdit(item);
+                                    }
+                                  }}
+                                  title={ct === "FC" ? "Edit Cascading (FC — data fields read-only)" : ct ? "Edit Cascading" : "Edit Baris"}
+                                  className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F] transition-colors">
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {(!ct || ct === "CC") && onDeleteItem && (
+                                <button type="button" onClick={() => setCorpDeleteItem(item)} title="Hapus KPI"
+                                  className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      )}
                       {/* Cascade badge column */}
                       {showCascadeCol && (
                         <td className="border border-gray-200 py-2 px-1 text-center"
-                          style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: W_CORP_CASC, maxWidth: W_CORP_CASC }}>
+                          style={{ position: "sticky", left: aksiOffset, zIndex: 12, background: stickyBg, minWidth: W_CORP_CASC, maxWidth: W_CORP_CASC }}>
                           {ct ? (
                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${CASCADE_BADGE[ct]?.cls}`}>
                               {CASCADE_BADGE[ct]?.label}
@@ -5328,6 +6040,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                         style={{ position: "sticky", left: leftOffsetBase + W_CORP_NO, zIndex: 12, background: stickyBg, minWidth: W_CORP_PERSP, maxWidth: W_CORP_PERSP }}>
                         {isEditing && isFieldEditable("perspektif")
                           ? <select value={row.perspektif} onChange={(e) => setDraftField({ perspektif: e.target.value })} className={cellInput}>
+                              <option value="">— Perspektif —</option>
                               {corpPerspOpts.map((p) => <option key={p}>{p}</option>)}
                             </select>
                           : <span className={`text-[11px] font-semibold ${PERSP_COLOR[row.perspektif] ?? "text-gray-700"}`}>{row.perspektif}</span>}
@@ -5338,6 +6051,11 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                         {isEditing && isFieldEditable("kpi")
                           ? <textarea rows={3} value={row.kpi} onChange={(e) => setDraftField({ kpi: e.target.value })} className={cellInput} />
                           : <p className="text-[11px] font-medium text-gray-800 leading-relaxed">{row.kpi}</p>}
+                        {hasFormatIssue && (
+                          <div className="mt-1.5 px-2 py-1 rounded-md bg-rose-100/80 border border-rose-200 text-[10px] text-rose-700 font-medium leading-snug">
+                            Format belum sesuai: {formatIssues.join(" · ")}
+                          </div>
+                        )}
                       </td>
                       {/* Satuan */}
                       <td className="border border-gray-200 py-2 px-1.5">
@@ -5366,6 +6084,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("formula")
                           ? <select value={row.formula} onChange={(e) => setDraftField({ formula: e.target.value })} className={cellInput}>
+                              <option value="">— Formula —</option>
                               {FORMULA_OPTIONS.map((f) => <option key={f}>{f}</option>)}
                             </select>
                           : <span className="text-[11px] text-gray-600">{row.formula || "—"}</span>}
@@ -5436,6 +6155,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("polaritas")
                           ? <select value={row.polaritas} onChange={(e) => setDraftField({ polaritas: e.target.value as Polaritas })} className={cellInput}>
+                              <option value="">— Polaritas —</option>
                               {corpPolaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                             </select>
                           : <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -5487,7 +6207,7 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                                   onToggle={(key, checked) => {
                                     const newVal = checked ? type : "";
                                     if (hasCascMap) {
-                                      setDraftField({ cascadingMap: { ...(draft?.cascadingMap ?? {}), [key]: newVal } });
+                                      setDraftField({ cascadingMap: { ...(row.cascadingMap ?? {}), [key]: newVal } });
                                     } else {
                                       setDraftField({ [key]: newVal } as Partial<KPISetting>);
                                     }
@@ -5521,34 +6241,6 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
                           </>
                         );
                       })()}
-                      {/* Aksi — hidden in preview mode or when approved/validated */}
-                      {showAksi && (
-                        <td className="border border-gray-200 py-2 px-1.5 bg-white text-center">
-                          {isEditing ? (
-                            <div className="flex flex-col gap-1 items-center">
-                              <button onClick={saveEdit} className="w-full px-2 py-1 rounded text-[10px] font-bold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors">Save</button>
-                              <button onClick={cancelEdit} className="w-full px-2 py-1 rounded text-[10px] font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors">Cancel</button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-center gap-1">
-                              {onUpdateItem && (
-                                <button
-                                  onClick={() => startEdit(item)}
-                                  title={ct === "FC" ? "Edit Cascading (FC — data fields read-only)" : ct ? "Edit Cascading" : "Edit"}
-                                  className="p-1.5 rounded-lg hover:bg-[#1A284F]/10 text-[#1A284F] transition-colors">
-                                  <Edit3 className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                              {(!ct || ct === "CC") && onDeleteItem && (
-                                <button onClick={() => onDeleteItem(item.id)} title="Delete"
-                                  className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors">
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      )}
                     </tr>
                   );
                 })}
@@ -5564,8 +6256,47 @@ export function CorporateKPITable({ items, onUpdateItem, onDeleteItem, onAddClic
     {corpTargetEdit && (
       <TargetEditMiniModal
         item={corpTargetEdit}
-        onSave={(updates) => { setDraftField(updates); setCorpTargetEdit(null); }}
+        onSave={(updates) => { setCorpRowPatch(corpTargetEdit.id, updates); setCorpTargetEdit(null); }}
         onClose={() => setCorpTargetEdit(null)}
+      />
+    )}
+    {corpDeleteItem && (
+      <DeleteKpiRowConfirmModal
+        item={corpDeleteItem}
+        onCancel={() => setCorpDeleteItem(null)}
+        onConfirm={() => {
+          onDeleteItem?.(corpDeleteItem.id);
+          if (editingRowId === corpDeleteItem.id) cancelEdit();
+          setCorpDeleteItem(null);
+        }}
+      />
+    )}
+    {corpUnsavedPopup && draft && (
+      <UnsavedRowEditPopup
+        kpiNo={draft.no || "—"}
+        onContinueEdit={() => {
+          setCorpUnsavedPopup(false);
+          setCorpPendingSwitch(null);
+        }}
+        onDiscard={() => {
+          const nextTarget = corpPendingSwitch;
+          cancelEdit();
+          if (nextTarget) startEdit(nextTarget);
+        }}
+        onSave={() => {
+          const nextTarget = corpPendingSwitch;
+          const ok = saveEdit();
+          setCorpUnsavedPopup(false);
+          setCorpPendingSwitch(null);
+          if (ok && nextTarget) startEdit(nextTarget);
+        }}
+      />
+    )}
+    {corpGlobalExitConfirm && (
+      <GlobalEditUnsavedModal
+        onContinueEdit={() => setCorpGlobalExitConfirm(false)}
+        onDiscardAll={discardCorpGlobalEdit}
+        onSaveAll={() => { commitCorpGlobalEdit(); }}
       />
     )}
 
@@ -5647,9 +6378,15 @@ type TabStatus = "idle" | "pending" | "approved" | "pending-target";
 function readStoredPersonalKpiItems(employeeId: string): KPISetting[] | null {
   try {
     const normId = normalizeEmployeeId(employeeId);
-    const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+    const raw = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
     const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
-    if (Array.isArray(map[normId]) && map[normId].length > 0) return map[normId];
+    if (normId && Object.prototype.hasOwnProperty.call(map, normId) && Array.isArray(map[normId])) {
+      return map[normId];
+    }
+    const trimmed = String(employeeId ?? "").trim();
+    if (trimmed && Object.prototype.hasOwnProperty.call(map, trimmed) && Array.isArray(map[trimmed])) {
+      return map[trimmed];
+    }
   } catch {
     // ignore
   }
@@ -5835,7 +6572,16 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const canSubmit = canCreate || canEdit;
   const isViewOnly = Boolean(delegationAccess && !canCreate && !canEdit && !canDelete);
   const effectiveScopeKey = businessScopeKey || (isCorporate ? `corporate-${getGroupNameForUnit(effectiveOwner.company)}` : "");
-  const [kpiAttachments, setKpiAttachments] = useState<Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>(() => {
+  const masterForSection = useMasterKpi();
+  // Pin owner & scope key pada saat mount agar perpindahan akun login tidak pernah menyimpan draft user lama ke user baru
+  const pinnedOwnerRef = useRef<ManagedUser>(effectiveOwner);
+  const pinnedScopeKeyRef = useRef<string>(effectiveScopeKey);
+  useEffect(() => {
+    pinnedOwnerRef.current = effectiveOwner;
+    pinnedScopeKeyRef.current = effectiveScopeKey;
+  }, [effectiveOwner.employeeId, effectiveScopeKey]);
+
+  const readAttachmentsForCurrentScope = () => {
     try {
       const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
       const map = raw ? (JSON.parse(raw) as Record<string, Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>) : {};
@@ -5844,7 +6590,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     } catch {
       return [];
     }
-  });
+  };
+  const [kpiAttachments, setKpiAttachments] = useState<Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>(
+    () => readAttachmentsForCurrentScope(),
+  );
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const kpiAttachInputRef = useRef<HTMLInputElement>(null);
 
@@ -5922,20 +6671,27 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     return readStoredPersonalKpiItems(effectiveOwner.employeeId) ?? initialItems;
   });
 
-  const persistKpiItemsToBackend = (nextItems: KPISetting[], statusLabel: string) => {
+  const persistKpiItemsToBackend = (
+    nextItems: KPISetting[],
+    statusLabel: string,
+    ownerOverride?: ManagedUser,
+    scopeKeyOverride?: string,
+  ) => {
+    const targetOwner = ownerOverride ?? pinnedOwnerRef.current;
+    const targetScopeKey = scopeKeyOverride ?? pinnedScopeKeyRef.current;
     if (isCorporate) {
       try {
         const raw = safeGetLocalRaw("pa_kpi_business_by_scope_v1");
         const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
-        map[effectiveScopeKey] = nextItems;
+        map[targetScopeKey] = nextItems;
         safeSetLocalJson("pa_kpi_business_by_scope_v1", map);
       } catch {
         // ignore
       }
-      void mergeKvMapRecord("pa_kpi_business_by_scope_v1", effectiveScopeKey, nextItems);
+      void mergeKvMapRecord("pa_kpi_business_by_scope_v1", targetScopeKey, nextItems);
       void syncToSupabase({
         kind: "kpi-business",
-        id: effectiveScopeKey,
+        id: targetScopeKey,
         period: "2026",
         items: nextItems,
         status: statusLabel,
@@ -5945,11 +6701,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           action: statusLabel === "Submitted" ? "Create" : "Update",
           module: "KPI",
           subModule: workspaceLabel || "KPI Business Setting",
-          description: `${statusLabel === "Submitted" ? "Submitted" : "Updated"} ${nextItems.length} KPI Business (${effectiveScopeKey}) by ${actorLabel}`,
+          description: `${statusLabel === "Submitted" ? "Submitted" : "Updated"} ${nextItems.length} KPI Business (${targetScopeKey}) by ${actorLabel}`,
         },
       });
     } else {
-      const normId = normalizeEmployeeId(effectiveOwner.employeeId);
+      const normId = normalizeEmployeeId(targetOwner.employeeId);
       try {
         const raw = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
         const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
@@ -5961,9 +6717,9 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       void mergeKvMapRecord("pa_kpi_setting_by_emp_v2", normId, nextItems);
       void syncToSupabase({
         kind: "kpi-setting",
-        docKey: `${effectiveOwner.employeeId}:personal:2026`,
-        employeeId: effectiveOwner.employeeId,
-        companyUnit: effectiveOwner.company,
+        docKey: `${targetOwner.employeeId}:personal:2026`,
+        employeeId: targetOwner.employeeId,
+        companyUnit: targetOwner.company,
         tab: "personal",
         period: "2026",
         items: nextItems,
@@ -5974,7 +6730,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           action: statusLabel === "Submitted" ? "Create" : "Update",
           module: "KPI",
           subModule: "KPI Setting (Personal)",
-          description: `${statusLabel === "Submitted" ? "Submitted" : "Updated"} ${nextItems.length} KPI Setting Personal (${effectiveOwner.employeeId}) by ${actorLabel}`,
+          description: `${statusLabel === "Submitted" ? "Submitted" : "Updated"} ${nextItems.length} KPI Setting Personal (${targetOwner.employeeId}) by ${actorLabel}`,
         },
       });
     }
@@ -6109,9 +6865,8 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   useEffect(() => {
     const init = readPersonalWorkflowState();
-    if (init.storedItems) {
-      setItems_(init.storedItems);
-    }
+    setItems_(init.storedItems ?? initialItems);
+    setKpiAttachments(readAttachmentsForCurrentScope());
     const onSync = () => {
       const st = readPersonalWorkflowState();
       setSubmitted(st.isSub);
@@ -6124,9 +6879,8 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       setSelectedTargetKpis(te.selectedIds);
       setTargetEditCategory(te.cat);
       setTargetEditReason(te.reason);
-      if (st.storedItems) {
-        setItems_(st.storedItems);
-      }
+      setItems_(st.storedItems ?? initialItems);
+      setKpiAttachments(readAttachmentsForCurrentScope());
       if (st.rec && !st.isSub && !isViewOnly) {
         setView("input");
       }
@@ -6172,12 +6926,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   const draftBlocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
-      hasUnsubmittedCreatedDraft && currentLocation.pathname !== nextLocation.pathname,
+      hasUnsubmittedCreatedDraft &&
+      currentLocation.pathname !== nextLocation.pathname &&
+      normalizeEmployeeId(getActiveUser().employeeId) === normalizeEmployeeId(pinnedOwnerRef.current.employeeId),
   );
 
   useEffect(() => {
     if (draftBlocker.state === "blocked") {
-      persistKpiItemsToBackend(latestItemsRef.current, "Draft");
+      persistKpiItemsToBackend(latestItemsRef.current, "Draft", pinnedOwnerRef.current, pinnedScopeKeyRef.current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftBlocker.state]);
@@ -6185,7 +6941,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   useEffect(() => {
     const onBeforeUnload = () => {
       if (!submitted && !kpiApproved && !isViewOnly && latestItemsRef.current.length > 0 && draftDirtyInSession) {
-        persistKpiItemsToBackend(latestItemsRef.current, "Draft");
+        persistKpiItemsToBackend(latestItemsRef.current, "Draft", pinnedOwnerRef.current, pinnedScopeKeyRef.current);
       }
     };
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -6505,8 +7261,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         if (sectionColI >= 0 && g(r, sectionColI)) {
           rowSec = g(r, sectionColI).toUpperCase().match(/[A-Z]/)?.[0] ?? curSec;
         }
-        const satuanVal = g(r, satuanI) || "%/Bulan";
+        const satuanVal = g(r, satuanI);
         const trackVal = derivePeriodeTrackingFromSatuan(satuanVal, g(r, trackI) || "Bulan");
+        const rawBobot = g(r, bobotI);
+        const normalizedBobot = /^\d+(?:\.\d+)?$/.test(rawBobot) ? `${rawBobot}%` : rawBobot;
 
         const item: KPISetting = {
           id: `imp-${Date.now()}-${imported.length}`,
@@ -6515,23 +7273,24 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           sectionAlphabet: `${rowSec}.`,
           sectionLabel: sectionColI >= 0 ? undefined : curSecLabel,
           sectionBobot: sectionColI >= 0 ? undefined : curSecBobot,
-          perspektif: g(r, perspektifI) || "Proses",
+          perspektif: g(r, perspektifI),
           kpi: kpiText,
           satuan: satuanVal,
-          formula: g(r, formulaI) || "Rata-Rata",
+          formula: g(r, formulaI),
           scope: isGroupTable ? g(r, scopeI) : "",
-          bobot: g(r, bobotI) || "0%",
+          bobot: normalizedBobot,
           definisi: g(r, definisiI),
           source: g(r, sourceI),
           baseline2025: g(r, baseI),
           target2026: g(r, targetI),
-          polaritas: ((g(r, polarI) as Polaritas) || "Maximize"),
+          polaritas: g(r, polarI) as Polaritas,
           detailFormula: g(r, detailI),
           keterangan: g(r, ketI),
           trackingPeriod: trackVal,
           monthlyTargets: {},
           colorIndicator: false,
           indicatorMode: "numeric",
+          _uploadedCheck: true,
         };
 
         if (isGroupTable && (fcI >= 0 || pcI >= 0 || ccI >= 0)) {
@@ -6559,7 +7318,15 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
       if (imported.length > 0) {
         setItems(imported);
-        toast.success(`${imported.length} baris KPI berhasil di-upload dan disimpan.`);
+        const invalidRows = imported.filter((it) => validateKpiRowStandard(it, masterForSection).length > 0);
+        if (invalidRows.length > 0) {
+          toast.warning(
+            `${imported.length} baris KPI di-upload, namun ${invalidRows.length} baris memiliki format penulisan yang belum sesuai standar sistem (ditandai merah lembut). Silakan perbaiki baris tersebut agar tanda merah otomatis hilang.`,
+            { duration: 7000 },
+          );
+        } else {
+          toast.success(`${imported.length} baris KPI berhasil di-upload dan seluruh format telah sesuai standar sistem.`);
+        }
       } else {
         toast.error("Tidak ada baris KPI berisi data pada file Excel yang dipilih.");
       }
@@ -6809,11 +7576,30 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         </div>
       )}
 
+      {(() => {
+        const invalidUploaded = items.filter((it) => validateKpiRowStandard(it, masterForSection).length > 0);
+        if (invalidUploaded.length === 0) return null;
+        return (
+          <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-rose-50/90 border border-rose-200 text-rose-800 text-xs">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="font-bold text-rose-900">
+                Terdapat {invalidUploaded.length} baris KPI hasil upload dengan format penulisan belum sesuai standar sistem
+              </p>
+              <p className="text-rose-700 mt-0.5 leading-relaxed">
+                Baris yang bermasalah diberi <strong>tanda merah lembut</strong> pada tabel beserta keterangan kolomnya (No: {invalidUploaded.map((r) => r.no).join(", ")}). Klik <strong>Edit</strong> per baris atau <strong>Global Edit</strong> untuk menyesuaikannya — tanda merah akan otomatis hilang begitu format sesuai.
+              </p>
+            </div>
+          </div>
+        );
+      })()}
+
       {isCorporate ? (
         <CorporateKPITable
           items={items}
           hideScope={isCorporate && (workspaceLabel?.includes("Unit") || effectiveScopeKey.startsWith("unit") || effectiveScopeKey.startsWith("corporate-unit"))}
           onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
+          onBatchUpdateItems={canEdit ? (next) => setItems(next) : undefined}
           onDeleteItem={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
           onAddClick={canCreate ? () => setShowAddModal(true) : undefined}
           onSubmit={canSubmit ? () => setShowConfirm(true) : undefined}
@@ -6858,6 +7644,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           editable={view === "input" && !submitted && !isViewOnly && (canEdit || canDelete)}
           onDelete={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
           onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
+          onBatchUpdateItems={canEdit ? (next) => setItems(next) : undefined}
           hideCascading={hideCascading}
           onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
           onUpdateSectionMeta={canEdit && !isViewOnly ? handleUpdateSectionMeta : undefined}
@@ -7416,7 +8203,7 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
       )}
       {activeTab === "personal" && (
         <KPISection
-          key="personal"
+          key={`personal-${activeUser.employeeId}`}
           initialItems={[]}
           isPersonal={true}
           isCorporate={false}
@@ -7458,7 +8245,7 @@ export function SupervisorSettingKPIPage({ personalOnly: personalOnlyProp = fals
 
   // Jika tidak ada delegasi KPI Setting yang diterima, jalankan tampilan standar 100% seperti sedia kala
   if (receivedDelegations.length === 0) {
-    return <StandardKPISettingContent personalOnly={personalOnlyProp} />;
+    return <StandardKPISettingContent key={activeUser.employeeId} personalOnly={personalOnlyProp} />;
   }
 
   // Bangun daftar tab KPI Setting gabungan (Delegasi dari Pemberi Delegasi + KPI milik Penerima Delegasi sendiri):

@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router";
 import { DatePickerID } from "../../components/DatePickerID";
 import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info } from "lucide-react";
 import { loadAllKPIComments, loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
+import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
 import { saveEvidenceFiles, loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import type { StoredEvidenceFile } from "../shared/kpiEvidenceStore";
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
@@ -21,7 +22,7 @@ import {
   type KpiTableScale,
 } from "../../components/KpiTableDisplayControls";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
-import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../store/notificationStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
@@ -660,7 +661,7 @@ export function saveKPITracking(data: KPITrackingSnapshot, ownerOverride?: { emp
       period: "2026",
       months: data.months,
       cellsMap: data.cellsMap,
-      monthlyNotes: loadAllMonthlyNotes(),
+      monthlyNotes: loadMonthlyNotes(),
       comments: loadAllKPIComments(),
       audit: {
         userId: actor.employeeId,
@@ -4360,7 +4361,7 @@ function KPIWorkspace({
       period: "2026",
       months,
       cellsMap: next,
-      monthlyNotes: loadAllMonthlyNotes(),
+      monthlyNotes: loadMonthlyNotes(),
       comments: loadAllKPIComments(),
     });
     savePersistedState("kpi_business_tracking_cells_v1", next);

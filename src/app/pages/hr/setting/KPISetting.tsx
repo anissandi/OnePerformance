@@ -3,7 +3,7 @@ import { useRouteTab } from "../../../utils/useRouteTab";
 import { CheckCircle2, X, RotateCcw, Download, FileSearch, Copy, UserCheck, ShieldCheck, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
-import { loadPersistedState, mergeKvMapRecord, safeSetLocalJson, savePersistedState } from "../../../services/supabaseClient";
+import { loadPersistedState, mergeKvMapRecord, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../../store/notificationStore";
 import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
 import {

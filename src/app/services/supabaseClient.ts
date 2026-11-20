@@ -2554,7 +2554,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const rawEmpId = String(kt.employee_id ?? "").trim();
         if (!rawEmpId) continue;
         const numMatch = rawEmpId.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
-        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmpId;
+        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmpId.toUpperCase();
         const months = Array.isArray(kt.months) ? kt.months : [];
         const cellsMap = kt.cells_map && typeof kt.cells_map === "object" ? kt.cells_map : {};
         safeSetLocalJson(`kpi_tracking_v1_${normId}`, { months, cellsMap });
@@ -2573,10 +2573,10 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       for (const row of kpiSettingsRows) {
         const rawEmp = String(row.employee_id ?? "").trim();
         const tab = String(row.tab ?? "personal");
-        const items = Array.isArray(row.items) ? row.items : [];
-        if (!rawEmp || items.length === 0 || tab !== "personal") continue;
+        if (!rawEmp || !Array.isArray(row.items) || tab !== "personal") continue;
+        const items = row.items;
         const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
-        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp;
+        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp.toUpperCase();
         byEmp[normId] = items;
       }
       safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
