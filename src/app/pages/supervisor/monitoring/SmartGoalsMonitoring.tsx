@@ -254,13 +254,14 @@ export function SupervisorMonitoringSmartGoals() {
   const [sortDir, setSortDir]                         = useState<SortDir>("asc");
   const [viewRecord, setViewRecord]                   = useState<{ empName: string; sg: SGRecord } | null>(null);
 
-  const units     = useMemo(() => [...new Set(TEAM_EMPLOYEES.map(e => e.unit))].sort(),     []);
-  const divisions = useMemo(() => [...new Set(TEAM_EMPLOYEES.map(e => e.division))].sort(), []);
-  const positions = useMemo(() => [...new Set(TEAM_EMPLOYEES.map(e => e.position))].sort(), []);
+  const teamSnapshot = useMemo(() => [...TEAM_EMPLOYEES], [tick]);
+  const units     = useMemo(() => [...new Set(teamSnapshot.map(e => e.unit))].sort(),     [teamSnapshot]);
+  const divisions = useMemo(() => [...new Set(teamSnapshot.map(e => e.division))].sort(), [teamSnapshot]);
+  const positions = useMemo(() => [...new Set(teamSnapshot.map(e => e.position))].sort(), [teamSnapshot]);
   const settingStatuses = ["Unsubmitted", "Draft", "Pending-Approver", "Revision", "Validated"];
   const measureStatuses = ["Unsubmitted", "Pending-Check", "Pending-Approver 1", "Pending-Approver 2", "Pending-Validate", "Revision", "Validated"];
 
-  const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "SMART Goals (Setting/Measurement)");
+  const allowedTeamEmployees = filterMonitoringByModuleAccess(teamSnapshot, "SMART Goals (Setting/Measurement)");
   const buildLiveSG = (empId: string): SGRecord => {
     const normId = normalizeEmployeeId(empId);
     const workflows = loadWorkflowRecords();

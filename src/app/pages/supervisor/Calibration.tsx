@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { AlertTriangle, Eye, X, FileText, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadPersistedState } from "../../services/supabaseClient";
@@ -74,6 +74,8 @@ interface TeamMember {
   no: number;
   idEmployee: string;
   name: string;
+  companyUnit: string;
+  division: string;
   department: string;
   position: string;
   currentScore: number;
@@ -106,6 +108,8 @@ function buildLiveSupervisorTeamMembers(): TeamMember[] {
       no: idx + 1,
       idEmployee: e.id,
       name: e.fullName,
+      companyUnit: e.companyUnit,
+      division: e.division,
       department: e.department,
       position: e.position,
       currentScore: currScore,
@@ -521,9 +525,26 @@ const ALL_GRADES = ["A+","A","B","C","D","E"];
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export function SupervisorCalibration() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
+
   const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
 
   // Filters
+  const [fUnit,     setFUnit]     = useState("");
+  const [fDiv,      setFDiv]      = useState("");
   const [fDept,     setFDept]     = useState("");
   const [fPosition, setFPosition] = useState("");
   const [fCurrGrade,setFCurrGrade]= useState("");
@@ -535,15 +556,42 @@ export function SupervisorCalibration() {
   const [sortCurr, setSortCurr] = useState<SortDir>(null);
   const [sortProp, setSortProp] = useState<SortDir>(null);
 
-  const deptOptions     = useMemo(() => [...new Set(TEAM_MEMBERS.map(m => m.department))], []);
-  const positionOptions = useMemo(() => [...new Set(TEAM_MEMBERS.map(m => m.position))], []);
-  const gradeOptions    = useMemo(() => [...new Set(TEAM_MEMBERS.flatMap(m => [m.currentGrade, m.proposedGrade]))].sort(), []);
+  const teamMembers = useMemo(() => buildLiveSupervisorTeamMembers(), [tick]);
+  const unitOptions = useMemo(
+    () => [...new Set(teamMembers.map((m) => m.companyUnit).filter(Boolean))].sort(),
+    [teamMembers],
+  );
+  const divOptions = useMemo(() => {
+    const pool = fUnit ? teamMembers.filter((m) => m.companyUnit === fUnit) : teamMembers;
+    return [...new Set(pool.map((m) => m.division).filter(Boolean))].sort();
+  }, [teamMembers, fUnit]);
+  const deptOptions = useMemo(() => {
+    const pool = teamMembers.filter(
+      (m) => (!fUnit || m.companyUnit === fUnit) && (!fDiv || m.division === fDiv),
+    );
+    return [...new Set(pool.map((m) => m.department).filter(Boolean))].sort();
+  }, [teamMembers, fUnit, fDiv]);
+  const positionOptions = useMemo(() => {
+    const pool = teamMembers.filter(
+      (m) =>
+        (!fUnit || m.companyUnit === fUnit) &&
+        (!fDiv || m.division === fDiv) &&
+        (!fDept || m.department === fDept),
+    );
+    return [...new Set(pool.map((m) => m.position).filter(Boolean))].sort();
+  }, [teamMembers, fUnit, fDiv, fDept]);
+  const gradeOptions = useMemo(
+    () => [...new Set(teamMembers.flatMap((m) => [m.currentGrade, m.proposedGrade]))].sort(),
+    [teamMembers],
+  );
   const statusOptions   = ["No Change", "Upgraded"];
 
-  const hasFilter = !!(fDept || fPosition || fCurrGrade || fPropGrade || fStatus);
+  const hasFilter = !!(fUnit || fDiv || fDept || fPosition || fCurrGrade || fPropGrade || fStatus);
 
   const displayed = useMemo(() => {
-    let rows = TEAM_MEMBERS.filter(m => {
+    let rows = teamMembers.filter(m => {
+      if (fUnit      && m.companyUnit   !== fUnit)      return false;
+      if (fDiv       && m.division      !== fDiv)       return false;
       if (fDept      && m.department    !== fDept)      return false;
       if (fPosition  && m.position      !== fPosition)  return false;
       if (fCurrGrade && m.currentGrade  !== fCurrGrade) return false;
@@ -557,7 +605,7 @@ export function SupervisorCalibration() {
       rows = [...rows].sort((a, b) => sortProp === "asc" ? a.proposedScore - b.proposedScore : b.proposedScore - a.proposedScore);
     }
     return rows;
-  }, [fDept, fPosition, fCurrGrade, fPropGrade, fStatus, sortCurr, sortProp]);
+  }, [teamMembers, fUnit, fDiv, fDept, fPosition, fCurrGrade, fPropGrade, fStatus, sortCurr, sortProp]);
 
   function cycleSortCurr() {
     setSortProp(null);
@@ -575,13 +623,10 @@ export function SupervisorCalibration() {
   }
 
   // HC summary
-  const activeGrades = ALL_GRADES.filter(g =>
-    TEAM_MEMBERS.some(m => m.currentGrade === g || m.proposedGrade === g)
-  );
   const allDisplayGrades = ALL_GRADES; // always show all including E
 
-  const currentCounts  = (g: string) => TEAM_MEMBERS.filter(m => m.currentGrade  === g).length;
-  const proposedCounts = (g: string) => TEAM_MEMBERS.filter(m => m.proposedGrade === g).length;
+  const currentCounts  = (g: string) => teamMembers.filter(m => m.currentGrade  === g).length;
+  const proposedCounts = (g: string) => teamMembers.filter(m => m.proposedGrade === g).length;
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -593,6 +638,22 @@ export function SupervisorCalibration() {
 
         {/* ── Filters ── */}
         <div className="flex flex-wrap items-center gap-2">
+          {unitOptions.length > 1 && (
+            <FilterSelect
+              label="All Units"
+              options={unitOptions}
+              value={fUnit}
+              onChange={(v) => { setFUnit(v); setFDiv(""); setFDept(""); setFPosition(""); }}
+            />
+          )}
+          {divOptions.length > 1 && (
+            <FilterSelect
+              label="All Divisions"
+              options={divOptions}
+              value={fDiv}
+              onChange={(v) => { setFDiv(v); setFDept(""); setFPosition(""); }}
+            />
+          )}
           <FilterSelect label="All Departments"   options={deptOptions}     value={fDept}      onChange={setFDept} />
           <FilterSelect label="All Positions"     options={positionOptions} value={fPosition}  onChange={setFPosition} />
           <FilterSelect label="Current Grade"     options={gradeOptions}    value={fCurrGrade} onChange={setFCurrGrade} />
@@ -600,7 +661,7 @@ export function SupervisorCalibration() {
           <FilterSelect label="All Status"        options={statusOptions}   value={fStatus}    onChange={setFStatus} />
           {hasFilter && (
             <button
-              onClick={() => { setFDept(""); setFPosition(""); setFCurrGrade(""); setFPropGrade(""); setFStatus(""); }}
+              onClick={() => { setFUnit(""); setFDiv(""); setFDept(""); setFPosition(""); setFCurrGrade(""); setFPropGrade(""); setFStatus(""); }}
               className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2 ml-1"
             >
               Clear filters
@@ -612,7 +673,7 @@ export function SupervisorCalibration() {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold text-[#1A284F]">
-              Team Calibration — {displayed.length}/{TEAM_MEMBERS.length} Members
+              Team Calibration — {displayed.length}/{teamMembers.length} Members
             </h2>
           </div>
 
@@ -725,7 +786,7 @@ export function SupervisorCalibration() {
                       </td>
                     );
                   })}
-                  <td className="py-2.5 px-6 text-center font-bold text-[#1A284F]">{TEAM_MEMBERS.length}</td>
+                  <td className="py-2.5 px-6 text-center font-bold text-[#1A284F]">{teamMembers.length}</td>
                 </tr>
                 <tr>
                   <td className="py-2.5 pr-6 font-semibold text-gray-600">Proposed HC</td>
@@ -740,7 +801,7 @@ export function SupervisorCalibration() {
                       </td>
                     );
                   })}
-                  <td className="py-2.5 px-6 text-center font-bold text-[#1A284F]">{TEAM_MEMBERS.length}</td>
+                  <td className="py-2.5 px-6 text-center font-bold text-[#1A284F]">{teamMembers.length}</td>
                 </tr>
               </tbody>
             </table>

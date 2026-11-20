@@ -46,6 +46,8 @@ import {
   readCalibrationTargets, getModuleScoreGrade,
 } from "../../data/mockEmployees";
 import {
+  getAuthorizedSubordinates,
+  isAdminOrHrIcfRole,
   isExcludedFromAppraisalCalibration,
   loadManagedUsers,
   resolveUserAllowedModules,
@@ -54,7 +56,6 @@ import {
   type ManagedUser,
   getActiveUser as getActiveUserForScope,
   resolveUserAllowedModules as resolveAllowedModulesForScope,
-  resolveUserAuthorityLevel as resolveAuthorityForScope,
 } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
@@ -1469,19 +1470,31 @@ function FilterSelect({ label, options, value, onChange, highlight }: { label: s
 export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const { t } = useLanguage();
   const { lockedUnits: authLockedUnits } = useAuthStore();
-  // Scope Supervisor & HR Unit: terkunci pada Unit Usaha, Divisi, Departemen milik user; modul sesuai Groupings
+  const [tick, setTick] = useState(0);
   const scopeUser = getActiveUserForScope();
+  const isGlobalViewer = isAdminOrHrIcfRole(scopeUser.role) || scopeUser.role === "BOD";
   const isCheckerRole = Boolean(scopeUser.isHrUnitChecker || scopeUser.role === "HR Unit");
-  const isScopedRole = scopeUser.role === "Supervisor" || isCheckerRole;
-  const scopeLevel = isScopedRole ? resolveAuthorityForScope(scopeUser) : null;
-  const lockDivision = isScopedRole && !isCheckerRole && scopeLevel !== "hr_unit" && scopeLevel !== "gm_unit" ? scopeUser.division : "";
-  const lockDepartment =
-    isScopedRole && !isCheckerRole && (scopeLevel === "department" || scopeLevel === "bagian" || scopeLevel === "seksi" || scopeLevel === "operational")
-      ? scopeUser.department
-      : "";
-  const effectiveLockedUnits = isScopedRole ? [scopeUser.company] : lockedUnits ?? authLockedUnits;
+  const isModuleScopedRole = scopeUser.role === "Supervisor";
+  const globalLockedUnits = isGlobalViewer ? (lockedUnits ?? authLockedUnits) : undefined;
+
+  const allManagedActiveUsers = useMemo(() => {
+    const all = loadManagedUsers().filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
+    if (isGlobalViewer) {
+      return globalLockedUnits ? all.filter((u) => globalLockedUnits.includes(u.company)) : all;
+    }
+    const authorizedIds = new Set(
+      getAuthorizedSubordinates(scopeUser, loadManagedUsers()).map((u) => u.employeeId.toLowerCase()),
+    );
+    if (isCheckerRole) {
+      // Checker: melihat seluruh Unit Usahanya (seperti GM Unit Usaha) + bawahan approver/multi-scope jika ada
+      return all.filter((u) => u.company === scopeUser.company || authorizedIds.has(u.employeeId.toLowerCase()));
+    }
+    return all.filter((u) => authorizedIds.has(u.employeeId.toLowerCase()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGlobalViewer, isCheckerRole, globalLockedUnits, scopeUser.employeeId, scopeUser.role, tick]);
+
   const moduleOptions = useMemo(() => {
-    if (!isScopedRole) return filterOptions.module;
+    if (!isModuleScopedRole) return filterOptions.module;
     const allowed = resolveAllowedModulesForScope(scopeUser);
     const map: Record<string, string[]> = {
       "KPI (Setting/Measurement)": ["KPI (Setting)", "KPI (Tracking)"],
@@ -1495,38 +1508,43 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     const opts = new Set(allowed.flatMap((m) => map[m] ?? []));
     return ["All Modules", ...filterOptions.module.filter((m) => opts.has(m))];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isScopedRole, scopeUser.employeeId, scopeUser.groupings]);
-  const defaultCompanyUnit =
-    effectiveLockedUnits && effectiveLockedUnits.length === 1
-      ? effectiveLockedUnits[0]
-      : "All Units";
+  }, [isModuleScopedRole, scopeUser.employeeId, scopeUser.groupings]);
+
   const companyUnitOptions = useMemo(() => {
-    if (!effectiveLockedUnits || effectiveLockedUnits.length === 0) {
-      return filterOptions.companyUnit;
+    if (isGlobalViewer) {
+      if (!globalLockedUnits || globalLockedUnits.length === 0) {
+        return filterOptions.companyUnit;
+      }
+      if (globalLockedUnits.length === 1) {
+        return [globalLockedUnits[0]];
+      }
+      return ["All Units", ...globalLockedUnits];
     }
-    if (effectiveLockedUnits.length === 1) {
-      return [effectiveLockedUnits[0]];
+    const unitSet = new Set(allManagedActiveUsers.map((u) => u.company).filter(Boolean));
+    const orderedUnits = [
+      ...filterOptions.companyUnit.slice(1).filter((u) => unitSet.has(u)),
+      ...Array.from(unitSet).filter((u) => !filterOptions.companyUnit.includes(u)),
+    ];
+    if (orderedUnits.length === 0) {
+      return [scopeUser.company || "All Units"];
     }
-    return ["All Units", ...effectiveLockedUnits];
-  }, [effectiveLockedUnits]);
+    if (orderedUnits.length === 1) {
+      return [orderedUnits[0]];
+    }
+    return ["All Units", ...orderedUnits];
+  }, [isGlobalViewer, globalLockedUnits, allManagedActiveUsers, scopeUser.company]);
+
+  const defaultCompanyUnit = companyUnitOptions.length === 1 ? companyUnitOptions[0] : "All Units";
+
   const [expandedCard, setExpandedCard] = useState<"timeline" | "multi" | "approval" | null>(null);
   const toggleCard = (id: "timeline" | "multi" | "approval") => setExpandedCard((cur) => (cur === id ? null : id));
   const cardSpan = (id: "timeline" | "multi" | "approval") => (expandedCard === id ? "xl:col-span-3 xl:order-first" : "");
   const [companyUnit, setCompanyUnit] = useState(() => defaultCompanyUnit);
-  const [division, setDivision] = useState(() => lockDivision || "All Divisions");
-  const [department, setDepartment] = useState(() => lockDepartment || "All Departments");
+  const [division, setDivision] = useState("All Divisions");
+  const [department, setDepartment] = useState("All Departments");
   const [module, setModule] = useState("All Modules");
   const [year, setYear] = useState("2026");
   const [month, setMonth] = useState("All Months");
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (!companyUnitOptions.includes(companyUnit)) {
-      setCompanyUnit(defaultCompanyUnit);
-      setDivision(lockDivision || "All Divisions");
-      setDepartment(lockDepartment || "All Departments");
-    }
-  }, [companyUnitOptions, companyUnit, defaultCompanyUnit]);
 
   useEffect(() => {
     const onRefresh = () => setTick((v) => v + 1);
@@ -1560,19 +1578,15 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
 
   // Employees filtered by company unit (for the grade distribution charts)
   const liveEmployees = useMemo(() => getLiveTransactionalEmployees(), [tick]);
-  const allManagedActiveUsers = useMemo(() => {
-    const all = loadManagedUsers().filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
-    return effectiveLockedUnits ? all.filter((u) => effectiveLockedUnits.includes(u.company)) : all;
-  }, [effectiveLockedUnits, tick]);
 
   const divisionOptions = useMemo(() => {
     const pool = companyUnit === "All Units"
       ? allManagedActiveUsers
       : allManagedActiveUsers.filter((u) => u.company === companyUnit);
     const divs = Array.from(new Set(pool.map((u) => (u.division || "").trim()).filter(Boolean))).sort();
-    if (lockDivision) return [lockDivision];
+    if (!isGlobalViewer && !isCheckerRole && divs.length === 1) return [divs[0]];
     return ["All Divisions", ...divs];
-  }, [allManagedActiveUsers, companyUnit]);
+  }, [allManagedActiveUsers, companyUnit, isGlobalViewer, isCheckerRole]);
 
   const departmentOptions = useMemo(() => {
     const pool = allManagedActiveUsers.filter(
@@ -1581,15 +1595,34 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         (division === "All Divisions" || u.division === division),
     );
     const depts = Array.from(new Set(pool.map((u) => (u.department || "").trim()).filter(Boolean))).sort();
-    if (lockDepartment) return [lockDepartment];
+    if (!isGlobalViewer && !isCheckerRole && depts.length === 1) return [depts[0]];
     return ["All Departments", ...depts];
-  }, [allManagedActiveUsers, companyUnit, division]);
+  }, [allManagedActiveUsers, companyUnit, division, isGlobalViewer, isCheckerRole]);
+
+  useEffect(() => {
+    if (!companyUnitOptions.includes(companyUnit)) {
+      setCompanyUnit(defaultCompanyUnit);
+    }
+  }, [companyUnitOptions, companyUnit, defaultCompanyUnit]);
+
+  useEffect(() => {
+    if (!divisionOptions.includes(division)) {
+      setDivision(divisionOptions[0] ?? "All Divisions");
+    }
+  }, [divisionOptions, division]);
+
+  useEffect(() => {
+    if (!departmentOptions.includes(department)) {
+      setDepartment(departmentOptions[0] ?? "All Departments");
+    }
+  }, [departmentOptions, department]);
 
   const filteredEmployees = useMemo(
     () => {
-      const unitEmployees = effectiveLockedUnits
-        ? liveEmployees.filter(e => effectiveLockedUnits.includes(e.companyUnit))
-        : liveEmployees;
+      const allowedIds = new Set(allManagedActiveUsers.map((u) => u.employeeId.toLowerCase()));
+      const unitEmployees = isGlobalViewer
+        ? (globalLockedUnits ? liveEmployees.filter((e) => globalLockedUnits.includes(e.companyUnit)) : liveEmployees)
+        : liveEmployees.filter((e) => allowedIds.has(e.id.toLowerCase()));
       return unitEmployees.filter(
         (e) =>
           (companyUnit === "All Units" || e.companyUnit === companyUnit) &&
@@ -1597,7 +1630,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
           (department === "All Departments" || e.department === department),
       );
     },
-    [companyUnit, division, department, effectiveLockedUnits, liveEmployees],
+    [companyUnit, division, department, isGlobalViewer, globalLockedUnits, allManagedActiveUsers, liveEmployees],
   );
 
   const scopedUsers = useMemo(() => {
@@ -1703,8 +1736,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
 
   const hasActiveFilters =
     companyUnit !== defaultCompanyUnit ||
-    division !== "All Divisions" ||
-    department !== "All Departments" ||
+    division !== (divisionOptions[0] ?? "All Divisions") ||
+    department !== (departmentOptions[0] ?? "All Departments") ||
     module !== "All Modules" ||
     year !== "2026" ||
     month !== "All Months";
@@ -1731,8 +1764,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             value={companyUnit}
             onChange={(val) => {
               setCompanyUnit(val);
-              setDivision(lockDivision || "All Divisions");
-              setDepartment(lockDepartment || "All Departments");
+              setDivision("All Divisions");
+              setDepartment("All Departments");
             }}
           />
           <FilterSelect
@@ -1741,7 +1774,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
             value={division}
             onChange={(val) => {
               setDivision(val);
-              setDepartment(lockDepartment || "All Departments");
+              setDepartment("All Departments");
             }}
           />
           <FilterSelect
@@ -1773,8 +1806,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
                 type="button"
                 onClick={() => {
                   setCompanyUnit(defaultCompanyUnit);
-                  setDivision(lockDivision || "All Divisions");
-                  setDepartment(lockDepartment || "All Departments");
+                  setDivision("All Divisions");
+                  setDepartment("All Departments");
                   setModule("All Modules");
                   setYear("2026");
                   setMonth("All Months");

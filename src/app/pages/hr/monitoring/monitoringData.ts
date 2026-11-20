@@ -45,7 +45,16 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
       division: u.division,
       unit: u.company,
       grade: u.grade || "Grade 5",
-      isSupervisor: allowed.includes("Managerial Skill") || u.role === "Supervisor" || u.role === "GM" || u.role === "Director",
+      isSupervisor:
+        allowed.includes("Managerial Skill") ||
+        u.role === "Supervisor" ||
+        u.role === "GM" ||
+        u.role === "vGM" ||
+        u.role === "Coordinator" ||
+        u.role === "Division" ||
+        u.role === "Departement" ||
+        u.role === "Director" ||
+        u.role === "DirectorNonOpr",
       isSelf,
       allowedModules: allowed,
       hasManagementInterview: allowed.includes("Management Interview"),
@@ -105,21 +114,20 @@ const ALL_COMPANY_UNITS = [
 
 function getScopedCompanyUnits(): string[] {
   const activeUser = getActiveUser();
+  const isGlobalViewer = isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
   const roleUnits = getRoleAllowedCompanyUnits(activeUser.role);
-  if (roleUnits.length > 0) {
-    const base =
-      activeUser.role === "GM" || activeUser.role === "HR Unit"
-        ? [activeUser.company, ...roleUnits, ...(activeUser.managedUnits ?? [])]
-        : [...roleUnits, ...(activeUser.managedUnits ?? [])];
-    return Array.from(new Set(base.filter(Boolean)));
+  if (isGlobalViewer) {
+    if (roleUnits.length > 0) {
+      return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+    }
+    return ALL_COMPANY_UNITS;
   }
-  if (activeUser.role === "HR Unit" || activeUser.role === "GM") {
-    return Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
-  }
-  if (isDirectorRoleOrGrouping(activeUser)) {
-    return getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits);
-  }
-  return ALL_COMPANY_UNITS;
+  const visibleUnits = new Set(getMonitoringEmployees().map((e) => e.unit).filter(Boolean));
+  const ordered = [
+    ...ALL_COMPANY_UNITS.filter((u) => visibleUnits.has(u)),
+    ...Array.from(visibleUnits).filter((u) => !ALL_COMPANY_UNITS.includes(u)),
+  ];
+  return ordered.length > 0 ? ordered : [activeUser.company].filter(Boolean);
 }
 
 export const COMPANY_UNITS: string[] = new Proxy([] as string[], {

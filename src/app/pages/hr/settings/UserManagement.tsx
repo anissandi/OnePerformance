@@ -49,14 +49,19 @@ function avatarColor(id: string) {
 }
 
 const ROLE_BADGE: Record<string, string> = {
-  "Employee":      "bg-emerald-50 text-emerald-700",
-  "Supervisor":    "bg-blue-50 text-blue-700",
-  "GM":            "bg-indigo-50 text-indigo-700",
-  "HR Unit":       "bg-purple-50 text-purple-700",
-  "HR ICF":        "bg-amber-50 text-amber-700",
-  "Director":      "bg-rose-50 text-rose-700",
-  "BOD":           "bg-red-50 text-red-700",
-  "Administrator": "bg-slate-100 text-slate-700",
+  "Employee":       "bg-emerald-50 text-emerald-700",
+  "Supervisor":     "bg-blue-50 text-blue-700",
+  "Departement":    "bg-cyan-50 text-cyan-800",
+  "Division":       "bg-sky-50 text-sky-700",
+  "vGM":            "bg-teal-50 text-teal-800",
+  "Coordinator":    "bg-teal-50 text-teal-800",
+  "GM":             "bg-indigo-50 text-indigo-700",
+  "HR Unit":        "bg-purple-50 text-purple-700",
+  "HR ICF":         "bg-amber-50 text-amber-700",
+  "Director":       "bg-rose-50 text-rose-700",
+  "DirectorNonOpr": "bg-pink-50 text-pink-800",
+  "BOD":            "bg-red-50 text-red-700",
+  "Administrator":  "bg-slate-100 text-slate-700",
 };
 
 function RoleBadge({ role }: { role: Role }) {
@@ -103,6 +108,7 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
             { label: "Bagian", value: user.bagian || "—" },
             { label: "Reg No AP1 (Approval 1)", value: user.regNoAp1 || "Belum ada approver" },
             { label: "Reg No AP2 (Approval 2)", value: user.regNoAp2 || "Belum ada approver" },
+            { label: "Multi-Unit (Cakupan)", value: user.managedUnits?.length ? user.managedUnits.join(", ") : "—" },
             { label: "Multi-Divisi (Tambahan)", value: user.managedDivisions?.length ? user.managedDivisions.join(", ") : "—" },
             { label: "Multi-Departemen (Tambahan)", value: user.managedDepartments?.length ? user.managedDepartments.join(", ") : "—" },
             { label: "Multi-Bagian (Tambahan)", value: user.managedBagians?.length ? user.managedBagians.join(", ") : "—" },
@@ -276,10 +282,35 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
 
   function f(key: keyof User, val: string) { setForm(p => ({ ...p, [key]: val })); }
 
-  const calibrationOrgOpts = useMemo(
-    () => loadCalibrationOrgOptions([form.company, ...(form.managedUnits ?? [])].filter(Boolean)),
-    [form.company, form.managedUnits],
-  );
+  const multiScopeOrgOpts = useMemo(() => {
+    const targetUnits =
+      form.managedUnits && form.managedUnits.length > 0
+        ? form.managedUnits
+        : [form.company].filter(Boolean);
+    const calOpts = loadCalibrationOrgOptions(targetUnits);
+    const allUsers = loadManagedUsers().filter((u) => targetUnits.includes(u.company));
+
+    const empDivs = Array.from(new Set(allUsers.map((u) => (u.division || "").trim()).filter(Boolean))).sort();
+    const divisions = empDivs.length > 0 ? empDivs : calOpts.divisions;
+
+    const selectedDivSet = new Set((form.managedDivisions ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean));
+    const usersInSelectedDivs =
+      selectedDivSet.size > 0
+        ? allUsers.filter((u) => selectedDivSet.has((u.division || "").trim().toLowerCase()))
+        : allUsers;
+    const empDepts = Array.from(new Set(usersInSelectedDivs.map((u) => (u.department || "").trim()).filter(Boolean))).sort();
+    const departments = empDepts.length > 0 ? empDepts : selectedDivSet.size > 0 ? [] : calOpts.departments;
+
+    const selectedDeptSet = new Set((form.managedDepartments ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean));
+    const usersInSelectedDepts =
+      selectedDeptSet.size > 0
+        ? usersInSelectedDivs.filter((u) => selectedDeptSet.has((u.department || "").trim().toLowerCase()))
+        : usersInSelectedDivs;
+    const empBags = Array.from(new Set(usersInSelectedDepts.map((u) => (u.bagian || "").trim()).filter(Boolean))).sort();
+    const bagians = empBags.length > 0 ? empBags : (selectedDivSet.size > 0 || selectedDeptSet.size > 0) ? [] : calOpts.bagians;
+
+    return { divisions, departments, bagians };
+  }, [form.company, form.managedUnits, form.managedDivisions, form.managedDepartments]);
 
   const calRoleMap: Record<string, "approver" | "mengetahui" | ""> = form.calibrationRoleByUnit ?? {};
 
@@ -509,37 +540,37 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                 Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian)
               </p>
               <p className="text-[11px] text-gray-500 mt-0.5">
-                Opsional: Pilih lebih dari 1 menggunakan dropdown checkbox di bawah apabila pejabat ini membawahi beberapa Unit Usaha, Divisi, Departemen, atau Bagian (data bersumber dari sistem &amp; tabel Proportion /calibration/setting).
+                Opsional: Jika ceklist Unit Usaha dipilih maka seluruh karyawan di Unit Usaha tersebut akan terlihat; jika ditambah ceklist Divisi maka otomatis difilter sesuai Divisi di Unit Usaha tersebut; dan jika ditambah Departemen / Bagian maka otomatis difilter sesuai Departemen / Bagian dari Divisi &amp; Unit Usaha tersebut.
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <MultiCheckboxDropdown
-                label="Unit Usaha Tambahan"
+                label="Unit Usaha"
                 options={COMPANIES}
                 selected={form.managedUnits ?? []}
                 onChange={(next) => setForm((p) => ({ ...p, managedUnits: next }))}
-                placeholder="— Pilih Unit Usaha Tambahan —"
+                placeholder="— Pilih Unit Usaha —"
               />
               <MultiCheckboxDropdown
-                label="Divisi Tambahan (dari Proportion /calibration/setting)"
-                options={calibrationOrgOpts.divisions}
+                label="Divisi"
+                options={multiScopeOrgOpts.divisions}
                 selected={form.managedDivisions ?? []}
                 onChange={(next) => setForm((p) => ({ ...p, managedDivisions: next }))}
-                placeholder="— Pilih Divisi Tambahan —"
+                placeholder="— Pilih Divisi —"
               />
               <MultiCheckboxDropdown
-                label="Departemen Tambahan (dari Proportion /calibration/setting)"
-                options={calibrationOrgOpts.departments}
+                label="Departemen"
+                options={multiScopeOrgOpts.departments}
                 selected={form.managedDepartments ?? []}
                 onChange={(next) => setForm((p) => ({ ...p, managedDepartments: next }))}
-                placeholder="— Pilih Departemen Tambahan —"
+                placeholder="— Pilih Departemen —"
               />
               <MultiCheckboxDropdown
-                label="Bagian Tambahan (dari Proportion /calibration/setting)"
-                options={calibrationOrgOpts.bagians}
+                label="Bagian"
+                options={multiScopeOrgOpts.bagians}
                 selected={form.managedBagians ?? []}
                 onChange={(next) => setForm((p) => ({ ...p, managedBagians: next }))}
-                placeholder="— Pilih Bagian Tambahan —"
+                placeholder="— Pilih Bagian —"
               />
             </div>
           </div>

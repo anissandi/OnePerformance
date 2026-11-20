@@ -476,14 +476,13 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   const activeUser = getActiveUser();
   const scopedMeta = getScopedFilterOptionsForUser(activeUser);
   const isGlobalViewer = isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
-  const isUnitScopedRole = activeUser.role === "HR Unit" || activeUser.role === "GM";
+  const isUnitScopedRole =
+    activeUser.role === "HR Unit" ||
+    activeUser.role === "GM" ||
+    activeUser.role === "vGM" ||
+    activeUser.role === "Coordinator";
   const { lockedUnits: authLockedUnits } = useAuthStore();
-  const effectiveLockedUnits =
-    lockedUnits ??
-    authLockedUnits ??
-    (isUnitScopedRole
-      ? Array.from(new Set([activeUser.company, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
-      : undefined);
+  const globalLockedUnits = isGlobalViewer ? (lockedUnits ?? authLockedUnits) : undefined;
   const supervisorAllowedIds = new Set(
     !isGlobalViewer || role === "supervisor" || isUnitScopedRole
       ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
@@ -491,6 +490,13 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   );
 
   const liveEmployees = getLiveTransactionalEmployees();
+  const visibleBaseEmployees = liveEmployees.filter((emp) => {
+    if (!isGlobalViewer || role === "supervisor" || isUnitScopedRole) {
+      return supervisorAllowedIds.has(emp.id.toLowerCase());
+    }
+    if (globalLockedUnits && !globalLockedUnits.includes(emp.companyUnit)) return false;
+    return true;
+  });
   const allWorkflows = loadWorkflowRecords();
   const isSettingFullyApproved = (empId: string, modName: "KPI" | "SMART Goals"): boolean => {
     const normId = normalizeEmployeeId(empId);
@@ -505,11 +511,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     return a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed");
   };
 
-  const filtered = liveEmployees.filter(emp => {
-    if (!isGlobalViewer || role === "supervisor" || isUnitScopedRole) {
-      if (!supervisorAllowedIds.has(emp.id.toLowerCase())) return false;
-    }
-    if (effectiveLockedUnits && !effectiveLockedUnits.includes(emp.companyUnit)) return false;
+  const filtered = visibleBaseEmployees.filter(emp => {
     if (companyUnit !== "All Units"       && emp.companyUnit !== companyUnit) return false;
     if (division    !== "All Divisions"   && emp.division    !== division)    return false;
     if (department  !== "All Departments" && emp.department  !== department)  return false;
@@ -549,8 +551,8 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   const dynamicFilterOpts = useMemo(() => {
     const poolByUnit =
       companyUnit === "All Units"
-        ? liveEmployees
-        : liveEmployees.filter((e) => e.companyUnit === companyUnit);
+        ? visibleBaseEmployees
+        : visibleBaseEmployees.filter((e) => e.companyUnit === companyUnit);
     const poolByDiv =
       division === "All Divisions"
         ? poolByUnit
@@ -563,13 +565,20 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     const uniq = (arr: string[]) =>
       Array.from(new Set(arr.map((s) => s.trim()).filter((s) => s && s !== "-"))).sort((a, b) => a.localeCompare(b));
 
+    const units = uniq(visibleBaseEmployees.map((e) => e.companyUnit));
     return {
-      companyUnit: ["All Units", ...uniq(liveEmployees.map((e) => e.companyUnit))],
+      companyUnit: units.length === 1 && !isGlobalViewer ? [units[0]] : ["All Units", ...units],
       division: ["All Divisions", ...uniq(poolByUnit.map((e) => e.division))],
       department: ["All Departments", ...uniq(poolByDiv.map((e) => e.department))],
       position: ["All Positions", ...uniq(poolByDept.map((e) => e.position))],
     };
-  }, [liveEmployees, companyUnit, division, department]);
+  }, [visibleBaseEmployees, companyUnit, division, department, isGlobalViewer]);
+
+  useEffect(() => {
+    if (!dynamicFilterOpts.companyUnit.includes(companyUnit)) {
+      setCompanyUnit(dynamicFilterOpts.companyUnit[0] ?? "All Units");
+    }
+  }, [dynamicFilterOpts.companyUnit, companyUnit]);
 
   const handleDownloadReport = () => {
     const leftHeaders = [
@@ -704,20 +713,8 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           <FilterSelect label="Year"         options={filterOptions.year}        value={year}        onChange={setYear} />
           <FilterSelect
             label="Company Unit"
-            options={
-              effectiveLockedUnits
-                ? effectiveLockedUnits.length === 1
-                  ? [effectiveLockedUnits[0]]
-                  : ["All Units", ...effectiveLockedUnits]
-                : role === "supervisor" && scopedMeta.units.length > 0
-                ? ["All Units", ...scopedMeta.units]
-                : dynamicFilterOpts.companyUnit
-            }
-            value={
-              effectiveLockedUnits && effectiveLockedUnits.length === 1
-                ? effectiveLockedUnits[0]
-                : companyUnit
-            }
+            options={dynamicFilterOpts.companyUnit}
+            value={companyUnit}
             onChange={(val) => {
               setCompanyUnit(val);
               setDivision("All Divisions");
@@ -727,11 +724,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           />
           <FilterSelect
             label="Division"
-            options={
-              role === "supervisor" && scopedMeta.divisions.length > 0
-                ? ["All Divisions", ...scopedMeta.divisions]
-                : dynamicFilterOpts.division
-            }
+            options={dynamicFilterOpts.division}
             value={division}
             onChange={(val) => {
               setDivision(val);
@@ -741,11 +734,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           />
           <FilterSelect
             label="Department"
-            options={
-              role === "supervisor" && scopedMeta.departments.length > 0
-                ? ["All Departments", ...scopedMeta.departments]
-                : dynamicFilterOpts.department
-            }
+            options={dynamicFilterOpts.department}
             value={department}
             onChange={(val) => {
               setDepartment(val);
@@ -754,11 +743,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
           />
           <FilterSelect
             label="Position"
-            options={
-              role === "supervisor" && scopedMeta.positions.length > 0
-                ? ["All Positions", ...scopedMeta.positions]
-                : dynamicFilterOpts.position
-            }
+            options={dynamicFilterOpts.position}
             value={position}
             onChange={setPosition}
           />

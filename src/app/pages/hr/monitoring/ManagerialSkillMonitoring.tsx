@@ -131,9 +131,6 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 
 export function HRMonitoringManagerialSkill({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   useAppraisalRevision();
-  const self = loadMSSelfRatings();
-  const first = loadAllMSApprovers().find((entry) => entry.approverLevel === 1);
-  const data: MSRecord[] = self ? [...MS_DATA.filter((record) => record.employeeId !== "E002"), { employeeId: "E002", selfStatus: "Selesai", supervisorStatus: first ? "Selesai" : "Belum Mulai", items: Object.entries(self.ratings).map(([no, score]) => ({ no: Number(no), selfScore: score, supScore: first?.ratings[Number(no)] ?? 0 })), lastUpdated: first?.reviewedDate ?? self.submittedAt }] : MS_DATA;
   const [search, setSearch]       = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
 
@@ -141,6 +138,26 @@ export function HRMonitoringManagerialSkill({ lockedUnits }: { lockedUnits?: str
     lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
     "Managerial Skill",
   );
+  const data: MSRecord[] = supervisors
+    .map((emp): MSRecord | null => {
+      const selfEntry = loadMSSelfRatings(emp.id);
+      const approvers = loadAllMSApprovers(emp.id);
+      const supEntry = approvers.find((a) => a.approverLevel === 2) ?? approvers.find((a) => a.approverLevel === 1);
+      if (!selfEntry && !supEntry) return null;
+      const ratingKeys = Object.keys(selfEntry?.ratings ?? supEntry?.ratings ?? {});
+      return {
+        employeeId: emp.id,
+        selfStatus: selfEntry ? "Selesai" : "Belum Mulai",
+        supervisorStatus: supEntry ? "Selesai" : "Belum Mulai",
+        items: ratingKeys.map((no) => ({
+          no: Number(no),
+          selfScore: selfEntry?.ratings?.[Number(no)] ?? 0,
+          supScore: supEntry?.ratings?.[Number(no)] ?? 0,
+        })),
+        lastUpdated: supEntry?.reviewedDate ?? selfEntry?.submittedAt ?? "-",
+      };
+    })
+    .filter((r): r is MSRecord => Boolean(r));
 
   const rows = supervisors.map((emp) => ({
     emp,

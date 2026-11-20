@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, Briefcase, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
+import { loadAllMSApprovers, loadMSSelfRatings } from "../../shared/msStore";
 
 const TEAM_IDS = ["E002", "E011"];
 const TEAM_UNIT = "PT. RSUP (Industri)";
@@ -69,18 +70,53 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 
 export function SupervisorMonitoringManagerialSkill() {
   const [search, setSearch] = useState("");
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onRefresh = () => setTick((t) => t + 1);
+    window.addEventListener("appraisal-updated", onRefresh);
+    window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-db-hydrated", onRefresh);
+    window.addEventListener("storage", onRefresh);
+    return () => {
+      window.removeEventListener("appraisal-updated", onRefresh);
+      window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-db-hydrated", onRefresh);
+      window.removeEventListener("storage", onRefresh);
+    };
+  }, []);
 
   const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "Managerial Skill");
+  const liveMsData: MSRecord[] = allowedTeamEmployees
+    .map((emp): MSRecord | null => {
+      const selfEntry = loadMSSelfRatings(emp.id);
+      const approvers = loadAllMSApprovers(emp.id);
+      const supEntry = approvers.find((a) => a.approverLevel === 2) ?? approvers.find((a) => a.approverLevel === 1);
+      if (!selfEntry && !supEntry) return null;
+      const ratingKeys = Object.keys(selfEntry?.ratings ?? supEntry?.ratings ?? {});
+      return {
+        employeeId: emp.id,
+        selfStatus: selfEntry ? "Selesai" : "Belum Mulai",
+        supervisorStatus: supEntry ? "Selesai" : "Belum Mulai",
+        items: ratingKeys.map((no) => ({
+          no: Number(no),
+          selfScore: selfEntry?.ratings?.[Number(no)] ?? 0,
+          supScore: supEntry?.ratings?.[Number(no)] ?? 0,
+        })),
+        lastUpdated: supEntry?.reviewedDate ?? selfEntry?.submittedAt ?? "-",
+      };
+    })
+    .filter((r): r is MSRecord => Boolean(r));
+
   const rows = allowedTeamEmployees.map((emp) => ({
     emp,
-    ms: MS_DATA.find((k) => k.employeeId === emp.id),
+    ms: liveMsData.find((k) => k.employeeId === emp.id),
   })).filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
 
   const supervisorCount = allowedTeamEmployees.length;
-  const selfDone  = MS_DATA.filter((k) => k.selfStatus === "Selesai").length;
-  const supDone   = MS_DATA.filter((k) => k.supervisorStatus === "Selesai").length;
-  const bothDone  = MS_DATA.filter((k) => k.selfStatus === "Selesai" && k.supervisorStatus === "Selesai").length;
-  const validFinal = MS_DATA.filter((k) => k.supervisorStatus === "Selesai" && k.items.length > 0);
+  const selfDone  = liveMsData.filter((k) => k.selfStatus === "Selesai").length;
+  const supDone   = liveMsData.filter((k) => k.supervisorStatus === "Selesai").length;
+  const bothDone  = liveMsData.filter((k) => k.selfStatus === "Selesai" && k.supervisorStatus === "Selesai").length;
+  const validFinal = liveMsData.filter((k) => k.supervisorStatus === "Selesai" && k.items.length > 0);
   const avgFinal  = validFinal.length
     ? (validFinal.reduce((s, k) => s + avgScore(k.items, "supScore"), 0) / validFinal.length).toFixed(2)
     : "—";

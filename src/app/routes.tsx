@@ -72,6 +72,7 @@ import {
 } from "./pages/shared/CycleHistory"
 import {
   getActiveUser,
+  getEffectiveLockedUnitsForUser,
   getGroupCompaniesForUnit,
   getRoleAllowedCompanyUnits,
   isDirectorRoleOrGrouping,
@@ -85,14 +86,7 @@ function HRAppraisalSummary() {
 }
 function getBodOrDirectorUnits(): string[] | undefined {
   const activeUser = getActiveUser()
-  const roleUnits = getRoleAllowedCompanyUnits(activeUser.role)
-  if (roleUnits.length > 0) {
-    return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)))
-  }
-  if (isDirectorRoleOrGrouping(activeUser)) {
-    return getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
-  }
-  return undefined
+  return getEffectiveLockedUnitsForUser(activeUser)
 }
 function BODAppraisalSummary() {
   return <PerformanceAppraisalSummary role="hr" lockedUnits={getBodOrDirectorUnits()} />

@@ -1091,7 +1091,7 @@ const DEFAULT_BOD: RolePermissions = {
 const DEFAULT_GM: RolePermissions = {
   ...DEFAULT_SUPERVISOR,
   dashboard: V,
-  analytics: N,
+  analytics: V,
   approvals_kpi_business: N,
   approvals_kpi_business_unit: N,
   pa_monitoring_interview: N,
@@ -1108,7 +1108,7 @@ const DEFAULT_GM: RolePermissions = {
 function applyNewMenuDefaults(role: BuiltinRole, perms: RolePermissions): RolePermissions {
   const isHrAdmin = role === "Administrator" || role === "HR ICF";
   const isDefaultDelegationRole =
-    isHrAdmin || role === "BOD" || role === "Director" || role === "GM";
+    isHrAdmin || role === "BOD" || role === "Director" || role === "DirectorNonOpr" || role === "GM" || role === "vGM" || role === "Coordinator";
   const calib = perms.approvals_calibration ?? N;
   return {
     ...perms,
@@ -1555,7 +1555,7 @@ export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
   const result: Record<Role, AccessRoleMetadata> = {};
   for (const r of roles) {
     const base = defaults[r] ?? { excludeFromCalibrationHC: false, excludeFromVerification: false };
-    const s = saved?.[r];
+    const s = saved?.[r] ?? (r === "Coordinator" ? saved?.["vGM"] : undefined);
     result[r] = s && typeof s === "object"
       ? {
           excludeFromCalibrationHC: Boolean(s.excludeFromCalibrationHC ?? base.excludeFromCalibrationHC),
@@ -1630,19 +1630,19 @@ function findAncestorIds(targetId: string, items: MenuItem[] = MENU_STRUCTURE): 
 
 function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
   return {
-    "Administrator": deepClone(DEFAULT_ADMIN),
-    "BOD":           deepClone(DEFAULT_BOD),
-    "Director":      deepClone(DEFAULT_DIRECTOR),
+    "Administrator": deepClone(BUILTIN_DEFAULTS["Administrator"]),
+    "BOD":           deepClone(BUILTIN_DEFAULTS["BOD"]),
+    "Director":      deepClone(BUILTIN_DEFAULTS["Director"]),
     "DirectorNonOpr": deepClone(BUILTIN_DEFAULTS["DirectorNonOpr"]),
-    "GM":            deepClone(DEFAULT_GM),
-    "vGM":           deepClone(DEFAULT_GM),
-    "Coordinator":   deepClone(DEFAULT_GM),
-    "Division":      deepClone(DEFAULT_SUPERVISOR),
-    "Departement":   deepClone(DEFAULT_SUPERVISOR),
-    "HR Unit":       deepClone(DEFAULT_HR_UNIT),
-    "HR ICF":        deepClone(DEFAULT_HR_ICF),
-    "Supervisor":    deepClone(DEFAULT_SUPERVISOR),
-    "Employee":      deepClone(DEFAULT_EMPLOYEE),
+    "GM":            deepClone(BUILTIN_DEFAULTS["GM"]),
+    "vGM":           deepClone(BUILTIN_DEFAULTS["vGM"]),
+    "Coordinator":   deepClone(BUILTIN_DEFAULTS["Coordinator"]),
+    "Division":      deepClone(BUILTIN_DEFAULTS["Division"]),
+    "Departement":   deepClone(BUILTIN_DEFAULTS["Departement"]),
+    "HR Unit":       deepClone(BUILTIN_DEFAULTS["HR Unit"]),
+    "HR ICF":        deepClone(BUILTIN_DEFAULTS["HR ICF"]),
+    "Supervisor":    deepClone(BUILTIN_DEFAULTS["Supervisor"]),
+    "Employee":      deepClone(BUILTIN_DEFAULTS["Employee"]),
   };
 }
 
@@ -1667,7 +1667,7 @@ export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
 
   for (const role of roles) {
     const base = defaults[role] ? deepClone(defaults[role]) : emptyPermissions();
-    const savedRole = saved?.[role];
+    const savedRole = saved?.[role] ?? (role === "Coordinator" ? saved?.["vGM"] : undefined);
     if (savedRole && typeof savedRole === "object") {
       result[role] = { ...base, ...savedRole };
     } else {

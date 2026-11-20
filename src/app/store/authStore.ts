@@ -286,7 +286,19 @@ export function isAdminOrHrIcfRole(role: AppUserRole): boolean {
 }
 
 export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers()): boolean {
-  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director" || user.role === "GM" || user.role === "HR Unit" || user.role === "Supervisor") {
+  if (
+    isAdminOrHrIcfRole(user.role) ||
+    user.role === "BOD" ||
+    user.role === "Director" ||
+    user.role === "DirectorNonOpr" ||
+    user.role === "GM" ||
+    user.role === "vGM" ||
+    user.role === "Coordinator" ||
+    user.role === "Division" ||
+    user.role === "Departement" ||
+    user.role === "HR Unit" ||
+    user.role === "Supervisor"
+  ) {
     return true;
   }
   if (user.role) {
@@ -306,18 +318,6 @@ export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers())
 }
 
 export type HierarchyAuthorityLevel =
-  | "admin"
-  | "bod"
-  | "director_group"
-  | "gm_unit"
-  | "hr_unit"
-  | "division"
-  | "department"
-  | "bagian"
-  | "seksi"
-  | "operational";
-
-type HierarchyAuthorityLevel =
   | "admin"
   | "bod"
   | "director_group"
@@ -433,7 +433,15 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
  * (groupings Operasional & Ka./Wa.Ka.Seksi dikecualikan).
  */
 export function isUserEligibleForDelegation(user: ManagedUser): boolean {
-  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD" || user.role === "Director" || user.role === "GM") {
+  if (
+    isAdminOrHrIcfRole(user.role) ||
+    user.role === "BOD" ||
+    user.role === "Director" ||
+    user.role === "DirectorNonOpr" ||
+    user.role === "GM" ||
+    user.role === "vGM" ||
+    user.role === "Coordinator"
+  ) {
     return true;
   }
   const grp = String(resolveEffectiveUserGrouping(user) ?? "").trim();
@@ -459,11 +467,61 @@ export function canUserAccessApprovalsDelegation(
     return true;
   }
   const level = resolveUserAuthorityLevel(user);
-  return level === "division" || level === "gm_unit" || level === "director_group" || level === "bod";
+  return level === "division" || level === "vgm_unit" || level === "gm_unit" || level === "director_group" || level === "bod";
 }
 
 function normOrgName(val?: string): string {
   return (val ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normEmpNum(val?: string): string {
+  const s = (val ?? "").trim().toLowerCase();
+  if (!s) return "";
+  return s.replace(/^(?:emp-?|e)0*/i, "");
+}
+
+/**
+ * Mengumpulkan seluruh ID karyawan (lowercase) yang berada dalam rantai Approver 1 / Approver 2
+ * (baik langsung maupun bertingkat/transitif, termasuk delegasi approval aktif) dari user yang login,
+ * tanpa dibatasi Unit Usaha, Divisi, Departemen, Bagian, atau Jabatan.
+ */
+export function getTransitiveApproverSubordinateIds(
+  user: ManagedUser,
+  allUsers = loadManagedUsers(),
+): Set<string> {
+  const transitiveSubIds = new Set<string>();
+  const seedIdentities = resolveApproverIdentities(user, "KPI", undefined, allUsers);
+  const queue: ManagedUser[] = seedIdentities.length > 0 ? [...seedIdentities] : [user];
+  const visited = new Set<string>(queue.map((u) => u.employeeId.toLowerCase()));
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    const reg = (curr.regNo ?? "").trim().toLowerCase();
+    const emp = curr.employeeId.trim().toLowerCase();
+    const empNum = normEmpNum(curr.employeeId);
+    const nm = curr.name.trim().toLowerCase();
+    for (const cand of allUsers) {
+      const candKey = cand.employeeId.toLowerCase();
+      if (visited.has(candKey)) continue;
+      const ap1 = (cand.regNoAp1 ?? "").trim().toLowerCase();
+      const ap2 = (cand.regNoAp2 ?? "").trim().toLowerCase();
+      const ap1Num = normEmpNum(ap1);
+      const ap2Num = normEmpNum(ap2);
+      const matchesAp = (ap: string, apNum: string) =>
+        Boolean(ap) &&
+        ((reg && ap === reg) ||
+          (emp && ap === emp) ||
+          (nm && ap === nm) ||
+          (empNum !== "" && apNum !== "" && apNum === empNum && /^(?:emp-?|e)\d+$/i.test(ap)));
+      if (matchesAp(ap1, ap1Num) || matchesAp(ap2, ap2Num)) {
+        visited.add(candKey);
+        transitiveSubIds.add(candKey);
+        queue.push(cand);
+      }
+    }
+  }
+  transitiveSubIds.delete(user.employeeId.toLowerCase());
+  return transitiveSubIds;
 }
 
 /**
@@ -493,30 +551,7 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   );
 
   // 1. Collect transitive AP1 / AP2 subordinate chain
-  const transitiveSubIds = new Set<string>();
-  const queue: ManagedUser[] = [user];
-  const visited = new Set<string>([user.employeeId.toLowerCase()]);
-  while (queue.length > 0) {
-    const curr = queue.shift()!;
-    const reg = (curr.regNo ?? "").trim().toLowerCase();
-    const emp = curr.employeeId.trim().toLowerCase();
-    const nm = curr.name.trim().toLowerCase();
-    for (const cand of allUsers) {
-      const candKey = cand.employeeId.toLowerCase();
-      if (visited.has(candKey)) continue;
-      const ap1 = (cand.regNoAp1 ?? "").trim().toLowerCase();
-      const ap2 = (cand.regNoAp2 ?? "").trim().toLowerCase();
-      const matched =
-        (reg && (ap1 === reg || ap2 === reg)) ||
-        (emp && (ap1 === emp || ap2 === emp)) ||
-        (nm && (ap1 === nm || ap2 === nm));
-      if (matched) {
-        visited.add(candKey);
-        transitiveSubIds.add(candKey);
-        queue.push(cand);
-      }
-    }
-  }
+  const transitiveSubIds = getTransitiveApproverSubordinateIds(user, allUsers);
 
   // 2. Collect structural hierarchy scope
   const calInvolvedUnits =
@@ -527,6 +562,20 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
           .filter(([, v]) => v === "approver" || v === "mengetahui")
           .map(([k]) => k)
       : [];
+  const checkedUnits = (user.managedUnits ?? []).map(normOrgName).filter(Boolean);
+  const checkedDivs = (user.managedDivisions ?? []).map(normOrgName).filter(Boolean);
+  const checkedDepts = (user.managedDepartments ?? []).map(normOrgName).filter(Boolean);
+  const checkedBagians = (user.managedBagians ?? []).map(normOrgName).filter(Boolean);
+  const hasMultiScope =
+    checkedUnits.length > 0 ||
+    checkedDivs.length > 0 ||
+    checkedDepts.length > 0 ||
+    checkedBagians.length > 0;
+  const checkedUnitSet = new Set<string>(checkedUnits);
+  const checkedDivSet = new Set<string>(checkedDivs);
+  const checkedDeptSet = new Set<string>(checkedDepts);
+  const checkedBagianSet = new Set<string>(checkedBagians);
+
   const allowedUnits = new Set<string>(
     [user.company, ...roleAllowedUnits, ...calInvolvedUnits, ...(user.managedUnits ?? [])].map(normOrgName).filter(Boolean),
   );
@@ -549,54 +598,62 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     const tEmp = target.employeeId.trim().toLowerCase();
     const tName = target.name.trim().toLowerCase();
     const matchesAp = (ap: string) =>
-      Boolean(ap) && ((tReg && tReg === ap) || (tEmp && tEmp === ap) || (tName && tName === ap));
+      Boolean(ap && ((tReg && tReg === ap) || (tEmp && tEmp === ap) || (tName && tName === ap)));
     return matchesAp(myAp1) || matchesAp(myAp2);
   };
 
   return allUsers.filter((target) => {
     if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return true;
     if (isMyApprover(target)) return false;
+    // 1. Jika user adalah Approver (AP1 / AP2) dari karyawan tsb, otomatis terlihat tanpa batasan filter Unit/Divisi/Departemen/Bagian/Jabatan/Role
     if (transitiveSubIds.has(target.employeeId.toLowerCase())) return true;
     if (target.role === user.role) return false;
 
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];
+    if (targetRank > myRank) return false;
 
-    // Jika Cakupan Wewenang Berjenjang Tambahan (Multi-Scope) memiliki ceklist Divisi/Departemen/Bagian,
-    // maka ceklist tersebut wajib menjadi filter aktif (tidak terbuka ke seluruh Unit Usaha).
-    if ((user.scopeDivisions?.length ?? 0) > 0 && !allowedDivisions.has(normOrgName(target.division))) {
-      return false;
-    }
-    if ((user.scopeDepartments?.length ?? 0) > 0 && !allowedDepartments.has(normOrgName(target.department))) {
-      return false;
-    }
-    if ((user.scopeBagians?.length ?? 0) > 0 && !allowedBagians.has(normOrgName(target.bagian))) {
-      return false;
+    // 2. Jika Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian) di-setup di /settings/user-management:
+    // - Ceklist Unit Usaha saja -> semua karyawan di Unit Usaha yang diceklis terlihat
+    // - Ditambah ceklist Divisi -> otomatis hanya melihat sesuai Divisi di Unit Usaha tersebut
+    // - Ditambah ceklist Departemen -> otomatis hanya melihat sesuai Departemen dari Divisi dan Unit Usaha tersebut
+    // - Ditambah ceklist Bagian -> otomatis hanya melihat sesuai Bagian dari Departemen, Divisi, dan Unit Usaha tersebut
+    if (hasMultiScope) {
+      const targetUnit = normOrgName(target.company);
+      const unitMatched =
+        checkedUnitSet.size > 0
+          ? checkedUnitSet.has(targetUnit) || roleAllowedUnits.some((u) => normOrgName(u) === targetUnit)
+          : level === "director_group"
+            ? directorGroupUnits.has(targetUnit)
+            : allowedUnits.has(targetUnit);
+      if (!unitMatched) return false;
+      if (checkedDivSet.size > 0 && !checkedDivSet.has(normOrgName(target.division))) return false;
+      if (checkedDeptSet.size > 0 && !checkedDeptSet.has(normOrgName(target.department))) return false;
+      if (checkedBagianSet.size > 0 && !checkedBagianSet.has(normOrgName(target.bagian))) return false;
+      return true;
     }
 
     // Jika Role memiliki cakupan Unit Usaha yang diceklis di Access Management,
     // tetap patuhi batas hirarki role agar tidak membocorkan data atasan (BOD/Director/GM/dll.)
     if (
       roleAllowedUnits.length > 0 &&
-      roleAllowedUnits.some((u) => normOrgName(u) === normOrgName(target.company)) &&
-      targetRank <= myRank
+      roleAllowedUnits.some((u) => normOrgName(u) === normOrgName(target.company))
     ) {
       return true;
     }
 
     // 1. Level Direktur pada Group: melihat semua unit dalam Group-nya (RSUP Group atau Sambu Group), GM, Divisi, Departemen, Bagian, All Posisi
     if (level === "director_group") {
-      return directorGroupUnits.has(normOrgName(target.company)) && targetRank <= myRank;
+      return directorGroupUnits.has(normOrgName(target.company));
     }
 
     // 2. Level GM, vGM & HR Unit: melihat karyawan pada Unit Usahanya sesuai batas hirarki role
     if (level === "gm_unit" || level === "vgm_unit" || level === "hr_unit") {
-      return allowedUnits.has(normOrgName(target.company)) && targetRank <= myRank;
+      return allowedUnits.has(normOrgName(target.company));
     }
 
     // Pastikan dalam Company Unit yang sama untuk level Divisi ke bawah
     if (!allowedUnits.has(normOrgName(target.company))) return false;
-    if (targetRank > myRank) return false;
 
     // 3. Level Divisi: melihat semua posisi, bagian, departemen dalam Divisinya
     if (level === "division") {
@@ -846,6 +903,7 @@ export function getScopedFilterOptionsForUser(
     bod: "Board of Directors (Semua Unit Group)",
     director_group: `Level Direktur Group (${groupName} — ${groupUnitsCount} Unit Usaha, GM, Divisi, Dept, Bagian & All Posisi)`,
     gm_unit: `Level GM Unit Usaha (${user.company})`,
+    vgm_unit: `Level ${user.role === "Coordinator" ? "Coordinator" : "vGM"} (${user.company})`,
     hr_unit: `HR Unit Usaha (${user.company})`,
     division: `Level Divisi (${user.division} — ${user.company})`,
     department: `Level Departemen (${user.department} · ${user.division})`,
@@ -1204,12 +1262,16 @@ export function resolvePortalPathForRole(role: AppUserRole, _position = "", grou
   if (role === "Administrator" || role === "HR Admin" || role === "HR ICF") {
     return "/hr";
   }
-  if (role === "BOD" || role === "Director") {
+  if (role === "BOD" || role === "Director" || role === "DirectorNonOpr") {
     return "/bod";
   }
   if (
     role === "Supervisor" ||
     role === "GM" ||
+    role === "vGM" ||
+    role === "Coordinator" ||
+    role === "Division" ||
+    role === "Departement" ||
     role === "HR Unit" ||
     (grouping && grouping !== "Operasional")
   ) {
@@ -1359,7 +1421,7 @@ export function findHrUnitCheckerUserForCompany(
  * - Director: seluruh unit dalam Group-nya (RSUP Group / Sambu Group) + akses khusus Access Management
  * - GM & HR Unit: terkunci ke Unit Usaha tempatnya berada, KECUALI diberi akses khusus melalui Access Management / managedUnits
  */
-export function getEffectiveLockedUnitsForUser(user: ManagedUser): string[] | undefined {
+export function getEffectiveLockedUnitsForUser(user: ManagedUser, allUsers = loadManagedUsers()): string[] | undefined {
   const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
   const extraManaged = (user.managedUnits ?? []).filter(Boolean);
 
@@ -1370,17 +1432,19 @@ export function getEffectiveLockedUnitsForUser(user: ManagedUser): string[] | un
     return undefined;
   }
 
+  const authorizedUnits = getAuthorizedSubordinates(user, allUsers)
+    .map((u) => u.company)
+    .filter(Boolean);
+
   if (isDirectorRoleOrGrouping(user)) {
     if (roleAllowedUnits.length > 0) {
-      return Array.from(new Set([...roleAllowedUnits, ...extraManaged]));
+      return Array.from(new Set([...roleAllowedUnits, ...extraManaged, ...authorizedUnits]));
     }
-    return getGroupCompaniesForUnit(user.company, extraManaged);
+    return Array.from(new Set([...getGroupCompaniesForUnit(user.company, extraManaged), ...authorizedUnits]));
   }
 
-  if (user.role === "GM" || user.role === "HR Unit") {
-    return Array.from(
-      new Set([user.company, ...roleAllowedUnits, ...extraManaged].filter(Boolean)),
-    );
+  if (authorizedUnits.length > 0) {
+    return Array.from(new Set(authorizedUnits));
   }
 
   if (roleAllowedUnits.length > 0) {
@@ -1589,8 +1653,12 @@ export function useAuthStore() {
   const activeUser = getActiveUser();
   const allUsers = loadManagedUsers();
   const allowedModules = resolveUserAllowedModules(activeUser);
-  const isHrUnitLocked = activeUser.role === "HR Unit" || activeUser.role === "GM";
-  const lockedUnits = getEffectiveLockedUnitsForUser(activeUser);
+  const isHrUnitLocked =
+    activeUser.role === "HR Unit" ||
+    activeUser.role === "GM" ||
+    activeUser.role === "vGM" ||
+    activeUser.role === "Coordinator";
+  const lockedUnits = getEffectiveLockedUnitsForUser(activeUser, allUsers);
 
   return {
     activeUser,
