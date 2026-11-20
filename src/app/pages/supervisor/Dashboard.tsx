@@ -13,6 +13,7 @@ import {
   getAllowedApprovalTypesForUser,
   getAuthorizedSubordinates,
   isAdminOrHrIcfRole,
+  isSameCompanyUnit,
   resolveReviewerRoleForTarget,
   resolveWorkflowStageForTarget,
   shouldBypassCheckerForSubmission,
@@ -293,7 +294,17 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
     () => {
       const isGlobalValidator = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
       if (isGlobalValidator) return allUsers;
-      return getAuthorizedSubordinates(activeUser, allUsers).filter((u) => u.employeeId !== activeUser.employeeId);
+      const authSubs = getAuthorizedSubordinates(activeUser, allUsers).filter((u) => u.employeeId !== activeUser.employeeId);
+      if (activeUser.role === "HR Unit" || Boolean(activeUser.isHrUnitChecker)) {
+        const authIds = new Set(authSubs.map((u) => u.employeeId.toLowerCase()));
+        const unitUsers = allUsers.filter(
+          (u) =>
+            u.employeeId !== activeUser.employeeId &&
+            (authIds.has(u.employeeId.toLowerCase()) || isSameCompanyUnit(u.company, activeUser.company)),
+        );
+        return unitUsers;
+      }
+      return authSubs;
     },
     [activeUser, allUsers, tick],
   );

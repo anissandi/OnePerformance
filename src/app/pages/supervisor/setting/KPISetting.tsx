@@ -7679,7 +7679,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 ref={kpiAttachInputRef}
                 type="file"
                 multiple
-                accept=".xlsx,.xls,.pdf,.doc,.docx"
+                accept=".xlsx,.xls,.pdf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,image/*"
                 className="hidden"
                 onChange={(e) => {
                   void handleUploadKpiAttachments(e.target.files);
