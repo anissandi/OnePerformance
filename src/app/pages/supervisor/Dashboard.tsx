@@ -28,6 +28,11 @@ import { projectApprovalRows } from "../../store/projectStore";
 import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
 import { ACCESS_UPDATED_EVENT, useAccessManagement } from "../hr/settings/AccessManagement";
+import {
+  getPendingKpiTrackingEditForDashboard,
+  KPI_TRACKING_EDIT_EVENT,
+  refreshKpiTrackingEditRequestsFromBackend,
+} from "../../store/kpiTrackingEditStore";
 import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../hr/settings/MenuManagement";
 import { useLocation } from "react-router";
 import { DashboardNotificationSection } from "../../components/DashboardNotificationSection";
@@ -129,6 +134,8 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
     window.addEventListener("storage", onRefresh);
     window.addEventListener(SOY_EVENT, onRefresh);
     window.addEventListener(KPI_TARGET_EDIT_EVENT, onRefresh);
+    window.addEventListener(KPI_TRACKING_EDIT_EVENT, onRefresh);
+    void refreshKpiTrackingEditRequestsFromBackend();
     return () => {
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("feedback-updated", onRefresh);
@@ -138,6 +145,7 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
       window.removeEventListener("storage", onRefresh);
       window.removeEventListener(SOY_EVENT, onRefresh);
       window.removeEventListener(KPI_TARGET_EDIT_EVENT, onRefresh);
+      window.removeEventListener(KPI_TRACKING_EDIT_EVENT, onRefresh);
     };
   }, []);
 
@@ -156,6 +164,25 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
       actionNeeded: req.stage === "pending_validate" ? ("Review & Validate" as ActionType) : ("Approve" as ActionType),
       submittedDate: req.phase2SubmittedAt || req.phase1RequestedAt || formatTodayDDMMYYYY(),
       notes: `[${req.phase1Category}] ${req.phase1Reason}${req.phase2Comment ? ` — Note: ${req.phase2Comment}` : ""}`,
+      urgent: false,
+    }));
+  }, [activeUser, allUsers, tick]);
+
+  // Task Approval Request Edit KPI Tracking (4-tahap: HR Unit Checker -> Approver 1 -> Approver 2 -> HR ICF Validator)
+  const kpiTrackingEditItems = useMemo<PendingItem[]>(() => {
+    return getPendingKpiTrackingEditForDashboard(activeUser, allUsers).map(({ req, stageRole, roleLabel }) => ({
+      id: `kpitredit-${req.id}`,
+      employeeId: req.employeeId,
+      employeeName: req.employeeName,
+      position: req.position,
+      unit: req.companyUnit,
+      division: req.division,
+      module: "KPI" as Module,
+      phase: "measurement" as const,
+      submissionType: `Request Edit KPI Tracking (${roleLabel})`,
+      actionNeeded: stageRole === "validator" ? ("Review & Validate" as ActionType) : ("Approve" as ActionType),
+      submittedDate: req.requestedAt || formatTodayDDMMYYYY(),
+      notes: `Bulan: ${req.monthLabels.join(", ")} — Alasan: ${req.reason}`,
       urgent: false,
     }));
   }, [activeUser, allUsers, tick]);
@@ -462,8 +489,8 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
       }
     }
 
-    return [...list, ...targetEditItems, ...kpiBusinessItems, ...openLockItems, ...calibrationItems];
-  }, [subordinates, allowedApprovalModules, tick, calibrationItems, openLockItems, targetEditItems, kpiBusinessItems]);
+    return [...list, ...targetEditItems, ...kpiTrackingEditItems, ...kpiBusinessItems, ...openLockItems, ...calibrationItems];
+  }, [subordinates, allowedApprovalModules, tick, calibrationItems, openLockItems, targetEditItems, kpiTrackingEditItems, kpiBusinessItems]);
 
   useEffect(() => {
     onCountChange?.(pendingItems.length);
@@ -682,7 +709,7 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
                       const portalSeg = location.pathname.split("/").filter(Boolean)[0];
                       const targetRoute = isHrPortal
                         ? rawRoute.replace(/^\/supervisor\//, "/hr/")
-                        : item.module === "Calibration" && (portalSeg === "bod" || portalSeg === "employee")
+                        : (portalSeg === "bod" || portalSeg === "employee")
                         ? rawRoute.replace(/^\/supervisor\//, `/${portalSeg}/`)
                         : rawRoute;
                       navigate(targetRoute);

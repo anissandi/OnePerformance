@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import {
   RefreshCw, CheckSquare, Square, Database, CheckCircle2,
-  AlertCircle, Clock, Upload, Download, FileSpreadsheet, Users, ShieldCheck, Building2, Search,
+  AlertCircle, Clock, Upload, Download, FileSpreadsheet, Users, ShieldCheck, Building2, Search, Info,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
   loadPersistedState,
   replaceAllBackendUsersAndResetForTrial,
@@ -197,7 +198,7 @@ export function DataSyncPage() {
     const unitFiltered = selectedUnit === "ALL" ? users : users.filter((u) => u.company === selectedUnit);
     const rows = unitFiltered.map((u, idx) => ({
       "No": u.no ?? String(idx + 1),
-      "Reg No": u.regNo ?? `REG-${String(idx + 1).padStart(3, "0")}`,
+      "Reg No": u.regNo || u.employeeId,
       "ID Karyawan": u.employeeId,
       "Nama": u.name,
       "Divisi": u.division,
@@ -263,7 +264,8 @@ export function DataSyncPage() {
           if (!empId || !name) return;
 
           const no = String(r["No"] ?? idx + 1).trim();
-          const regNo = String(r["Reg No"] ?? r["RegNo"] ?? `REG-${empId}`).trim();
+          const rawRegNo = String(r["Reg No"] ?? r["RegNo"] ?? "").trim();
+          const regNo = rawRegNo || empId;
           const division = String(r["Divisi"] ?? r["Division"] ?? "Staff Management").trim();
           const department = String(r["Departement"] ?? r["Departemen"] ?? r["Department"] ?? "Sumber Daya Manusia").trim();
           const bagian = String(r["Bagian"] ?? r["Section"] ?? "").trim();
@@ -330,7 +332,7 @@ export function DataSyncPage() {
             position,
             joinDate,
             telegramNo,
-            email: email || prev?.email || `${empId.toLowerCase()}@sambugroup.com`,
+            email,
             regNoAp1,
             regNoAp2,
             company: String(r["Company"] ?? r["Unit"] ?? prev?.company ?? targetCompany).trim(),
@@ -395,10 +397,37 @@ export function DataSyncPage() {
                     changed = true;
                   }
                 }
-                if (changed) localStorage.setItem(key, JSON.stringify(map));
+                if (changed) {
+                  savePersistedState(key, map);
+                }
               } catch {
                 // ignore
               }
+            }
+            try {
+              const wfRaw = localStorage.getItem("appraisal_workflow_records_v1");
+              const wfList = wfRaw ? (JSON.parse(wfRaw) as Array<{ key?: string; employeeId?: string; module?: string; phase?: string }>) : [];
+              if (Array.isArray(wfList) && wfList.length > 0) {
+                const matchesEmp = (idVal?: string) => {
+                  const low = String(idVal ?? "").trim().toLowerCase();
+                  if (importedIds.has(low)) return true;
+                  const num = low.match(/^(?:emp-?|e)(\d+)$/i)?.[1];
+                  if (!num) return false;
+                  return importedIds.has(`e${num.padStart(3, "0")}`) || importedIds.has(`emp-${num.padStart(3, "0")}`);
+                };
+                const removedWf = wfList.filter((r) => matchesEmp(r.employeeId));
+                if (removedWf.length > 0) {
+                  const keptWf = wfList.filter((r) => !matchesEmp(r.employeeId));
+                  savePersistedState("appraisal_workflow_records_v1", keptWf);
+                  void syncToSupabase({
+                    kind: "workflow-delete",
+                    docKeys: removedWf.map((r) => String(r.key ?? "")).filter(Boolean),
+                    records: removedWf,
+                  });
+                }
+              }
+            } catch {
+              // ignore
             }
           }
         }
@@ -573,12 +602,41 @@ export function DataSyncPage() {
                 value={importMode}
                 onChange={(e) => setImportMode(e.target.value as "merge" | "update_clear_tx" | "replace_all_trial")}
                 className="text-xs font-semibold text-[#1A284F] bg-transparent focus:outline-none"
-                title="Pilih mode upload data karyawan"
               >
                 <option value="merge">Mode: Update / Gabung Data</option>
                 <option value="update_clear_tx">Mode: Update / Clear Transaksi</option>
                 <option value="replace_all_trial">Mode: Replace / Ganti Data</option>
               </select>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Informasi Mode Upload Data Karyawan"
+                    className="inline-flex items-center justify-center w-5 h-5 rounded-full text-slate-500 hover:text-[#1A284F] hover:bg-gray-200/70 transition-colors shrink-0"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="bottom"
+                  align="start"
+                  className="max-w-sm bg-[#1A284F] text-white p-3.5 rounded-xl shadow-xl z-[70] space-y-2 text-[11px] leading-relaxed"
+                >
+                  <p className="font-bold text-amber-300 text-xs">Penjelasan Mode Upload Data Karyawan:</p>
+                  <div className={importMode === "merge" ? "bg-white/10 rounded-lg p-2 border border-white/20" : "opacity-90"}>
+                    <p className="font-bold text-white">1. Mode: Update / Gabung Data</p>
+                    <p className="text-white/85">Menambahkan karyawan baru dan memperbarui data karyawan yang sudah ada tanpa menghapus riwayat transaksi penilaian kinerja.</p>
+                  </div>
+                  <div className={importMode === "update_clear_tx" ? "bg-white/10 rounded-lg p-2 border border-white/20" : "opacity-90"}>
+                    <p className="font-bold text-white">2. Mode: Update / Clear Transaksi</p>
+                    <p className="text-white/85">Menambahkan/memperbarui data karyawan sesuai file Excel sekaligus mengosongkan seluruh riwayat transaksi penilaian kinerja milik karyawan pada file tersebut.</p>
+                  </div>
+                  <div className={importMode === "replace_all_trial" ? "bg-white/10 rounded-lg p-2 border border-white/20" : "opacity-90"}>
+                    <p className="font-bold text-white">3. Mode: Replace / Ganti Data</p>
+                    <p className="text-white/85">Mengganti seluruh data karyawan di sistem (kecuali Administrator &amp; HR ICF) dengan isi file Excel terbaru serta mengosongkan seluruh transaksi &amp; arsip di semua unit usaha.</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
             </div>
 
             <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5">
@@ -678,7 +736,7 @@ export function DataSyncPage() {
                   <tr key={u.id} className="hover:bg-gray-50/80">
                     <td className="px-3 py-2 text-gray-500">{u.no ?? idx + 1}</td>
                     <td className="px-3 py-2 font-mono font-semibold text-[#1A284F]">
-                      {u.regNo ?? `REG-${String(idx + 1).padStart(3, "0")}`}
+                      {u.regNo || u.employeeId}
                     </td>
                     <td className="px-3 py-2 font-mono text-gray-700">{u.employeeId}</td>
                     <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{u.name}</td>
@@ -688,7 +746,7 @@ export function DataSyncPage() {
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{u.position}</td>
                     <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{u.joinDate || "—"}</td>
                     <td className="px-3 py-2 font-mono text-gray-600 whitespace-nowrap">{u.telegramNo || "—"}</td>
-                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{u.email}</td>
+                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{u.email || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium text-[11px] ${u.regNoAp1 ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
                         {resolveApproverDisplay(u.regNoAp1)}

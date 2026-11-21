@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useLocation, useParams } from "react-router";
 import { ModuleRouteNav } from "../../components/ModuleRouteNav";
 import { routeBase, tabSlug } from "../../utils/useRouteTab";
-import { Search, Eye, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, Filter, FileCheck, Check, CheckCircle2, XCircle, RotateCcw, X, FileEdit, Clock, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Search, Eye, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, Filter, FileCheck, Check, CheckCircle2, XCircle, RotateCcw, X, FileEdit, Clock, ListTodo, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
@@ -19,12 +19,18 @@ import {
   getAllowedApprovalTypesForUser,
   getDirectApprovalRoleForTarget,
   getScopedFilterOptionsForUser,
+  loadManagedUsers,
   useAuthStore,
 } from "../../store/authStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
-
-const TEAM_UNIT = "PT RSUP (Industry)";
-const TEAM_DIV  = "Divisi Sumber Daya Manusia";
+import {
+  approveKpiTrackingEditRequest,
+  getKpiTrackingEditApprovalRowsForViewer,
+  KPI_TRACKING_EDIT_EVENT,
+  loadKpiTrackingEditRequests,
+  refreshKpiTrackingEditRequestsFromBackend,
+  rejectKpiTrackingEditRequest,
+} from "../../store/kpiTrackingEditStore";
 
 const BASE_CHECKIN: ApprovalRow[] = [];
 const BASE_SETTING: ApprovalRow[] = [];
@@ -32,13 +38,23 @@ const BASE_SETTING: ApprovalRow[] = [];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const MONTH_NUM: Record<string,string> = Object.fromEntries(MONTHS.map((m, i) => [m, String(i + 1).padStart(2, "0")]));
 
-const CHECKIN_FILTER_OPTIONS = {
-  companyUnit: [TEAM_UNIT], year: ["2026"], month: MONTHS, division: [TEAM_DIV],
-  department: ["SDM"], approvalType: ["KPI", "SMART Goals", "Appraisal Form", "Managerial Skill", "Project", "Inter-Department Feedback"],
-};
-const SETTING_FILTER_OPTIONS = {
-  companyUnit: [TEAM_UNIT], year: ["2026"], month: MONTHS, division: [TEAM_DIV],
-  department: ["SDM"], approvalType: ["KPI", "SMART Goals"],
+interface ApprovalFilterOptions {
+  companyUnit: string[];
+  year: string[];
+  month: string[];
+  division: string[];
+  department: string[];
+  bagian: string[];
+}
+
+const MODULE_BADGE_TONE: Record<string, string> = {
+  KPI: "bg-blue-50 text-blue-700 border-blue-200",
+  "SMART Goals": "bg-emerald-50 text-emerald-700 border-emerald-200",
+  "Appraisal Form": "bg-indigo-50 text-indigo-700 border-indigo-200",
+  "Managerial Skill": "bg-teal-50 text-teal-700 border-teal-200",
+  Project: "bg-amber-50 text-amber-800 border-amber-200",
+  "Inter-Department Feedback": "bg-cyan-50 text-cyan-800 border-cyan-200",
+  RCA: "bg-rose-50 text-rose-700 border-rose-200",
 };
 
 const PENDING_STATUSES  = new Set(["Pending", "Pending-Hasil Tindak Lanjut", "Edit Request"]);
@@ -56,32 +72,23 @@ export function SupervisorApprovals() {
   const routeType = moduleTypes.find((type) => tabSlug(type) === tab);
   const moduleBase = routeBase(location.pathname, routeType ? tab : undefined);
   const scopedFilterMeta = getScopedFilterOptionsForUser(activeUser);
-  const dynamicCheckinFilterOpts = {
-    ...CHECKIN_FILTER_OPTIONS,
-    companyUnit: scopedFilterMeta.units.length > 0 ? scopedFilterMeta.units : [activeUser.company],
-    division: scopedFilterMeta.divisions.length > 0 ? scopedFilterMeta.divisions : [activeUser.division],
-    department: scopedFilterMeta.departments.length > 0 ? scopedFilterMeta.departments : [activeUser.department],
-    approvalType: moduleTypes,
-  };
-  const dynamicSettingFilterOpts = {
-    ...SETTING_FILTER_OPTIONS,
-    companyUnit: scopedFilterMeta.units.length > 0 ? scopedFilterMeta.units : [activeUser.company],
-    division: scopedFilterMeta.divisions.length > 0 ? scopedFilterMeta.divisions : [activeUser.division],
-    department: scopedFilterMeta.departments.length > 0 ? scopedFilterMeta.departments : [activeUser.department],
-    approvalType: moduleTypes,
-  };
 
   const buildCheckinRows = () =>
-    resolveDynamicApprovalRowsForUser(
-      [
-        ...applyOverrides(BASE_CHECKIN, "approver1", "measurement"),
-        ...projectApprovalRows("approver1"),
-        ...feedbackApprovalRows("approver1"),
-      ],
-      activeUser,
-      "measurement",
-      allowedTypeSet,
-    );
+    [
+      ...(allowedTypeSet.has("KPI")
+        ? getKpiTrackingEditApprovalRowsForViewer(activeUser, loadManagedUsers())
+        : []),
+      ...resolveDynamicApprovalRowsForUser(
+        [
+          ...applyOverrides(BASE_CHECKIN, "approver1", "measurement"),
+          ...projectApprovalRows("approver1"),
+          ...feedbackApprovalRows("approver1"),
+        ],
+        activeUser,
+        "measurement",
+        allowedTypeSet,
+      ),
+    ];
 
   const buildSettingRows = () =>
     resolveDynamicApprovalRowsForUser(
@@ -109,17 +116,20 @@ export function SupervisorApprovals() {
     refresh();
     if (mainTab === "checkin") {
       void refreshFeedbackSubmissionsFromBackend();
+      void refreshKpiTrackingEditRequestsFromBackend();
     }
     window.addEventListener("feedback-updated", refresh);
     window.addEventListener("appraisal-updated", refresh);
     window.addEventListener("pa-auth-updated", refresh);
     window.addEventListener("pa-db-hydrated", refresh);
+    window.addEventListener(KPI_TRACKING_EDIT_EVENT, refresh);
     window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener("feedback-updated", refresh);
       window.removeEventListener("appraisal-updated", refresh);
       window.removeEventListener("pa-auth-updated", refresh);
       window.removeEventListener("pa-db-hydrated", refresh);
+      window.removeEventListener(KPI_TRACKING_EDIT_EVENT, refresh);
       window.removeEventListener("storage", refresh);
     };
   }, [location.pathname, mainTab, activeUser.employeeId]);
@@ -130,6 +140,19 @@ export function SupervisorApprovals() {
       setSettingData((prev) => prev.map((r) => r.no === "ST-02" && r.submittedDate === "-" ? { ...r, submittedDate: "29/05/2026" } : r));
     }
   }, [location.pathname]);
+
+  const activeRows = mainTab === "checkin" ? checkinData : settingData;
+  const uniqSorted = (vals: (string | undefined)[]) =>
+    Array.from(new Set(vals.map((v) => (v ?? "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "id"));
+
+  const dynamicFilterOpts: ApprovalFilterOptions = {
+    companyUnit: uniqSorted([...(scopedFilterMeta.units.length > 0 ? scopedFilterMeta.units : [activeUser.company]), ...activeRows.map((r) => r.companyUnit)]),
+    year: ["2026"],
+    month: MONTHS,
+    division: uniqSorted([...(scopedFilterMeta.divisions.length > 0 ? scopedFilterMeta.divisions : [activeUser.division]), ...activeRows.map((r) => r.division)]),
+    department: uniqSorted([...(scopedFilterMeta.departments.length > 0 ? scopedFilterMeta.departments : [activeUser.department]), ...activeRows.map((r) => r.department)]),
+    bagian: uniqSorted([...(scopedFilterMeta.bagians.length > 0 ? scopedFilterMeta.bagians : [activeUser.bagian]), ...activeRows.map((r) => r.bagian)]),
+  };
 
   return (
     <div className="w-full">
@@ -146,9 +169,9 @@ export function SupervisorApprovals() {
       </div>
       <ModuleRouteNav base={moduleBase} modules={moduleTypes} label="Modul approval" />
       {mainTab === "checkin" ? (
-        <ApprovalsTable key={`checkin-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={checkinData} onDataChange={setCheckinData} filterOptions={dynamicCheckinFilterOpts} reviewerRole="approver1" isSetting={false} />
+        <ApprovalsTable key={`checkin-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={checkinData} onDataChange={setCheckinData} filterOptions={dynamicFilterOpts} reviewerRole="approver1" isSetting={false} />
       ) : (
-        <ApprovalsTable key={`setting-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={settingData} onDataChange={setSettingData} filterOptions={dynamicSettingFilterOpts} reviewerRole="approver1" isSetting={true} />
+        <ApprovalsTable key={`setting-${routeType ?? "all"}-${activeUser.employeeId}`} initialType={routeType} data={settingData} onDataChange={setSettingData} filterOptions={dynamicFilterOpts} reviewerRole="approver1" isSetting={true} />
       )}
     </div>
   );
@@ -159,22 +182,32 @@ export function SupervisorApprovals() {
 function EditRequestReviewModal({ row, onAccept, onReject, onClose }: {
   row: ApprovalRow;
   onAccept: () => void;
-  onReject: () => void;
+  onReject: (note?: string) => void;
   onClose: () => void;
 }) {
+  const [note, setNote] = useState("");
+  const trackingReqId = row.no.startsWith("KPITREDIT::") ? row.no.slice("KPITREDIT::".length) : "";
+  const trackingReq = trackingReqId ? loadKpiTrackingEditRequests().find((r) => r.id === trackingReqId) : undefined;
+  const actionLabel =
+    row.workflowStageForRow === "checker"
+      ? "Check & Lanjutkan"
+      : row.workflowStageForRow === "validator"
+      ? "Validate Request"
+      : "Approve Request";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div className="flex items-center gap-2">
             <FileEdit className="w-5 h-5 text-amber-500" />
-            <h2 className="text-lg font-bold text-gray-900">Edit Request Review</h2>
+            <h2 className="text-lg font-bold text-gray-900">Review Request Edit KPI Tracking</h2>
           </div>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded">
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="px-6 py-5 space-y-4">
+        <div className="px-6 py-5 space-y-4 overflow-y-auto">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
               <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Employee</p>
@@ -197,9 +230,40 @@ function EditRequestReviewModal({ row, onAccept, onReject, onClose }: {
               <p className="text-gray-700">{row.editRequestDate ?? "-"}</p>
             </div>
           </div>
+          {trackingReq && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold text-slate-600">Bulan yang Diajukan:</span>
+                {trackingReq.monthLabels.map((m) => (
+                  <span key={m} className="px-2 py-0.5 rounded-full bg-[#1A284F] text-white font-semibold text-[11px]">{m}</span>
+                ))}
+              </div>
+              <div>
+                <p className="font-bold text-slate-600 mb-1">KPI yang Diajukan:</p>
+                <ul className="space-y-1 pl-1">
+                  {trackingReq.kpiSummaries.map((k) => (
+                    <li key={k.no} className="text-slate-700">
+                      <span className="font-bold text-[#1A284F] mr-1.5">{k.no}.</span>
+                      <span className="font-semibold text-blue-700">{k.perspektif}</span> - {k.kpiTitle}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
           <div className="rounded-xl bg-amber-50 border border-amber-200 p-4">
             <p className="text-xs text-amber-600 uppercase tracking-wider font-semibold mb-2">Reason for Edit Request</p>
-            <p className="text-sm text-amber-900 leading-relaxed">{row.editRequestReason}</p>
+            <p className="text-sm text-amber-900 leading-relaxed whitespace-pre-line">{trackingReq ? trackingReq.reason : row.editRequestReason}</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">Catatan Approver (Opsional / Alasan Penolakan)</label>
+            <textarea
+              rows={2}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Tambahkan catatan (opsional)..."
+              className="w-full border border-gray-200 rounded-xl px-3.5 py-2 text-xs text-gray-700 focus:outline-none focus:border-[#1A284F] resize-none"
+            />
           </div>
         </div>
         <div className="flex items-center gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
@@ -207,10 +271,10 @@ function EditRequestReviewModal({ row, onAccept, onReject, onClose }: {
             onClick={onAccept}
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-xl bg-green-500 text-white hover:bg-green-600 transition-colors"
           >
-            <CheckCircle2 className="w-4 h-4" /> Accept Request
+            <CheckCircle2 className="w-4 h-4" /> {actionLabel}
           </button>
           <button
-            onClick={onReject}
+            onClick={() => onReject(note)}
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-xl bg-red-500 text-white hover:bg-red-600 transition-colors"
           >
             <XCircle className="w-4 h-4" /> Reject Request
@@ -322,20 +386,20 @@ function ApprovalsTable({
 }: {
   data: ApprovalRow[];
   onDataChange: (rows: ApprovalRow[]) => void;
-  filterOptions: typeof CHECKIN_FILTER_OPTIONS;
+  filterOptions: ApprovalFilterOptions;
   reviewerRole: "approver1" | "approver2";
   isSetting: boolean;
   initialType?: string;
 }) {
   const { activeUser } = useAuthStore();
-  const [activeTab, setActiveTab]                         = useState("Pending");
+  const [activeTab, setActiveTab]                         = useState<"Pending Task" | "Approval History">("Pending Task");
   const [search, setSearch]                               = useState("");
   const [selectedCompanyUnits, setSelectedCompanyUnits]   = useState<string[]>([]);
   const [selectedYears, setSelectedYears]                 = useState<string[]>(["2026"]);
   const [selectedMonths, setSelectedMonths]               = useState<string[]>([]);
   const [selectedDivisions, setSelectedDivisions]         = useState<string[]>([]);
   const [selectedDepartments, setSelectedDepartments]     = useState<string[]>([]);
-  const [selectedApprovalTypes, setSelectedApprovalTypes] = useState<string[]>(() => initialType ? [initialType] : []);
+  const [selectedBagians, setSelectedBagians]             = useState<string[]>([]);
   const [openFilter, setOpenFilter]                       = useState<string | null>(null);
   const [currentPage, setCurrentPage]                     = useState(1);
   const [sortCol, setSortCol]   = useState<string>("no");
@@ -361,29 +425,35 @@ function ApprovalsTable({
   };
 
   const filtered = data.filter((row) => {
-    const matchTab    = activeTab === "Pending" ? PENDING_STATUSES.has(row.status) : HISTORY_STATUSES.has(row.status);
-    const matchSearch = !search || row.name.toLowerCase().includes(search.toLowerCase()) || row.employeeId.toLowerCase().includes(search.toLowerCase());
+    const matchTab    = activeTab === "Pending Task" ? PENDING_STATUSES.has(row.status) : HISTORY_STATUSES.has(row.status);
+    const q           = search.trim().toLowerCase();
+    const matchSearch = !q ||
+      row.name.toLowerCase().includes(q) ||
+      row.employeeId.toLowerCase().includes(q) ||
+      row.division.toLowerCase().includes(q) ||
+      row.department.toLowerCase().includes(q) ||
+      (row.bagian ?? "").toLowerCase().includes(q);
     const matchUnit   = !selectedCompanyUnits.length  || selectedCompanyUnits.includes(row.companyUnit);
     const matchDiv    = !selectedDivisions.length     || selectedDivisions.includes(row.division);
     const matchDept   = !selectedDepartments.length   || selectedDepartments.includes(row.department);
-    const matchType   = !selectedApprovalTypes.length || selectedApprovalTypes.includes(row.type);
+    const matchBagian = !selectedBagians.length       || selectedBagians.includes(row.bagian ?? "");
+    const matchType   = !initialType                  || row.type === initialType;
     const parts       = getDateParts(row.submittedDate);
     const inferredYear = parts ? parts[2] : row.no.match(/20\d{2}/)?.[0];
     const matchYear   = !selectedYears.length   || (inferredYear ? selectedYears.includes(inferredYear) : false);
     const matchMonth  = !selectedMonths.length  || (parts ? selectedMonths.some(m => MONTH_NUM[m] === parts[1]) : false);
-    return matchTab && matchSearch && matchUnit && matchDiv && matchDept && matchType && matchYear && matchMonth;
+    return matchTab && matchSearch && matchUnit && matchDiv && matchDept && matchBagian && matchType && matchYear && matchMonth;
   });
 
-  const hasActiveFilters = selectedCompanyUnits.length > 0 || !(selectedYears.length === 1 && selectedYears[0] === "2026") || selectedMonths.length > 0 || selectedDivisions.length > 0 || selectedDepartments.length > 0 || selectedApprovalTypes.length > 0 || !!search;
+  const hasActiveFilters = selectedCompanyUnits.length > 0 || !(selectedYears.length === 1 && selectedYears[0] === "2026") || selectedMonths.length > 0 || selectedDivisions.length > 0 || selectedDepartments.length > 0 || selectedBagians.length > 0 || !!search;
 
   const COL_GETTER: Record<string, (r: ApprovalRow) => string> = {
     no:           (r) => r.no,
     employeeId:   (r) => r.employeeId,
     name:         (r) => r.name,
-    position:     (r) => r.position,
-    department:   (r) => r.department,
     division:     (r) => r.division,
-    companyUnit:  (r) => r.companyUnit,
+    department:   (r) => r.department,
+    bagian:       (r) => r.bagian ?? "",
     type:         (r) => r.type,
     submittedDate:(r) => { const p = getDateParts(r.submittedDate); return p ? `${p[2]}${p[1]}${p[0]}` : ""; },
     approvalDate: (r) => { const p = getDateParts(r.approvalDate);  return p ? `${p[2]}${p[1]}${p[0]}` : ""; },
@@ -398,18 +468,33 @@ function ApprovalsTable({
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const paginated  = sorted.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  useEffect(() => setCurrentPage(1), [activeTab, search, selectedCompanyUnits, selectedYears, selectedMonths, selectedDivisions, selectedDepartments, selectedApprovalTypes, sortCol, sortDir]);
+  useEffect(() => setCurrentPage(1), [activeTab, search, selectedCompanyUnits, selectedYears, selectedMonths, selectedDivisions, selectedDepartments, selectedBagians, sortCol, sortDir]);
 
-  const pendingCount = data.filter((r) => PENDING_STATUSES.has(r.status)).length;
+  const typeScopedData = initialType ? data.filter((r) => r.type === initialType) : data;
+  const pendingCount = typeScopedData.filter((r) => PENDING_STATUSES.has(r.status)).length;
+  const historyCount = typeScopedData.filter((r) => HISTORY_STATUSES.has(r.status)).length;
 
   const handleAcceptEdit = (row: ApprovalRow) => {
-    // Approver 1 accepts → pending approver 2
+    if (row.no.startsWith("KPITREDIT::")) {
+      const reqId = row.no.slice("KPITREDIT::".length);
+      approveKpiTrackingEditRequest(reqId, activeUser);
+      setEditReviewRow(null);
+      setActiveTab("Approval History");
+      return;
+    }
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: "EditRequest-PendingA2" } : r));
     setEditReviewRow(null);
     setActiveTab("Approval History");
   };
 
-  const handleRejectEdit = (row: ApprovalRow) => {
+  const handleRejectEdit = (row: ApprovalRow, note?: string) => {
+    if (row.no.startsWith("KPITREDIT::")) {
+      const reqId = row.no.slice("KPITREDIT::".length);
+      rejectKpiTrackingEditRequest(reqId, activeUser, note);
+      setEditReviewRow(null);
+      setActiveTab("Approval History");
+      return;
+    }
     onDataChange(data.map((r) => r.no === row.no ? { ...r, status: "EditRequest-Rejected" } : r));
     setEditReviewRow(null);
     setActiveTab("Approval History");
@@ -507,36 +592,65 @@ function ApprovalsTable({
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8">
       {/* Tabs */}
-      <div className="flex items-center gap-4 mb-8">
+      <div className="inline-flex flex-wrap items-center gap-2.5 p-1.5 rounded-2xl bg-slate-100/90 border border-slate-200/80 mb-7">
         <button
-          onClick={() => setActiveTab("Pending")}
-          className={`relative px-8 py-2 rounded-lg font-medium transition-colors ${activeTab === "Pending" ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+          type="button"
+          onClick={() => setActiveTab("Pending Task")}
+          className={`inline-flex items-center gap-2.5 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+            activeTab === "Pending Task"
+              ? "bg-gradient-to-r from-[#1A284F] to-[#28407A] text-white shadow-md ring-1 ring-[#1A284F]/20"
+              : "bg-white/80 text-slate-600 hover:bg-white hover:text-[#1A284F] border border-slate-200/80"
+          }`}
         >
-          Pending
-          {pendingCount > 0 && (
-            <span className="absolute -top-2 -right-2 w-5 h-5 flex items-center justify-center bg-red-500 text-white text-[10px] font-bold rounded-full">{pendingCount}</span>
-          )}
+          <ListTodo className="w-4 h-4 shrink-0" />
+          <span>Pending Task</span>
+          <span
+            className={`min-w-5 h-5 px-1.5 inline-flex items-center justify-center rounded-full text-[11px] font-bold ${
+              activeTab === "Pending Task"
+                ? pendingCount > 0
+                  ? "bg-amber-400 text-[#1A284F]"
+                  : "bg-white/20 text-white"
+                : pendingCount > 0
+                  ? "bg-amber-100 text-amber-800 border border-amber-200"
+                  : "bg-slate-100 text-slate-500"
+            }`}
+          >
+            {pendingCount}
+          </span>
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab("Approval History")}
-          className={`px-8 py-2 rounded-lg font-medium border-2 transition-colors ${isHistory ? "border-green-500 text-green-600 bg-green-50" : "border-green-500 text-green-600 hover:bg-green-50"}`}
+          className={`inline-flex items-center gap-2.5 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+            isHistory
+              ? "bg-gradient-to-r from-teal-700 to-emerald-700 text-white shadow-md ring-1 ring-emerald-800/20"
+              : "bg-white/80 text-slate-600 hover:bg-teal-50/70 hover:text-teal-800 border border-slate-200/80"
+          }`}
         >
-          Approval History
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>Approval History</span>
+          <span
+            className={`min-w-5 h-5 px-1.5 inline-flex items-center justify-center rounded-full text-[11px] font-bold ${
+              isHistory ? "bg-white/20 text-white" : "bg-teal-50 text-teal-700 border border-teal-200"
+            }`}
+          >
+            {historyCount}
+          </span>
         </button>
       </div>
 
       {/* Filters */}
-      <div className="grid grid-cols-6 gap-4 mb-6">
-        <FilterDropdown label="Company Unit"  options={filterOptions.companyUnit}  selected={selectedCompanyUnits}  onToggle={(i) => toggleSelection(selectedCompanyUnits, setSelectedCompanyUnits, i)} isOpen={openFilter === "companyUnit"}  onToggleOpen={() => toggleFilter("companyUnit")} />
-        <FilterDropdown label="Year"          options={filterOptions.year}         selected={selectedYears}         onToggle={(i) => toggleSelection(selectedYears, setSelectedYears, i)}                 isOpen={openFilter === "year"}         onToggleOpen={() => toggleFilter("year")} />
-        <FilterDropdown label="Month"         options={filterOptions.month}        selected={selectedMonths}        onToggle={(i) => toggleSelection(selectedMonths, setSelectedMonths, i)}               isOpen={openFilter === "month"}        onToggleOpen={() => toggleFilter("month")} />
-        <FilterDropdown label="Division"      options={filterOptions.division}     selected={selectedDivisions}     onToggle={(i) => toggleSelection(selectedDivisions, setSelectedDivisions, i)}         isOpen={openFilter === "division"}     onToggleOpen={() => toggleFilter("division")} />
-        <FilterDropdown label="Department"    options={filterOptions.department}   selected={selectedDepartments}   onToggle={(i) => toggleSelection(selectedDepartments, setSelectedDepartments, i)}   isOpen={openFilter === "department"}   onToggleOpen={() => toggleFilter("department")} />
-        <FilterDropdown label="Approval Type" options={filterOptions.approvalType} selected={selectedApprovalTypes} onToggle={(i) => toggleSelection(selectedApprovalTypes, setSelectedApprovalTypes, i)} isOpen={openFilter === "approvalType"} onToggleOpen={() => toggleFilter("approvalType")} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3.5 mb-6">
+        <FilterDropdown tone="blue"    label="Company Unit" options={filterOptions.companyUnit} selected={selectedCompanyUnits} onToggle={(i) => toggleSelection(selectedCompanyUnits, setSelectedCompanyUnits, i)} isOpen={openFilter === "companyUnit"} onToggleOpen={() => toggleFilter("companyUnit")} />
+        <FilterDropdown tone="indigo"  label="Year"         options={filterOptions.year}        selected={selectedYears}        onToggle={(i) => toggleSelection(selectedYears, setSelectedYears, i)}               isOpen={openFilter === "year"}        onToggleOpen={() => toggleFilter("year")} />
+        <FilterDropdown tone="teal"    label="Month"        options={filterOptions.month}       selected={selectedMonths}       onToggle={(i) => toggleSelection(selectedMonths, setSelectedMonths, i)}             isOpen={openFilter === "month"}       onToggleOpen={() => toggleFilter("month")} />
+        <FilterDropdown tone="emerald" label="Division"     options={filterOptions.division}    selected={selectedDivisions}    onToggle={(i) => toggleSelection(selectedDivisions, setSelectedDivisions, i)}       isOpen={openFilter === "division"}    onToggleOpen={() => toggleFilter("division")} />
+        <FilterDropdown tone="amber"   label="Department"   options={filterOptions.department}  selected={selectedDepartments}  onToggle={(i) => toggleSelection(selectedDepartments, setSelectedDepartments, i)}   isOpen={openFilter === "department"}  onToggleOpen={() => toggleFilter("department")} />
+        <FilterDropdown tone="cyan"    label="Bagian"       options={filterOptions.bagian}      selected={selectedBagians}      onToggle={(i) => toggleSelection(selectedBagians, setSelectedBagians, i)}           isOpen={openFilter === "bagian"}      onToggleOpen={() => toggleFilter("bagian")} />
       </div>
       {hasActiveFilters && (
         <div className="flex justify-end -mt-3 mb-3">
-          <button onClick={() => { setSelectedCompanyUnits([]); setSelectedYears(["2026"]); setSelectedMonths([]); setSelectedDivisions([]); setSelectedDepartments([]); setSelectedApprovalTypes([]); setSearch(""); }} className="text-xs text-red-500 hover:text-red-700 underline">Reset filters</button>
+          <button onClick={() => { setSelectedCompanyUnits([]); setSelectedYears(["2026"]); setSelectedMonths([]); setSelectedDivisions([]); setSelectedDepartments([]); setSelectedBagians([]); setSearch(""); }} className="text-xs text-red-500 hover:text-red-700 underline">Reset filters</button>
         </div>
       )}
 
@@ -544,7 +658,7 @@ function ApprovalsTable({
       <div className="flex gap-4 mb-8">
         <div className="relative flex-1">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by employee name or ID..." className="pl-12 py-6 bg-[#FAFAFA] border-gray-200 rounded-full w-full text-base" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari Nama, ID Karyawan, Divisi, Departemen, atau Bagian..." className="pl-12 py-6 bg-[#FAFAFA] border-gray-200 rounded-full w-full text-base" />
         </div>
         <Button className="bg-[#1A284F] hover:bg-[#131d3b] text-white px-10 py-6 rounded-full text-base font-medium">Search</Button>
       </div>
@@ -552,29 +666,28 @@ function ApprovalsTable({
       {isSetting && <TargetEditRequestsSection />}
 
       {/* Table */}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm bg-white">
         <table className="w-full text-left border-collapse">
           <thead>
-            <tr className="border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            <tr className="bg-[#1A284F] text-white text-xs font-semibold uppercase tracking-wider">
               {([
-                { col: null,            label: "Actions",       cls: "" },
-                { col: "no",            label: "No",            cls: "w-16" },
-                { col: "employeeId",    label: "Employee ID",   cls: "" },
-                { col: "name",          label: "Full Name",     cls: "" },
-                { col: "position",      label: "Position",      cls: "" },
-                { col: "department",    label: "Department",    cls: "" },
-                { col: "division",      label: "Division",      cls: "" },
-                { col: "companyUnit",   label: "Company Unit",  cls: "" },
-                { col: "type",          label: "Approval Type", cls: "" },
-                { col: "submittedDate", label: "Submitted Date",cls: "" },
-                { col: "approvalDate",  label: "Approval Date", cls: "" },
+                { col: null,            label: "Action",          cls: "whitespace-nowrap" },
+                { col: "no",            label: "No",              cls: "w-14 whitespace-nowrap text-center" },
+                { col: "employeeId",    label: "ID Karyawan",     cls: "whitespace-nowrap" },
+                { col: "name",          label: "Nama",            cls: "whitespace-nowrap" },
+                { col: "division",      label: "Divisi",          cls: "whitespace-nowrap" },
+                { col: "department",    label: "Departemen",      cls: "whitespace-nowrap" },
+                { col: "bagian",        label: "Bagian",          cls: "whitespace-nowrap" },
+                { col: "type",          label: "Tipe Modul",      cls: "whitespace-nowrap" },
+                { col: "submittedDate", label: "Tgl Pengajuan",   cls: "whitespace-nowrap" },
+                { col: "approvalDate",  label: "Tgl Persetujuan", cls: "whitespace-nowrap" },
               ] as { col: string | null; label: string; cls: string }[]).map(({ col, label, cls }) =>
                 col ? (
                   <th key={col} className={`py-4 px-4 ${cls} cursor-pointer select-none group`} onClick={() => handleSort(col)}>
                     <span className="inline-flex items-center gap-1">
                       {label}
-                      <span className="text-gray-400 group-hover:text-gray-600">
-                        {sortCol === col ? (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-40" />}
+                      <span className="text-white/60 group-hover:text-white">
+                        {sortCol === col ? (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-60" />}
                       </span>
                     </span>
                   </th>
@@ -586,48 +699,48 @@ function ApprovalsTable({
           </thead>
           <tbody>
             {paginated.length === 0 ? (
-              <tr><td colSpan={11} className="py-16 text-center text-gray-400 text-sm">No records found for this tab.</td></tr>
+              <tr><td colSpan={10} className="py-16 text-center text-gray-400 text-sm">Tidak ada data pengajuan pada tab ini.</td></tr>
             ) : paginated.map((row, idx) => (
-              <tr key={row.no} className={`border-b border-gray-50/50 hover:bg-gray-50/50 ${idx === 0 ? "bg-[#FDF9F1]" : ""}`}>
+              <tr key={row.no} className={`border-b border-gray-100 transition-colors hover:bg-sky-100/40 ${idx % 2 === 0 ? "bg-white" : "bg-slate-50/50"}`}>
                 <td className="py-4 px-4">
                   <div className="flex items-center gap-2 flex-wrap">
-                    {/* Pending tab */}
-                    {activeTab === "Pending" && (row.status === "Pending" || row.status === "Pending-Hasil Tindak Lanjut") && (() => {
+                    {/* Pending Task tab */}
+                    {activeTab === "Pending Task" && (row.status === "Pending" || row.status === "Pending-Hasil Tindak Lanjut") && (() => {
                       const rel = getDirectApprovalRoleForTarget(activeUser, row.employeeId);
                       const isDirectApprover = rel === "ap1" || rel === "ap2" || rel === "checker" || rel === "validator";
                       return isDirectApprover ? (
                         <button
                           onClick={() => { setReviewRow(row); setReviewFromHistory(false); }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-[#1A284F] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg"
+                          className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#1A284F] hover:bg-[#25386e] border border-[#1A284F] rounded-xl shadow-sm hover:shadow transition-all whitespace-nowrap"
                           title="Review Submission"
                         >
-                          <FileCheck className="w-4 h-4" />
+                          <FileCheck className="w-4 h-4 shrink-0" />
                           <span>Review</span>
                         </button>
                       ) : (
                         <button
                           onClick={() => { setReviewRow(row); setReviewFromHistory(true); }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded-lg"
+                          className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl shadow-2xs transition-all whitespace-nowrap"
                           title="View Only (Cakupan Hirarki Berjenjang)"
                         >
-                          <Eye className="w-4 h-4" />
+                          <Eye className="w-4 h-4 shrink-0 text-slate-600" />
                           <span>View (Hirarki)</span>
                         </button>
                       );
                     })()}
-                    {activeTab === "Pending" && row.status === "Edit Request" && (
+                    {activeTab === "Pending Task" && row.status === "Edit Request" && (
                       <button
                         onClick={() => setEditReviewRow(row)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-50 border border-amber-300 text-amber-700 hover:bg-amber-100 transition-colors"
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold rounded-xl bg-amber-600 border border-amber-600 text-white hover:bg-amber-700 shadow-sm transition-all whitespace-nowrap"
                         title="Review Edit Request"
                       >
-                        <FileEdit className="w-3.5 h-3.5" /> Review Request
+                        <FileEdit className="w-4 h-4 shrink-0" /> Review Request
                       </button>
                     )}
                     {/* Approval History tab */}
                     {isHistory && (
                       <>
-                        <button onClick={() => { setReviewRow(row); setReviewFromHistory(true); }} className="p-1 text-gray-500 hover:bg-gray-100 rounded" title="View">
+                        <button onClick={() => { setReviewRow(row); setReviewFromHistory(true); }} className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors" title="View">
                           <Eye className="w-5 h-5" />
                         </button>
                         <HistoryTag status={row.status} type={row.type} />
@@ -635,16 +748,19 @@ function ApprovalsTable({
                     )}
                   </div>
                 </td>
-                <td className="py-4 px-4 text-gray-500 text-sm">{row.no}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{row.employeeId}</td>
-                <td className="py-4 px-4 text-sm font-medium text-gray-900">{row.name}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{row.position}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{row.department}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{row.division}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{row.companyUnit}</td>
-                <td className="py-4 px-4 text-sm font-medium text-gray-900">{row.type}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{normalizeDateDDMMYYYY(row.submittedDate)}</td>
-                <td className="py-4 px-4 text-sm text-gray-600">{isHistory ? normalizeDateDDMMYYYY(row.approvalDate) : "—"}</td>
+                <td className="py-4 px-4 text-center text-gray-500 text-sm font-medium">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
+                <td className="py-4 px-4 text-sm font-mono font-semibold text-[#1A284F] whitespace-nowrap">{row.employeeId}</td>
+                <td className="py-4 px-4 text-sm font-medium text-gray-900 whitespace-nowrap">{row.name}</td>
+                <td className="py-4 px-4 text-sm text-gray-600 whitespace-nowrap">{row.division || "—"}</td>
+                <td className="py-4 px-4 text-sm text-gray-600 whitespace-nowrap">{row.department || "—"}</td>
+                <td className="py-4 px-4 text-sm text-gray-600 whitespace-nowrap">{row.bagian || "—"}</td>
+                <td className="py-4 px-4 text-sm whitespace-nowrap">
+                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${MODULE_BADGE_TONE[row.type] ?? "bg-slate-50 text-slate-700 border-slate-200"}`}>
+                    {row.type}
+                  </span>
+                </td>
+                <td className="py-4 px-4 text-sm text-gray-600 whitespace-nowrap">{normalizeDateDDMMYYYY(row.submittedDate)}</td>
+                <td className="py-4 px-4 text-sm text-gray-600 whitespace-nowrap">{isHistory ? normalizeDateDDMMYYYY(row.approvalDate) : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -681,7 +797,7 @@ function ApprovalsTable({
         <EditRequestReviewModal
           row={editReviewRow}
           onAccept={() => handleAcceptEdit(editReviewRow)}
-          onReject={() => handleRejectEdit(editReviewRow)}
+          onReject={(note) => handleRejectEdit(editReviewRow, note)}
           onClose={() => setEditReviewRow(null)}
         />
       )}
@@ -689,7 +805,43 @@ function ApprovalsTable({
   );
 }
 
-function FilterDropdown({ label, options, selected, onToggle, isOpen, onToggleOpen }: {
+type FilterTone = "blue" | "indigo" | "teal" | "emerald" | "amber" | "cyan";
+
+const FILTER_TONE_CLASSES: Record<FilterTone, { btn: string; icon: string; badge: string }> = {
+  blue: {
+    btn: "bg-blue-50/60 border-blue-200/90 text-blue-900 hover:bg-blue-100/70 hover:border-blue-300",
+    icon: "text-blue-600",
+    badge: "bg-blue-600 text-white",
+  },
+  indigo: {
+    btn: "bg-indigo-50/60 border-indigo-200/90 text-indigo-900 hover:bg-indigo-100/70 hover:border-indigo-300",
+    icon: "text-indigo-600",
+    badge: "bg-indigo-600 text-white",
+  },
+  teal: {
+    btn: "bg-teal-50/60 border-teal-200/90 text-teal-900 hover:bg-teal-100/70 hover:border-teal-300",
+    icon: "text-teal-600",
+    badge: "bg-teal-600 text-white",
+  },
+  emerald: {
+    btn: "bg-emerald-50/60 border-emerald-200/90 text-emerald-900 hover:bg-emerald-100/70 hover:border-emerald-300",
+    icon: "text-emerald-600",
+    badge: "bg-emerald-600 text-white",
+  },
+  amber: {
+    btn: "bg-amber-50/70 border-amber-200/90 text-amber-900 hover:bg-amber-100/70 hover:border-amber-300",
+    icon: "text-amber-600",
+    badge: "bg-amber-600 text-white",
+  },
+  cyan: {
+    btn: "bg-cyan-50/60 border-cyan-200/90 text-cyan-900 hover:bg-cyan-100/70 hover:border-cyan-300",
+    icon: "text-cyan-600",
+    badge: "bg-cyan-600 text-white",
+  },
+};
+
+function FilterDropdown({ tone, label, options, selected, onToggle, isOpen, onToggleOpen }: {
+  tone: FilterTone;
   label: string; options: string[]; selected: string[];
   onToggle: (item: string) => void; isOpen: boolean; onToggleOpen: () => void;
 }) {
@@ -700,23 +852,32 @@ function FilterDropdown({ label, options, selected, onToggle, isOpen, onToggleOp
     return () => document.removeEventListener("mousedown", handler);
   }, [isOpen, onToggleOpen]);
 
+  const palette = FILTER_TONE_CLASSES[tone];
+
   return (
     <div className="relative" ref={ref}>
-      <button onClick={onToggleOpen} className="w-full flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-        <div className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-gray-400" />
-          <span>{label}{selected.length > 0 && <span className="ml-2 px-2 py-0.5 bg-[#1A284F] text-white text-xs rounded-full">{selected.length}</span>}</span>
+      <button type="button" onClick={onToggleOpen} className={`w-full flex items-center justify-between border rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-semibold transition-colors ${palette.btn}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <Filter className={`w-3.5 h-3.5 shrink-0 ${palette.icon}`} />
+          <span className="truncate">{label}</span>
+          {selected.length > 0 && (
+            <span className={`px-2 py-0.5 text-[11px] font-bold rounded-full shrink-0 ${palette.badge}`}>{selected.length}</span>
+          )}
         </div>
-        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDown className={`w-4 h-4 shrink-0 opacity-70 transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </button>
       {isOpen && (
-        <div className="absolute z-50 w-full mt-2 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
-          {options.map((option) => (
-            <label key={option} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 cursor-pointer transition-colors">
-              <input type="checkbox" checked={selected.includes(option)} onChange={() => onToggle(option)} className="w-4 h-4 text-[#1A284F] border-gray-300 rounded focus:ring-[#1A284F] focus:ring-2" />
-              <span className="text-sm text-gray-700">{option}</span>
-            </label>
-          ))}
+        <div className="absolute z-50 w-full mt-2 bg-white border border-gray-200 rounded-xl shadow-lg max-h-64 overflow-y-auto">
+          {options.length === 0 ? (
+            <p className="px-4 py-3 text-xs text-gray-400 text-center">Belum ada opsi</p>
+          ) : (
+            options.map((option) => (
+              <label key={option} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 cursor-pointer transition-colors">
+                <input type="checkbox" checked={selected.includes(option)} onChange={() => onToggle(option)} className="w-4 h-4 text-[#1A284F] border-gray-300 rounded focus:ring-[#1A284F] focus:ring-2" />
+                <span className="text-sm text-gray-700">{option}</span>
+              </label>
+            ))
+          )}
         </div>
       )}
     </div>

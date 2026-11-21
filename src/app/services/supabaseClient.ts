@@ -241,10 +241,12 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
     if (valid.length > 0) {
       const fullRows = valid.map((u) => {
         const apPair = normalizeDbApproverPair(u.regNoAp1, u.regNoAp2);
+        const empIdStr = String(u.employeeId ?? "").trim();
+        const rawRegNo = String(u.regNo ?? "").trim();
         return {
-        employee_id: String(u.employeeId ?? "").trim(),
+        employee_id: empIdStr,
         no: String(u.no ?? ""),
-        reg_no: String(u.regNo ?? ""),
+        reg_no: rawRegNo || empIdStr,
         name: String(u.name || "-"),
         email: String(u.email ?? ""),
         position: String(u.position || "-"),
@@ -741,6 +743,8 @@ const CRITICAL_AUTH_KV_KEYS = new Set([
   "pa_unit_login_configs_v1",
   "pa_archived_users_v1",
   "pa_trial_mode_clean_v1",
+  "year_end_workflow_2026",
+  "pa_kpi_tracking_edit_requests_v1",
 ]);
 
 const EPHEMERAL_OR_LEGACY_LOCAL_KEYS = [
@@ -1008,6 +1012,7 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
       kind === "interview-schedule" ||
       kind === "mi-clear-all" ||
       kind === "evidence-delete" ||
+      kind === "year-end-verification" ||
       (kind === "kv-state" && CRITICAL_AUTH_KV_KEYS.has(String(payload.stateKey ?? "")));
 
     // Path 0 (Vercel Serverless API with SUPABASE_SERVICE_ROLE_KEY — bypasses RLS & build-time env issues)
@@ -2404,7 +2409,7 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     ...normalizeDbApproverPair(u.reg_no_ap1, u.reg_no_ap2),
     id: String(idx + 1),
     no: String(u.no || idx + 1),
-    regNo: String(u.reg_no || `REG-${String(idx + 1).padStart(3, "0")}`),
+    regNo: String(u.reg_no || u.employee_id || ""),
     name: String(u.name ?? ""),
     employeeId: String(u.employee_id ?? ""),
     position: String(u.position ?? ""),
@@ -2431,6 +2436,77 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
   })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
   safeSetLocalJson("pa_managed_users_v1", mapped);
   return mapped;
+}
+
+export async function fetchEmployeeKpiTrackingLive<TMonth = unknown>(
+  employeeId: string,
+): Promise<{ months: TMonth[]; cellsMap: Record<string, Record<string, string>> } | null> {
+  const candidates = buildEmployeeIdMatchSet(employeeId);
+  if (candidates.size === 0) return null;
+  const lowerSet = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+  const numMatch = employeeId.trim().match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+  const normKey = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : employeeId.trim();
+  const kvKey = `kpi_tracking_v1_${normKey}`;
+  try {
+    const [trackingRows, kvMap] = await Promise.all([
+      restSelect<{
+        employee_id?: string;
+        months?: unknown[];
+        cells_map?: Record<string, Record<string, string>>;
+        updated_at?: string;
+      }>("pa_kpi_trackings", "select=*&period=eq.2026&order=updated_at.desc"),
+      refreshKvKeysFromBackend([kvKey]),
+    ]);
+    const matchedRow = trackingRows.find((r) => lowerSet.has(String(r.employee_id ?? "").trim().toLowerCase()));
+    if (matchedRow && Array.isArray(matchedRow.months)) {
+      const snap = {
+        months: matchedRow.months as TMonth[],
+        cellsMap:
+          matchedRow.cells_map && typeof matchedRow.cells_map === "object"
+            ? matchedRow.cells_map
+            : {},
+      };
+      safeSetLocalJson(kvKey, snap);
+      return snap;
+    }
+    const fromKv = kvMap[kvKey] as { months?: unknown[]; cellsMap?: Record<string, Record<string, string>> } | undefined;
+    if (fromKv && Array.isArray(fromKv.months)) {
+      const snap = {
+        months: fromKv.months as TMonth[],
+        cellsMap: fromKv.cellsMap && typeof fromKv.cellsMap === "object" ? fromKv.cellsMap : {},
+      };
+      safeSetLocalJson(kvKey, snap);
+      return snap;
+    }
+  } catch {
+    // ignore network failure
+  }
+  return null;
+}
+
+export async function fetchYearEndVerificationLive(): Promise<Record<string, unknown> | null> {
+  try {
+    const [verifRows, kvMap] = await Promise.all([
+      restSelect<{ period?: string; state?: Record<string, unknown> }>(
+        "pa_year_end_verifications",
+        "select=*&period=eq.2026&limit=1",
+      ),
+      refreshKvKeysFromBackend(["year_end_workflow_2026", "pa_archived_users_v1"]),
+    ]);
+    const fromTable = verifRows[0]?.state;
+    const fromKv = kvMap.year_end_workflow_2026 as Record<string, unknown> | undefined;
+    const chosen = (fromKv && typeof fromKv === "object" ? fromKv : null) ?? (fromTable && typeof fromTable === "object" ? fromTable : null);
+    if (chosen) {
+      safeSetLocalJson("year_end_workflow_2026", chosen);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("year-end-updated"));
+      }
+      return chosen;
+    }
+  } catch {
+    // ignore network failure
+  }
+  return null;
 }
 
 export async function hydrateAllStoresFromSupabase(): Promise<void> {

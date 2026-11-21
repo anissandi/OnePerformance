@@ -8,6 +8,7 @@ import {
   resolveEffectiveUserGrouping,
   resolveUserAllowedModules,
 } from "../store/authStore";
+import { isEmployeeArchived } from "../store/archiveStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 import { dateToSortableKey, normalizeDateDDMMYYYY } from "../utils/dateFormat";
 import { loadUnitScoreWeights, weightColumnFromGrouping } from "../pages/shared/scoringWeightStore";
@@ -126,7 +127,9 @@ function averageNumbers(nums: number[]): number {
 export function getLiveTransactionalEmployees(): Employee[] {
   try {
     // Role Director & BOD tidak masuk dalam penilaian kinerja reguler (headcount, grade distribution, calibration adjustment, dll.)
-    const users = loadManagedUsers().filter((u) => !isExcludedFromAppraisalCalibration(u));
+    const users = loadManagedUsers().filter(
+      (u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u) && !isEmployeeArchived(u.employeeId),
+    );
     const activeUser = getActiveUser();
     const workflows = loadWorkflowRecords();
     const projectByEmp = loadAllIcfProjectsByEmployee();

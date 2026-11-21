@@ -38,10 +38,10 @@ import { DelegatedWorkspaceBanner } from "../../../components/approval/Delegated
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../../components/ApproverNotesHistory";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
-import { AlertCircle, Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers, Download } from "lucide-react";
+import { AlertCircle, Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers, Download, FileSpreadsheet, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
-import { EvidenceViewerModal } from "../../../components/EvidenceViewerModal";
+import { EmbeddedPdfPreview, EvidenceViewerModal, triggerReliableFileDownload } from "../../../components/EvidenceViewerModal";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
 import {
@@ -818,7 +818,7 @@ const PERSP_COLOR: Record<string, string> = {
   "Learning & Growth": "text-pink-700",
 };
 
-const W_NO = 52;
+const W_NO = 84;
 const W_PERSP = 140;
 const W_KPI = 270;
 const W_AKSI = 88;
@@ -1002,6 +1002,32 @@ function normalizeKpiTitleKey(kpiText?: string): string {
     .toLowerCase();
 }
 
+function normalizeKpiNoKey(raw?: string): string {
+  return String(raw ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/\.+$/, "")
+    .toLowerCase();
+}
+
+function findDuplicateKpiNoIds(items: KPISetting[]): Set<string> {
+  const byNo = new Map<string, string[]>();
+  for (const item of items) {
+    const key = normalizeKpiNoKey(item.no);
+    if (!key) continue;
+    const list = byNo.get(key) ?? [];
+    list.push(item.id);
+    byNo.set(key, list);
+  }
+  const dupIds = new Set<string>();
+  for (const ids of byNo.values()) {
+    if (ids.length > 1) {
+      ids.forEach((id) => dupIds.add(id));
+    }
+  }
+  return dupIds;
+}
+
 function findDuplicateKpiTitleIds(items: KPISetting[]): Set<string> {
   const byTitle = new Map<string, string[]>();
   for (const item of items) {
@@ -1024,16 +1050,27 @@ function evaluateKpiSettingSubmitStatus(
   items: KPISetting[],
   isCorporate: boolean,
   editedSectionBobots?: Record<string, string>,
-): { canSubmit: boolean; totalSectionBobot: number; totalItemBobot: number; reasons: string[] } {
+  options?: { requireAttachment?: boolean; attachmentCount?: number },
+): { canSubmit: boolean; isBobotValid: boolean; totalSectionBobot: number; totalItemBobot: number; reasons: string[] } {
   if (items.length === 0) {
+    const emptyReasons = ["Belum ada KPI. Tambahkan KPI terlebih dahulu hingga Total Bobot mencapai 100%."];
+    if (options?.requireAttachment && (options.attachmentCount ?? 0) === 0) {
+      emptyReasons.push("Lampiran KPI wajib diunggah (format Excel atau PDF) sebelum Submit KPI.");
+    }
     return {
       canSubmit: false,
+      isBobotValid: false,
       totalSectionBobot: 0,
       totalItemBobot: 0,
-      reasons: ["Belum ada KPI. Tambahkan KPI terlebih dahulu hingga Total Bobot mencapai 100%."],
+      reasons: emptyReasons,
     };
   }
   const reasons: string[] = [];
+  const bobotReasons: string[] = [];
+  const dupNoIds = findDuplicateKpiNoIds(items);
+  if (dupNoIds.size > 0) {
+    reasons.push("No KPI sama, pastikan tidak ada No KPI yang sama");
+  }
   const dupIds = findDuplicateKpiTitleIds(items);
   if (dupIds.size > 0) {
     reasons.push("judul KPI sama, pastikan tidak ada judul KPI yang sama");
@@ -1043,11 +1080,12 @@ function evaluateKpiSettingSubmitStatus(
 
   if (Math.round(totalSectionBobot * 100) !== 10000) {
     const diff = Math.abs(100 - totalSectionBobot);
-    reasons.push(
+    const msg =
       totalSectionBobot < 100
         ? `Total bobot semua Section saat ini ${formatPctNum(totalSectionBobot)}% (kurang ${formatPctNum(diff)}% dari 100%).`
-        : `Total bobot semua Section saat ini ${formatPctNum(totalSectionBobot)}% (melebihi 100% sebesar ${formatPctNum(diff)}%).`,
-    );
+        : `Total bobot semua Section saat ini ${formatPctNum(totalSectionBobot)}% (melebihi 100% sebesar ${formatPctNum(diff)}%).`;
+    bobotReasons.push(msg);
+    reasons.push(msg);
   }
 
   const uniqueSecs = Array.from(new Set(items.map((i) => i.section).filter(Boolean))).sort();
@@ -1055,20 +1093,25 @@ function evaluateKpiSettingSubmitStatus(
     const secLimit = resolveEffectiveSectionBobotNum(items, sec, isCorporate, editedSectionBobots);
     const subSum = Math.round(calcSubSectionBobot(items, sec) * 100) / 100;
     if (Math.round(subSum * 100) !== Math.round(secLimit * 100)) {
-      reasons.push(
-        `Section ${sec}: total bobot Sub Section ${formatPctNum(subSum)}% belum tepat sama dengan bobot Section ${formatPctNum(secLimit)}%.`,
-      );
+      const msg = `Section ${sec}: total bobot Sub Section ${formatPctNum(subSum)}% belum tepat sama dengan bobot Section ${formatPctNum(secLimit)}%.`;
+      bobotReasons.push(msg);
+      reasons.push(msg);
     }
   }
 
   if (Math.round(totalItemBobot * 100) !== 10000) {
-    reasons.push(
-      `Total Bobot seluruh KPI saat ini ${formatPctNum(totalItemBobot)}% — wajib tepat 100% sebelum Submit KPI.`,
-    );
+    const msg = `Total Bobot seluruh KPI saat ini ${formatPctNum(totalItemBobot)}% — wajib tepat 100% sebelum Submit KPI.`;
+    bobotReasons.push(msg);
+    reasons.push(msg);
+  }
+
+  if (options?.requireAttachment && (options.attachmentCount ?? 0) === 0) {
+    reasons.push("Lampiran KPI wajib diunggah (format Excel atau PDF) sebelum Submit KPI.");
   }
 
   return {
     canSubmit: reasons.length === 0,
+    isBobotValid: bobotReasons.length === 0,
     totalSectionBobot,
     totalItemBobot,
     reasons,
@@ -3415,7 +3458,29 @@ export function AddKPIModal({
               )}
 
               <div className="grid grid-cols-2 gap-3">
-                <Field label="No *"><input value={form.no} onChange={(e) => set("no", e.target.value)} placeholder="e.g. 8" className={inputCls} /></Field>
+                <Field label="No *">
+                  {(() => {
+                    const hasDupNo = Boolean(
+                      normalizeKpiNoKey(form.no) &&
+                        existingItems.some((x) => normalizeKpiNoKey(x.no) === normalizeKpiNoKey(form.no)),
+                    );
+                    return (
+                      <>
+                        <input
+                          value={form.no}
+                          onChange={(e) => set("no", e.target.value)}
+                          placeholder="e.g. 8"
+                          className={`${inputCls} ${hasDupNo ? "border-rose-300 bg-rose-50/70 focus:border-rose-400" : ""}`}
+                        />
+                        {hasDupNo && (
+                          <p className="mt-1 text-[10px] font-semibold text-rose-700">
+                            No KPI sama, pastikan tidak ada No KPI yang sama
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </Field>
                 <Field label="Perspektif">
                   <select value={form.perspektif} onChange={(e) => set("perspektif", e.target.value)} className={inputCls}>
                     <option value="">— Perspektif —</option>
@@ -5028,11 +5093,13 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
     secItems(sec).map((item, rowIdx) => {
       const isEditing = globalEdit || editingId === item.id;
       const row = globalEdit ? (globalDrafts[item.id] ?? item) : (editingId === item.id && draft ? draft : item);
+      const duplicateNoIds = findDuplicateKpiNoIds(activeDisplayItems);
+      const isDuplicateNo = duplicateNoIds.has(item.id);
       const duplicateKpiIds = findDuplicateKpiTitleIds(activeDisplayItems);
       const isDuplicateKpi = duplicateKpiIds.has(item.id);
       const formatIssues = validateKpiRowStandard(row, master);
       const hasFormatIssue = formatIssues.length > 0;
-      const hasRowRedAlert = hasFormatIssue || isDuplicateKpi;
+      const hasRowRedAlert = hasFormatIssue || isDuplicateKpi || isDuplicateNo;
       const stickyBg = hasRowRedAlert ? "#fff1f2" : isEditing ? "#f0f7ff" : rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc";
       const secLimitNum = resolveEffectiveSectionBobotNum(activeDisplayItems, sec, false);
       const otherSubBobot = calcSubSectionBobot(activeDisplayItems, sec, item.id);
@@ -5112,11 +5179,16 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
             </td>
           )}
           {/* No */}
-          <td className="border border-gray-200 text-center text-xs font-semibold text-gray-600 py-3 px-2"
-            style={{ position: "sticky", left: leftActionOffset, zIndex: 12, background: stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
+          <td className={`border text-center text-xs font-semibold py-3 px-1.5 ${isDuplicateNo ? "border-rose-300 bg-rose-50/95 text-rose-800" : "border-gray-200 text-gray-600"}`}
+            style={{ position: "sticky", left: leftActionOffset, zIndex: 12, background: isDuplicateNo ? "#ffe4e6" : stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
             {isEditing
               ? <input value={row.no} onChange={(e) => setD({ no: e.target.value })} className={ci + " text-center font-bold"} />
               : item.no}
+            {isDuplicateNo && (
+              <div className="mt-1 px-1 py-0.5 rounded bg-rose-100/95 border border-rose-300 text-[9px] text-rose-800 font-semibold leading-tight">
+                No KPI sama, pastikan tidak ada No KPI yang sama
+              </div>
+            )}
           </td>
           {/* Perspektif */}
           <td className="border border-gray-200 py-3 px-3"
@@ -5888,7 +5960,7 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
     : POLARITAS_OPTIONS;
   const W_CORP_AKSI = 84;
   const W_CORP_CASC = 62;
-  const W_CORP_NO = 48;
+  const W_CORP_NO = 80;
   const W_CORP_PERSP = 120;
   const W_CORP_KPI = 260;
   const COLS = [
@@ -6245,11 +6317,13 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                 {secRows.map((item, idx) => {
                   const isEditing = corpGlobalEdit || editingRowId === item.id;
                   const row = corpGlobalEdit ? (corpGlobalDrafts[item.id] ?? item) : (editingRowId === item.id && draft ? draft : item);
+                  const corpDupNoIds = findDuplicateKpiNoIds(activeCorpItems);
+                  const isCorpDuplicateNo = corpDupNoIds.has(item.id);
                   const corpDupIds = findDuplicateKpiTitleIds(activeCorpItems);
                   const isCorpDuplicateKpi = corpDupIds.has(item.id);
                   const formatIssues = validateKpiRowStandard(row, master);
                   const hasFormatIssue = formatIssues.length > 0;
-                  const hasCorpRedAlert = hasFormatIssue || isCorpDuplicateKpi;
+                  const hasCorpRedAlert = hasFormatIssue || isCorpDuplicateKpi || isCorpDuplicateNo;
                   const rowBg = idx % 2 === 0 ? "bg-white" : "bg-slate-50/70";
                   const stickyBg = hasCorpRedAlert ? "#fff1f2" : isEditing ? "#f0f7ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
                   const ct = item._cascadeType;
@@ -6349,11 +6423,16 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                         </td>
                       )}
                       {/* No */}
-                      <td className="border border-gray-200 py-2 px-1.5 text-center"
-                        style={{ position: "sticky", left: leftOffsetBase, zIndex: 12, background: stickyBg, minWidth: W_CORP_NO, maxWidth: W_CORP_NO }}>
+                      <td className={`border py-2 px-1.5 text-center ${isCorpDuplicateNo ? "border-rose-300 bg-rose-50/95" : "border-gray-200"}`}
+                        style={{ position: "sticky", left: leftOffsetBase, zIndex: 12, background: isCorpDuplicateNo ? "#ffe4e6" : stickyBg, minWidth: W_CORP_NO, maxWidth: W_CORP_NO }}>
                         {isEditing && isFieldEditable("no")
                           ? <input value={row.no} onChange={(e) => setDraftField({ no: e.target.value })} className={cellInput + " text-center font-bold text-gray-600"} />
-                          : <span className="font-bold text-gray-500 text-[11px]">{row.no}</span>}
+                          : <span className={`font-bold text-[11px] ${isCorpDuplicateNo ? "text-rose-800" : "text-gray-500"}`}>{row.no}</span>}
+                        {isCorpDuplicateNo && (
+                          <div className="mt-1 px-1 py-0.5 rounded bg-rose-100/95 border border-rose-300 text-[9px] text-rose-800 font-semibold leading-tight">
+                            No KPI sama, pastikan tidak ada No KPI yang sama
+                          </div>
+                        )}
                       </td>
                       {/* Perspektif */}
                       <td className="border border-gray-200 py-2 px-2"
@@ -6853,12 +6932,41 @@ function buildKpiCopySources(owner: ManagedUser): { group: KpiCopySource; unit: 
   };
 }
 
-function readStoredBusinessKpiStatus(scopeKey: string): { submitted: boolean; approved: boolean } {
+function readStoredBusinessKpiStatus(scopeKey: string): {
+  submitted: boolean;
+  approved: boolean;
+  stage?: string;
+  revisionNote?: string;
+  revisionBy?: string;
+  revisionRole?: string;
+  revisionDate?: string;
+} {
   try {
     const raw = localStorage.getItem("pa_kpi_business_status_v1");
-    const map = raw ? (JSON.parse(raw) as Record<string, { submitted?: boolean; approved?: boolean }>) : {};
+    const map = raw
+      ? (JSON.parse(raw) as Record<
+          string,
+          {
+            submitted?: boolean;
+            approved?: boolean;
+            stage?: string;
+            revisionNote?: string;
+            revisionBy?: string;
+            revisionRole?: string;
+            revisionDate?: string;
+          }
+        >)
+      : {};
     const entry = map[scopeKey] ?? (scopeKey === "unit-PT RSUP ASD" ? map["unit-ASD"] : undefined);
-    return { submitted: Boolean(entry?.submitted), approved: Boolean(entry?.approved) };
+    return {
+      submitted: Boolean(entry?.submitted),
+      approved: Boolean(entry?.approved),
+      stage: entry?.stage,
+      revisionNote: entry?.revisionNote,
+      revisionBy: entry?.revisionBy,
+      revisionRole: entry?.revisionRole,
+      revisionDate: entry?.revisionDate,
+    };
   } catch {
     return { submitted: false, approved: false };
   }
@@ -6921,6 +7029,8 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     () => readAttachmentsForCurrentScope(),
   );
   const [previewKpiAtt, setPreviewKpiAtt] = useState<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt: string } | null>(null);
+  const [embeddedKpiPdfId, setEmbeddedKpiPdfId] = useState<string | null>(null);
+  const [attachTipOpen, setAttachTipOpen] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const kpiAttachInputRef = useRef<HTMLInputElement>(null);
 
@@ -6945,13 +7055,42 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   const handleUploadKpiAttachments = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
+    const validFiles: File[] = [];
+    let rejectedInvalid = false;
+    for (const f of Array.from(files)) {
+      const ext = (f.name.split(".").pop() || "").toLowerCase();
+      const mime = (f.type || "").toLowerCase();
+      const allowed =
+        ext === "pdf" ||
+        ext === "xlsx" ||
+        ext === "xls" ||
+        mime === "application/pdf" ||
+        mime === "application/vnd.ms-excel" ||
+        mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      if (allowed) {
+        validFiles.push(f);
+      } else {
+        rejectedInvalid = true;
+      }
+    }
+    if (rejectedInvalid) {
+      toast.error("Format file Lampiran KPI hanya diperbolehkan Excel (.xlsx, .xls) atau PDF (.pdf).");
+    }
+    if (validFiles.length === 0) return;
+
     setUploadingAttachment(true);
     const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
     const added: Array<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt: string }> = [];
-    for (const f of Array.from(files)) {
+    for (const f of validFiles) {
       let url = "";
       let uploadedId = "";
-      let uploadedMime = f.type || "";
+      let uploadedMime =
+        f.type ||
+        (/\.pdf$/i.test(f.name)
+          ? "application/pdf"
+          : /\.xlsx$/i.test(f.name)
+          ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          : "application/vnd.ms-excel");
       try {
         const up = await uploadEvidenceFileToSupabase(f, {
           employeeId: effectiveOwner.employeeId,
@@ -6969,6 +7108,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         uploadedMime = up?.mimeType || uploadedMime;
       } catch {
         url = "";
+      }
+      if (!url) {
+        url = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+          reader.onerror = () => resolve("");
+          reader.readAsDataURL(f);
+        });
       }
       added.push({
         id: uploadedId || `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -6998,6 +7145,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       void mergeKvMapRecord("pa_kpi_attachments_v1", key, kvLight);
       return next;
     });
+    const firstPdf = added.find((a) => a.mimeType === "application/pdf" || /\.pdf$/i.test(a.name));
+    if (firstPdf) {
+      setEmbeddedKpiPdfId(firstPdf.id);
+    }
     setUploadingAttachment(false);
     toast.success(`${added.length} file lampiran KPI berhasil diunggah.`);
   };
@@ -7005,6 +7156,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const handleRemoveKpiAttachment = (attId: string) => {
     const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
     void deleteUploadedEvidenceById(attId);
+    setEmbeddedKpiPdfId((prev) => (prev === attId ? null : prev));
     setKpiAttachments((prev) => {
       const next = prev.filter((a) => a.id !== attId);
       try {
@@ -7104,6 +7256,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     setDraftDirtyInSession(true);
     const prevSnap = latestItemsRef.current;
     const computedNext = typeof updater === "function" ? updater(prevSnap) : updater;
+    const prevNoDups = findDuplicateKpiNoIds(prevSnap);
+    const nextNoDups = findDuplicateKpiNoIds(computedNext);
+    if (
+      nextNoDups.size > 0 &&
+      (computedNext.length > prevSnap.length || Array.from(nextNoDups).some((id) => !prevNoDups.has(id)))
+    ) {
+      toast.error("No KPI sama, pastikan tidak ada No KPI yang sama");
+    }
     const prevDups = findDuplicateKpiTitleIds(prevSnap);
     const nextDups = findDuplicateKpiTitleIds(computedNext);
     if (
@@ -7152,11 +7312,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isTableFullscreen, setIsTableFullscreen] = useState(false);
+  const isTableFullscreenRef = useRef(false);
   const [tableScale, setTableScale] = useState<KpiTableScale>("md");
 
   const toggleTableFullscreen = () => {
     setIsTableFullscreen((prev) => {
       const next = !prev;
+      isTableFullscreenRef.current = next;
       dispatchTableFullscreen(next);
       return next;
     });
@@ -7168,7 +7330,9 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   useEffect(() => {
     return () => {
-      dispatchTableFullscreen(false);
+      if (isTableFullscreenRef.current) {
+        dispatchTableFullscreen(false);
+      }
     };
   }, []);
   const readPersonalWorkflowState = () => {
@@ -7280,10 +7444,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     onTabStatusChange?.(ts);
   }, [submitted, kpiApproved, pendingTargetEditRequest, monthlyTargetPending]);
 
-  const submitStatus = evaluateKpiSettingSubmitStatus(items, Boolean(isCorporate), editedSectionBobots);
+  const submitStatus = evaluateKpiSettingSubmitStatus(items, Boolean(isCorporate), editedSectionBobots, {
+    requireAttachment: true,
+    attachmentCount: kpiAttachments.length,
+  });
   const totalBobot = submitStatus.totalItemBobot;
   const totalSectionBobot = submitStatus.totalSectionBobot;
-  const isBobotExact100 = submitStatus.canSubmit;
+  const isBobotExact100 = submitStatus.isBobotValid;
 
   const hasUnsubmittedCreatedDraft =
     !submitted &&
@@ -7729,6 +7896,35 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           employeeId={effectiveOwner.employeeId}
         />
       )}
+      {isCorporate && !submitted && (() => {
+        const corpSt = readStoredBusinessKpiStatus(effectiveScopeKey);
+        if (corpSt.stage !== "revision") return null;
+        const revTypeLabel =
+          corpSt.revisionRole ||
+          (effectiveScopeKey.startsWith("unit-") || effectiveScopeKey.startsWith("corporate-unit")
+            ? "Director"
+            : "HR ICF Validator");
+        return (
+          <div className="rounded-lg border border-orange-200 bg-orange-50/70 px-3 py-2 space-y-1">
+            <p className="text-[11px] font-bold text-orange-800">
+              Catatan / Riwayat Revisi {revTypeLabel}
+            </p>
+            <div className="bg-white border border-orange-100 rounded px-2.5 py-1 text-[11px] flex items-start justify-between gap-2">
+              <div>
+                <span className="font-semibold text-gray-800">
+                  {revTypeLabel}{corpSt.revisionBy ? ` (${corpSt.revisionBy})` : ""}:{" "}
+                </span>
+                <span className="text-gray-700">
+                  {corpSt.revisionNote || "Perlu perbaikan sesuai arahan approver."}
+                </span>
+              </div>
+              {corpSt.revisionDate && (
+                <span className="text-[10px] text-gray-400 shrink-0">{corpSt.revisionDate}</span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Controls row */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -8028,12 +8224,15 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       )}
 
       {/* Lampiran KPI */}
-      <div className="rounded-xl border border-sky-200/80 bg-sky-50/40 p-4 flex flex-col gap-3">
+      <div className={`rounded-xl border p-4 flex flex-col gap-3 ${kpiAttachments.length === 0 && !submitted && !kpiApproved && !isViewOnly ? "border-amber-200/90 bg-amber-50/30" : "border-sky-200/80 bg-sky-50/40"}`}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <Paperclip className="w-4 h-4 text-sky-700" />
             <span className="text-xs font-bold text-[#1A284F] uppercase tracking-wide">
               Lampiran KPI
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+              Wajib · Excel / PDF
             </span>
             {kpiAttachments.length > 0 && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
@@ -8047,62 +8246,96 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 ref={kpiAttachInputRef}
                 type="file"
                 multiple
-                accept=".xlsx,.xls,.pdf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,image/*"
+                accept=".xlsx,.xls,.pdf,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
                 onChange={(e) => {
                   void handleUploadKpiAttachments(e.target.files);
                   e.target.value = "";
                 }}
               />
-              <button
-                type="button"
-                disabled={uploadingAttachment}
-                onClick={() => kpiAttachInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-50 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                {uploadingAttachment ? "Mengunggah..." : "Lampiran KPI"}
-              </button>
+              {kpiAttachments.length === 0 ? (
+                <Tooltip open={attachTipOpen} onOpenChange={setAttachTipOpen}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={uploadingAttachment}
+                      onMouseEnter={() => setAttachTipOpen(true)}
+                      onMouseLeave={() => setAttachTipOpen(false)}
+                      onClick={() => kpiAttachInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-50 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      {uploadingAttachment ? "Mengunggah..." : "Lampiran KPI"}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="end" className="max-w-xs bg-[#1A284F] text-white px-3 py-2 rounded-lg shadow-xl z-[70] text-[11px]">
+                    Lampiran KPI wajib diunggah (format Excel atau PDF) sebelum Submit KPI.
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <button
+                  type="button"
+                  disabled={uploadingAttachment}
+                  onClick={() => kpiAttachInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-50 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {uploadingAttachment ? "Mengunggah..." : "Lampiran KPI"}
+                </button>
+              )}
             </>
           )}
         </div>
         <p className="text-xs text-sky-800/90 leading-relaxed">
-          Silahkan tambahkan file lampiran KPI yang anda buat diluar sistem ini (jika ada) atau file pendukung KPI lainnya. Lampiran ini sebagai referensi Atasan untuk tindak lanjut persetujuan atau revisi.
+          Silahkan tambahkan file lampiran KPI yang sudah di setujui oleh pimpinan (jika ada) atau file pendukung terkait perhitungan baseline dan target KPI (wajib). Lampiran ini sebagai referensi untuk tindak lanjut persetujuan atau revisi.
         </p>
         {kpiAttachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {kpiAttachments.map((att) => {
-              const isPreviewable =
-                Boolean(att.mimeType?.startsWith("image/") || att.mimeType === "application/pdf") ||
-                /\.(pdf|png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name || "");
+              const isPdf = att.mimeType === "application/pdf" || /\.pdf$/i.test(att.name || "");
+              const isExcel =
+                /\.(xlsx?|csv)$/i.test(att.name || "") ||
+                Boolean(att.mimeType?.toLowerCase().includes("spreadsheet") || att.mimeType?.toLowerCase().includes("excel"));
+              const isEmbeddedOpen = isPdf && embeddedKpiPdfId === att.id;
               return (
               <div
                 key={att.id}
                 className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-sky-200 text-xs text-gray-700 shadow-2xs"
               >
-                <Paperclip className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                {isPdf ? (
+                  <FileText className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                ) : isExcel ? (
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                ) : (
+                  <Paperclip className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                )}
+                <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${isPdf ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-teal-50 text-teal-700 border-teal-200"}`}>
+                  {isPdf ? "PDF" : isExcel ? "Excel" : "File"}
+                </span>
                 <span className="font-medium text-[#1A284F] truncate max-w-[220px]" title={att.name}>{att.name}</span>
-                {att.url && isPreviewable && (
+                {att.url && isPdf && (
                   <button
                     type="button"
-                    onClick={() => setPreviewKpiAtt(att)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 text-[10px] font-semibold"
-                    title="Lihat langsung"
+                    onClick={() => setEmbeddedKpiPdfId((prev) => (prev === att.id ? null : att.id))}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors ${
+                      isEmbeddedOpen
+                        ? "bg-[#1A284F] text-white border-[#1A284F]"
+                        : "bg-sky-50 text-sky-700 hover:bg-sky-100 border-sky-200"
+                    }`}
+                    title="Buka PDF langsung (embed)"
                   >
-                    <Eye className="w-3 h-3" /> Lihat
+                    <Eye className="w-3 h-3" /> {isEmbeddedOpen ? "Tutup PDF" : "Buka PDF"}
                   </button>
                 )}
                 {att.url && (
-                  <a
-                    href={att.url}
-                    download={att.name}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F]/20 text-[10px] font-semibold"
+                  <button
+                    type="button"
+                    onClick={() => { void triggerReliableFileDownload(att.url, att.name); }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F]/20 text-[10px] font-semibold transition-colors"
                     title="Download lampiran"
                   >
                     <Download className="w-3 h-3" /> Download
-                  </a>
+                  </button>
                 )}
                 {!submitted && !kpiApproved && !isViewOnly && canDelete && (
                   <button
@@ -8119,6 +8352,21 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
             })}
           </div>
         )}
+        {(() => {
+          const activePdf = kpiAttachments.find(
+            (a) => a.id === embeddedKpiPdfId && (a.mimeType === "application/pdf" || /\.pdf$/i.test(a.name || "")) && a.url,
+          );
+          if (!activePdf) return null;
+          return (
+            <EmbeddedPdfPreview
+              url={activePdf.url}
+              name={activePdf.name}
+              height={500}
+              onClose={() => setEmbeddedKpiPdfId(null)}
+              onExpandModal={() => setPreviewKpiAtt(activePdf)}
+            />
+          );
+        })()}
         {previewKpiAtt && (
           <EvidenceViewerModal
             name={previewKpiAtt.name}

@@ -82,10 +82,11 @@ function normalizeApproverPairServer(rawAp1, rawAp2) {
 
 function toPaUserRow(u, now, mode = "full") {
   const apPair = normalizeApproverPairServer(u.regNoAp1 ?? u.reg_no_ap1, u.regNoAp2 ?? u.reg_no_ap2);
+  const empIdStr = String(u.employeeId ?? u.employee_id ?? "").trim();
   const base = {
-    employee_id: String(u.employeeId ?? u.employee_id ?? "").trim(),
+    employee_id: empIdStr,
     name: String(u.name || "-"),
-    email: String(u.email || ""),
+    email: String(u.email ?? ""),
     position: String(u.position || "-"),
     company: canonicalizeUnitName(u.company || "PT RSUP (Industry)"),
     unit_id: String(u.unitId || u.unit_id || "IND"),
@@ -99,10 +100,11 @@ function toPaUserRow(u, now, mode = "full") {
     updated_at: now,
   };
   if (mode === "minimal" || mode === true) return base;
+  const rawRegNo = String(u.regNo ?? u.reg_no ?? "").trim();
   const extended = {
     ...base,
     no: String(u.no ?? ""),
-    reg_no: String(u.regNo ?? u.reg_no ?? ""),
+    reg_no: rawRegNo || empIdStr,
     bagian: String(u.bagian ?? ""),
     join_date: String(u.joinDate ?? u.join_date ?? ""),
     telegram_no: String(u.telegramNo ?? u.telegram_no ?? ""),
@@ -315,12 +317,66 @@ export default async function handler(req, res) {
       }
 
       if (kind === "user-delete" && body.employeeId) {
+        const rawEmpId = String(body.employeeId).trim();
+        const numMatch = rawEmpId.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const candidates = Array.from(
+          new Set(
+            [
+              rawEmpId,
+              numMatch ? `E${numMatch.padStart(3, "0")}` : "",
+              numMatch ? `EMP-${numMatch.padStart(3, "0")}` : "",
+            ].filter(Boolean),
+          ),
+        );
+        const encodedIn = candidates.map((c) => encodeURIComponent(c)).join(",");
         const del = await pgRest(
           cfg,
-          `pa_users?employee_id=eq.${encodeURIComponent(String(body.employeeId).trim())}`,
+          `pa_users?employee_id=in.(${encodedIn})`,
           { method: "DELETE" },
         );
         return res.status(200).json({ ok: del.ok, status: del.status });
+      }
+
+      if (kind === "year-end-verification" && body.state) {
+        const period = String(body.period ?? "2026");
+        const up = await pgRest(cfg, "pa_year_end_verifications?on_conflict=period", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            period,
+            state: body.state,
+            updated_at: now,
+          }),
+        });
+        await pgRest(cfg, "pa_kv_state?on_conflict=state_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            state_key: "year_end_workflow_2026",
+            state_value: body.state,
+            updated_at: now,
+          }),
+        });
+        if (body.audit && typeof body.audit === "object") {
+          const a = body.audit;
+          await pgRest(cfg, "pa_audit_trail", {
+            method: "POST",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({
+              timestamp: String(a.timestamp ?? now.slice(0, 19).replace("T", " ")),
+              user_id: String(a.userId ?? "SYSTEM"),
+              user_name: String(a.userName ?? "System"),
+              role: String(a.role ?? "HR ICF"),
+              action: String(a.action ?? "Update"),
+              module: String(a.module ?? "Calibration"),
+              sub_module: String(a.subModule ?? "Year-End Verification"),
+              description: String(a.description ?? ""),
+              ip_address: "10.0.1.15",
+              status: "Success",
+            }),
+          });
+        }
+        return res.status(200).json({ ok: up.ok, status: up.status });
       }
 
       if (kind === "interview-schedule" && body.schedule) {

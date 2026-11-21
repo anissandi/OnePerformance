@@ -12,10 +12,10 @@ import {
   FileText, ChevronDown, ChevronUp, Target,
 } from "lucide-react";
 import { FORMS, type FormItem } from "../pages/employee/AppraisalForm";
-import { KPI_ITEMS, loadKPITracking } from "../pages/employee/KPIPage";
+import { KPI_ITEMS, loadKPITracking, resolveEmployeeTrackingKpiItems, type KPIItem, type MonthEntry } from "../pages/employee/KPIPage";
 import { SAMPLE_GOALS, ROWS } from "../pages/employee/SMARTGoals";
 import { loadCheckInEntries, loadSubmittedGoals, type StoredSmartGoalEvidenceFile } from "../pages/shared/smartGoalsStore";
-import { fetchEmployeeSmartGoalsLive } from "../services/supabaseClient";
+import { fetchEmployeeKpiSettingsLive, fetchEmployeeKpiTrackingLive, fetchEmployeeSmartGoalsLive } from "../services/supabaseClient";
 import { loadKPIComments, loadKPICommentsForEmployee, saveKPIComment } from "../pages/shared/kpiCommentsStore";
 import { loadEvidenceFiles, type StoredEvidenceFile } from "../pages/shared/kpiEvidenceStore";
 import { saveAssessment, loadAssessment, loadSGAssessment } from "../pages/shared/approvalsStore";
@@ -43,6 +43,7 @@ export interface ApprovalRow {
   position: string;
   department: string;
   division: string;
+  bagian?: string;
   companyUnit: string;
   type: string;
   submittedDate: string;
@@ -405,13 +406,53 @@ function formatEvidenceSize(bytes: number): string {
 }
 
 function KPIReview({ row }: { row: ApprovalRow }) {
-  const kpiItems = KPI_ITEMS;
-  const { months: ownerMonths, cellsMap: ownerCellsMap } = loadKPITracking(row.employeeId);
-  const evidenceFiles: StoredEvidenceFile[] = loadEvidenceFiles(row.employeeId);
-  const rcaSubmissions = loadRCASubmissions(row.employeeId);
+  const [kpiItems, setKpiItems] = useState<KPIItem[]>(() => resolveEmployeeTrackingKpiItems(row.employeeId));
+  const [trackingSnap, setTrackingSnap] = useState<{ months: MonthEntry[]; cellsMap: Record<string, Record<string, string>> }>(
+    () => loadKPITracking(row.employeeId),
+  );
+  const [evidenceFiles, setEvidenceFiles] = useState<StoredEvidenceFile[]>(() => loadEvidenceFiles(row.employeeId));
+  const [rcaSubmissions, setRcaSubmissions] = useState<StoredRCASubmission[]>(() => loadRCASubmissions(row.employeeId));
   const [highlightedRcaKey, setHighlightedRcaKey] = useState<string | null>(null);
   const [showRcaTable, setShowRcaTable] = useState<boolean>(true);
   const [previewEvFile, setPreviewEvFile] = useState<StoredEvidenceFile | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const refreshLocal = () => {
+      if (cancelled) return;
+      setKpiItems(resolveEmployeeTrackingKpiItems(row.employeeId));
+      setTrackingSnap(loadKPITracking(row.employeeId));
+      setEvidenceFiles(loadEvidenceFiles(row.employeeId));
+      setRcaSubmissions(loadRCASubmissions(row.employeeId));
+    };
+    refreshLocal();
+    void Promise.all([
+      fetchEmployeeKpiSettingsLive(row.employeeId),
+      fetchEmployeeKpiTrackingLive<MonthEntry>(row.employeeId),
+    ]).then(([remoteSettings, remoteTracking]) => {
+      if (cancelled) return;
+      if (remoteSettings.length > 0) {
+        setKpiItems(resolveEmployeeTrackingKpiItems(row.employeeId));
+      }
+      if (remoteTracking) {
+        setTrackingSnap(remoteTracking);
+      } else {
+        setTrackingSnap(loadKPITracking(row.employeeId));
+      }
+    });
+    window.addEventListener("pa-db-hydrated", refreshLocal);
+    window.addEventListener("appraisal-updated", refreshLocal);
+    window.addEventListener("storage", refreshLocal);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pa-db-hydrated", refreshLocal);
+      window.removeEventListener("appraisal-updated", refreshLocal);
+      window.removeEventListener("storage", refreshLocal);
+    };
+  }, [row.employeeId]);
+
+  const ownerMonths = trackingSnap.months;
+  const ownerCellsMap = trackingSnap.cellsMap;
 
   const handleClickRcaTag = (sub: StoredRCASubmission) => {
     setShowRcaTable(true);
@@ -439,13 +480,19 @@ function KPIReview({ row }: { row: ApprovalRow }) {
         </span>
       </div>
 
-      <KPITableView
-        kpiItems={kpiItems}
-        months={ownerMonths}
-        cells={ownerCellsMap}
-        rcaSubmissions={rcaSubmissions}
-        onPreviewRCA={handleClickRcaTag}
-      />
+      {kpiItems.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 py-10 px-4 text-center text-xs text-gray-500">
+          Karyawan ini belum memiliki data KPI yang dibuat pada KPI Setting.
+        </div>
+      ) : (
+        <KPITableView
+          kpiItems={kpiItems}
+          months={ownerMonths}
+          cells={ownerCellsMap}
+          rcaSubmissions={rcaSubmissions}
+          onPreviewRCA={handleClickRcaTag}
+        />
+      )}
 
       {/* ── Unified RCA Table (semua bulan termasuk bulan-bulan sebelumnya dalam 1 tabel) ── */}
       {rcaSubmissions.length > 0 && showRcaTable && (

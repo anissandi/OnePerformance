@@ -1,5 +1,6 @@
 import { normalizeEmployeeId, loadWorkflowRecords } from "./appraisalWorkflowStore";
 import { savePersistedState } from "../../services/supabaseClient";
+import { getActiveUser } from "../../store/authStore";
 
 export interface YearEndState {
   reminded: string[];
@@ -40,29 +41,52 @@ export function applyYearEndScorePolicy<T extends Record<string, number | null>>
   return Object.fromEntries(Object.entries(scores).map(([module, score]) => [module, completion[module] === false ? 0 : score])) as T;
 }
 
-export function saveYearEndState(state: YearEndState): void {
+export function saveYearEndState(
+  state: YearEndState,
+  auditMeta?: { action?: string; description?: string },
+): void {
   try {
     const existingRaw = localStorage.getItem(KEY);
-    if (existingRaw && existingRaw === JSON.stringify(state)) {
+    if (!auditMeta && existingRaw && existingRaw === JSON.stringify(state)) {
       return;
     }
   } catch {
     // ignore
   }
+  const actor = getActiveUser();
   savePersistedState(KEY, state, {
     kind: "year-end-verification",
     period: "2026",
     state,
     audit: {
-      action: "Update",
+      userId: actor.employeeId,
+      userName: actor.name,
+      role: actor.role,
+      action: auditMeta?.action ?? "Update",
       module: "Calibration",
       subModule: "Year-End Verification",
-      description: `Updated Year-End Verification state (phase: ${state.phase}, reminded: ${state.reminded.length}, inactive: ${state.inactive.length})`,
+      description:
+        auditMeta?.description ??
+        `Updated Year-End Verification state (phase: ${state.phase}, reminded: ${state.reminded.length}, ignored: ${state.ignored.length})`,
     },
   });
   window.dispatchEvent(new Event("year-end-updated"));
 }
 
 export function canProceedToInterview(employees: { id: string; overall: string }[], state: YearEndState): boolean {
-  return employees.length > 0 && employees.every((employee) => employee.overall === "Complete" || state.inactive.includes(employee.id) || state.ignored.includes(employee.id));
+  const inactiveNorm = new Set((state.inactive ?? []).map((id) => normalizeEmployeeId(id)));
+  const ignoredNorm = new Set((state.ignored ?? []).map((id) => normalizeEmployeeId(id)));
+  return (
+    employees.length > 0 &&
+    employees.every((employee) => {
+      const norm = normalizeEmployeeId(employee.id);
+      return (
+        employee.overall === "Complete" ||
+        state.inactive.includes(employee.id) ||
+        state.ignored.includes(employee.id) ||
+        inactiveNorm.has(norm) ||
+        ignoredNorm.has(norm)
+      );
+    })
+  );
 }

@@ -1,10 +1,9 @@
-import { resolveEditRequestApprovers } from "../../store/kpiTargetEditStore";
 // @refresh reset
 import React, { useState, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { DatePickerID } from "../../components/DatePickerID";
 import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
-import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info } from "lucide-react";
+import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info, RotateCcw } from "lucide-react";
 import { loadAllKPIComments, loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
 import { saveEvidenceFiles, loadEvidenceFiles } from "../shared/kpiEvidenceStore";
@@ -26,6 +25,7 @@ import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, t
 import {
   buildEmployeeIdMatchSet,
   fetchEmployeeKpiSettingsLive,
+  fetchEmployeeKpiTrackingLive,
   loadPersistedState,
   mergeKvMapRecord,
   safeGetLocalRaw,
@@ -47,9 +47,19 @@ import {
   usesDemoSampleData,
   type ManagedUser,
 } from "../../store/authStore";
-import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type KpiMonthState } from "../shared/appraisalWorkflowStore";
+import { cancelSubmittedKpiMeasurement, getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type KpiMonthState } from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
+import {
+  cancelOwnKpiTrackingEditRequest,
+  completeKpiTrackingEditSession,
+  getLatestKpiTrackingEditForEmployee,
+  getStageDisplayLabel,
+  KPI_TRACKING_EDIT_EVENT,
+  refreshKpiTrackingEditRequestsFromBackend,
+  resolveKpiTrackingEditChain,
+  submitKpiTrackingEditRequest,
+} from "../../store/kpiTrackingEditStore";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -697,17 +707,25 @@ function loadSubmitState(employeeId?: string): { submitted: boolean; submittedDa
         return { submitted: false, submittedDate: "" };
       }
       const isRev = Object.values(wfRec.decisions).some((d) => d?.status === "Revision");
-      const isValidated = wfRec.decisions.validator?.status === "Validated";
+      const isValidated =
+        wfRec.decisions.validator?.status === "Validated" ||
+        wfRec.decisions.approver2?.status === "Validated";
+      const trackedLabels = readTrackedKpiMonthLabels(targetEmpId);
+      const effectiveValidatedSet = new Set([
+        ...(wfRec.validatedMonths ?? []),
+        ...(isValidated && (!wfRec.validatedMonths || wfRec.validatedMonths.length === 0)
+          ? (wfRec.submittedMonths && wfRec.submittedMonths.length > 0 ? wfRec.submittedMonths : trackedLabels)
+          : []),
+      ]);
       const hasUnvalidatedMonth =
         isValidated &&
-        Array.isArray(wfRec.validatedMonths) &&
-        readTrackedKpiMonthLabels(targetEmpId).some((m) => !wfRec.validatedMonths!.includes(m));
+        trackedLabels.some((m) => !effectiveValidatedSet.has(m));
       const hasUnsubmittedNewMonth =
         !isValidated &&
         Array.isArray(wfRec.submittedMonths) &&
         wfRec.submittedMonths.length > 0 &&
-        readTrackedKpiMonthLabels(targetEmpId).some(
-          (m) => !wfRec.submittedMonths!.includes(m) && !(wfRec.validatedMonths ?? []).includes(m),
+        trackedLabels.some(
+          (m) => !wfRec.submittedMonths!.includes(m) && !effectiveValidatedSet.has(m),
         );
       if (isRev || hasUnvalidatedMonth || hasUnsubmittedNewMonth) {
         return { submitted: false, submittedDate: wfRec.submittedDate || "" };
@@ -856,17 +874,25 @@ export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, u
 
 export function resolveEmployeeTrackingKpiItems(employeeId: string): KPIItem[] {
   try {
-    const normId = normalizeEmployeeId(employeeId);
+    const candidates = buildEmployeeIdMatchSet(employeeId);
+    candidates.add(normalizeEmployeeId(employeeId));
     const rawSet = localStorage.getItem("pa_kpi_setting_by_emp_v2");
     const setMap = rawSet ? (JSON.parse(rawSet) as Record<string, Array<Record<string, unknown>>>) : {};
-    const empItems = setMap[normId] ?? setMap[employeeId];
-    if (Array.isArray(empItems) && empItems.length > 0) {
-      return mapStoredSettingRowsToTrackingItems(empItems);
+    for (const k of candidates) {
+      if (Array.isArray(setMap[k]) && setMap[k].length > 0) {
+        return mapStoredSettingRowsToTrackingItems(setMap[k]);
+      }
+    }
+    const lower = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+    for (const [k, v] of Object.entries(setMap)) {
+      if (lower.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) {
+        return mapStoredSettingRowsToTrackingItems(v);
+      }
     }
   } catch {
     // ignore
   }
-  return KPI_ITEMS;
+  return [];
 }
 
 export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
@@ -875,18 +901,17 @@ export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
     const targetEmpId = employeeId ?? activeUser.employeeId;
     const normId = normalizeEmployeeId(targetEmpId);
     const byEmpRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
-    if (byEmpRaw) return JSON.parse(byEmpRaw) as KPITrackingSnapshot;
-    // Hanya baca legacy global key bila sedang memuat milik user aktif sendiri (mencegah kebocoran lintas karyawan)
-    if (!employeeId || normId === normalizeEmployeeId(activeUser.employeeId)) {
-      const raw = localStorage.getItem(KPI_STORE_KEY);
-      if (raw) return JSON.parse(raw) as KPITrackingSnapshot;
+    if (byEmpRaw) {
+      const parsed = JSON.parse(byEmpRaw) as KPITrackingSnapshot;
+      if (parsed && Array.isArray(parsed.months)) {
+        return {
+          months: parsed.months,
+          cellsMap: parsed.cellsMap && typeof parsed.cellsMap === "object" ? parsed.cellsMap : {},
+        };
+      }
     }
   } catch { /* ignore */ }
-  // Default: INITIAL_MONTHS merged with pre-filled targets
-  const cellsMap = Object.fromEntries(
-    INITIAL_MONTHS.map((m) => [m.id, { ...getPrefilledCells(m.label), ...m.cells }])
-  );
-  return { months: INITIAL_MONTHS, cellsMap };
+  return { months: [], cellsMap: {} };
 }
 
 export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrackingEvaluation {
@@ -1335,16 +1360,21 @@ export function separatorMismatchMessage(target: string, actual: string): string
 
 function AddMonthModal({
   existingLabels,
+  allowedLabels,
+  lockedReasonByLabel,
   kpiItems = KPI_ITEMS,
   onAdd,
   onClose,
 }: {
   existingLabels: string[];
+  allowedLabels?: string[];
+  lockedReasonByLabel?: Record<string, string>;
   kpiItems?: KPIItem[];
   onAdd: (entry: MonthEntry) => void;
   onClose: () => void;
 }) {
-  const available = MONTH_OPTIONS.filter((m) => !existingLabels.includes(m));
+  const unadded = MONTH_OPTIONS.filter((m) => !existingLabels.includes(m));
+  const available = allowedLabels ? unadded.filter((m) => allowedLabels.includes(m)) : unadded;
   const [label, setLabel] = useState(available[0] ?? "");
   const [cells, setCells] = useState<Record<CellKey, string>>(() => getPrefilledCells(available[0] ?? "", kpiItems));
   const [attempted, setAttempted] = useState(false);
@@ -1447,12 +1477,18 @@ function AddMonthModal({
             <select
               value={label}
               onChange={(e) => handleLabelChange(e.target.value)}
+              disabled={available.length === 0}
               className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F]"
             >
               {available.map((m) => <option key={m} value={m}>{m}</option>)}
-              {!available.length && <option>All months added</option>}
+              {!available.length && <option value="">Tidak ada bulan yang terbuka pada jadwal saat ini</option>}
             </select>
           </div>
+          {lockedReasonByLabel && unadded.some((m) => !available.includes(m) && lockedReasonByLabel[m]) && (
+            <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 leading-relaxed">
+              <strong>Info Jadwal Modul (/modules):</strong> Bulan yang terkunci oleh <em>Date Lock Per Month</em> atau di luar <em>Bulan Tracking Tertinggal</em> tidak dapat dipilih kecuali dibuka melalui Aktivasi Modul atau Request Open Lock ke HR ICF.
+            </div>
+          )}
           <div className="flex items-center gap-2 px-3 py-2 bg-sky-50 rounded-lg border border-sky-200">
             <Lock className="w-3 h-3 text-sky-500 shrink-0" />
             <p className="text-[11px] text-sky-700 font-medium">
@@ -2526,18 +2562,24 @@ function OpenLockRequestModal({ onCancel, onConfirm }: { onCancel: () => void; o
 
 // ─── Edit Request Modals ─────────────────────────────────────────────────────
 
-function getEditRequestApprovers() {
-  const list = resolveEditRequestApprovers();
-  return list.length > 0
-    ? list
-    : [{ label: "Approver", name: "Belum ada approver terdaftar", role: "Reg No AP1/AP2 kosong — hubungi HR ICF" }];
-}
+const EDIT_MODAL_PERSP_COLOR: Record<string, string> = {
+  Finansial: "text-blue-700",
+  Financial: "text-blue-700",
+  Proses: "text-purple-700",
+  "Environment, Health & Safety": "text-green-700",
+  Customer: "text-orange-700",
+  "Learning & Growth": "text-pink-700",
+};
 
 function EditRequestModal({
+  ownerUser,
+  kpiItems,
   months,
   onCancel,
   onConfirm,
 }: {
+  ownerUser: ManagedUser;
+  kpiItems: KPIItem[];
   months: MonthEntry[];
   onCancel: () => void;
   onConfirm: (targets: { kpiNo: string; monthId: string }[], reason: string) => void;
@@ -2545,6 +2587,7 @@ function EditRequestModal({
   const [selectedKpis, setSelectedKpis] = useState<string[]>([]);
   const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
   const [reason, setReason] = useState("");
+  const chainInfo = resolveKpiTrackingEditChain(ownerUser);
 
   const toggleKpi = (no: string) =>
     setSelectedKpis((prev) => (prev.includes(no) ? prev.filter((x) => x !== no) : [...prev, no]));
@@ -2564,8 +2607,13 @@ function EditRequestModal({
     onConfirm(targets, reason);
   };
 
-  const sectionA = KPI_ITEMS.filter((k) => k.section === "A");
-  const sectionB = KPI_ITEMS.filter((k) => k.section === "B");
+  const sections = Array.from(new Set(kpiItems.map((k) => k.section || "A"))).sort();
+  const secHeaderTones = [
+    "bg-blue-50 text-blue-700",
+    "bg-indigo-50 text-indigo-700",
+    "bg-teal-50 text-teal-700",
+    "bg-violet-50 text-violet-700",
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -2588,16 +2636,35 @@ function EditRequestModal({
         <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5">
           {/* Approvers */}
           <div className="flex flex-col gap-2">
-            <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Request akan dikirim ke</p>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">
+              Request akan dikirim ke (Skema 4 Tahap: Checker → AP1 → AP2 → Validator)
+            </p>
             <div className="flex flex-col gap-2">
-              {getEditRequestApprovers().map((a) => (
-                <div key={a.label} className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[#1A284F]/5 border border-[#1A284F]/10">
-                  <div className="w-8 h-8 rounded-full bg-[#1A284F] flex items-center justify-center shrink-0">
-                    <UserCircle2 className="w-4 h-4 text-white" />
+              {chainInfo.steps.map((step, idx) => (
+                <div
+                  key={step.stage}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border ${
+                    step.bypassed
+                      ? "bg-gray-50 border-gray-200 opacity-75"
+                      : "bg-[#1A284F]/5 border-[#1A284F]/15"
+                  }`}
+                >
+                  <div className="w-7 h-7 rounded-full bg-[#1A284F] text-white text-xs font-bold flex items-center justify-center shrink-0">
+                    {idx + 1}
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-[#1A284F]">{a.name}</p>
-                    <p className="text-[10px] text-gray-500">{a.label} · {a.role}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-xs font-bold text-[#1A284F]">{step.name}</p>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-white border border-slate-200 text-slate-700">
+                        {step.label}
+                      </span>
+                      {step.bypassed && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 border border-amber-200 text-amber-700">
+                          Bypass
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-500 truncate">{step.position}</p>
                   </div>
                 </div>
               ))}
@@ -2611,40 +2678,45 @@ function EditRequestModal({
               <span className="text-red-500 normal-case font-normal">* wajib pilih</span>
             </p>
             <div className="rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-3 py-2 bg-blue-50 border-b border-gray-100">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">A. Objective KPI</span>
-              </div>
-              {sectionA.map((kpi) => (
-                <label key={kpi.no} className="flex items-start gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer border-b border-gray-50 last:border-0">
-                  <input
-                    type="checkbox"
-                    checked={selectedKpis.includes(kpi.no)}
-                    onChange={() => toggleKpi(kpi.no)}
-                    className="mt-0.5 accent-[#1A284F]"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[11px] font-bold text-[#1A284F] mr-2">{kpi.no}</span>
-                    <span className="text-[11px] text-gray-700">{kpi.kpi.split("\n")[0]}</span>
-                  </div>
-                </label>
-              ))}
-              <div className="px-3 py-2 bg-indigo-50 border-b border-gray-100">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">B. Functional KPI</span>
-              </div>
-              {sectionB.map((kpi) => (
-                <label key={kpi.no} className="flex items-start gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer border-b border-gray-50 last:border-0">
-                  <input
-                    type="checkbox"
-                    checked={selectedKpis.includes(kpi.no)}
-                    onChange={() => toggleKpi(kpi.no)}
-                    className="mt-0.5 accent-[#1A284F]"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[11px] font-bold text-[#1A284F] mr-2">{kpi.no}</span>
-                    <span className="text-[11px] text-gray-700">{kpi.kpi.split("\n")[0]}</span>
-                  </div>
-                </label>
-              ))}
+              {kpiItems.length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-gray-400">
+                  Belum ada data KPI pada akun ini.
+                </div>
+              ) : (
+                sections.map((sec, si) => {
+                  const secRows = kpiItems.filter((k) => (k.section || "A") === sec);
+                  const first = secRows[0];
+                  const secName = first?.sectionLabel || (sec === "A" ? "Objective KPI" : sec === "B" ? "Functional KPI" : `Section ${sec}`);
+                  const toneCls = secHeaderTones[si % secHeaderTones.length];
+                  return (
+                    <React.Fragment key={sec}>
+                      <div className={`px-3 py-2 border-b border-gray-100 ${toneCls}`}>
+                        <span className="text-[10px] font-bold uppercase tracking-wider">
+                          {sec}. {secName}
+                        </span>
+                      </div>
+                      {secRows.map((kpi) => (
+                        <label key={kpi.no} className="flex items-start gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer border-b border-gray-50 last:border-0">
+                          <input
+                            type="checkbox"
+                            checked={selectedKpis.includes(kpi.no)}
+                            onChange={() => toggleKpi(kpi.no)}
+                            className="mt-0.5 accent-[#1A284F]"
+                          />
+                          <div className="flex-1 min-w-0 text-[11px] leading-relaxed">
+                            <span className="font-bold text-[#1A284F] mr-2">{kpi.no}.</span>
+                            <span className={`font-bold ${EDIT_MODAL_PERSP_COLOR[kpi.perspektif] ?? "text-slate-700"}`}>
+                              {kpi.perspektif}
+                            </span>
+                            <span className="text-gray-400 font-semibold mx-1.5">-</span>
+                            <span className="text-gray-800 font-medium">{kpi.kpi.split("\n")[0]}</span>
+                          </div>
+                        </label>
+                      ))}
+                    </React.Fragment>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -2707,7 +2779,8 @@ function EditRequestModal({
   );
 }
 
-function EditRequestSuccessModal({ onClose }: { onClose: () => void }) {
+function EditRequestSuccessModal({ ownerUser, onClose }: { ownerUser: ManagedUser; onClose: () => void }) {
+  const chainInfo = resolveKpiTrackingEditChain(ownerUser);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center">
@@ -2716,10 +2789,10 @@ function EditRequestSuccessModal({ onClose }: { onClose: () => void }) {
         </div>
         <h3 className="font-bold text-gray-900 text-lg mb-2">Request Terkirim</h3>
         <p className="text-gray-500 text-sm mb-1">Permintaan edit KPI Tracking telah dikirimkan ke</p>
-        <div className="flex flex-col gap-1 mb-6">
-          {getEditRequestApprovers().map((a) => (
-            <p key={a.label} className="text-[#1A284F] font-semibold text-sm">
-              {a.name} <span className="text-gray-400 font-normal text-xs">({a.label})</span>
+        <div className="flex flex-col gap-1 mb-6 mt-2">
+          {chainInfo.steps.filter((s) => !s.bypassed).map((s) => (
+            <p key={s.stage} className="text-[#1A284F] font-semibold text-xs">
+              {s.name} <span className="text-gray-400 font-normal">({s.label})</span>
             </p>
           ))}
         </div>
@@ -3951,8 +4024,8 @@ function KPIWorkspace({
   const [submittedDate, setSubmittedDate] = useState(() => loadSubmitState(activeUser.employeeId).submittedDate);
   const [showEditRequest, setShowEditRequest] = useState(false);
   const [showEditRequestSuccess, setShowEditRequestSuccess] = useState(false);
-  const [pendingEditRequest, setPendingEditRequest] = useState(false);
-  const [editRequestDate, setEditRequestDate] = useState<string>("");
+  const [showCancelSubmitConfirm, setShowCancelSubmitConfirm] = useState(false);
+  const [activeEditRequest, setActiveEditRequest] = useState(() => getLatestKpiTrackingEditForEmployee(activeUser.employeeId));
   const [rcaMap, setRcaMap] = useState<RCAMap>({});
   const [storedRCAStatus, setStoredRCAStatus] = useState<Record<string, RCAStatus>>(() =>
     buildStoredRCAStatusMap(loadRCASubmissions(activeUser.employeeId))
@@ -3975,6 +4048,7 @@ function KPIWorkspace({
       setOpenLockRejected(ol.rejected);
       setOpenLockNote(ol.note);
       setOpenLockApprovedUntil(ol.approvedUntil);
+      setActiveEditRequest(getLatestKpiTrackingEditForEmployee(activeUser.employeeId));
       setWfRefreshTick((v) => v + 1);
     };
     window.addEventListener("focus", sync);
@@ -3982,12 +4056,17 @@ function KPIWorkspace({
     window.addEventListener("appraisal-updated", sync);
     window.addEventListener("pa-auth-updated", sync);
     window.addEventListener("pa-db-hydrated", sync);
+    window.addEventListener("pa-module-activation-updated", sync);
+    window.addEventListener(KPI_TRACKING_EDIT_EVENT, sync);
+    void refreshKpiTrackingEditRequestsFromBackend();
     return () => {
       window.removeEventListener("focus", sync);
       window.removeEventListener("storage", sync);
       window.removeEventListener("appraisal-updated", sync);
       window.removeEventListener("pa-auth-updated", sync);
       window.removeEventListener("pa-db-hydrated", sync);
+      window.removeEventListener("pa-module-activation-updated", sync);
+      window.removeEventListener(KPI_TRACKING_EDIT_EVENT, sync);
     };
   }, []);
 
@@ -4019,9 +4098,33 @@ function KPIWorkspace({
   const [openLockNote, setOpenLockNote] = useState(() => readOpenLockState().note);
   const [openLockApprovedUntil, setOpenLockApprovedUntil] = useState(() => readOpenLockState().approvedUntil);
 
-  // Edit request approval flow
-  const [editRequestApproved, setEditRequestApproved] = useState(false);
-  const [approvedEditTargets, setApprovedEditTargets] = useState<{ kpiNo: string; monthId: string }[]>([]);
+  // Edit request approval flow (persisted in pa_kpi_tracking_edit_requests_v1)
+  const pendingEditRequest = Boolean(activeEditRequest && activeEditRequest.stage.startsWith("pending_"));
+  const editRequestApproved = activeEditRequest?.stage === "approved";
+  const editRequestRejected = activeEditRequest?.stage === "rejected";
+  const editRequestDate = activeEditRequest?.requestedAt ?? "";
+  const approvedEditTargets = editRequestApproved ? (activeEditRequest?.targets ?? []) : [];
+
+  // Evaluasi apakah minimal 1 Approver nyata sudah memproses KPI Measurement (Checker bukan Bypassed, AP1, AP2, atau Validator)
+  const wfMeasurementRec = (() => {
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    return loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "KPI" &&
+        r.phase === "measurement" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
+    );
+  })();
+  const hasAtLeastOneRealApprover = Boolean(
+    wfMeasurementRec &&
+      ((wfMeasurementRec.decisions.checker?.status &&
+        wfMeasurementRec.decisions.checker.status !== "Revision" &&
+        wfMeasurementRec.decisions.checker.status !== "Bypassed") ||
+        (wfMeasurementRec.decisions.approver1?.status && wfMeasurementRec.decisions.approver1.status !== "Revision") ||
+        (wfMeasurementRec.decisions.approver2?.status && wfMeasurementRec.decisions.approver2.status !== "Revision") ||
+        (wfMeasurementRec.decisions.validator?.status && wfMeasurementRec.decisions.validator.status !== "Revision")),
+  );
 
   // Sesuaikan penguncian KPI Tracking dengan tanggal aktual yang di-setup di Module Activation (/hr/modules)
   const kpiSettingGate = (() => {
@@ -4091,6 +4194,14 @@ function KPIWorkspace({
         }
       });
     }
+    if (months.length === 0) {
+      void fetchEmployeeKpiTrackingLive<MonthEntry>(activeUser.employeeId).then((remoteSnap) => {
+        if (!cancelled && remoteSnap && remoteSnap.months.length > 0) {
+          setMonths(remoteSnap.months);
+          setCellsMap(remoteSnap.cellsMap);
+        }
+      });
+    }
     return () => {
       cancelled = true;
     };
@@ -4135,36 +4246,140 @@ function KPIWorkspace({
     }
   })();
 
-  const isDeadlinePassed = (() => {
-    try {
-      const kpiMeasMod = kpiMeasurementModuleInfo;
-      if (!kpiMeasMod) return false;
-      if (kpiMeasMod.active === false && Boolean(kpiMeasMod.startDate || kpiMeasMod.endDate || kpiMeasMod.dateLockPerMonth)) return true;
-      if (kpiMeasMod.dateLockPerMonth) {
-        const rawLock = String(kpiMeasMod.dateLockPerMonth).trim();
-        if (/^\d{4}-\d{2}-\d{2}$/.test(rawLock)) {
-          const lockTs = new Date(`${rawLock}T23:59:59`).getTime();
-          if (Number.isFinite(lockTs) && Date.now() > lockTs) return true;
-        } else {
-          const dayNum = parseInt(rawLock, 10);
-          if (Number.isFinite(dayNum) && dayNum >= 1 && dayNum <= 31) {
-            if (new Date().getDate() > dayNum) return true;
-          }
-        }
-      }
-      if (kpiMeasMod.endDate) {
-        const endTs = new Date(`${kpiMeasMod.endDate}T23:59:59`).getTime();
-        if (Number.isFinite(endTs)) {
-          return Date.now() > endTs;
-        }
-      }
-      return false;
-    } catch {
-      return false;
+  // Evaluasi jadwal Aktivasi Modul (/modules -> KPI · Measurement: active, startDate, endDate, dateLockPerMonth, backlogMonths, backlogEndDate)
+  const kpiModuleScheduleEval = (() => {
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1; // 1..12
+    const curDay = now.getDate();
+    const mod = kpiMeasurementModuleInfo;
+    const isOpenLockCurrentlyValid =
+      openLockApproved && (!openLockApprovedUntil || todayIso <= openLockApprovedUntil);
+
+    const lockedReasonByLabel: Record<string, string> = {};
+    const allowedMonthLabels: string[] = [];
+
+    if (!mod) {
+      return {
+        moduleInactive: false,
+        beforeStartDate: false,
+        afterEndDate: false,
+        isOpenLockCurrentlyValid,
+        allowedMonthLabels: [...MONTH_OPTIONS],
+        lockedReasonByLabel,
+        lockBannerMessage: "",
+      };
     }
+
+    const moduleInactive = mod.active === false;
+    const beforeStartDate = Boolean(mod.active && mod.startDate && todayIso < mod.startDate);
+    const afterEndDate = Boolean(mod.active && mod.endDate && todayIso > mod.endDate);
+    const lockDayNum = mod.dateLockPerMonth && /^\d+$/.test(String(mod.dateLockPerMonth).trim())
+      ? parseInt(String(mod.dateLockPerMonth).trim(), 10)
+      : null;
+    const backlogSet = new Set((mod.backlogMonths ?? []).map((v) => Number(v)));
+    const backlogWindowOpen = Boolean(
+      backlogSet.size > 0 && mod.backlogEndDate && todayIso <= mod.backlogEndDate,
+    );
+
+    MONTH_OPTIONS.forEach((mLabel, idx) => {
+      const mNum = idx + 1; // 1..12 for 2026
+      if (isOpenLockCurrentlyValid) {
+        allowedMonthLabels.push(mLabel);
+        return;
+      }
+      if (moduleInactive) {
+        lockedReasonByLabel[mLabel] = "Modul KPI · Measurement belum diaktifkan pada menu Module Activation (/modules).";
+        return;
+      }
+      if (beforeStartDate) {
+        lockedReasonByLabel[mLabel] = `Jadwal KPI · Measurement baru dimulai pada ${mod.startDate}.`;
+        return;
+      }
+      if (afterEndDate) {
+        lockedReasonByLabel[mLabel] = `Batas akhir modul KPI · Measurement (${mod.endDate}) telah terlewati.`;
+        return;
+      }
+      if (curYear < 2026 || (curYear === 2026 && mNum > curMonth)) {
+        lockedReasonByLabel[mLabel] = `Periode ${mLabel} belum berjalan.`;
+        return;
+      }
+      if (curYear === 2026 && mNum === curMonth) {
+        allowedMonthLabels.push(mLabel);
+        return;
+      }
+      // Bulan yang sudah lewat (mNum < curMonth di 2026, atau curYear > 2026)
+      if (backlogSet.has(mNum) && backlogWindowOpen) {
+        allowedMonthLabels.push(mLabel);
+        return;
+      }
+      if (curYear === 2026 && mNum === curMonth - 1) {
+        if (!lockDayNum || curDay <= lockDayNum) {
+          allowedMonthLabels.push(mLabel);
+          return;
+        }
+        lockedReasonByLabel[mLabel] = `Melewati Date Lock Per Month (tanggal ${lockDayNum}).`;
+        return;
+      }
+      // mNum < curMonth - 1 (2 bulan sebelumnya atau lebih lama)
+      if (backlogSet.has(mNum) && mod.backlogEndDate && todayIso > mod.backlogEndDate) {
+        lockedReasonByLabel[mLabel] = `Melewati Batas Submit Bulan Tertinggal (${mod.backlogEndDate}).`;
+        return;
+      }
+      if (lockDayNum || backlogSet.size > 0 || curYear > 2026) {
+        lockedReasonByLabel[mLabel] = `Periode ${mLabel} sudah terkunci (tidak termasuk Bulan Tracking Tertinggal aktif).`;
+        return;
+      }
+      allowedMonthLabels.push(mLabel);
+    });
+
+    let lockBannerMessage = "";
+    if (moduleInactive) {
+      lockBannerMessage = "Modul KPI · Measurement saat ini berstatus Tidak Aktif pada menu Module Activation (/modules).";
+    } else if (beforeStartDate) {
+      lockBannerMessage = `Jadwal pengisian KPI · Measurement belum dimulai (periode aktif: ${mod.startDate}${mod.endDate ? ` s/d ${mod.endDate}` : ""}).`;
+    } else if (afterEndDate) {
+      lockBannerMessage = `Batas akhir jadwal KPI · Measurement (${mod.endDate}) telah terlewat.`;
+    }
+
+    return {
+      moduleInactive,
+      beforeStartDate,
+      afterEndDate,
+      isOpenLockCurrentlyValid,
+      allowedMonthLabels,
+      lockedReasonByLabel,
+      lockBannerMessage,
+    };
   })();
+
+  const unsubmittedTrackedMonths = months
+    .map((m) => m.label)
+    .filter((lbl) => {
+      const normId = normalizeEmployeeId(activeUser.employeeId);
+      const wf = loadWorkflowRecords().find(
+        (r) => r.year === "2026" && r.module === "KPI" && r.phase === "measurement" && r.employeeId === normId,
+      );
+      return !(wf?.validatedMonths ?? []).includes(lbl);
+    });
+  const hasLockedUnsubmittedMonth =
+    unsubmittedTrackedMonths.length > 0 &&
+    unsubmittedTrackedMonths.some((lbl) => !kpiModuleScheduleEval.allowedMonthLabels.includes(lbl));
+  const noOpenMonthsAvailableToAdd =
+    months.length === 0 &&
+    kpiModuleScheduleEval.allowedMonthLabels.length === 0;
+
+  const isDeadlinePassed =
+    kpiModuleScheduleEval.moduleInactive ||
+    kpiModuleScheduleEval.beforeStartDate ||
+    kpiModuleScheduleEval.afterEndDate ||
+    hasLockedUnsubmittedMonth ||
+    noOpenMonthsAvailableToAdd;
   const isCurrentTabValidated = isBusinessWorkspace ? isBusinessSettingApproved : isKpiSettingValidated;
-  const isLockedByDeadline = !isCurrentTabValidated || (isDeadlinePassed && !submitted && !openLockApproved);
+  const isLockedByDeadline =
+    !isCurrentTabValidated ||
+    (isDeadlinePassed && !submitted && !kpiModuleScheduleEval.isOpenLockCurrentlyValid);
   const approvedEditCells =
     editRequestApproved && approvedEditTargets.length > 0
       ? new Set(approvedEditTargets.map((t) => `${t.kpiNo}::${t.monthId}`))
@@ -4581,11 +4796,13 @@ function KPIWorkspace({
 
   const [showEvidenceWarn, setShowEvidenceWarn] = useState(false);
   const [isTableFullscreen, setIsTableFullscreen] = useState(false);
+  const isTableFullscreenRef = useRef(false);
   const [tableScale, setTableScale] = useState<KpiTableScale>("md");
 
   const toggleTableFullscreen = () => {
     setIsTableFullscreen((prev) => {
       const next = !prev;
+      isTableFullscreenRef.current = next;
       dispatchTableFullscreen(next);
       return next;
     });
@@ -4597,7 +4814,9 @@ function KPIWorkspace({
 
   React.useEffect(() => {
     return () => {
-      dispatchTableFullscreen(false);
+      if (isTableFullscreenRef.current) {
+        dispatchTableFullscreen(false);
+      }
     };
   }, []);
 
@@ -4853,32 +5072,56 @@ function KPIWorkspace({
           </div>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {view === "input" && !isLockedByDeadline && !isViewOnly && (
+          {isCurrentTabValidated && !isViewOnly && (
             <>
-              {canCreate && (
+              {canCreate && !kpiModuleScheduleEval.moduleInactive && !kpiModuleScheduleEval.beforeStartDate && (
                 <button
+                  type="button"
                   onClick={() => setShowAddModal(true)}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors"
+                  disabled={MONTH_OPTIONS.filter((m) => !months.some((em) => em.label === m) && kpiModuleScheduleEval.allowedMonthLabels.includes(m)).length === 0}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
                 >
                   <Plus className="w-4 h-4" />
                   Add Month
                 </button>
               )}
-              <button
-                onClick={() => setView("preview")}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-              >
-                <Eye className="w-4 h-4" />
-                Preview
-              </button>
+              {!submitted && !isLockedByDeadline && (
+                view === "input" ? (
+                  <button
+                    type="button"
+                    onClick={() => setView("preview")}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                  >
+                    <Eye className="w-4 h-4" />
+                    Preview
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setView("input")}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    Back to Edit
+                  </button>
+                )
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="inline-flex">
                     <button
                       type="button"
-                      aria-disabled={!kpiSubmitValidation.canSubmit}
-                      onClick={handleSubmitClick}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors ${kpiSubmitValidation.canSubmit ? "" : "opacity-50 cursor-not-allowed"}`}
+                      disabled={submitted || isLockedByDeadline}
+                      aria-disabled={submitted || isLockedByDeadline || !kpiSubmitValidation.canSubmit}
+                      onClick={() => {
+                        if (submitted || isLockedByDeadline) return;
+                        handleSubmitClick();
+                      }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white transition-colors ${
+                        !submitted && !isLockedByDeadline && kpiSubmitValidation.canSubmit
+                          ? "hover:bg-[#131d3b]"
+                          : "opacity-45 cursor-not-allowed"
+                      }`}
                     >
                       <Send className="w-4 h-4" />
                       Submit KPI Tracking
@@ -4886,7 +5129,15 @@ function KPIWorkspace({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
-                  {kpiSubmitValidation.canSubmit ? (
+                  {submitted ? (
+                    <p className="text-[11px]">
+                      KPI Tracking sudah disubmit. Tombol Submit tidak aktif sampai Anda memicu pengisian bulan berikutnya melalui tombol <strong>+ Add Month</strong>.
+                    </p>
+                  ) : isLockedByDeadline ? (
+                    <p className="text-[11px]">
+                      Pengisian/submit KPI Tracking saat ini terkunci sesuai jadwal Aktivasi Modul (/modules).
+                    </p>
+                  ) : kpiSubmitValidation.canSubmit ? (
                     <p className="text-[11px]">Semua tag RCA bulan {submitMonthLabels.join(", ")} sudah kuning & Evidence Documents sudah diupload. Klik untuk submit KPI Tracking & RCA ke approver.</p>
                   ) : (
                     <>
@@ -4901,75 +5152,6 @@ function KPIWorkspace({
                   )}
                 </TooltipContent>
               </Tooltip>
-            </>
-          )}
-          {view === "preview" && (
-            <>
-              {!submitted && !isLockedByDeadline && !isViewOnly && (
-                <button
-                  onClick={() => setView("input")}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-                >
-                  <Edit3 className="w-4 h-4" />
-                  Back to Edit
-                </button>
-              )}
-              {!submitted && !isLockedByDeadline && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span tabIndex={0} className="inline-flex">
-                      <button
-                        type="button"
-                        aria-disabled={!kpiSubmitValidation.canSubmit}
-                        onClick={handleSubmitClick}
-                        className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors ${kpiSubmitValidation.canSubmit ? "" : "opacity-50 cursor-not-allowed"}`}
-                      >
-                        <Send className="w-4 h-4" />
-                        Submit KPI Tracking
-                      </button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
-                    {kpiSubmitValidation.canSubmit ? (
-                      <p className="text-[11px]">Semua tag RCA bulan {submitMonthLabels.join(", ")} sudah kuning & Evidence Documents sudah diupload. Klik untuk submit KPI Tracking & RCA ke approver.</p>
-                    ) : (
-                      <>
-                        <p className="font-bold text-xs mb-1">Belum dapat Submit KPI Tracking:</p>
-                        <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90">
-                          {kpiSubmitValidation.reasons.map((r, i) => (
-                            <li key={i}>{r}</li>
-                          ))}
-                        </ul>
-                        {missingRcaTags.length > 0 && <p className="mt-1.5 text-[10px] text-red-200">Klik tombol untuk menyorot tag RCA merah.</p>}
-                      </>
-                    )}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-              {submitted && !pendingEditRequest && !editRequestApproved && canEdit && (
-                <button
-                  onClick={() => setShowEditRequest(true)}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 transition-colors"
-                >
-                  <FileEdit className="w-4 h-4" />
-                  Edit Request
-                </button>
-              )}
-              {submitted && pendingEditRequest && !editRequestApproved && (
-                <div className="flex items-center gap-2">
-                  <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                    Pending Edit Approval
-                  </span>
-                  <button
-                    onClick={() => setPendingEditRequest(false)}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
-                  >
-                    <X className="w-4 h-4" />
-                    Cancel Request
-                  </button>
-                </div>
-              )}
             </>
           )}
           {isCurrentTabValidated && <ExportImportButton onExport={handleExport} onImport={!submitted && !isLockedByDeadline && !isViewOnly && (canCreate || canEdit) ? handleImport : undefined} />}
@@ -5010,18 +5192,42 @@ function KPIWorkspace({
         <div className="flex items-start gap-3 flex-wrap px-4 py-3 rounded-xl border border-red-200 bg-red-50">
           <Lock className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-red-700">KPI Tracking Terkunci (Date Lock Terlewat)</p>
+            <p className="text-sm font-semibold text-red-700">
+              {kpiModuleScheduleEval.moduleInactive
+                ? "KPI Tracking Terkunci (Modul Belum Aktif)"
+                : kpiModuleScheduleEval.beforeStartDate
+                ? "KPI Tracking Terkunci (Jadwal Belum Dimulai)"
+                : "KPI Tracking Terkunci (Batas Waktu / Date Lock Terlewat)"}
+            </p>
             <p className="text-xs text-red-600 mt-0.5">
-              Batas waktu pengisian KPI Tracking{kpiMeasurementModuleInfo?.dateLockPerMonth ? <> (Date Lock Per Month: <span className="font-bold">tanggal {kpiMeasurementModuleInfo.dateLockPerMonth}</span>)</> : kpiMeasurementModuleInfo?.endDate ? <> (<span className="font-bold">{kpiMeasurementModuleInfo.endDate}</span>)</> : null} telah terlewat. Silakan ajukan <strong>Request Open Lock</strong> ke <strong>HR ICF</strong> untuk membuka pengisian dan submit data.
+              {kpiModuleScheduleEval.lockBannerMessage ? (
+                <>{kpiModuleScheduleEval.lockBannerMessage} </>
+              ) : (
+                <>
+                  Batas waktu pengisian KPI Tracking
+                  {kpiMeasurementModuleInfo?.dateLockPerMonth ? (
+                    <> (Date Lock Per Month: <span className="font-bold">tanggal {kpiMeasurementModuleInfo.dateLockPerMonth}</span>)</>
+                  ) : null}
+                  {kpiMeasurementModuleInfo?.backlogEndDate ? (
+                    <> · Batas Submit Bulan Tertinggal: <span className="font-bold">{kpiMeasurementModuleInfo.backlogEndDate}</span></>
+                  ) : null}{" "}
+                  telah terlewat.{" "}
+                </>
+              )}
+              {!kpiModuleScheduleEval.moduleInactive && !kpiModuleScheduleEval.beforeStartDate && (
+                <>Silakan ajukan <strong>Request Open Lock</strong> ke <strong>HR ICF</strong> untuk membuka pengisian dan submit data.</>
+              )}
             </p>
           </div>
-          <button
-            onClick={() => setShowOpenLockModal(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shrink-0"
-          >
-            <LockOpen className="w-4 h-4" />
-            Request Open Lock
-          </button>
+          {!kpiModuleScheduleEval.moduleInactive && !kpiModuleScheduleEval.beforeStartDate && (
+            <button
+              onClick={() => setShowOpenLockModal(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shrink-0"
+            >
+              <LockOpen className="w-4 h-4" />
+              Request Open Lock
+            </button>
+          )}
         </div>
       )}
 
@@ -5094,22 +5300,46 @@ function KPIWorkspace({
           </span>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { setEditRequestApproved(false); setApprovedEditTargets([]); }}
+              onClick={() => {
+                completeKpiTrackingEditSession(activeUser.employeeId);
+                setActiveEditRequest(undefined);
+              }}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-blue-300 text-blue-700 hover:bg-blue-100 transition-colors"
             >
               Batal Edit
             </button>
             <button
               onClick={() => {
-                setEditRequestApproved(false);
-                setApprovedEditTargets([]);
-                setPendingEditRequest(false);
-                { const _d = new Date(); setSubmittedDate(`${String(_d.getDate()).padStart(2,"0")}/${String(_d.getMonth()+1).padStart(2,"0")}/${_d.getFullYear()}`); }
+                const _d = new Date();
+                const dateStr = `${String(_d.getDate()).padStart(2, "0")}/${String(_d.getMonth() + 1).padStart(2, "0")}/${_d.getFullYear()}`;
+                const editedMonthIds = new Set(approvedEditTargets.map((t) => t.monthId));
+                const editedMonthLabels = months.filter((m) => editedMonthIds.has(m.id)).map((m) => m.label);
+                saveKPITracking({ months, cellsMap }, activeUser);
+                completeKpiTrackingEditSession(activeUser.employeeId);
+                setActiveEditRequest(undefined);
+                setSubmittedDate(dateStr);
+                setSubmitted(true);
+                submitWorkflowModule("KPI", "measurement", dateStr, activeUser.employeeId, editedMonthLabels.length > 0 ? editedMonthLabels : months.map((m) => m.label));
+                toast.success("Perubahan KPI Tracking berhasil disimpan dan diajukan kembali ke Approver.");
               }}
               className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
             >
               <Send className="w-3 h-3" /> Re-submit
             </button>
+          </div>
+        </div>
+      )}
+
+      {submitted && editRequestRejected && activeEditRequest && (
+        <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3 rounded-xl border border-rose-200 bg-rose-50">
+          <div className="flex items-center gap-2 text-xs text-rose-700">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+            <span>
+              Request Edit KPI Tracking terakhir ditolak
+              {activeEditRequest.decisions[activeEditRequest.decisions.length - 1]?.note
+                ? `: "${activeEditRequest.decisions[activeEditRequest.decisions.length - 1]?.note}"`
+                : "."}
+            </span>
           </div>
         </div>
       )}
@@ -5137,7 +5367,7 @@ function KPIWorkspace({
             <span className="font-semibold text-gray-500">Approval Status:</span>
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 border border-amber-400 text-amber-700">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              Supervisor 1
+              {activeEditRequest ? getStageDisplayLabel(activeEditRequest.stage) : "Pending Approval"}
             </span>
           </div>
         </div>
@@ -5226,11 +5456,54 @@ function KPIWorkspace({
                   <span className={`text-xs font-bold ${Math.round(totalTrackingBobot * 100) === 10000 ? "text-green-700" : "text-orange-700"}`}>{formattedTrackingBobot}%</span>
                 </div>
               </div>
-              {isTableFullscreen && isCurrentTabValidated && (
-                <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap ml-auto">
+                {/* Poin 1 & 2: Cancel Submit (jika belum ada approver yang memproses) vs Edit Request (jika minimal 1 approver sudah approve/check), 1 baris paling kanan dengan ukuran seperti Full Screen */}
+                {!isViewOnly && canEdit && submitted && !hasAtLeastOneRealApprover && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCancelSubmitConfirm(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"
+                    title="Batalkan submit agar KPI Tracking dapat diedit kembali"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Cancel Submit</span>
+                  </button>
+                )}
+                {!isViewOnly && canEdit && submitted && hasAtLeastOneRealApprover && !pendingEditRequest && !editRequestApproved && (
+                  <button
+                    type="button"
+                    onClick={() => setShowEditRequest(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 transition-colors"
+                    title="Ajukan Request Edit KPI Tracking ke Approver"
+                  >
+                    <FileEdit className="w-3.5 h-3.5" />
+                    <span>Edit Request</span>
+                  </button>
+                )}
+                {!isViewOnly && canEdit && submitted && hasAtLeastOneRealApprover && pendingEditRequest && !editRequestApproved && (
+                  <>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                      <span>Pending Edit Approval</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        cancelOwnKpiTrackingEditRequest(activeUser.employeeId);
+                        setActiveEditRequest(undefined);
+                        toast.success("Request Edit KPI Tracking dibatalkan.");
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Cancel Request</span>
+                    </button>
+                  </>
+                )}
+                {isTableFullscreen && isCurrentTabValidated && (
                   <ExportImportButton onExport={handleExport} onImport={!submitted && !isLockedByDeadline && !isViewOnly && (canCreate || canEdit) ? handleImport : undefined} size="sm" />
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             <KPITable
@@ -5275,6 +5548,8 @@ function KPIWorkspace({
       {showAddModal && (
         <AddMonthModal
           existingLabels={months.map((m) => m.label)}
+          allowedLabels={kpiModuleScheduleEval.allowedMonthLabels}
+          lockedReasonByLabel={kpiModuleScheduleEval.lockedReasonByLabel}
           kpiItems={isBusinessWorkspace ? businessTrackingItems : trackingKpiItems}
           onAdd={addMonth}
           onClose={() => setShowAddModal(false)}
@@ -5417,24 +5692,83 @@ function KPIWorkspace({
       )}
       {showEditRequest && (
         <EditRequestModal
-          months={(() => {
-            const now = new Date();
-            const shortMonth = now.toLocaleString("en-US", { month: "short" }).toLowerCase();
-            const shortYear = String(now.getFullYear()).slice(2);
-            const currentId = `${shortMonth}${shortYear}`;
-            const current = months.find((m) => m.id === currentId);
-            return current ? [current] : months.slice(-1);
-          })()}
+          ownerUser={activeUser}
+          kpiItems={isBusinessWorkspace ? businessTrackingItems : trackingKpiItems}
+          months={months}
           onCancel={() => setShowEditRequest(false)}
-          onConfirm={(targets, _reason) => {
-            setApprovedEditTargets(targets);
+          onConfirm={(targets, reason) => {
+            const activeList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
+            const kpiNoSet = new Set(targets.map((t) => t.kpiNo));
+            const monthIdSet = new Set(targets.map((t) => t.monthId));
+            const kpiSummaries = activeList
+              .filter((k) => kpiNoSet.has(k.no))
+              .map((k) => ({
+                no: k.no,
+                perspektif: k.perspektif,
+                kpiTitle: k.kpi.split("\n")[0],
+              }));
+            const monthLabels = months.filter((m) => monthIdSet.has(m.id)).map((m) => m.label);
+            const created = submitKpiTrackingEditRequest({
+              ownerUser: activeUser,
+              targets,
+              kpiSummaries,
+              monthLabels,
+              reason,
+            });
+            setActiveEditRequest(created);
             setShowEditRequest(false);
             setShowEditRequestSuccess(true);
           }}
         />
       )}
       {showEditRequestSuccess && (
-        <EditRequestSuccessModal onClose={() => { setShowEditRequestSuccess(false); setPendingEditRequest(true); const _d = new Date(); setEditRequestDate(`${String(_d.getDate()).padStart(2,"0")}/${String(_d.getMonth()+1).padStart(2,"0")}/${_d.getFullYear()}`); }} />
+        <EditRequestSuccessModal
+          ownerUser={activeUser}
+          onClose={() => {
+            setShowEditRequestSuccess(false);
+            setActiveEditRequest(getLatestKpiTrackingEditForEmployee(activeUser.employeeId));
+          }}
+        />
+      )}
+      {showCancelSubmitConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowCancelSubmitConfirm(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 text-center space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center mx-auto">
+              <RotateCcw className="w-6 h-6 text-rose-600" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-gray-900">Batalkan Submit KPI Tracking?</h3>
+              <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                Pengajuan KPI Tracking Anda belum diproses oleh Approver. Setelah dibatalkan, status akan kembali ke <strong>Draft Mode</strong> dan Anda dapat mengedit kembali data KPI Tracking.
+              </p>
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowCancelSubmitConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              >
+                Kembali
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCancelSubmitConfirm(false);
+                  if (cancelSubmittedKpiMeasurement(activeUser.employeeId)) {
+                    setSubmitted(false);
+                    setView("input");
+                    toast.success("Submit KPI Tracking berhasil dibatalkan. Silakan edit kembali data Anda.");
+                  } else {
+                    toast.error("Pengajuan sudah diproses oleh Approver — silakan gunakan tombol Edit Request.");
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold transition-colors"
+              >
+                Ya, Cancel Submit
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

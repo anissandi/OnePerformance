@@ -1,9 +1,10 @@
-import { deleteBackendRecordFromSupabase, savePersistedState } from "../services/supabaseClient";
+import { deleteBackendRecordFromSupabase, loadPersistedState, savePersistedState, syncToSupabase } from "../services/supabaseClient";
 import { getActiveUser, loadManagedUsers, saveManagedUsers, type ManagedUser } from "./authStore";
 
 export const ARCHIVE_KEY = "pa_archived_users_v1";
 export const ARCHIVE_UPDATED_EVENT = "pa-archive-updated";
 export const EOY_ARCHIVE_REASON = "Eliminasi HC (EOY)";
+export type ArchiveSource = "manual" | "eoy" | "verification";
 
 export interface ArchivedUserRecord {
   id: string;
@@ -11,7 +12,7 @@ export interface ArchivedUserRecord {
   archivedAt: string; // ISO
   reason: string;
   archivedBy: string;
-  source: "manual" | "eoy";
+  source: ArchiveSource;
 }
 
 function normId(id: string): string {
@@ -28,8 +29,31 @@ export function loadArchivedUsers(): ArchivedUserRecord[] {
   }
 }
 
-function saveArchivedUsers(list: ArchivedUserRecord[]): void {
-  savePersistedState(ARCHIVE_KEY, list);
+function saveArchivedUsers(
+  list: ArchivedUserRecord[],
+  audit?: { action: string; subModule: string; description: string },
+): void {
+  const actor = getActiveUser();
+  savePersistedState(
+    ARCHIVE_KEY,
+    list,
+    audit
+      ? {
+          kind: "kv-state",
+          stateKey: ARCHIVE_KEY,
+          stateValue: list,
+          audit: {
+            userId: actor.employeeId,
+            userName: actor.name,
+            role: actor.role,
+            action: audit.action,
+            module: "Archive",
+            subModule: audit.subModule,
+            description: audit.description,
+          },
+        }
+      : undefined,
+  );
   window.dispatchEvent(new Event(ARCHIVE_UPDATED_EVENT));
 }
 
@@ -39,34 +63,102 @@ export function isEmployeeArchived(employeeIdOrEmail: string): ArchivedUserRecor
   return loadArchivedUsers().find(
     (a) =>
       a.user.employeeId.toLowerCase() === q ||
-      (a.user.email ?? "").toLowerCase() === q ||
-      (a.user.name ?? "").toLowerCase() === q,
+      normId(a.user.employeeId).toLowerCase() === normId(q).toLowerCase() ||
+      Boolean(a.user.email && a.user.email.trim().toLowerCase() === q) ||
+      Boolean(a.user.name && a.user.name.trim().toLowerCase() === q),
   );
 }
 
 /** Arsipkan user: dikeluarkan dari User Management aktif (tidak bisa login) tanpa menghapus data PA. */
-export function archiveUsers(users: ManagedUser[], reason: string, source: "manual" | "eoy" = "manual"): number {
+export function archiveUsers(users: ManagedUser[], reason: string, source: ArchiveSource = "manual"): number {
   if (users.length === 0) return 0;
   const actor = getActiveUser();
   const archivedBy = actor?.name ? `${actor.name}${actor.role ? ` (${actor.role})` : ""}` : "System";
   const now = new Date().toISOString();
   const existing = loadArchivedUsers();
   const ids = new Set(users.map((u) => u.employeeId.toLowerCase()));
+  const normIds = new Set(users.map((u) => normId(u.employeeId).toLowerCase()));
+  const namesLower = new Set(users.map((u) => (u.name ?? "").trim().toLowerCase()).filter(Boolean));
+  const cleanReason = reason.trim() || (source === "eoy" ? EOY_ARCHIVE_REASON : "-");
   const next = [
     ...existing.filter((a) => !ids.has(a.user.employeeId.toLowerCase())),
     ...users.map((u) => ({
       id: `arc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      user: u,
+      user: { ...u, status: "Inactive" as const },
       archivedAt: now,
-      reason: reason.trim() || (source === "eoy" ? EOY_ARCHIVE_REASON : "-"),
+      reason: cleanReason,
       archivedBy,
       source,
     })),
   ];
-  saveArchivedUsers(next);
-  const remaining = loadManagedUsers().filter((u) => !ids.has(u.employeeId.toLowerCase()));
+  saveArchivedUsers(next, {
+    action: "Update",
+    subModule: source === "verification" ? "Calibration Verification Inactive" : source === "eoy" ? "EOY Headcount Elimination" : "User Management Archive",
+    description: `Archived ${users.length} employee(s): ${users.map((u) => `${u.name} (${u.employeeId})`).join(", ")} — Reason: ${cleanReason}`,
+  });
+  const remaining = loadManagedUsers().filter(
+    (u) => !ids.has(u.employeeId.toLowerCase()) && !normIds.has(normId(u.employeeId).toLowerCase()),
+  );
   // Sinkronkan penghapusan user aktif ke backend (data PA tetap tersimpan untuk restore)
   users.forEach((u) => saveManagedUsers(remaining, undefined, u.employeeId));
+
+  // Bersihkan karyawan yang diarsipkan dari state aktif Year-End Verification & jadwal aktif Management Interview
+  try {
+    const matchesTargetId = (val: string) =>
+      ids.has(val.trim().toLowerCase()) || normIds.has(normId(val).toLowerCase());
+    const yeRaw = loadPersistedState<Record<string, unknown> | null>("year_end_workflow_2026", null);
+    if (yeRaw && typeof yeRaw === "object") {
+      const prevCompletion = (yeRaw.completion && typeof yeRaw.completion === "object" ? { ...(yeRaw.completion as Record<string, unknown>) } : {});
+      for (const k of Object.keys(prevCompletion)) {
+        if (matchesTargetId(k)) delete prevCompletion[k];
+      }
+      const nextYe = {
+        ...yeRaw,
+        reminded: Array.isArray(yeRaw.reminded) ? (yeRaw.reminded as string[]).filter((x) => !matchesTargetId(String(x))) : [],
+        inactive: Array.isArray(yeRaw.inactive) ? (yeRaw.inactive as string[]).filter((x) => !matchesTargetId(String(x))) : [],
+        ignored: Array.isArray(yeRaw.ignored) ? (yeRaw.ignored as string[]).filter((x) => !matchesTargetId(String(x))) : [],
+        completion: prevCompletion,
+      };
+      savePersistedState("year_end_workflow_2026", nextYe, {
+        kind: "year-end-verification",
+        period: "2026",
+        state: nextYe,
+      });
+      window.dispatchEvent(new Event("year-end-updated"));
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const schedules = loadPersistedState<Array<Record<string, unknown>>>("pa_interview_schedules_v1", []);
+    if (Array.isArray(schedules) && schedules.length > 0) {
+      let changedSchedule = false;
+      const nextSchedules = schedules.map((s) => {
+        if (s.status !== "Scheduled") return s;
+        const prevNames = Array.isArray(s.addedUsers) ? (s.addedUsers as string[]) : [];
+        const prevIds = Array.isArray(s.addedUserIds) ? (s.addedUserIds as string[]) : [];
+        const filteredNames = prevNames.filter((nm) => !namesLower.has(String(nm ?? "").trim().toLowerCase()));
+        const filteredIds = prevIds.filter(
+          (eid) => !ids.has(String(eid ?? "").trim().toLowerCase()) && !normIds.has(normId(String(eid ?? "")).toLowerCase()),
+        );
+        if (filteredNames.length !== prevNames.length || filteredIds.length !== prevIds.length) {
+          changedSchedule = true;
+          const updated = { ...s, addedUsers: filteredNames, addedUserIds: filteredIds };
+          void syncToSupabase({ kind: "interview-schedule", schedule: updated });
+          return updated;
+        }
+        return s;
+      });
+      if (changedSchedule) {
+        savePersistedState("pa_interview_schedules_v1", nextSchedules);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  window.dispatchEvent(new Event("appraisal-updated"));
   return users.length;
 }
 
@@ -79,7 +171,12 @@ export function restoreArchivedUser(archiveId: string): ManagedUser | null {
   const restored: ManagedUser = { ...rec.user, status: "Active" };
   const next = [...users, restored];
   saveManagedUsers(next, restored);
-  saveArchivedUsers(list.filter((a) => a.id !== archiveId));
+  saveArchivedUsers(list.filter((a) => a.id !== archiveId), {
+    action: "Update",
+    subModule: "Restore Archive",
+    description: `Restored archived employee: ${restored.name} (${restored.employeeId})`,
+  });
+  window.dispatchEvent(new Event("appraisal-updated"));
   return restored;
 }
 

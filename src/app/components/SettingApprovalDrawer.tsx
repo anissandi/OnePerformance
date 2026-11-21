@@ -6,7 +6,7 @@ import { ROWS, SAMPLE_GOALS, type SmartGoal } from "../pages/employee/SMARTGoals
 import { loadSubmittedGoals, normalizeSmartGoalsList, parseSmartGoalAttainablePoints } from "../pages/shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
-import { EvidenceViewerModal } from "./EvidenceViewerModal";
+import { EmbeddedPdfPreview, EvidenceViewerModal, triggerReliableFileDownload } from "./EvidenceViewerModal";
 import {
   buildEmployeeIdMatchSet,
   fetchEmployeeKpiSettingsLive,
@@ -17,7 +17,7 @@ import {
 import { FORMS } from "../pages/employee/AppraisalForm";
 import { MS_ITEMS } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPI_ITEMS as FULL_KPI_ITEMS } from "../pages/employee/KPIPage";
-import { loadManagedUsers, type ManagedUser } from "../store/authStore";
+import { loadManagedUsers, resolveEffectiveUserGrouping, type ManagedUser } from "../store/authStore";
 import { normalizeDateDDMMYYYY } from "../utils/dateFormat";
 
 // ── Extra sample goals for non-EMP002 employees ───────────────────────────────
@@ -641,6 +641,44 @@ interface StoredOwnerKpiItem {
   detailFormula: string;
   keterangan?: string;
   trackingPeriod?: string;
+  cascading?: string;
+  _cascadeType?: string;
+  colorIndicator?: boolean;
+  indicatorMode?: "numeric" | "color" | "ratio";
+}
+
+const OWNER_PERSP_COLOR: Record<string, string> = {
+  Finansial: "text-blue-700",
+  Proses: "text-purple-700",
+  "Environment, Health & Safety": "text-green-700",
+  Customer: "text-orange-700",
+  "Learning & Growth": "text-pink-700",
+};
+
+const OWNER_COLOR_BAND_META: Record<string, { color: string; bg: string; border: string; dot: string }> = {
+  "95%-100%":  { color: "#16a34a", bg: "#f0fdf4", border: "#86efac", dot: "#22c55e" },
+  "≥80%-<95%": { color: "#b45309", bg: "#fefce8", border: "#fde047", dot: "#eab308" },
+  "<80%":      { color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
+};
+
+const OWNER_BASELINE_COLOR_META: Record<string, { color: string; bg: string; border: string; dot: string }> = {
+  Blue:  { color: "#1d4ed8", bg: "#eff6ff", border: "#93c5fd", dot: "#3b82f6" },
+  Red:   { color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
+  Black: { color: "#111827", bg: "#f9fafb", border: "#d1d5db", dot: "#374151" },
+};
+
+function OwnerColorValueBadge({ value, isBaseline }: { value: string; isBaseline?: boolean }) {
+  const meta = isBaseline ? OWNER_BASELINE_COLOR_META[value] : OWNER_COLOR_BAND_META[value];
+  if (!meta) return <span className="text-gray-400 italic text-[11px]">{value || "—"}</span>;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border"
+      style={{ background: meta.bg, borderColor: meta.border, color: meta.color }}
+    >
+      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.dot }} />
+      {value}
+    </span>
+  );
 }
 
 function derivePeriodeTrackingLabel(satuan?: string, trackingPeriod?: string): string {
@@ -792,6 +830,7 @@ function KPIContent({ employeeId }: { employeeId: string }) {
   const [kpiItems, setKpiItems] = useState<StoredOwnerKpiItem[]>(() => readLocalOwnerKpiItems());
   const [kpiAttachments, setKpiAttachments] = useState<HydratedKpiAttachmentItem[]>(() => readLocalKpiAttachments());
   const [previewAtt, setPreviewAtt] = useState<HydratedKpiAttachmentItem | null>(null);
+  const [embeddedPdfId, setEmbeddedPdfId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -800,15 +839,15 @@ function KPIContent({ employeeId }: { employeeId: string }) {
     void fetchKpiAttachmentsForEmployee(employeeId).then((remoteAtts) => {
       if (!cancelled && remoteAtts.length > 0) {
         setKpiAttachments(remoteAtts);
+        const firstPdf = remoteAtts.find((a) => a.mimeType === "application/pdf" || /\.pdf$/i.test(a.name || ""));
+        if (firstPdf) setEmbeddedPdfId((prev) => prev ?? firstPdf.id);
       }
     });
-    if (readLocalOwnerKpiItems().length === 0) {
-      void fetchEmployeeKpiSettingsLive<StoredOwnerKpiItem>(employeeId).then((remoteItems) => {
-        if (!cancelled && remoteItems.length > 0) {
-          setKpiItems(remoteItems);
-        }
-      });
-    }
+    void fetchEmployeeKpiSettingsLive<StoredOwnerKpiItem>(employeeId).then((remoteItems) => {
+      if (!cancelled && remoteItems.length > 0) {
+        setKpiItems(remoteItems);
+      }
+    });
     const onSync = () => {
       if (cancelled) return;
       const latestLocalItems = readLocalOwnerKpiItems();
@@ -828,10 +867,31 @@ function KPIContent({ employeeId }: { employeeId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId]);
 
-  const sections = Array.from(new Set(kpiItems.map((k) => k.section || "A"))).sort();
-  const bgColors = ["#1565C0", "#1976D2", "#1E88E5", "#2196F3", "#00838F", "#6A1B9A"];
+  const ownerUser = loadManagedUsers().find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(employeeId) ||
+      u.employeeId.trim().toLowerCase() === employeeId.trim().toLowerCase(),
+  );
+  const ownerGrouping = ownerUser ? String(resolveEffectiveUserGrouping(ownerUser) ?? "").trim() : "";
+  const hideCascadingForOwner =
+    ["Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Seksi", "Operasional"].includes(ownerGrouping) &&
+    !kpiItems.some((k) => Boolean(k.cascading || k._cascadeType));
+  const showCascadingCol = !hideCascadingForOwner;
+  const totalCols = showCascadingCol ? 15 : 14;
 
-  const totalBobot = kpiItems.reduce((sum, k) => sum + (parseFloat(String(k.bobot).replace("%", "")) || 0), 0);
+  const sections = Array.from(new Set(kpiItems.map((k) => k.section || "A"))).sort();
+  const bgColors = ["#1565C0", "#1976D2", "#1E88E5", "#2196F3", "#42A5F5", "#64B5F6"];
+  const sectionChipStyles = [
+    "bg-blue-50 text-blue-700",
+    "bg-indigo-50 text-indigo-700",
+    "bg-violet-50 text-violet-700",
+    "bg-sky-50 text-sky-700",
+    "bg-teal-50 text-teal-700",
+    "bg-cyan-50 text-cyan-700",
+  ];
+
+  const totalBobot = Math.round(kpiItems.reduce((sum, k) => sum + (parseFloat(String(k.bobot).replace("%", "")) || 0), 0) * 100) / 100;
+  const isBobot100 = Math.round(totalBobot * 100) === 10000;
 
   if (kpiItems.length === 0) {
     return (
@@ -843,10 +903,23 @@ function KPIContent({ employeeId }: { employeeId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h3 className="font-bold text-gray-800 text-sm">KPI Setting Detail</h3>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">Total Bobot: <span className="font-bold text-[#1A284F]">{totalBobot}%</span></span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-[#1A284F]/5 rounded-lg">
+            <span className="text-xs font-bold text-[#1A284F]">Total KPI:</span>
+            <span className="text-xs font-bold text-[#1A284F]">{kpiItems.length}</span>
+          </div>
+          {sections.map((sec, si) => (
+            <div key={sec} className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold ${sectionChipStyles[si % sectionChipStyles.length]}`}>
+              <span>Section {sec}:</span>
+              <span>{kpiItems.filter((k) => (k.section || "A") === sec).length}</span>
+            </div>
+          ))}
+          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold ${isBobot100 ? "bg-green-50 text-green-700" : "bg-orange-50 text-orange-700"}`}>
+            <span>Total Bobot:</span>
+            <span>{totalBobot}%</span>
+          </div>
         </div>
       </div>
 
@@ -854,58 +927,89 @@ function KPIContent({ employeeId }: { employeeId: string }) {
           <table className="border-collapse text-xs w-full">
             <thead>
               <tr className="bg-[#1A284F] text-white">
-                <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: 50, maxWidth: 50 }}>No</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 50, zIndex: 25, background: "#1A284F", minWidth: 120, maxWidth: 120 }}>Perspektif</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 170, zIndex: 25, background: "#1A284F", minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 110 }}>Satuan</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 font-semibold" style={{ minWidth: 100 }}>Formula Setahun</th>
-                <th className="border border-[#1A284F]/30 py-3 px-2 font-semibold text-center" style={{ minWidth: 64 }}>Bobot</th>
+                <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 25, background: "#1A284F", minWidth: 54, maxWidth: 54 }}>No</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 54, zIndex: 25, background: "#1A284F", minWidth: 140, maxWidth: 140 }}>Perspektif</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 194, zIndex: 25, background: "#1A284F", minWidth: 270, maxWidth: 270, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 160 }}>Satuan</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 100 }}>Formula Setahun</th>
+                <th className="border border-[#1A284F]/30 py-3 px-2 font-semibold text-center" style={{ minWidth: 80 }}>Bobot</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 240 }}>Definisi</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 155 }}>Source</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 88 }}>Baseline 2025</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 88 }}>Target 2026</th>
-                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 88 }}>Polaritas</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 96 }}>Baseline 2025</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 96 }}>Target 2026</th>
+                <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 96 }}>Polaritas</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 250 }}>Detail Formula</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ minWidth: 180 }}>Keterangan</th>
                 <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold" style={{ minWidth: 110 }}>Periode Tracking</th>
+                {showCascadingCol && (
+                  <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ minWidth: 110 }}>CASCADING (FC; PC; CC)</th>
+                )}
               </tr>
             </thead>
             <tbody>
               {sections.map((sec, si) => {
                 const secRows = kpiItems.filter((k) => (k.section || "A") === sec);
                 const first = secRows[0];
-                const defLabel = sec === "A" ? "Objective KPI — Bobot 20%" : sec === "B" ? "Functional KPI — Bobot 80%" : `Section ${sec}`;
-                const secTitle = first?.sectionLabel
-                  ? `${sec}. ${first.sectionLabel}${first.sectionBobot ? ` — Bobot ${first.sectionBobot}` : ""}`
-                  : `${sec}. ${defLabel}`;
+                const secSubSum = Math.round(secRows.reduce((s, r) => s + (parseFloat(String(r.bobot).replace("%", "")) || 0), 0) * 100) / 100;
+                const pureSecName = first?.sectionLabel || (sec === "A" ? "Objective KPI" : sec === "B" ? "Functional KPI" : `Section ${sec}`);
+                const secBobotLabel = first?.sectionBobot || `${secSubSum}%`;
                 const bg = bgColors[si % bgColors.length];
                 return (
                   <React.Fragment key={sec}>
                     <tr>
-                      <td colSpan={14} className="p-0 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: bg, borderColor: bg }}>
-                        <div className="py-2 px-4 inline-flex items-center whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}>
-                          {secTitle}
+                      <td colSpan={totalCols} className="p-0 text-white text-xs font-bold border" style={{ background: bg, borderColor: bg }}>
+                        <div className="py-2 px-4 inline-flex items-center gap-2 whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}>
+                          <span className="uppercase tracking-wider">{sec}. {pureSecName}</span>
+                          <span className="text-white/90 text-[11px] font-semibold">— Bobot <strong className="text-white">{secBobotLabel}</strong></span>
+                          <span className="text-[10px] text-white/75 font-normal">(Terisi {secSubSum}%)</span>
                         </div>
                       </td>
                     </tr>
                     {secRows.map((kpi, idx) => {
-                      const stickyBg = idx % 2 === 0 ? "#ffffff" : "#f9fafb";
+                      const stickyBg = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+                      const isColorMode = Boolean(kpi.colorIndicator || kpi.indicatorMode === "color");
+                      const cascVal = kpi.cascading || kpi._cascadeType || "";
                       return (
-                      <tr key={kpi.id ?? `${sec}-${kpi.no}-${idx}`} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                        <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700" style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: 50, maxWidth: 50 }}>{kpi.no}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700" style={{ position: "sticky", left: 50, zIndex: 12, background: stickyBg, minWidth: 120, maxWidth: 120 }}>{kpi.perspektif}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700 whitespace-pre-line" style={{ position: "sticky", left: 170, zIndex: 12, background: stickyBg, minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>{kpi.kpi}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.satuan}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700">{kpi.formula}</td>
-                        <td className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">{kpi.bobot}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs leading-relaxed">{kpi.definisi}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs">{kpi.source}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.baseline2025}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-center font-semibold text-[#1A284F]">{kpi.target2026}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-center text-gray-700">{kpi.polaritas}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.detailFormula}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-gray-700 text-xs whitespace-pre-line leading-relaxed">{kpi.keterangan || "—"}</td>
-                        <td className="border border-gray-200 py-2 px-3 text-center text-gray-600 text-xs">{derivePeriodeTrackingLabel(kpi.satuan, kpi.trackingPeriod)}</td>
+                      <tr key={kpi.id ?? `${sec}-${kpi.no}-${idx}`} className={idx % 2 === 0 ? "bg-white hover:bg-gray-50/50" : "bg-slate-50/60 hover:bg-gray-50"}>
+                        <td className="border border-gray-200 py-3 px-2 text-center text-xs font-semibold text-gray-600" style={{ position: "sticky", left: 0, zIndex: 12, background: stickyBg, minWidth: 54, maxWidth: 54 }}>{kpi.no}</td>
+                        <td className="border border-gray-200 py-3 px-3" style={{ position: "sticky", left: 54, zIndex: 12, background: stickyBg, minWidth: 140, maxWidth: 140 }}>
+                          <span className={`text-xs font-bold ${OWNER_PERSP_COLOR[kpi.perspektif] ?? "text-gray-700"}`}>{kpi.perspektif}</span>
+                        </td>
+                        <td className="border border-gray-200 py-3 px-3" style={{ position: "sticky", left: 194, zIndex: 12, background: stickyBg, minWidth: 270, maxWidth: 270, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
+                          <p className="text-xs font-medium text-gray-800 whitespace-pre-line leading-relaxed">{kpi.kpi}</p>
+                        </td>
+                        <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600">{kpi.satuan}</td>
+                        <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center">{kpi.formula}</td>
+                        <td className="border border-gray-200 py-3 px-2 text-center">
+                          <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{kpi.bobot}</span>
+                        </td>
+                        <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 leading-relaxed whitespace-pre-line">{kpi.definisi || "—"}</td>
+                        <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600">{kpi.source || "—"}</td>
+                        <td className="border border-gray-200 py-3 px-3 text-center text-xs font-medium text-gray-700">
+                          {isColorMode ? <OwnerColorValueBadge value={kpi.baseline2025} isBaseline /> : (kpi.baseline2025 || "—")}
+                        </td>
+                        <td className="border border-gray-200 py-3 px-3 text-center text-xs font-bold text-[#1A284F]">
+                          {isColorMode ? <OwnerColorValueBadge value={kpi.target2026} /> : (kpi.target2026 || "—")}
+                        </td>
+                        <td className="border border-gray-200 py-3 px-2 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : kpi.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
+                            {kpi.polaritas}
+                          </span>
+                        </td>
+                        <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed">{kpi.detailFormula || "—"}</td>
+                        <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed">{kpi.keterangan || "—"}</td>
+                        <td className="border border-gray-200 py-3 px-3 text-center text-xs text-gray-600">{derivePeriodeTrackingLabel(kpi.satuan, kpi.trackingPeriod)}</td>
+                        {showCascadingCol && (
+                          <td className="border border-gray-200 py-3 px-2 text-center">
+                            {cascVal ? (
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${cascVal === "FC" ? "bg-indigo-50 text-indigo-700" : cascVal === "PC" ? "bg-amber-50 text-amber-700" : "bg-teal-50 text-teal-700"}`}>
+                                {cascVal}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
+                          </td>
+                        )}
                       </tr>
                       );
                     })}
@@ -950,17 +1054,27 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                   {att.url && meta.isPreviewable && (
                     <button
                       type="button"
-                      onClick={() => setPreviewAtt(att)}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 text-[10px] font-semibold transition-colors"
-                      title="Lihat langsung"
+                      onClick={() => {
+                        if (meta.kind === "pdf") {
+                          setEmbeddedPdfId((prev) => (prev === att.id ? null : att.id));
+                        } else {
+                          setPreviewAtt(att);
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors ${
+                        meta.kind === "pdf" && embeddedPdfId === att.id
+                          ? "bg-[#1A284F] text-white border-[#1A284F]"
+                          : "bg-sky-50 text-sky-700 hover:bg-sky-100 border-sky-200"
+                      }`}
+                      title={meta.kind === "pdf" ? "Buka PDF langsung (embed)" : "Lihat langsung"}
                     >
-                      <Eye className="w-3 h-3" /> Lihat
+                      <Eye className="w-3 h-3" /> {meta.kind === "pdf" ? (embeddedPdfId === att.id ? "Tutup PDF" : "Buka PDF") : "Lihat"}
                     </button>
                   )}
                   {att.url && (
                     <button
                       type="button"
-                      onClick={() => triggerAttachmentFileDownload(att.url, att.name)}
+                      onClick={() => { void triggerReliableFileDownload(att.url, att.name); }}
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F]/20 text-[10px] font-semibold transition-colors"
                       title="Download lampiran"
                     >
@@ -971,6 +1085,21 @@ function KPIContent({ employeeId }: { employeeId: string }) {
               );
             })}
           </div>
+          {(() => {
+            const activePdf = kpiAttachments.find(
+              (a) => a.id === embeddedPdfId && (a.mimeType === "application/pdf" || /\.pdf$/i.test(a.name || "")) && a.url,
+            );
+            if (!activePdf) return null;
+            return (
+              <EmbeddedPdfPreview
+                url={activePdf.url}
+                name={activePdf.name}
+                height={460}
+                onClose={() => setEmbeddedPdfId(null)}
+                onExpandModal={() => setPreviewAtt(activePdf)}
+              />
+            );
+          })()}
         </div>
       )}
       {previewAtt && (

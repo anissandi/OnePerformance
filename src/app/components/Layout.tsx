@@ -14,22 +14,55 @@ import {
   useAuthStore,
 } from "../store/authStore";
 
+const USER_SIDEBAR_HIDDEN_KEY = "pa_user_sidebar_hidden_v1";
+
+let moduleUserSidebarHidden: boolean = (() => {
+  try {
+    return sessionStorage.getItem(USER_SIDEBAR_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+
+function writeUserSidebarHidden(next: boolean) {
+  moduleUserSidebarHidden = next;
+  try {
+    if (next) sessionStorage.setItem(USER_SIDEBAR_HIDDEN_KEY, "1");
+    else sessionStorage.removeItem(USER_SIDEBAR_HIDDEN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function AppLayout() {
   const location = useLocation();
   const { activeUser, portalPath } = useAuthStore();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [userSidebarHidden, setUserSidebarHidden] = useState<boolean>(() => moduleUserSidebarHidden);
+  const [tableFullscreen, setTableFullscreen] = useState(false);
   const [, setSessionTick] = useState(0);
+  const sidebarCollapsed = userSidebarHidden || tableFullscreen;
 
   useEffect(() => {
     const onTableFullscreen = (e: Event) => {
       const custom = e as CustomEvent<{ fullscreen?: boolean }>;
       if (typeof custom.detail?.fullscreen === "boolean") {
-        setSidebarCollapsed(custom.detail.fullscreen);
+        setTableFullscreen(custom.detail.fullscreen);
       }
     };
     window.addEventListener("pa-table-fullscreen-change", onTableFullscreen);
     return () => window.removeEventListener("pa-table-fullscreen-change", onTableFullscreen);
   }, []);
+
+  const handleToggleSidebar = () => {
+    if (sidebarCollapsed) {
+      writeUserSidebarHidden(false);
+      setUserSidebarHidden(false);
+      setTableFullscreen(false);
+    } else {
+      writeUserSidebarHidden(true);
+      setUserSidebarHidden(true);
+    }
+  };
 
   const sessionSnapshot = peekSessionValidity();
 
@@ -137,7 +170,7 @@ export function AppLayout() {
       <AppFrame sidebar={<Sidebar role={role} collapsed={sidebarCollapsed} />} topbar={<Topbar
               role={role}
               sidebarCollapsed={sidebarCollapsed}
-              onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+              onToggleSidebar={handleToggleSidebar}
             />}>
         <div key={activeUser.employeeId} className="contents">
           <Outlet />

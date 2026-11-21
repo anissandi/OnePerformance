@@ -1,11 +1,15 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { CheckCircle2, XCircle, Clock, Users, AlertTriangle, Bell, BellRing, UserX, Building2, ChevronRight, ArrowLeft } from "lucide-react";
+import { toast } from "sonner";
 
 import { useNavigate } from "react-router";
 import { loadYearEndState, saveYearEndState, canProceedToInterview } from "../shared/yearEndWorkflowStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { isFeedbackFollowUpComplete, loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
-import { isExcludedFromVerification, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
+import { getActiveUser, isExcludedFromVerification, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
+import { ARCHIVE_UPDATED_EVENT, archiveUsers, isEmployeeArchived } from "../../store/archiveStore";
+import { pushEmployeeNotification } from "../../store/notificationStore";
+import { fetchYearEndVerificationLive } from "../../services/supabaseClient";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 import { evaluateEmployeeKPITracking } from "../employee/KPIPage";
 
@@ -48,7 +52,7 @@ interface Employee {
 
 function buildImportedVerificationEmployees(): Employee[] {
   return loadManagedUsers()
-    .filter((u) => u.status === "Active" && !isExcludedFromVerification(u))
+    .filter((u) => u.status === "Active" && !isExcludedFromVerification(u) && !isEmployeeArchived(u.employeeId))
     .map((u) => {
       const allowed = resolveUserAllowedModules(u);
       const hasKpi = allowed.includes("KPI (Setting/Measurement)");
@@ -162,7 +166,40 @@ const _UNUSED_STATIC_EMPLOYEES: Employee[] = [
 ];
 
 
-const statusOptions   = ["All", "Complete", "Incomplete", "Pending", "Inactivated", "Ignored"] as const;
+const statusOptions   = ["All", "Complete", "Incomplete", "Pending", "Ignored"] as const;
+
+function buildVerificationReminderDetails(emp: Employee): {
+  pendingModules: string[];
+  incompleteModules: string[];
+  summaryText: string;
+  ctaRoute: string;
+} {
+  const entries: Array<{ label: string; status: ModuleStatus; route: string }> = [
+    { label: "KPI", status: emp.kpi, route: "/measurement/kpi-tracking" },
+    { label: "SMART Goals", status: emp.smartGoals, route: "/measurement/smart-goals" },
+    { label: "Appraisal Form", status: emp.appraisalForm, route: "/measurement/appraisal-form" },
+    { label: "Managerial Skill", status: emp.managerialSkill, route: "/measurement/managerial-skill" },
+    { label: "Project Outside Job Scope", status: emp.projectOJS, route: "/measurement/project-outside" },
+    { label: "Inter-Department Feedback", status: emp.interDept, route: "/measurement/inter-department-feedback" },
+  ];
+  const incompleteModules = entries.filter((e) => e.status === "incomplete").map((e) => e.label);
+  const pendingModules = entries.filter((e) => e.status === "pending").map((e) => e.label);
+  const firstActionable = entries.find((e) => e.status === "incomplete" || e.status === "pending");
+  const statusParts: string[] = [];
+  if (incompleteModules.length > 0) {
+    statusParts.push(`Incomplete: ${incompleteModules.join(", ")}`);
+  }
+  if (pendingModules.length > 0) {
+    statusParts.push(`Pending: ${pendingModules.join(", ")}`);
+  }
+  const detailStr = statusParts.join(" | ") || `Status keseluruhan: ${emp.overall}`;
+  return {
+    pendingModules,
+    incompleteModules,
+    summaryText: `Pengingat Verifikasi Penilaian Kinerja 2026 — terdapat modul penilaian Anda yang belum selesai (${detailStr}). Mohon segera lengkapi pengisian atau tindak lanjuti proses persetujuan modul terkait.`,
+    ctaRoute: firstActionable?.route || "/dashboard",
+  };
+}
 
 // ─── Shared UI ─────────────────────────────────────────────────────────────────
 
@@ -265,15 +302,25 @@ export function YearEndVerification() {
   const [posFilter,      setPosFilter]      = useState("All");
   const [statusFilter,   setStatusFilter]   = useState("All");
   const [remindedSet,    setRemindedSet]    = useState<Set<string>>(() => new Set(loadYearEndState().reminded));
-  const [inactiveSet,    setInactiveSet]    = useState<Set<string>>(new Set());
-  const [ignoredSet,     setIgnoredSet]     = useState<Set<string>>(new Set());
+  const [ignoredSet,     setIgnoredSet]     = useState<Set<string>>(() => new Set(loadYearEndState().ignored));
+  const [inactiveReason, setInactiveReason] = useState("");
 
   const navigate = useNavigate();
   const [workflow, setWorkflow] = useState(loadWorkflowRecords);
   const [feedback, setFeedback] = useState(loadFeedbackSubmissions);
   const [tick, setTick] = useState(0);
   useEffect(() => {
+    void fetchYearEndVerificationLive().then((remote) => {
+      if (remote) {
+        const latest = loadYearEndState();
+        setRemindedSet(new Set(latest.reminded));
+        setIgnoredSet(new Set(latest.ignored));
+      }
+    });
     const refresh = () => {
+      const latestYe = loadYearEndState();
+      setRemindedSet(new Set(latestYe.reminded));
+      setIgnoredSet(new Set(latestYe.ignored));
       setWorkflow(loadWorkflowRecords());
       setFeedback(loadFeedbackSubmissions());
       setTick((t) => t + 1);
@@ -283,12 +330,16 @@ export function YearEndVerification() {
     window.addEventListener("pa-auth-updated", refresh);
     window.addEventListener("pa-employees-imported", refresh);
     window.addEventListener("pa-db-hydrated", refresh);
+    window.addEventListener("year-end-updated", refresh);
+    window.addEventListener(ARCHIVE_UPDATED_EVENT, refresh);
     return () => {
       window.removeEventListener("appraisal-updated", refresh);
       window.removeEventListener("feedback-updated", refresh);
       window.removeEventListener("pa-auth-updated", refresh);
       window.removeEventListener("pa-employees-imported", refresh);
       window.removeEventListener("pa-db-hydrated", refresh);
+      window.removeEventListener("year-end-updated", refresh);
+      window.removeEventListener(ARCHIVE_UPDATED_EVENT, refresh);
     };
   }, []);
   const currentEmployees = useMemo(() => {
@@ -364,9 +415,30 @@ export function YearEndVerification() {
   });
   }, [workflow, feedback, tick]);
   useEffect(() => {
+    const prev = loadYearEndState();
     const completion = Object.fromEntries(currentEmployees.map((employee) => [normalizeEmployeeId(employee.id), { kpi: employee.kpi === "complete", smartGoals: employee.smartGoals === "complete", appraisalForm: employee.appraisalForm === "complete", managerialSkill: employee.managerialSkill === "complete", projectOutsideJobScope: employee.projectOJS === "complete" }]));
-    saveYearEndState({ ...loadYearEndState(), reminded: [...remindedSet], inactive: [...inactiveSet], ignored: [...ignoredSet], completion });
-  }, [remindedSet, inactiveSet, ignoredSet, currentEmployees]);
+    saveYearEndState({ ...prev, reminded: [...remindedSet], ignored: [...ignoredSet], completion });
+  }, [currentEmployees]);
+
+  const buildCompletionSnapshot = () =>
+    Object.fromEntries(
+      currentEmployees.map((employee) => [
+        normalizeEmployeeId(employee.id),
+        {
+          kpi: employee.kpi === "complete",
+          smartGoals: employee.smartGoals === "complete",
+          appraisalForm: employee.appraisalForm === "complete",
+          managerialSkill: employee.managerialSkill === "complete",
+          projectOutsideJobScope: employee.projectOJS === "complete",
+        },
+      ]),
+    );
+
+  const isEmpIgnored = (empId: string) =>
+    ignoredSet.has(empId) || Array.from(ignoredSet).some((x) => normalizeEmployeeId(x) === normalizeEmployeeId(empId));
+  const isEmpReminded = (empId: string) =>
+    remindedSet.has(empId) || Array.from(remindedSet).some((x) => normalizeEmployeeId(x) === normalizeEmployeeId(empId));
+
   // Hanya karyawan pada Company Unit yang dipilih yang masuk dalam perhitungan & tabel
   const unitEmployees = useMemo(
     () =>
@@ -376,11 +448,24 @@ export function YearEndVerification() {
     [currentEmployees, selectedUnit],
   );
 
+  const archivedInSelectedUnitCount = useMemo(() => {
+    if (!selectedUnit) return 0;
+    try {
+      const raw = JSON.parse(localStorage.getItem("pa_archived_users_v1") ?? "[]") as Array<{ source?: string; user?: { company?: string } }>;
+      return Array.isArray(raw)
+        ? raw.filter((r) => r?.source === "verification" && r?.user?.company === selectedUnit.name).length
+        : 0;
+    } catch {
+      return 0;
+    }
+  }, [selectedUnit, tick]);
+
   const TOTAL_EMPLOYEES = unitEmployees.length;
-  const FULLY_COMPLETE = unitEmployees.filter((employee) => employee.overall === "Complete" && !inactiveSet.has(employee.id)).length;
-  const INCOMPLETE = unitEmployees.filter((employee) => employee.overall === "Incomplete" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
-  const PENDING_REVIEW = unitEmployees.filter((employee) => employee.overall === "Pending" && !inactiveSet.has(employee.id) && !ignoredSet.has(employee.id)).length;
-  const handled = unitEmployees.filter((employee) => employee.overall === "Complete" || inactiveSet.has(employee.id) || ignoredSet.has(employee.id)).length;
+  const FULLY_COMPLETE = unitEmployees.filter((employee) => employee.overall === "Complete").length;
+  const INCOMPLETE = unitEmployees.filter((employee) => employee.overall === "Incomplete" && !isEmpIgnored(employee.id)).length;
+  const PENDING_REVIEW = unitEmployees.filter((employee) => employee.overall === "Pending" && !isEmpIgnored(employee.id)).length;
+  const IGNORED_COUNT = unitEmployees.filter((employee) => isEmpIgnored(employee.id)).length;
+  const handled = unitEmployees.filter((employee) => employee.overall === "Complete" || isEmpIgnored(employee.id)).length;
   const READINESS_PCT = TOTAL_EMPLOYEES > 0 ? Math.round((handled / TOTAL_EMPLOYEES) * 100) : 0;
 
   const divisionOptions = useMemo(() => ["All", ...Array.from(new Set(unitEmployees.map((e) => e.division)))], [unitEmployees]);
@@ -391,7 +476,6 @@ export function YearEndVerification() {
     | { type: "reminder_one"; id: string; name: string }
     | { type: "reminder_all"; count: number }
     | { type: "inactive"; id: string; name: string }
-    | { type: "reactivate"; id: string; name: string }
     | { type: "ignore"; id: string; name: string }
     | { type: "unignore"; id: string; name: string }
     | { type: "proceed" }
@@ -404,35 +488,158 @@ export function YearEndVerification() {
     const matchDiv    = divFilter    === "All" || e.division   === divFilter;
     const matchDept   = deptFilter   === "All" || e.department === deptFilter;
     const matchPos    = posFilter    === "All" || e.position   === posFilter;
-    const matchStatus = statusFilter === "All" || (inactiveSet.has(e.id) ? "Inactivated" : ignoredSet.has(e.id) ? "Ignored" : e.overall) === statusFilter;
+    const matchStatus = statusFilter === "All" || (isEmpIgnored(e.id) ? "Ignored" : e.overall) === statusFilter;
     return matchSearch && matchDiv && matchDept && matchPos && matchStatus;
-  }), [search, divFilter, deptFilter, posFilter, statusFilter, unitEmployees, inactiveSet, ignoredSet]);
+  }), [search, divFilter, deptFilter, posFilter, statusFilter, unitEmployees, ignoredSet]);
 
-  const canProceed = canProceedToInterview(unitEmployees, { ...loadYearEndState(), inactive: [...inactiveSet], ignored: [...ignoredSet] });
+  const canProceed = canProceedToInterview(unitEmployees, { ...loadYearEndState(), inactive: [], ignored: [...ignoredSet] });
 
   function confirmSendReminder(id: string, name: string) { setModal({ type: "reminder_one", id, name }); }
-  function doSendReminder(id: string) { setRemindedSet((prev) => new Set([...prev, id])); }
+  function doSendReminder(id: string) {
+    const targetEmp = unitEmployees.find((e) => e.id === id) ?? currentEmployees.find((e) => e.id === id);
+    const actor = getActiveUser();
+    const nextReminded = new Set([...remindedSet, id]);
+    setRemindedSet(nextReminded);
+    const prev = loadYearEndState();
+    saveYearEndState(
+      {
+        ...prev,
+        reminded: [...nextReminded],
+        ignored: [...ignoredSet],
+        completion: buildCompletionSnapshot(),
+      },
+      {
+        action: "Update",
+        description: `Sent Year-End Verification reminder to ${targetEmp?.name ?? id} (${id})`,
+      },
+    );
+    if (targetEmp) {
+      const detail = buildVerificationReminderDetails(targetEmp);
+      pushEmployeeNotification({
+        employeeIds: [targetEmp.id],
+        title: "Reminder Verifikasi Penilaian Kinerja 2026",
+        summary: detail.summaryText,
+        category: "Reminder",
+        moduleName: "Calibration Verification",
+        approvalStatus: targetEmp.overall,
+        ctaLabel: "Lengkapi Modul Penilaian",
+        ctaRoute: detail.ctaRoute,
+        senderName: actor.name,
+        senderRole: actor.role,
+      });
+    }
+    toast.success(`Notifikasi reminder berhasil dikirim ke ${targetEmp?.name ?? id}.`);
+  }
 
   function confirmSendAll() {
-    const count = filtered.filter((e) => !inactiveSet.has(e.id) && !ignoredSet.has(e.id) && (e.overall === "Pending" || e.overall === "Incomplete") && !remindedSet.has(e.id)).length;
+    const count = filtered.filter((e) => !isEmpIgnored(e.id) && (e.overall === "Pending" || e.overall === "Incomplete") && !isEmpReminded(e.id)).length;
     setModal({ type: "reminder_all", count });
   }
   function doSendAllReminders() {
-    const ids = filtered.filter((e) => !inactiveSet.has(e.id) && !ignoredSet.has(e.id) && (e.overall === "Pending" || e.overall === "Incomplete")).map((e) => e.id);
-    setRemindedSet((prev) => new Set([...prev, ...ids]));
+    const targets = filtered.filter((e) => !isEmpIgnored(e.id) && (e.overall === "Pending" || e.overall === "Incomplete") && !isEmpReminded(e.id));
+    if (targets.length === 0) return;
+    const actor = getActiveUser();
+    const nextReminded = new Set([...remindedSet, ...targets.map((t) => t.id)]);
+    setRemindedSet(nextReminded);
+    const prev = loadYearEndState();
+    saveYearEndState(
+      {
+        ...prev,
+        reminded: [...nextReminded],
+        ignored: [...ignoredSet],
+        completion: buildCompletionSnapshot(),
+      },
+      {
+        action: "Update",
+        description: `Sent bulk Year-End Verification reminders to ${targets.length} employee(s) in ${selectedUnit?.name ?? "Unit"}`,
+      },
+    );
+    for (const targetEmp of targets) {
+      const detail = buildVerificationReminderDetails(targetEmp);
+      pushEmployeeNotification({
+        employeeIds: [targetEmp.id],
+        title: "Reminder Verifikasi Penilaian Kinerja 2026",
+        summary: detail.summaryText,
+        category: "Reminder",
+        moduleName: "Calibration Verification",
+        approvalStatus: targetEmp.overall,
+        ctaLabel: "Lengkapi Modul Penilaian",
+        ctaRoute: detail.ctaRoute,
+        senderName: actor.name,
+        senderRole: actor.role,
+      });
+    }
+    toast.success(`Notifikasi reminder berhasil dikirim ke ${targets.length} karyawan.`);
   }
 
-  function confirmInactive(id: string, name: string) { setModal({ type: "inactive", id, name }); }
-  function doInactive(id: string) { setIgnoredSet((prev) => new Set([...prev].filter((value) => value !== id))); setInactiveSet((prev) => new Set([...prev, id])); }
-  function confirmReactivate(id: string, name: string) { setModal({ type: "reactivate", id, name }); }
-  function doReactivate(id: string) { setInactiveSet((prev) => { const s = new Set(prev); s.delete(id); return s; }); }
+  function confirmInactive(id: string, name: string) {
+    setInactiveReason("");
+    setModal({ type: "inactive", id, name });
+  }
+  function doInactive(id: string, reasonText: string) {
+    const cleanReason = reasonText.trim();
+    if (!cleanReason) {
+      toast.error("Alasan Inactive wajib diisi.");
+      return;
+    }
+    const managedUser = loadManagedUsers().find(
+      (u) => u.employeeId.toLowerCase() === id.toLowerCase() || normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(id),
+    );
+    if (!managedUser) {
+      toast.error("Data karyawan tidak ditemukan pada daftar aktif.");
+      return;
+    }
+    const nextIgnored = new Set([...ignoredSet].filter((v) => normalizeEmployeeId(v) !== normalizeEmployeeId(id)));
+    const nextReminded = new Set([...remindedSet].filter((v) => normalizeEmployeeId(v) !== normalizeEmployeeId(id)));
+    setIgnoredSet(nextIgnored);
+    setRemindedSet(nextReminded);
+    archiveUsers([managedUser], cleanReason, "verification");
+    setInactiveReason("");
+    setModal(null);
+    setTick((t) => t + 1);
+    toast.success(`${managedUser.name} (${managedUser.employeeId}) telah dinonaktifkan dan dipindahkan ke Archive.`);
+  }
 
   function confirmIgnore(id: string, name: string) { setModal({ type: "ignore", id, name }); }
-  function doIgnore(id: string) { setInactiveSet((prev) => new Set([...prev].filter((value) => value !== id))); setIgnoredSet((prev) => new Set([...prev, id])); }
+  function doIgnore(id: string) {
+    const nextIgnored = new Set([...ignoredSet, id]);
+    setIgnoredSet(nextIgnored);
+    const prev = loadYearEndState();
+    saveYearEndState(
+      {
+        ...prev,
+        reminded: [...remindedSet],
+        ignored: [...nextIgnored],
+        completion: buildCompletionSnapshot(),
+      },
+      {
+        action: "Update",
+        description: `Marked employee ${id} as Ignored in Year-End Verification`,
+      },
+    );
+    toast.success("Status karyawan diperbarui menjadi Ignored dan tersimpan ke database.");
+  }
   function confirmUnignore(id: string, name: string) { setModal({ type: "unignore", id, name }); }
-  function doUnignore(id: string) { setIgnoredSet((prev) => { const s = new Set(prev); s.delete(id); return s; }); }
+  function doUnignore(id: string) {
+    const nextIgnored = new Set([...ignoredSet].filter((v) => v !== id && normalizeEmployeeId(v) !== normalizeEmployeeId(id)));
+    setIgnoredSet(nextIgnored);
+    const prev = loadYearEndState();
+    saveYearEndState(
+      {
+        ...prev,
+        reminded: [...remindedSet],
+        ignored: [...nextIgnored],
+        completion: buildCompletionSnapshot(),
+      },
+      {
+        action: "Update",
+        description: `Reverted Ignored status for employee ${id} in Year-End Verification`,
+      },
+    );
+    toast.success("Status Ignored telah dibatalkan dan tersimpan ke database.");
+  }
 
-  const pendingCount = filtered.filter((e) => !inactiveSet.has(e.id) && !ignoredSet.has(e.id) && (e.overall === "Pending" || e.overall === "Incomplete") && !remindedSet.has(e.id)).length;
+  const pendingCount = filtered.filter((e) => !isEmpIgnored(e.id) && (e.overall === "Pending" || e.overall === "Incomplete") && !isEmpReminded(e.id)).length;
 
   const TabBar = ({ onTabClick }: { onTabClick?: () => void }) => (
     <div className="border-b border-gray-200">
@@ -569,8 +776,8 @@ export function YearEndVerification() {
           { icon: CheckCircle2,  label: "Fully Complete",   value: FULLY_COMPLETE,  cls: "border-green-200", val: "text-green-600" },
           { icon: XCircle,       label: "Incomplete",       value: INCOMPLETE,      cls: "border-red-200",   val: "text-red-600"   },
           { icon: Clock,         label: "Pending Review",   value: PENDING_REVIEW,  cls: "border-amber-200", val: "text-amber-600" },
-          { icon: UserX,         label: "Inactivated",      value: inactiveSet.size, cls: "border-gray-200", val: "text-gray-600" },
-          { icon: AlertTriangle, label: "Ignored",          value: ignoredSet.size, cls: "border-orange-200", val: "text-orange-600" },
+          { icon: UserX,         label: "Archived (Inactive)", value: archivedInSelectedUnitCount, cls: "border-gray-200", val: "text-gray-600" },
+          { icon: AlertTriangle, label: "Ignored",          value: IGNORED_COUNT, cls: "border-orange-200", val: "text-orange-600" },
         ].map(({ icon: Icon, label, value, cls, val }) => (
           <div key={label} className={`bg-white rounded-2xl border shadow-sm p-6 ${cls}`}>
             <div className="flex items-center gap-2 mb-1">
@@ -645,13 +852,10 @@ export function YearEndVerification() {
                 </tr>
               )}
               {filtered.map((emp, idx) => {
-                const isInactive = inactiveSet.has(emp.id);
-                const isIgnored  = ignoredSet.has(emp.id);
-                const needsReminder = !isInactive && !isIgnored && (emp.overall === "Pending" || emp.overall === "Incomplete");
-                const reminded = remindedSet.has(emp.id);
-                const rowCls = isInactive
-                  ? "opacity-40 bg-gray-50"
-                  : isIgnored
+                const isIgnored  = isEmpIgnored(emp.id);
+                const needsReminder = !isIgnored && (emp.overall === "Pending" || emp.overall === "Incomplete");
+                const reminded = isEmpReminded(emp.id);
+                const rowCls = isIgnored
                   ? "bg-orange-50/50"
                   : "hover:bg-gray-50/60";
                 return (
@@ -661,19 +865,7 @@ export function YearEndVerification() {
 
                     {/* Action */}
                     <td className="px-4 py-3 text-center">
-                      {isInactive ? (
-                        <div className="flex flex-wrap items-center justify-center gap-1.5">
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-500 bg-gray-100 border border-gray-200 rounded-lg px-2.5 py-1.5 whitespace-nowrap">
-                            <UserX className="w-3 h-3" /> Inactivated
-                          </span>
-                          <button
-                            onClick={() => confirmReactivate(emp.id, emp.name)}
-                            className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 hover:border-blue-400 rounded-lg px-2.5 py-1.5 transition-colors whitespace-nowrap"
-                          >
-                            Reactivate
-                          </button>
-                        </div>
-                      ) : isIgnored ? (
+                      {isIgnored ? (
                         <div className="flex flex-wrap items-center justify-center gap-1.5">
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5 whitespace-nowrap">
                             Ignored
@@ -785,7 +977,26 @@ export function YearEndVerification() {
       <ConfirmModal
         open={modal?.type === "reminder_one"}
         title="Kirim Reminder?"
-        message={<>Reminder akan dikirim ke <span className="font-semibold text-gray-800">{modal?.type === "reminder_one" ? modal.name : ""}</span> untuk melengkapi data penilaian.</>}
+        message={(() => {
+          if (modal?.type !== "reminder_one") return null;
+          const emp = unitEmployees.find((e) => e.id === modal.id);
+          const detail = emp ? buildVerificationReminderDetails(emp) : null;
+          return (
+            <>
+              Notifikasi sistem akan dikirim ke <span className="font-semibold text-gray-800">{modal.name}</span> ({modal.id}) beserta rincian modul yang belum tuntas:
+              {detail && (
+                <span className="block mt-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 text-left">
+                  {detail.incompleteModules.length > 0 && (
+                    <span className="block"><strong>Incomplete:</strong> {detail.incompleteModules.join(", ")}</span>
+                  )}
+                  {detail.pendingModules.length > 0 && (
+                    <span className="block"><strong>Pending:</strong> {detail.pendingModules.join(", ")}</span>
+                  )}
+                </span>
+              )}
+            </>
+          );
+        })()}
         confirmLabel="Kirim"
         confirmCls="bg-amber-500 hover:bg-amber-600"
         icon={<Bell className="w-6 h-6 text-amber-500" />}
@@ -802,26 +1013,55 @@ export function YearEndVerification() {
         onConfirm={doSendAllReminders}
         onCancel={() => setModal(null)}
       />
-      <ConfirmModal
-        open={modal?.type === "inactive"}
-        title="Nonaktifkan Karyawan?"
-        message={<><span className="font-semibold text-gray-800">{modal?.type === "inactive" ? modal.name : ""}</span> akan dikeluarkan dari seluruh proses penilaian kinerja tahun ini.</>}
-        confirmLabel="Nonaktifkan"
-        confirmCls="bg-red-600 hover:bg-red-700"
-        icon={<UserX className="w-6 h-6 text-red-500" />}
-        onConfirm={() => { if (modal?.type === "inactive") doInactive(modal.id); }}
-        onCancel={() => setModal(null)}
-      />
-      <ConfirmModal
-        open={modal?.type === "reactivate"}
-        title="Aktifkan Kembali?"
-        message={<><span className="font-semibold text-gray-800">{modal?.type === "reactivate" ? modal.name : ""}</span> akan diikutsertakan kembali dalam proses penilaian kinerja.</>}
-        confirmLabel="Aktifkan"
-        confirmCls="bg-blue-600 hover:bg-blue-700"
-        icon={<CheckCircle2 className="w-6 h-6 text-blue-500" />}
-        onConfirm={() => { if (modal?.type === "reactivate") doReactivate(modal.id); }}
-        onCancel={() => setModal(null)}
-      />
+      {modal?.type === "inactive" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px] p-4" onClick={() => setModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 pt-6 pb-4 flex flex-col items-center text-center gap-2.5">
+              <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
+                <UserX className="w-6 h-6 text-red-500" />
+              </div>
+              <h2 className="text-base font-bold text-gray-900">Nonaktifkan &amp; Arsipkan Karyawan?</h2>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                <span className="font-semibold text-gray-800">{modal.name}</span> ({modal.id}) akan dipindahkan ke menu{" "}
+                <span className="font-semibold text-[#1A284F]">Archive (/settings/archive)</span> dan dikeluarkan dari seluruh fitur karyawan aktif (login, headcount, verifikasi, kalibrasi, dll.).
+              </p>
+            </div>
+            <div className="px-6 pb-4">
+              <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                Alasan Inactive <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                rows={3}
+                autoFocus
+                value={inactiveReason}
+                onChange={(e) => setInactiveReason(e.target.value)}
+                placeholder="Masukkan alasan penonaktifan (akan tersimpan pada kolom Keterangan Arsip di menu Archive)..."
+                className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-red-400 resize-none"
+              />
+              <p className="text-[11px] text-gray-400 mt-1">
+                Alasan ini akan ditampilkan pada kolom <strong>Keterangan Arsip</strong> di halaman Archive.
+              </p>
+            </div>
+            <div className="flex gap-3 px-6 pb-6 pt-1">
+              <button
+                type="button"
+                onClick={() => setModal(null)}
+                className="flex-1 border border-gray-200 rounded-xl py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={!inactiveReason.trim()}
+                onClick={() => doInactive(modal.id, inactiveReason)}
+                className="flex-1 rounded-xl py-2.5 text-sm font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Nonaktifkan &amp; Arsipkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <ConfirmModal
         open={modal?.type === "ignore"}
         title="Abaikan Modul Belum Selesai?"
@@ -849,13 +1089,20 @@ export function YearEndVerification() {
           <>
             Seluruh karyawan yang memenuhi syarat akan dilanjutkan ke fase{" "}
             <span className="font-semibold text-gray-800">Management Interview</span>.
-            Karyawan dengan status Inactive tidak akan disertakan. Proses ini tidak dapat dibatalkan.
+            Karyawan yang telah dipindahkan ke Archive (Inactive) tidak akan disertakan. Proses ini tidak dapat dibatalkan.
           </>
         }
         confirmLabel="Ya, Lanjutkan"
         confirmCls="bg-[#1A284F] hover:bg-[#243869]"
         icon={<CheckCircle2 className="w-6 h-6 text-[#1A284F]" />}
-        onConfirm={() => { if (!canProceed) return; saveYearEndState({ ...loadYearEndState(), phase: "management-interview" }); navigate("/hr/calibration/management-interview"); }}
+        onConfirm={() => {
+          if (!canProceed) return;
+          saveYearEndState(
+            { ...loadYearEndState(), reminded: [...remindedSet], ignored: [...ignoredSet], completion: buildCompletionSnapshot(), phase: "management-interview" },
+            { action: "Approve", description: `Proceeded ${selectedUnit?.name ?? "Company Unit"} from Year-End Verification to Management Interview phase` },
+          );
+          navigate("/hr/calibration/management-interview");
+        }}
         onCancel={() => setModal(null)}
       />
     </div>

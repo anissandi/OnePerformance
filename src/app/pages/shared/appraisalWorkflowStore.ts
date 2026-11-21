@@ -316,6 +316,79 @@ export function submitWorkflowModule(
     approverName: getActiveUser().name,
   });
 }
+
+/**
+ * Batalkan Submit KPI Tracking selama belum ada 1 pun approver (Checker/AP1/AP2/Validator) yang memproses.
+ * - Jika terdapat bulan sebelumnya yang sudah Validated (`validatedMonths`), pulihkan status ke Validated untuk bulan lama tersebut
+ *   sehingga hanya bulan baru yang kembali berstatus Draft / dapat diedit.
+ * - Jika belum ada bulan Validated, hapus workflow record KPI Measurement dari cache & tabel Supabase `pa_workflow_documents`.
+ */
+export function cancelSubmittedKpiMeasurement(employeeId: string): boolean {
+  const normId = normalizeEmployeeId(employeeId);
+  const key = keyFor(employeeId, "KPI", "measurement");
+  const all = loadWorkflowRecords();
+  const existing = all.find(
+    (r) =>
+      r.key === key ||
+      (r.year === "2026" && r.module === "KPI" && r.phase === "measurement" && r.employeeId === normId),
+  );
+  if (!existing) return false;
+
+  const chk = existing.decisions.checker?.status ?? "";
+  const a1 = existing.decisions.approver1?.status ?? "";
+  const a2 = existing.decisions.approver2?.status ?? "";
+  const val = existing.decisions.validator?.status ?? "";
+  const hasRealApproverDecision = Boolean(
+    (chk && chk !== "Revision" && chk !== "Bypassed") ||
+      (a1 && a1 !== "Revision") ||
+      (a2 && a2 !== "Revision") ||
+      (val && val !== "Revision"),
+  );
+  if (hasRealApproverDecision) return false;
+
+  const prevValidated = existing.validatedMonths ?? [];
+  if (prevValidated.length > 0) {
+    const restored: WorkflowRecord = {
+      ...existing,
+      submittedMonths: [...prevValidated],
+      validatedMonths: [...prevValidated],
+      decisions: {
+        validator: {
+          status: "Validated",
+          date: existing.submittedDate || formatTodayDDMMYYYY(),
+        },
+      },
+    };
+    write(restored);
+  } else {
+    const remaining = all.filter((r) => r.key !== existing.key);
+    savePersistedState(KEY, remaining);
+    void syncToSupabase({
+      kind: "workflow-delete",
+      docKeys: [existing.key],
+      records: [
+        {
+          key: existing.key,
+          employeeId: existing.employeeId,
+          module: "KPI",
+          phase: "measurement",
+        },
+      ],
+      audit: {
+        userId: getActiveUser().employeeId,
+        userName: getActiveUser().name,
+        role: getActiveUser().role,
+        action: "Update",
+        module: "KPI",
+        subModule: "KPI Tracking",
+        description: `Cancelled submitted KPI Tracking (${(existing.submittedMonths ?? []).join(", ") || "2026"}) before approver action`,
+      },
+    });
+    window.dispatchEvent(new Event("appraisal-updated"));
+  }
+  return true;
+}
+
 export function saveWorkflowDecision(no: string, status: string, date: string, note?: string) {
   const alias = workflowAlias(no);
   if (!alias) return;

@@ -149,10 +149,12 @@ function normalizeApproverPairServer(rawAp1: unknown, rawAp2: unknown): { regNoA
 
 async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknown>, now: string): Promise<void> {
   const apPair = normalizeApproverPairServer(u.regNoAp1 ?? u.reg_no_ap1, u.regNoAp2 ?? u.reg_no_ap2);
+  const empIdStr = String(u.employeeId ?? "").trim();
+  const rawRegNo = String(u.regNo ?? u.reg_no ?? "").trim();
   const fullRow = {
-    employee_id: String(u.employeeId ?? ""),
+    employee_id: empIdStr,
     no: String(u.no ?? ""),
-    reg_no: String(u.regNo ?? ""),
+    reg_no: rawRegNo || empIdStr,
     name: String(u.name ?? ""),
     email: String(u.email ?? ""),
     position: String(u.position ?? ""),
@@ -720,6 +722,11 @@ mainAppRoutes.post("/sync", async (c) => {
       await client.from("pa_year_end_verifications").upsert({
         period: String(body.period ?? "2026"),
         state: body.state,
+        updated_at: now,
+      });
+      await client.from("pa_kv_state").upsert({
+        state_key: "year_end_workflow_2026",
+        state_value: body.state,
         updated_at: now,
       });
     } else if (kind === "calibration-adjustment" && body.adjustmentKey) {

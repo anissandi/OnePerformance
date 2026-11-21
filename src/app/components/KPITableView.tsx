@@ -37,6 +37,14 @@ function parseNum(s: string): number | null {
   return isNaN(n) ? null : n;
 }
 
+const PERSP_TEXT_COLOR: Record<string, string> = {
+  Finansial: "text-blue-700",
+  Proses: "text-purple-700",
+  "Environment, Health & Safety": "text-green-700",
+  Customer: "text-orange-700",
+  "Learning & Growth": "text-pink-700",
+};
+
 export function KPITableView({
   kpiItems,
   months,
@@ -44,21 +52,45 @@ export function KPITableView({
   rcaSubmissions = [],
   onPreviewRCA,
 }: KPITableViewProps) {
+  const monthLabelById = new Map(months.map((m) => [m.id, m.label] as const));
+
+  const resolveFallbackTarget = (kpi: KPIItem, monthId: string): string => {
+    const mLabel = monthLabelById.get(monthId) ?? "";
+    return kpi.monthlyTargets?.[mLabel] || kpi.target2026 || "";
+  };
+
   // Compute cell value for a given sub-row
   const getCellValue = (kpi: KPIItem, monthId: string, subIdx: number): string => {
     const cellKey = `${kpi.no}__${subIdx}`;
     const sub = kpi.subRows[subIdx];
+    if (!sub) return "—";
     const rawVal = cells[monthId]?.[cellKey] ?? "";
+    const isTargetSub = !sub.compute && sub.label.toLowerCase().startsWith("target");
     
-    if (!sub.compute) return rawVal || "—";
+    if (!sub.compute) {
+      if (isTargetSub && !rawVal) {
+        return resolveFallbackTarget(kpi, monthId) || "—";
+      }
+      return rawVal || "—";
+    }
     
     // Compute based on spec
     const spec = sub.compute;
+
+    if (spec.type === "color_band") {
+      const flagRaw = (cells[monthId]?.[`${kpi.no}__${spec.flagIdx}`] ?? "").trim();
+      if (!flagRaw) return "—";
+      if (flagRaw === "100" || flagRaw === "100%") return "100.0%";
+      if (flagRaw === "75" || flagRaw === "75%") return "75.0%";
+      if (flagRaw === "0" || flagRaw === "0%") return "0.0%";
+      const fn = parseNum(flagRaw);
+      return fn !== null ? `${fn.toFixed(1)}%` : "—";
+    }
     
     if (spec.type === "ratio") {
       const actualKey = `${kpi.no}__${spec.actualIdx}`;
       const targetKey = `${kpi.no}__${spec.targetIdx}`;
-      const rawTarget = cells[monthId]?.[targetKey] ?? "";
+      const rawTarget = (cells[monthId]?.[targetKey] || resolveFallbackTarget(kpi, monthId)).trim();
       const target = parseNum(rawTarget);
       const isRangeStabilize =
         kpi.polaritas === "Stabilize" && /^\s*-?\d+(?:\.\d+)?\s*[-–]\s*-?\d+(?:\.\d+)?\s*$/.test(rawTarget.replace(/,/g, ""));
@@ -187,11 +219,11 @@ export function KPITableView({
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700"
                         style={{ position: "sticky", left: W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
-                        {kpi.perspektif}
+                        <span className={`font-bold ${PERSP_TEXT_COLOR[kpi.perspektif] ?? "text-gray-700"}`}>{kpi.perspektif}</span>
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700"
                         style={{ position: "sticky", left: W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
-                        {kpi.kpi}
+                        <p className="font-medium text-gray-800 whitespace-pre-line leading-relaxed">{kpi.kpi}</p>
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700">
                         {kpi.satuan}
@@ -199,8 +231,8 @@ export function KPITableView({
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700">
                         {kpi.formula}
                       </td>
-                      <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center font-semibold text-gray-700">
-                        {kpi.bobot}
+                      <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center">
+                        <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{kpi.bobot}</span>
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700 text-xs">
                         {kpi.definisi}
@@ -211,11 +243,13 @@ export function KPITableView({
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-center text-gray-700">
                         {kpi.baseline2025}
                       </td>
-                      <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-center text-gray-700">
+                      <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-center font-bold text-[#1A284F]">
                         {kpi.target2026}
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-center text-gray-700">
-                        {kpi.polaritas}
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : kpi.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
+                          {kpi.polaritas}
+                        </span>
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-gray-700 text-xs">
                         {kpi.detailFormula}

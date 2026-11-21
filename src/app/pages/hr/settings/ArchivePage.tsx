@@ -23,7 +23,7 @@ export function ArchivePage() {
   const { lockedUnits } = useAuthStore();
   const [records, setRecords] = useState<ArchivedUserRecord[]>(() => loadArchivedUsers());
   const [search, setSearch] = useState("");
-  const [sourceFilter, setSourceFilter] = useState<"all" | "manual" | "eoy">("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "manual" | "verification" | "eoy">("all");
   const [viewing, setViewing] = useState<ArchivedUserRecord | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
 
@@ -79,7 +79,7 @@ export function ArchivePage() {
           <div>
             <h1 className="font-bold text-gray-800 text-lg">Archive</h1>
             <p className="text-xs text-gray-400 mt-0.5">
-              Karyawan yang dihapus di User Management atau tereliminasi pada Confirm Data HC Akhir Tahun.
+              Karyawan yang dihapus di User Management, dinonaktifkan pada Calibration Verification, atau tereliminasi pada Confirm Data HC Akhir Tahun.
             </p>
           </div>
         </div>
@@ -102,6 +102,7 @@ export function ArchivePage() {
           {([
             ["all", "Semua"],
             ["manual", "Delete User Management"],
+            ["verification", "Inactive Verification"],
             ["eoy", EOY_ARCHIVE_REASON],
           ] as const).map(([id, label]) => (
             <button
@@ -172,7 +173,11 @@ export function ArchivePage() {
                     <td className={td}>{fmtDate(r.archivedAt)}</td>
                     <td className={`${td} max-w-[240px] truncate`} title={r.reason}>
                       <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                        r.source === "eoy" ? "border-amber-200 bg-amber-50 text-amber-700" : "border-gray-200 bg-gray-50 text-gray-600"
+                        r.source === "eoy"
+                          ? "border-amber-200 bg-amber-50 text-amber-700"
+                          : r.source === "verification"
+                            ? "border-rose-200 bg-rose-50 text-rose-700"
+                            : "border-gray-200 bg-gray-50 text-gray-600"
                       }`}>
                         {r.reason}
                       </span>

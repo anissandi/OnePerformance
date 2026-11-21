@@ -77,6 +77,9 @@ function shuffleUniqueSoftColors(): string[] {
   return arr;
 }
 
+let moduleWasCollapsed = false;
+let moduleCachedCollapsedColors: string[] = shuffleUniqueSoftColors();
+
 interface NavSubChild {
   to: string;
   label: string;
@@ -784,7 +787,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
   const [expandedMenus, setExpandedMenus] = useState<Set<number>>(getInitialExpanded);
   const [collapsedFlyout, setCollapsedFlyout] = useState<{ idx: number; top: number } | null>(null);
   const [collapsedTooltip, setCollapsedTooltip] = useState<{ idx: number; centerY: number; label: string } | null>(null);
-  const [collapsedIconColors, setCollapsedIconColors] = useState<string[]>(() => shuffleUniqueSoftColors());
+  const [collapsedIconColors, setCollapsedIconColors] = useState<string[]>(() => moduleCachedCollapsedColors);
   const flyoutRef = useRef<HTMLDivElement>(null);
 
   // Auto-expand when navigating to a child route (e.g. from notification)
@@ -813,8 +816,16 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
   useEffect(() => {
     if (collapsed) {
-      setCollapsedIconColors(shuffleUniqueSoftColors());
+      if (!moduleWasCollapsed) {
+        const nextColors = shuffleUniqueSoftColors();
+        moduleCachedCollapsedColors = nextColors;
+        setCollapsedIconColors(nextColors);
+      } else {
+        setCollapsedIconColors(moduleCachedCollapsedColors);
+      }
+      moduleWasCollapsed = true;
     } else {
+      moduleWasCollapsed = false;
       setCollapsedFlyout(null);
       setCollapsedTooltip(null);
     }

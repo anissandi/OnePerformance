@@ -204,6 +204,7 @@ export function applyOverrides(
           position: managedUser.position,
           department: managedUser.department,
           division: managedUser.division,
+          bagian: managedUser.bagian || "",
           companyUnit: managedUser.company,
           type: record.module,
           submittedDate: record.submittedDate,
@@ -248,6 +249,7 @@ export function resolveDynamicApprovalRowsForUser(
   const workflows = loadWorkflowRecords();
   const overrides = loadOverrides();
   const feedbackSubs = phase === "measurement" ? loadFeedbackSubmissions() : [];
+  const managedUsers = loadManagedUsers();
   const seenKeys = new Set<string>();
   const result: ApprovalRow[] = [];
 
@@ -256,6 +258,11 @@ export function resolveDynamicApprovalRowsForUser(
     if (lockedUnits && !lockedUnits.includes(row.companyUnit)) continue;
 
     const normEmpId = normalizeEmployeeId(row.employeeId);
+    const ownerManaged = managedUsers.find(
+      (u) =>
+        normalizeEmployeeId(u.employeeId) === normEmpId ||
+        u.employeeId.trim().toLowerCase() === row.employeeId.trim().toLowerCase(),
+    );
     const dedupKey = `${normEmpId}:${phase}:${row.type}`;
     if (seenKeys.has(dedupKey)) continue;
 
@@ -321,6 +328,9 @@ export function resolveDynamicApprovalRowsForUser(
         : `${prefix}-LIVE-${normEmpId}-${row.type}`;
     const rowWithCanonicalNo: ApprovalRow = {
       ...row,
+      division: ownerManaged?.division || row.division,
+      department: ownerManaged?.department || row.department,
+      bagian: ownerManaged?.bagian || row.bagian || "",
       no: canonicalNo,
       reviewerRoleForRow: roleForRow,
       workflowStageForRow: stageForRow,

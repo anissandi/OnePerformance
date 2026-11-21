@@ -20,6 +20,7 @@ import {
   saveKpiValidationChecklist,
   type KpiHierarchyValidationChecklist,
 } from "../ModuleActivation";
+import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -835,8 +836,18 @@ export function HRSettingKPIPage() {
   };
 
   const handleRevision = (note: string) => {
+    const revRole = isDirector ? "Director" : "HR ICF Validator";
     persistScopeStatus(
-      { submitted: false, directorApproved: false, approved: false, stage: "revision", revisionNote: note, revisionBy: activeUser.name },
+      {
+        submitted: false,
+        directorApproved: false,
+        approved: false,
+        stage: "revision",
+        revisionNote: note,
+        revisionBy: activeUser.name,
+        revisionRole: revRole,
+        revisionDate: formatTodayDDMMYYYY(),
+      },
       "Reject",
       `${activeUser.name} requested revision on ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`}: ${note}`,
     );

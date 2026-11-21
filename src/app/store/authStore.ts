@@ -1156,6 +1156,24 @@ export function peekSessionValidity(now = Date.now()): { valid: boolean; expired
   if (!hasActiveUser) {
     return { valid: false, expired: false };
   }
+  try {
+    const sessId = String(session.employeeId ?? "").trim().toLowerCase();
+    if (sessId) {
+      const archived = JSON.parse(safeGetLocalRaw("pa_archived_users_v1") ?? "[]") as Array<{ user?: ManagedUser }>;
+      if (
+        Array.isArray(archived) &&
+        archived.some((a) => a?.user?.employeeId && a.user.employeeId.trim().toLowerCase() === sessId)
+      ) {
+        return { valid: false, expired: true };
+      }
+      const matchedInUsers = loadManagedUsers().find((u) => u.employeeId.trim().toLowerCase() === sessId);
+      if (matchedInUsers && matchedInUsers.status !== "Active") {
+        return { valid: false, expired: true };
+      }
+    }
+  } catch {
+    // ignore
+  }
   if (session.awayStartedAt !== null) {
     if (now - session.awayStartedAt >= SESSION_TIMEOUT_MS) {
       return { valid: false, expired: true };
@@ -1594,9 +1612,9 @@ export function loginWithCompanyAndEmployeeId(
   // Cari karyawan berdasarkan Employee ID / Reg No / email / nama
   const matchesQuery = (u: ManagedUser) =>
     u.employeeId.toLowerCase() === q ||
-    (u.regNo ?? "").toLowerCase() === q ||
-    (u.email ?? "").toLowerCase() === q ||
-    (u.name ?? "").toLowerCase() === q;
+    Boolean(u.regNo && u.regNo.trim().toLowerCase() === q) ||
+    Boolean(u.email && u.email.trim().toLowerCase() === q) ||
+    Boolean(u.name && u.name.trim().toLowerCase() === q);
   const candidates = users.filter(matchesQuery);
   const matched = candidates.find((u) => isSameCompanyUnit(u.company, companyName));
 
@@ -1617,7 +1635,9 @@ export function loginWithCompanyAndEmployeeId(
         archived.some(
           (a) =>
             a.user &&
-            (a.user.employeeId.toLowerCase() === q || (a.user.email ?? "").toLowerCase() === q || (a.user.name ?? "").toLowerCase() === q),
+            (a.user.employeeId.toLowerCase() === q ||
+              Boolean(a.user.email && a.user.email.trim().toLowerCase() === q) ||
+              Boolean(a.user.name && a.user.name.trim().toLowerCase() === q)),
         )
       ) {
         return { ok: false, error: "Karyawan tidak ditemukan." };

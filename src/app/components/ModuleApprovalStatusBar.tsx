@@ -338,6 +338,34 @@ export function ModuleApprovalStatusBar({
   };
 
   const revHistory = wfRec?.revisionHistory ?? [];
+  const activeRevisionRole =
+    chkDec?.status === "Revision"
+      ? "HR Unit Checker"
+      : a1Dec?.status === "Revision"
+      ? "Approver 1"
+      : a2Dec?.status === "Revision"
+      ? "Approver 2"
+      : valDec?.status === "Revision"
+      ? "HR ICF Validator"
+      : revHistory[revHistory.length - 1]?.role || "Approver";
+
+  const activeRevDec =
+    chkDec?.status === "Revision"
+      ? { role: "HR Unit Checker", approverName: resolveCheckerDisplayName(), note: chkDec.note || "", date: chkDec.date }
+      : a1Dec?.status === "Revision"
+      ? { role: "Approver 1", approverName: a1Dec.approverName || ap1User?.name || "Approver 1", note: a1Dec.note || "", date: a1Dec.date }
+      : a2Dec?.status === "Revision"
+      ? { role: "Approver 2", approverName: a2Dec.approverName || ap2User?.name || "Approver 2", note: a2Dec.note || "", date: a2Dec.date }
+      : valDec?.status === "Revision"
+      ? { role: "HR ICF Validator", approverName: resolveValidatorDisplayName(), note: valDec.note || "", date: valDec.date }
+      : null;
+
+  const displayedRevisions =
+    revHistory.length > 0
+      ? revHistory
+      : activeRevDec
+      ? [activeRevDec]
+      : [];
 
   return (
     <div className="space-y-2">
@@ -378,12 +406,12 @@ export function ModuleApprovalStatusBar({
         ))}
       </div>
 
-      {revHistory.length > 0 && (
+      {isRev && displayedRevisions.length > 0 && (
         <div className="rounded-lg border border-orange-200 bg-orange-50/70 px-3 py-2 space-y-1">
           <p className="text-[11px] font-bold text-orange-800">
-            Catatan / Riwayat Revisi Approver ({revHistory.length}):
+            Catatan / Riwayat Revisi {activeRevisionRole}
           </p>
-          {revHistory.map((rev, idx) => (
+          {displayedRevisions.map((rev, idx) => (
             <div
               key={idx}
               className="bg-white border border-orange-100 rounded px-2.5 py-1 text-[11px] flex items-start justify-between gap-2"
@@ -392,7 +420,7 @@ export function ModuleApprovalStatusBar({
                 <span className="font-semibold text-gray-800">
                   {rev.role} ({rev.approverName}):{" "}
                 </span>
-                <span className="text-gray-700">{rev.note}</span>
+                <span className="text-gray-700">{rev.note || "Perlu perbaikan sesuai arahan approver."}</span>
               </div>
               <span className="text-[10px] text-gray-400 shrink-0">{normalizeDateDDMMYYYY(rev.date)}</span>
             </div>
