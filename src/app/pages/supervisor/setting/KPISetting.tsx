@@ -21,7 +21,16 @@ import {
   type ManagedUser,
 } from "../../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
-import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, syncToSupabase, uploadEvidenceFileToSupabase } from "../../../services/supabaseClient";
+import {
+  deleteUploadedEvidenceById,
+  fetchEmployeeKpiSettingsLive,
+  fetchKpiAttachmentsForEmployee,
+  mergeKvMapRecord,
+  safeGetLocalRaw,
+  safeSetLocalJson,
+  syncToSupabase,
+  uploadEvidenceFileToSupabase,
+} from "../../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../../store/notificationStore";
 import { cancelTargetEditPhase1, getTargetEditRequestForEmployee, KPI_TARGET_EDIT_EVENT, submitTargetEditPhase1, submitTargetEditPhase2, resolveEditRequestApprovers, resolveTargetEditPhase1Approver, resolveTargetEditPhase2Chain, type TargetEditAttachment } from "../../../store/kpiTargetEditStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../../store/delegationStore";
@@ -29,9 +38,10 @@ import { DelegatedWorkspaceBanner } from "../../../components/approval/Delegated
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../../components/ApproverNotesHistory";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
-import { AlertCircle, Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers } from "lucide-react";
+import { AlertCircle, Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers, Download } from "lucide-react";
 import { toast } from "sonner";
 import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
+import { EvidenceViewerModal } from "../../../components/EvidenceViewerModal";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
 import {
@@ -860,8 +870,10 @@ function SatuanField({ value, onChange, unitOptions, periodeOptions }: {
   const periode = sep >= 0 ? value.slice(sep + 1).trim() : "";
 
   const combine = (u: string, p: string) => onChange(u && p ? `${u}/${p}` : u ? u : p ? `/${p}` : "");
-  const uOpts = unitOptions ?? SATUAN_UNIT_OPTIONS;
-  const pOpts = (periodeOptions ?? SATUAN_PERIODE_OPTIONS).filter((p) => p.toLowerCase() !== "hari");
+  const baseUOpts = unitOptions ?? SATUAN_UNIT_OPTIONS;
+  const uOpts = unit && !baseUOpts.includes(unit) ? [unit, ...baseUOpts] : baseUOpts;
+  const basePOpts = (periodeOptions ?? SATUAN_PERIODE_OPTIONS).filter((p) => p.toLowerCase() !== "hari");
+  const pOpts = periode && !basePOpts.includes(periode) ? [periode, ...basePOpts] : basePOpts;
 
   return (
     <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.violet.wrap}`}>
@@ -983,6 +995,31 @@ function calcAllSectionsBobotSum(
   return Math.round(sum * 100) / 100;
 }
 
+function normalizeKpiTitleKey(kpiText?: string): string {
+  return String(kpiText ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function findDuplicateKpiTitleIds(items: KPISetting[]): Set<string> {
+  const byTitle = new Map<string, string[]>();
+  for (const item of items) {
+    const key = normalizeKpiTitleKey(item.kpi);
+    if (!key) continue;
+    const list = byTitle.get(key) ?? [];
+    list.push(item.id);
+    byTitle.set(key, list);
+  }
+  const dupIds = new Set<string>();
+  for (const ids of byTitle.values()) {
+    if (ids.length > 1) {
+      ids.forEach((id) => dupIds.add(id));
+    }
+  }
+  return dupIds;
+}
+
 function evaluateKpiSettingSubmitStatus(
   items: KPISetting[],
   isCorporate: boolean,
@@ -997,6 +1034,10 @@ function evaluateKpiSettingSubmitStatus(
     };
   }
   const reasons: string[] = [];
+  const dupIds = findDuplicateKpiTitleIds(items);
+  if (dupIds.size > 0) {
+    reasons.push("judul KPI sama, pastikan tidak ada judul KPI yang sama");
+  }
   const totalSectionBobot = calcAllSectionsBobotSum(items, isCorporate, editedSectionBobots);
   const totalItemBobot = Math.round(items.reduce((s, i) => s + parsePctNum(i.bobot), 0) * 100) / 100;
 
@@ -2207,19 +2248,23 @@ function BaselineColorField({ value, onChange }: { value: string; onChange: (v: 
   );
 }
 
-function Target2026Field({ value, colorMode, ratioMode, monthlyTargets }: {
+function Target2026Field({ value, colorMode, ratioMode, monthlyTargets, softOrangeHighlight = false }: {
   value: string; colorMode: boolean; ratioMode?: boolean;
   monthlyTargets?: Record<string, string>;
+  softOrangeHighlight?: boolean;
 }) {
   const meta = colorMode ? MONTHLY_FLAG_OPTIONS.find((o) => o.value === value) : null;
+  const orangeWrapCls = softOrangeHighlight
+    ? "border-2 border-orange-300 bg-orange-50/50 ring-2 ring-orange-100"
+    : "";
 
   if (ratioMode) {
     const hasValue = !!value;
     const { totalP, totalN } = monthlyTargets ? computeRatioSumDisplay(monthlyTargets) : { totalP: 0, totalN: 0 };
     return (
-      <div className="flex flex-col gap-1">
+      <div className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all ${softOrangeHighlight ? orangeWrapCls : ""}`}>
         <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Target 2026</label>
-        <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-purple-200 bg-purple-50/40">
+        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-xl border ${softOrangeHighlight ? "border-orange-300 bg-white" : "border-purple-200 bg-purple-50/40"}`}>
           <span className="text-xl font-black text-purple-700 tracking-tight">
             {hasValue ? value : "—:—"}
           </span>
@@ -2230,12 +2275,18 @@ function Target2026Field({ value, colorMode, ratioMode, monthlyTargets }: {
           )}
           <span className="ml-auto text-[10px] text-purple-400 font-medium">auto</span>
         </div>
+        {softOrangeHighlight && (
+          <p className="text-[11px] font-medium text-orange-700 flex items-center gap-1.5 mt-0.5">
+            <AlertCircle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+            Pastikan sudah sesuai dengan tracking bulanan &amp; target setahun Anda
+          </p>
+        )}
       </div>
     );
   }
 
   return (
-    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.amber.wrap}`}>
+    <div className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${softOrangeHighlight ? orangeWrapCls : `border ${FIELD_TONE_STYLES.amber.wrap}`}`}>
       <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
         <span>Target 2026</span>
@@ -2245,7 +2296,7 @@ function Target2026Field({ value, colorMode, ratioMode, monthlyTargets }: {
           className="flex items-center gap-2.5 px-4 py-2.5 rounded-lg border text-sm font-bold"
           style={{
             background: meta ? meta.bg : "#f9fafb",
-            borderColor: meta ? meta.border : "#e5e7eb",
+            borderColor: softOrangeHighlight ? "#fdba74" : (meta ? meta.border : "#e5e7eb"),
             color: meta ? meta.color : "#9ca3af",
           }}
         >
@@ -2264,11 +2315,19 @@ function Target2026Field({ value, colorMode, ratioMode, monthlyTargets }: {
           <input
             value={value}
             readOnly
-            className="text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none w-full bg-gray-50 text-[#1A284F] font-bold cursor-default"
+            className={`text-sm rounded-lg px-3 py-2 outline-none w-full text-[#1A284F] font-bold cursor-default ${
+              softOrangeHighlight ? "border-2 border-orange-300 bg-white" : "border border-gray-200 bg-gray-50"
+            }`}
             placeholder="Auto-computed from Monthly Target"
           />
           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 font-medium pointer-events-none">auto</span>
         </div>
+      )}
+      {softOrangeHighlight && (
+        <p className="text-[11px] font-medium text-orange-700 flex items-center gap-1.5 mt-0.5">
+          <AlertCircle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+          Pastikan sudah sesuai dengan tracking bulanan &amp; target setahun Anda
+        </p>
       )}
     </div>
   );
@@ -2280,12 +2339,14 @@ function MonthlyTargetTable({
   colorMode,
   ratioMode,
   onChange,
+  softOrangeHighlight = false,
 }: {
   monthlyTargets: Record<string, string>;
   formula: string;
   colorMode: boolean;
   ratioMode?: boolean;
   onChange: (mt: Record<string, string>, computed2026: string) => void;
+  softOrangeHighlight?: boolean;
 }) {
   const handleChange = (key: string, val: string) => {
     // Auto-fill all months when Jan is changed (ratio or color mode)
@@ -2310,9 +2371,9 @@ function MonthlyTargetTable({
     : "";
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={`flex flex-col gap-1.5 ${softOrangeHighlight ? "rounded-xl border-2 border-orange-300 bg-orange-50/50 ring-2 ring-orange-100 p-3.5" : ""}`}>
       <div className="flex items-center justify-between">
-        <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Monthly Target</label>
+        <label className={`text-[11px] font-bold uppercase tracking-wide ${softOrangeHighlight ? "text-orange-800" : "text-gray-500"}`}>Monthly Target</label>
         {ruleHint && (
           <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
             ratioMode ? "text-purple-700 bg-purple-50 border-purple-200"
@@ -2323,7 +2384,7 @@ function MonthlyTargetTable({
           </span>
         )}
       </div>
-      <div className="overflow-x-auto rounded-xl border border-gray-200">
+      <div className={`overflow-x-auto rounded-xl ${softOrangeHighlight ? "border-2 border-orange-300 bg-white" : "border border-gray-200"}`}>
         <table className="border-collapse w-full text-xs" style={{ minWidth: 680 }}>
           <thead>
             <tr className="bg-[#1A284F]/5">
@@ -2395,6 +2456,12 @@ function MonthlyTargetTable({
       {!colorMode && !ratioMode && formula === "Nilai Akhir" && (
         <p className="text-[10px] text-amber-700 font-medium">December (highlighted) is used as the final target value.</p>
       )}
+      {softOrangeHighlight && (
+        <p className="text-[11px] font-medium text-orange-700 flex items-center gap-1.5 mt-0.5">
+          <AlertCircle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+          Pastikan sudah sesuai dengan tracking bulanan &amp; target setahun Anda
+        </p>
+      )}
     </div>
   );
 }
@@ -2465,14 +2532,21 @@ function resolveApproverKpiSnapshot(approverUser: ManagedUser | undefined): {
 
 function LihatKpiAtasanModal({
   ownerUser,
+  targetSectionCode,
+  targetSectionLabel,
+  remainingSectionBobot,
   onSelectKpi,
   onClose,
 }: {
   ownerUser: ManagedUser;
+  targetSectionCode: string;
+  targetSectionLabel: string;
+  remainingSectionBobot: number;
   onSelectKpi: (item: KPISetting) => void;
   onClose: () => void;
 }) {
   const allUsers = loadManagedUsers();
+  const [remoteTick, setRemoteTick] = useState(0);
   const findUserByRegOrId = (key?: string): ManagedUser | undefined => {
     const k = (key ?? "").trim().toLowerCase();
     if (!k) return undefined;
@@ -2506,8 +2580,37 @@ function LihatKpiAtasanModal({
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const currentTab = tabs.find((t) => t.id === activeTab) ?? tabs[0];
+
+  useEffect(() => {
+    const supUser = currentTab?.user;
+    if (!supUser?.employeeId) return;
+    let cancelled = false;
+    void fetchEmployeeKpiSettingsLive<KPISetting>(supUser.employeeId).then((remote) => {
+      if (!cancelled && remote.length > 0) {
+        setRemoteTick((t) => t + 1);
+      }
+    });
+    const onHydrated = () => {
+      if (!cancelled) setRemoteTick((t) => t + 1);
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pa-db-hydrated", onHydrated);
+    };
+  }, [currentTab?.user?.employeeId]);
+
+  void remoteTick;
   const snapshot = resolveApproverKpiSnapshot(currentTab?.user);
   const selectedItem = snapshot.items.find((i) => i.id === selectedId) ?? null;
+  const sections = Array.from(new Set(snapshot.items.map((k) => k.section || "A"))).sort();
+  const sectionBannerPalette = ["#1565C0", "#1976D2", "#1E88E5", "#2196F3", "#00838F", "#6A1B9A"];
+  const hasAnyCascading = snapshot.items.some((k) => Boolean(k.cascading));
+  const colSpanCount = hasAnyCascading ? 16 : 15;
+
+  const selectedBobotNum = selectedItem ? parsePctNum(selectedItem.bobot) : 0;
+  const bobotMismatch =
+    selectedItem !== null && Math.abs(selectedBobotNum - remainingSectionBobot) > 1e-6;
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 sm:p-5">
@@ -2573,61 +2676,143 @@ function LihatKpiAtasanModal({
             </div>
           ) : (
             <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
-              <table className="border-collapse text-xs w-full" style={{ minWidth: 1650 }}>
+              <table className="border-collapse text-xs w-full" style={{ minWidth: 1850 }}>
                 <thead>
                   <tr className="bg-[#1A284F] text-white">
-                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold w-12">Pilih</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold w-14">No</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[130px]">Perspektif</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[240px]">KPI</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[120px]">Satuan</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[100px]">Formula</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 26, background: "#1A284F", minWidth: 54, maxWidth: 54 }}>Pilih</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 54, zIndex: 25, background: "#1A284F", minWidth: 52, maxWidth: 52 }}>No</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 106, zIndex: 25, background: "#1A284F", minWidth: 125, maxWidth: 125 }}>Perspektif</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 231, zIndex: 25, background: "#1A284F", minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[130px]">Satuan</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[110px]">Formula Setahun</th>
                     <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold w-20">Bobot</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[220px]">Definisi</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[150px]">Source</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[240px]">Definisi</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[155px]">Source</th>
                     <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Baseline 2025</th>
                     <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Target 2026</th>
                     <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Polaritas</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[220px]">Detail Formula</th>
-                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[160px]">Keterangan</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[240px]">Detail Formula</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[170px]">Keterangan</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[120px]">Periode Tracking</th>
+                    {hasAnyCascading && (
+                      <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[110px]">CASCADING (FC; PC; CC)</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {snapshot.items.map((it, idx) => {
-                    const checked = selectedId === it.id;
+                  {sections.map((sec, sIdx) => {
+                    const secRows = snapshot.items.filter((k) => (k.section || "A") === sec);
+                    const first = secRows[0];
+                    const fallbackLabel =
+                      sec === "A"
+                        ? "Objective KPI"
+                        : sec === "B"
+                          ? "Functional KPI"
+                          : resolvePersonalSectionLabel(first);
+                    const secLabel = first?.sectionLabel || fallbackLabel;
+                    const secBobotVal =
+                      first?.sectionBobot ||
+                      `${formatPctNum(secRows.reduce((s, r) => s + parsePctNum(r.bobot), 0))}%`;
+                    const bannerBg =
+                      (CORP_SECTION_META as Record<string, { bg?: string }>)[sec]?.bg ||
+                      sectionBannerPalette[sIdx % sectionBannerPalette.length];
                     return (
-                      <tr
-                        key={it.id}
-                        onClick={() => setSelectedId(checked ? null : it.id)}
-                        className={`cursor-pointer border-t border-gray-200 transition-colors ${
-                          checked ? "bg-sky-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-slate-50/60 hover:bg-gray-50"
-                        }`}
-                      >
-                        <td className="border border-gray-200 py-2.5 px-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => setSelectedId(checked ? null : it.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-4 h-4 accent-[#1A284F] cursor-pointer"
-                          />
-                        </td>
-                        <td className="border border-gray-200 py-2.5 px-2 text-center font-semibold text-gray-600">{it.no}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 font-semibold text-gray-700">{it.perspektif}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 font-medium text-gray-800 whitespace-pre-line">{it.kpi}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.satuan}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-600">{it.formula}</td>
-                        <td className="border border-gray-200 py-2.5 px-2 text-center">
-                          <span className="px-2 py-0.5 rounded-full bg-[#1A284F] text-white text-[10px] font-bold">{it.bobot}</span>
-                        </td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.definisi || "—"}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.source || "—"}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-700">{it.baseline2025 || "—"}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-center font-bold text-[#1A284F]">{it.target2026 || "—"}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-center">{it.polaritas}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line">{it.detailFormula || "—"}</td>
-                        <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line">{it.keterangan || "—"}</td>
-                      </tr>
+                      <React.Fragment key={sec}>
+                        {/* Section Header Banner — TANPA checkbox (Section tidak dapat dipilih) */}
+                        <tr className="select-none">
+                          <td
+                            colSpan={colSpanCount}
+                            className="p-0 text-white text-xs font-bold uppercase tracking-widest border"
+                            style={{ background: bannerBg, borderColor: bannerBg }}
+                          >
+                            <div
+                              className="py-2.5 px-4 inline-flex items-center gap-2 whitespace-nowrap"
+                              style={{ position: "sticky", left: 0, zIndex: 15, background: bannerBg }}
+                            >
+                              <span>{sec}. {secLabel}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold tracking-normal">
+                                Bobot {secBobotVal}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                        {secRows.map((it, idx) => {
+                          const checked = selectedId === it.id;
+                          const stickyBg = checked ? "#f0f9ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+                          return (
+                            <tr
+                              key={it.id}
+                              onClick={() => setSelectedId(checked ? null : it.id)}
+                              className={`cursor-pointer border-t border-gray-200 transition-colors ${
+                                checked ? "bg-sky-50 ring-1 ring-inset ring-sky-300" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-slate-50/60 hover:bg-gray-50"
+                              }`}
+                            >
+                              <td
+                                className="border border-gray-200 py-2.5 px-2 text-center"
+                                style={{ position: "sticky", left: 0, zIndex: 13, background: stickyBg, minWidth: 54, maxWidth: 54 }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => setSelectedId(checked ? null : it.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="w-4 h-4 accent-[#1A284F] cursor-pointer"
+                                />
+                              </td>
+                              <td
+                                className="border border-gray-200 py-2.5 px-2 text-center font-semibold text-gray-600"
+                                style={{ position: "sticky", left: 54, zIndex: 12, background: stickyBg, minWidth: 52, maxWidth: 52 }}
+                              >
+                                {it.no}
+                              </td>
+                              <td
+                                className="border border-gray-200 py-2.5 px-3 font-semibold text-gray-700"
+                                style={{ position: "sticky", left: 106, zIndex: 12, background: stickyBg, minWidth: 125, maxWidth: 125 }}
+                              >
+                                <span className={PERSP_COLOR[it.perspektif] ?? "text-gray-700"}>{it.perspektif}</span>
+                              </td>
+                              <td
+                                className="border border-gray-200 py-2.5 px-3 font-medium text-gray-800 whitespace-pre-line"
+                                style={{ position: "sticky", left: 231, zIndex: 12, background: stickyBg, minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}
+                              >
+                                {it.kpi}
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.satuan}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-600">{it.formula}</td>
+                              <td className="border border-gray-200 py-2.5 px-2 text-center">
+                                <span className="px-2 py-0.5 rounded-full bg-[#1A284F] text-white text-[10px] font-bold">{it.bobot}</span>
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600 leading-relaxed">{it.definisi || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.source || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-700">
+                                {it.colorIndicator ? <ColorValueBadge value={it.baseline2025} isBaseline /> : (it.baseline2025 || "—")}
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center font-bold text-[#1A284F]">
+                                {it.colorIndicator ? <ColorValueBadge value={it.target2026} /> : (it.target2026 || "—")}
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${it.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : it.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
+                                  {it.polaritas}
+                                </span>
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line leading-relaxed">{it.detailFormula || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line leading-relaxed">{it.keterangan || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-600">
+                                {derivePeriodeTrackingFromSatuan(it.satuan, it.trackingPeriod)}
+                              </td>
+                              {hasAnyCascading && (
+                                <td className="border border-gray-200 py-2.5 px-2 text-center">
+                                  {it.cascading ? (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700">{it.cascading}</span>
+                                  ) : (
+                                    <span className="text-gray-300">—</span>
+                                  )}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -2636,15 +2821,27 @@ function LihatKpiAtasanModal({
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50/40 shrink-0">
-          <span className="text-xs text-gray-500">
-            {selectedItem ? (
-              <>Terpilih: <strong className="text-[#1A284F]">{selectedItem.kpi}</strong> (Bobot {selectedItem.bobot})</>
-            ) : (
-              "Pilih 1 baris KPI untuk disalin ke form."
-            )}
-          </span>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2.5 px-6 py-4 border-t border-gray-100 bg-gray-50/40 shrink-0">
+          {selectedItem && bobotMismatch && (
+            <div className="flex items-start gap-2 px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+              <span>
+                Bobot KPI Atasan (<strong>{selectedItem.bobot}</strong>) tidak sesuai dengan sisa bobot pada{" "}
+                <strong>Section {targetSectionCode} — {targetSectionLabel}</strong> Anda saat ini (sisa bobot:{" "}
+                <strong>{formatPctNum(remainingSectionBobot)}%</strong>).{" "}
+                <strong>Sisa bobot perlu disesuaikan setelah KPI Atasan ditambahkan ke form.</strong>
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs text-gray-500">
+              {selectedItem ? (
+                <>Terpilih: <strong className="text-[#1A284F]">{selectedItem.kpi}</strong> (Bobot {selectedItem.bobot})</>
+              ) : (
+                "Pilih 1 baris KPI (hanya baris KPI yang dapat dipilih, Section tidak memiliki checkbox)."
+              )}
+            </span>
+            <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onClose}
@@ -2664,6 +2861,7 @@ function LihatKpiAtasanModal({
                 <Plus className="w-4 h-4" /> Add
               </button>
             )}
+            </div>
           </div>
         </div>
       </div>
@@ -2690,6 +2888,8 @@ export function AddKPIModal({
 }) {
   const [showLihatAtasan, setShowLihatAtasan] = useState(false);
   const [atasanBobotWarning, setAtasanBobotWarning] = useState<string | null>(null);
+  const [fromAtasanKpi, setFromAtasanKpi] = useState(false);
+  const [atasanBobotNeedsAdjust, setAtasanBobotNeedsAdjust] = useState(false);
   const [addTipOpen, setAddTipOpen] = useState(false);
   const activeActor = getActiveUser();
   const canLihatKpiAtasan =
@@ -2842,7 +3042,7 @@ export function AddKPIModal({
   const availableSubBobotOpts = buildRemainingBobotOptions(
     activeSectionLimitNum === 0 ? 0 : 1,
     subRemainingInSection,
-    undefined,
+    form.bobot || undefined,
     activeSectionLimitNum === 0,
   );
 
@@ -3187,8 +3387,9 @@ export function AddKPIModal({
           {tab === "subsection" && (
             <>
               {atasanBobotWarning && (
-                <div className="px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-medium">
-                  {atasanBobotWarning}
+                <div className="flex items-start gap-2 px-4 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 font-medium">
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                  <span>{atasanBobotWarning}</span>
                 </div>
               )}
               <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-[#1A284F]/5 border border-[#1A284F]/15 text-xs flex-wrap">
@@ -3216,6 +3417,9 @@ export function AddKPIModal({
                 <Field label="Perspektif">
                   <select value={form.perspektif} onChange={(e) => set("perspektif", e.target.value)} className={inputCls}>
                     <option value="">— Perspektif —</option>
+                    {form.perspektif && !master.perspektif.includes(form.perspektif) && (
+                      <option value={form.perspektif}>{form.perspektif}</option>
+                    )}
                     {master.perspektif.map((p) => <option key={p}>{p}</option>)}
                   </select>
                 </Field>
@@ -3233,21 +3437,66 @@ export function AddKPIModal({
               </Field>
 
               <div className="grid grid-cols-2 gap-4">
-                <Field label={`Bobot * (Maks. Sisa Section: ${formatPctNum(subRemainingInSection)}%)`}>
-                  <select
-                    value={form.bobot}
-                    disabled={isSectionQuotaFull}
-                    onChange={(e) => set("bobot", e.target.value)}
-                    className={inputCls + " disabled:bg-gray-100 disabled:cursor-not-allowed"}
-                  >
-                    <option value="">— Pilih Bobot (Sisa {formatPctNum(subRemainingInSection)}%) —</option>
-                    {availableSubBobotOpts.map((b) => (
-                      <option key={b} value={b}>
-                        {b}{parsePctNum(b) === subRemainingInSection && subRemainingInSection > 0 ? " (Gunakan seluruh sisa section)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                {(() => {
+                  const bobotExceedsRemaining = parsePctNum(form.bobot) > subRemainingInSection + 1e-6;
+                  const showSoftRedBobot = bobotExceedsRemaining || (fromAtasanKpi && atasanBobotNeedsAdjust);
+                  return (
+                    <div
+                      className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${
+                        showSoftRedBobot
+                          ? "bg-rose-50/90 border-2 border-rose-300 ring-2 ring-rose-100"
+                          : `border ${FIELD_TONE_STYLES.emerald.wrap}`
+                      }`}
+                    >
+                      <label
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${
+                          showSoftRedBobot ? "text-rose-800" : FIELD_TONE_STYLES.emerald.label
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${showSoftRedBobot ? "bg-rose-500" : FIELD_TONE_STYLES.emerald.dot}`} />
+                        <span>{`Bobot * (Maks. Sisa Section: ${formatPctNum(subRemainingInSection)}%)`}</span>
+                      </label>
+                      <select
+                        value={form.bobot}
+                        disabled={isSectionQuotaFull}
+                        onChange={(e) => {
+                          const nextVal = e.target.value;
+                          set("bobot", nextVal);
+                          const nextNum = parsePctNum(nextVal);
+                          if (nextVal && nextNum <= subRemainingInSection + 1e-6) {
+                            setAtasanBobotNeedsAdjust(false);
+                            setAtasanBobotWarning(null);
+                          }
+                        }}
+                        className={`${inputCls} disabled:bg-gray-100 disabled:cursor-not-allowed ${
+                          showSoftRedBobot ? "border-2 border-rose-300 bg-white text-rose-900 font-semibold" : ""
+                        }`}
+                      >
+                        <option value="">— Pilih Bobot (Sisa {formatPctNum(subRemainingInSection)}%) —</option>
+                        {availableSubBobotOpts.map((b) => {
+                          const bNum = parsePctNum(b);
+                          return (
+                            <option key={b} value={b}>
+                              {b}
+                              {bNum > subRemainingInSection + 1e-6
+                                ? ` (Melebihi sisa ${formatPctNum(subRemainingInSection)}% — wajib disesuaikan)`
+                                : bNum === subRemainingInSection && subRemainingInSection > 0
+                                  ? " (Gunakan seluruh sisa section)"
+                                  : ""}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {showSoftRedBobot && (
+                        <p className="text-[11px] font-medium text-rose-700 leading-snug mt-0.5">
+                          {bobotExceedsRemaining
+                            ? `Bobot (${form.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Sesuaikan bobot agar tidak melebihi sisa kuota.`
+                            : `Bobot KPI Atasan (${form.bobot}) belum sama dengan sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan.`}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
                 <Field label="Polaritas">
                   <select value={form.polaritas} onChange={(e) => set("polaritas", e.target.value as Polaritas)} className={inputCls}>
                     {polaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
@@ -3278,10 +3527,17 @@ export function AddKPIModal({
                 formula={form.formula}
                 colorMode={colorMode}
                 ratioMode={ratioMode}
+                softOrangeHighlight={fromAtasanKpi}
                 onChange={(mt, computed) => setForm((p) => ({ ...p, monthlyTargets: mt, target2026: computed }))}
               />
 
-              <Target2026Field value={form.target2026} colorMode={colorMode} ratioMode={ratioMode} monthlyTargets={form.monthlyTargets} />
+              <Target2026Field
+                value={form.target2026}
+                colorMode={colorMode}
+                ratioMode={ratioMode}
+                monthlyTargets={form.monthlyTargets}
+                softOrangeHighlight={fromAtasanKpi}
+              />
 
               <Field label="Detail Formula Pencapaian"><textarea rows={4} value={form.detailFormula} onChange={(e) => set("detailFormula", e.target.value)} className={inputCls + " resize-none"} /></Field>
               <Field label="Keterangan"><textarea rows={3} value={form.keterangan} onChange={(e) => set("keterangan", e.target.value)} className={inputCls + " resize-none"} /></Field>
@@ -3325,35 +3581,86 @@ export function AddKPIModal({
       {showLihatAtasan && (
         <LihatKpiAtasanModal
           ownerUser={ownerUser ?? activeActor}
+          targetSectionCode={form.section}
+          targetSectionLabel={form.sectionLabel || `Section ${form.section}`}
+          remainingSectionBobot={subRemainingInSection}
           onSelectKpi={(picked) => {
             const pickedBobotNum = parsePctNum(picked.bobot);
             const exceeds = pickedBobotNum > subRemainingInSection + 1e-6;
+            const mismatch = Math.abs(pickedBobotNum - subRemainingInSection) > 1e-6;
+            setFromAtasanKpi(true);
+            setAtasanBobotNeedsAdjust(mismatch);
             if (exceeds) {
               setAtasanBobotWarning(
-                `Bobot KPI atasan (${picked.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Silakan sesuaikan bobot sebelum menyimpan.`,
+                `Bobot KPI Atasan (${picked.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Sisa bobot wajib disesuaikan pada field Bobot bertanda merah muda sebelum menyimpan.`,
+              );
+            } else if (mismatch) {
+              setAtasanBobotWarning(
+                `Bobot KPI Atasan (${picked.bobot}) belum menutup seluruh sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan setelah KPI ditambahkan.`,
               );
             } else {
               setAtasanBobotWarning(null);
             }
+            // Pastikan seluruh 12 bulan Monthly Target & Target 2026 terisi penuh dari KPI Atasan
+            const normalizedMonthly: Record<string, string> = {};
+            const srcMt = picked.monthlyTargets ?? {};
+            MONTHS_LIST.forEach((mKey, mIdx) => {
+              const shortKey = MONTHS_SHORT[mIdx];
+              const val = srcMt[mKey] ?? srcMt[shortKey] ?? "";
+              if (val !== "") normalizedMonthly[mKey] = String(val);
+            });
+            if (Object.keys(normalizedMonthly).length === 0 && picked.target2026) {
+              const pickedMode = picked.indicatorMode ?? (picked.colorIndicator ? "color" : "numeric");
+              if (pickedMode === "color" || pickedMode === "ratio" || picked.formula === "Nilai Akhir" || picked.formula === "Rata-Rata") {
+                MONTHS_LIST.forEach((mKey) => {
+                  normalizedMonthly[mKey] = String(picked.target2026);
+                });
+              } else {
+                const cleanTargetNum = parseFloat(String(picked.target2026).replace(/[^0-9.-]/g, ""));
+                if (Number.isFinite(cleanTargetNum)) {
+                  const perMonth = Math.round((cleanTargetNum / 12) * 100) / 100;
+                  MONTHS_LIST.forEach((mKey) => {
+                    normalizedMonthly[mKey] = String(perMonth);
+                  });
+                }
+              }
+            }
+            const resolvedMode: IndicatorMode =
+              picked.indicatorMode ?? (picked.colorIndicator ? "color" : "numeric");
+            const resolvedFormula =
+              picked.formula ||
+              (resolvedMode === "color" ? "Nilai Akhir" : resolvedMode === "ratio" ? "Jumlah" : form.formula);
+            const resolvedTarget2026 =
+              picked.target2026 ||
+              (resolvedMode === "ratio"
+                ? computeRatioTarget2026(normalizedMonthly)
+                : computeTarget2026(normalizedMonthly, resolvedFormula));
+            const nextSeqNo = existingItems.some((x) => x.no === picked.no)
+              ? String(existingItems.length + 1)
+              : picked.no || String(existingItems.length + 1);
             setForm((p) => ({
               ...p,
-              no: picked.no || p.no,
+              no: p.no.trim() || nextSeqNo,
               perspektif: picked.perspektif || p.perspektif,
               kpi: picked.kpi || p.kpi,
               satuan: picked.satuan || p.satuan,
-              formula: picked.formula || p.formula,
-              bobot: exceeds ? "" : picked.bobot,
+              formula: resolvedFormula,
+              bobot: picked.bobot || p.bobot,
               definisi: picked.definisi || "",
               source: picked.source || "",
               baseline2025: picked.baseline2025 || "",
-              target2026: picked.target2026 || "",
+              target2026: resolvedTarget2026,
               polaritas: picked.polaritas || "Maximize",
               detailFormula: picked.detailFormula || "",
               keterangan: picked.keterangan || "",
-              monthlyTargets: picked.monthlyTargets ? { ...picked.monthlyTargets } : {},
-              colorIndicator: picked.colorIndicator ?? false,
-              indicatorMode: picked.indicatorMode ?? "numeric",
-              trackingPeriod: picked.trackingPeriod || p.trackingPeriod,
+              monthlyTargets: normalizedMonthly,
+              colorIndicator: resolvedMode === "color",
+              indicatorMode: resolvedMode,
+              ratioPositiveLabel: picked.ratioPositiveLabel,
+              ratioNegativeLabel: picked.ratioNegativeLabel,
+              cascading: picked.cascading ?? p.cascading,
+              copiedFromId: picked.id,
+              trackingPeriod: derivePeriodeTrackingFromSatuan(picked.satuan || p.satuan, picked.trackingPeriod || p.trackingPeriod),
             }));
           }}
           onClose={() => setShowLihatAtasan(false)}
@@ -4719,9 +5026,12 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
     secItems(sec).map((item, rowIdx) => {
       const isEditing = globalEdit || editingId === item.id;
       const row = globalEdit ? (globalDrafts[item.id] ?? item) : (editingId === item.id && draft ? draft : item);
+      const duplicateKpiIds = findDuplicateKpiTitleIds(activeDisplayItems);
+      const isDuplicateKpi = duplicateKpiIds.has(item.id);
       const formatIssues = validateKpiRowStandard(row, master);
       const hasFormatIssue = formatIssues.length > 0;
-      const stickyBg = hasFormatIssue ? "#fff1f2" : isEditing ? "#f0f7ff" : rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc";
+      const hasRowRedAlert = hasFormatIssue || isDuplicateKpi;
+      const stickyBg = hasRowRedAlert ? "#fff1f2" : isEditing ? "#f0f7ff" : rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc";
       const secLimitNum = resolveEffectiveSectionBobotNum(activeDisplayItems, sec, false);
       const otherSubBobot = calcSubSectionBobot(activeDisplayItems, sec, item.id);
       const maxAllowedSubBobot = Math.max(0, Math.round((secLimitNum - otherSubBobot) * 100) / 100);
@@ -4737,7 +5047,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           key={item.id}
           data-kpi-editing-row={!globalEdit && editingId === item.id ? "true" : undefined}
           className={`border-t border-gray-200 transition-colors ${
-            hasFormatIssue
+            hasRowRedAlert
               ? "bg-rose-50/80 ring-1 ring-inset ring-rose-300/70"
               : isEditing
               ? "bg-blue-50/20 ring-1 ring-inset ring-[#1A284F]/20"
@@ -4817,8 +5127,8 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
               : <span className={`text-xs font-bold ${PERSP_COLOR[item.perspektif] ?? "text-gray-700"}`}>{item.perspektif}</span>}
           </td>
           {/* KPI */}
-          <td className="border border-gray-200 py-3 px-3"
-            style={{ position: "sticky", left: leftActionOffset + W_NO + W_PERSP, zIndex: 12, background: stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
+          <td className={`border py-3 px-3 ${isDuplicateKpi ? "border-rose-300 bg-rose-50/95" : "border-gray-200"}`}
+            style={{ position: "sticky", left: leftActionOffset + W_NO + W_PERSP, zIndex: 12, background: isDuplicateKpi ? "#ffe4e6" : stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
             {isEditing
               ? (item._cascadeType === "FC" || item._cascadeType === "PC")
                 ? <div className="flex flex-col gap-1">
@@ -4827,6 +5137,11 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                   </div>
                 : <textarea rows={3} value={row.kpi} onChange={(e) => setD({ kpi: e.target.value })} className={ci} />
               : <p className="text-xs font-medium text-gray-800 whitespace-pre-line leading-relaxed">{item.kpi}</p>}
+            {isDuplicateKpi && (
+              <div className="mt-1.5 px-2 py-1 rounded-md bg-rose-100/90 border border-rose-300 text-[10px] text-rose-800 font-semibold leading-snug">
+                judul KPI sama, pastikan tidak ada judul KPI yang sama
+              </div>
+            )}
             {hasFormatIssue && (
               <div className="mt-1.5 px-2 py-1 rounded-md bg-rose-100/80 border border-rose-200 text-[10px] text-rose-700 font-medium leading-snug">
                 Format belum sesuai: {formatIssues.join(" · ")}
@@ -5928,10 +6243,13 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                 {secRows.map((item, idx) => {
                   const isEditing = corpGlobalEdit || editingRowId === item.id;
                   const row = corpGlobalEdit ? (corpGlobalDrafts[item.id] ?? item) : (editingRowId === item.id && draft ? draft : item);
+                  const corpDupIds = findDuplicateKpiTitleIds(activeCorpItems);
+                  const isCorpDuplicateKpi = corpDupIds.has(item.id);
                   const formatIssues = validateKpiRowStandard(row, master);
                   const hasFormatIssue = formatIssues.length > 0;
+                  const hasCorpRedAlert = hasFormatIssue || isCorpDuplicateKpi;
                   const rowBg = idx % 2 === 0 ? "bg-white" : "bg-slate-50/70";
-                  const stickyBg = hasFormatIssue ? "#fff1f2" : isEditing ? "#f0f7ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+                  const stickyBg = hasCorpRedAlert ? "#fff1f2" : isEditing ? "#f0f7ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
                   const ct = item._cascadeType;
                   const otherSubUsed = calcSubSectionBobot(activeCorpItems, sec, item.id);
                   const maxAllowedRowSubBobot = Math.max(0, Math.round((secBobotNum - otherSubUsed) * 100) / 100);
@@ -5954,7 +6272,7 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                       key={item.id}
                       data-kpi-editing-row={!corpGlobalEdit && editingRowId === item.id ? "true" : undefined}
                       className={`border-t border-gray-100 ${
-                        hasFormatIssue
+                        hasCorpRedAlert
                           ? "bg-rose-50/80 ring-1 ring-inset ring-rose-300/70"
                           : isEditing
                           ? "ring-1 ring-inset ring-[#1A284F]/20 bg-blue-50/10"
@@ -6046,11 +6364,16 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                           : <span className={`text-[11px] font-semibold ${PERSP_COLOR[row.perspektif] ?? "text-gray-700"}`}>{row.perspektif}</span>}
                       </td>
                       {/* KPI */}
-                      <td className="border border-gray-200 py-2 px-2"
-                        style={{ position: "sticky", left: leftOffsetBase + W_CORP_NO + W_CORP_PERSP, zIndex: 12, background: stickyBg, minWidth: W_CORP_KPI, maxWidth: W_CORP_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
+                      <td className={`border py-2 px-2 ${isCorpDuplicateKpi ? "border-rose-300 bg-rose-50/95" : "border-gray-200"}`}
+                        style={{ position: "sticky", left: leftOffsetBase + W_CORP_NO + W_CORP_PERSP, zIndex: 12, background: isCorpDuplicateKpi ? "#ffe4e6" : stickyBg, minWidth: W_CORP_KPI, maxWidth: W_CORP_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
                         {isEditing && isFieldEditable("kpi")
                           ? <textarea rows={3} value={row.kpi} onChange={(e) => setDraftField({ kpi: e.target.value })} className={cellInput} />
                           : <p className="text-[11px] font-medium text-gray-800 leading-relaxed">{row.kpi}</p>}
+                        {isCorpDuplicateKpi && (
+                          <div className="mt-1.5 px-2 py-1 rounded-md bg-rose-100/90 border border-rose-300 text-[10px] text-rose-800 font-semibold leading-snug">
+                            judul KPI sama, pastikan tidak ada judul KPI yang sama
+                          </div>
+                        )}
                         {hasFormatIssue && (
                           <div className="mt-1.5 px-2 py-1 rounded-md bg-rose-100/80 border border-rose-200 text-[10px] text-rose-700 font-medium leading-snug">
                             Format belum sesuai: {formatIssues.join(" · ")}
@@ -6584,26 +6907,47 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const readAttachmentsForCurrentScope = () => {
     try {
       const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
-      const map = raw ? (JSON.parse(raw) as Record<string, Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>) : {};
+      const map = raw ? (JSON.parse(raw) as Record<string, Array<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt: string }>>) : {};
       const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
-      return Array.isArray(map[key]) ? map[key] : [];
+      const direct = map[key] ?? (!isCorporate ? map[effectiveOwner.employeeId] : undefined);
+      return Array.isArray(direct) ? direct : [];
     } catch {
       return [];
     }
   };
-  const [kpiAttachments, setKpiAttachments] = useState<Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }>>(
+  const [kpiAttachments, setKpiAttachments] = useState<Array<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt: string }>>(
     () => readAttachmentsForCurrentScope(),
   );
+  const [previewKpiAtt, setPreviewKpiAtt] = useState<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt: string } | null>(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const kpiAttachInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setKpiAttachments(readAttachmentsForCurrentScope());
+    if (!isCorporate && effectiveOwner.employeeId) {
+      let cancelled = false;
+      void fetchKpiAttachmentsForEmployee(effectiveOwner.employeeId).then((remote) => {
+        if (!cancelled && remote.length > 0) {
+          setKpiAttachments(remote);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCorporate, effectiveScopeKey, effectiveOwner.employeeId]);
 
   const handleUploadKpiAttachments = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setUploadingAttachment(true);
     const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
-    const added: Array<{ id: string; name: string; size: number; url: string; uploadedAt: string }> = [];
+    const added: Array<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt: string }> = [];
     for (const f of Array.from(files)) {
       let url = "";
+      let uploadedId = "";
+      let uploadedMime = f.type || "";
       try {
         const up = await uploadEvidenceFileToSupabase(f, {
           employeeId: effectiveOwner.employeeId,
@@ -6617,13 +6961,16 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           month: "All",
         });
         url = up?.url || "";
+        uploadedId = up?.id || "";
+        uploadedMime = up?.mimeType || uploadedMime;
       } catch {
         url = "";
       }
       added.push({
-        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: uploadedId || `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name: f.name,
         size: f.size,
+        mimeType: uploadedMime || undefined,
         url,
         uploadedAt: formatTodayDDMMYYYY(),
       });
@@ -6638,7 +6985,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       } catch {
         // ignore
       }
-      void mergeKvMapRecord("pa_kpi_attachments_v1", key, next);
+      // Simpan metadata ringan di pa_kv_state (URL Storage tetap utuh; Data URL besar sudah tersimpan di pa_evidence_files)
+      const kvLight = next.map((item) =>
+        item.url && item.url.startsWith("data:") && item.url.length > 150_000
+          ? { ...item, url: "" }
+          : item,
+      );
+      void mergeKvMapRecord("pa_kpi_attachments_v1", key, kvLight);
       return next;
     });
     setUploadingAttachment(false);
@@ -6647,6 +7000,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   const handleRemoveKpiAttachment = (attId: string) => {
     const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
+    void deleteUploadedEvidenceById(attId);
     setKpiAttachments((prev) => {
       const next = prev.filter((a) => a.id !== attId);
       try {
@@ -6744,6 +7098,16 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
   const setItems = (updater: KPISetting[] | ((prev: KPISetting[]) => KPISetting[])) => {
     setDraftDirtyInSession(true);
+    const prevSnap = latestItemsRef.current;
+    const computedNext = typeof updater === "function" ? updater(prevSnap) : updater;
+    const prevDups = findDuplicateKpiTitleIds(prevSnap);
+    const nextDups = findDuplicateKpiTitleIds(computedNext);
+    if (
+      nextDups.size > 0 &&
+      (computedNext.length > prevSnap.length || Array.from(nextDups).some((id) => !prevDups.has(id)))
+    ) {
+      toast.error("judul KPI sama, pastikan tidak ada judul KPI yang sama");
+    }
     setItems_((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       persistKpiItemsToBackend(next, "Draft");
@@ -7703,18 +8067,38 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         </p>
         {kpiAttachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {kpiAttachments.map((att) => (
+            {kpiAttachments.map((att) => {
+              const isPreviewable =
+                Boolean(att.mimeType?.startsWith("image/") || att.mimeType === "application/pdf") ||
+                /\.(pdf|png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name || "");
+              return (
               <div
                 key={att.id}
                 className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-sky-200 text-xs text-gray-700 shadow-2xs"
               >
                 <Paperclip className="w-3.5 h-3.5 text-sky-600 shrink-0" />
-                {att.url ? (
-                  <a href={att.url} target="_blank" rel="noreferrer" className="font-medium text-[#1A284F] hover:underline truncate max-w-[220px]">
-                    {att.name}
+                <span className="font-medium text-[#1A284F] truncate max-w-[220px]" title={att.name}>{att.name}</span>
+                {att.url && isPreviewable && (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewKpiAtt(att)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 text-[10px] font-semibold"
+                    title="Lihat langsung"
+                  >
+                    <Eye className="w-3 h-3" /> Lihat
+                  </button>
+                )}
+                {att.url && (
+                  <a
+                    href={att.url}
+                    download={att.name}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F]/20 text-[10px] font-semibold"
+                    title="Download lampiran"
+                  >
+                    <Download className="w-3 h-3" /> Download
                   </a>
-                ) : (
-                  <span className="font-medium text-[#1A284F] truncate max-w-[220px]">{att.name}</span>
                 )}
                 {!submitted && !kpiApproved && !isViewOnly && canDelete && (
                   <button
@@ -7727,8 +8111,18 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                   </button>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
+        )}
+        {previewKpiAtt && (
+          <EvidenceViewerModal
+            name={previewKpiAtt.name}
+            url={previewKpiAtt.url}
+            mimeType={previewKpiAtt.mimeType}
+            subtitle="Lampiran KPI Setting"
+            onClose={() => setPreviewKpiAtt(null)}
+          />
         )}
       </div>
       {showCopyModal && copySource && (
@@ -7808,7 +8202,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 onClick={() => draftBlocker.proceed?.()}
                 className="px-5 py-2.5 rounded-xl bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"
               >
-                OK, Lanjutkan
+                OK, Tinggalkan Halaman
               </button>
             </div>
           </div>

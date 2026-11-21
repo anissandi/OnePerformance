@@ -1,11 +1,18 @@
 // @refresh reset
-import React, { useState } from "react";
-import { X, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Lightbulb, ClipboardList, Layers, Eye, User, Building2, Calendar, MessageSquare, Paperclip, Download } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { X, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Lightbulb, ClipboardList, Layers, Eye, User, Building2, Calendar, MessageSquare, Paperclip, Download, FileSpreadsheet, FileText, Image as ImageIcon } from "lucide-react";
 import { type ApprovalRow } from "./ReviewDrawer";
 import { ROWS, SAMPLE_GOALS, type SmartGoal } from "../pages/employee/SMARTGoals";
 import { loadSubmittedGoals } from "../pages/shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
+import { EvidenceViewerModal } from "./EvidenceViewerModal";
+import {
+  buildEmployeeIdMatchSet,
+  fetchEmployeeKpiSettingsLive,
+  fetchKpiAttachmentsForEmployee,
+  type HydratedKpiAttachmentItem,
+} from "../services/supabaseClient";
 import { FORMS } from "../pages/employee/AppraisalForm";
 import { MS_ITEMS } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPI_ITEMS as FULL_KPI_ITEMS } from "../pages/employee/KPIPage";
@@ -608,19 +615,177 @@ function derivePeriodeTrackingLabel(satuan?: string, trackingPeriod?: string): s
   return trackingPeriod || "Bulan";
 }
 
-function KPIContent({ employeeId }: { employeeId: string }) {
-  const kpiItems: StoredOwnerKpiItem[] = (() => {
+function classifyAttachmentType(name: string, mimeType = ""): {
+  badge: string;
+  badgeClass: string;
+  isPreviewable: boolean;
+  kind: "image" | "pdf" | "excel" | "word" | "other";
+} {
+  const n = (name || "").toLowerCase();
+  const m = (mimeType || "").toLowerCase();
+  if (m.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(n)) {
+    return { badge: "Gambar", badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-200", isPreviewable: true, kind: "image" };
+  }
+  if (m === "application/pdf" || /\.pdf$/i.test(n)) {
+    return { badge: "PDF", badgeClass: "bg-rose-50 text-rose-700 border-rose-200", isPreviewable: true, kind: "pdf" };
+  }
+  if (/\.(xlsx?|csv)$/i.test(n) || m.includes("spreadsheet") || m.includes("excel")) {
+    return { badge: "Excel", badgeClass: "bg-teal-50 text-teal-700 border-teal-200", isPreviewable: false, kind: "excel" };
+  }
+  if (/\.(docx?)$/i.test(n) || m.includes("word")) {
+    return { badge: "Word", badgeClass: "bg-blue-50 text-blue-700 border-blue-200", isPreviewable: false, kind: "word" };
+  }
+  return { badge: "File", badgeClass: "bg-slate-100 text-slate-600 border-slate-200", isPreviewable: false, kind: "other" };
+}
+
+function triggerAttachmentFileDownload(url: string, fileName: string) {
+  if (!url) return;
+  if (url.startsWith("data:")) {
     try {
-      const normId = normalizeEmployeeId(employeeId);
+      const [head, body] = url.split(",", 2);
+      const mime = head.match(/^data:([^;]+)/)?.[1] ?? "application/octet-stream";
+      const isBase64 = /;base64/i.test(head);
+      const raw = isBase64 ? atob(body) : decodeURIComponent(body);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      return;
+    } catch {
+      // fallback below
+    }
+  }
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.target = "_blank";
+  a.rel = "noreferrer";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function KPIContent({ employeeId }: { employeeId: string }) {
+  const readLocalOwnerKpiItems = (): StoredOwnerKpiItem[] => {
+    try {
+      const candidates = buildEmployeeIdMatchSet(employeeId);
+      candidates.add(normalizeEmployeeId(employeeId));
       const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
       const map = raw ? (JSON.parse(raw) as Record<string, StoredOwnerKpiItem[]>) : {};
-      const stored = map[normId] ?? map[employeeId];
-      if (Array.isArray(stored) && stored.length > 0) return stored;
+      for (const key of candidates) {
+        const stored = map[key];
+        if (Array.isArray(stored) && stored.length > 0) return stored;
+      }
+      const lowerCandidates = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+      for (const [k, v] of Object.entries(map)) {
+        if (lowerCandidates.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) {
+          return v;
+        }
+      }
     } catch {
       // ignore
     }
     return [];
-  })();
+  };
+
+  const readLocalKpiAttachments = (): HydratedKpiAttachmentItem[] => {
+    const out: HydratedKpiAttachmentItem[] = [];
+    const seen = new Set<string>();
+    const candidates = buildEmployeeIdMatchSet(employeeId);
+    candidates.add(normalizeEmployeeId(employeeId));
+    const lowerCandidates = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+    try {
+      const raw = localStorage.getItem("pa_kpi_attachments_v1");
+      const map = raw ? (JSON.parse(raw) as Record<string, HydratedKpiAttachmentItem[]>) : {};
+      for (const [k, arr] of Object.entries(map)) {
+        if (!lowerCandidates.has(k.trim().toLowerCase()) || !Array.isArray(arr)) continue;
+        for (const item of arr) {
+          if (!item || !item.name) continue;
+          const sig = `${item.id || ""}::${item.name}`;
+          if (!seen.has(sig)) {
+            seen.add(sig);
+            out.push(item);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      const evRaw = localStorage.getItem("pa_uploaded_evidence_v1");
+      const evList = evRaw ? (JSON.parse(evRaw) as Array<Record<string, unknown>>) : [];
+      for (const ev of evList) {
+        if (
+          ev &&
+          ev.moduleType === "Lampiran KPI Setting" &&
+          lowerCandidates.has(String(ev.employeeId ?? "").trim().toLowerCase())
+        ) {
+          const id = String(ev.id ?? "");
+          const name = String(ev.fileName ?? "");
+          if (!name) continue;
+          if (!out.some((x) => x.id === id || (x.name === name && x.size === Number(ev.fileSize ?? 0)))) {
+            out.push({
+              id: id || name,
+              name,
+              size: Number(ev.fileSize ?? 0),
+              mimeType: ev.mimeType ? String(ev.mimeType) : undefined,
+              url: String(ev.url ?? ""),
+              uploadedAt: String(ev.submittedDate ?? ""),
+            });
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return out;
+  };
+
+  const [kpiItems, setKpiItems] = useState<StoredOwnerKpiItem[]>(() => readLocalOwnerKpiItems());
+  const [kpiAttachments, setKpiAttachments] = useState<HydratedKpiAttachmentItem[]>(() => readLocalKpiAttachments());
+  const [previewAtt, setPreviewAtt] = useState<HydratedKpiAttachmentItem | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setKpiItems(readLocalOwnerKpiItems());
+    setKpiAttachments(readLocalKpiAttachments());
+    void fetchKpiAttachmentsForEmployee(employeeId).then((remoteAtts) => {
+      if (!cancelled && remoteAtts.length > 0) {
+        setKpiAttachments(remoteAtts);
+      }
+    });
+    if (readLocalOwnerKpiItems().length === 0) {
+      void fetchEmployeeKpiSettingsLive<StoredOwnerKpiItem>(employeeId).then((remoteItems) => {
+        if (!cancelled && remoteItems.length > 0) {
+          setKpiItems(remoteItems);
+        }
+      });
+    }
+    const onSync = () => {
+      if (cancelled) return;
+      const latestLocalItems = readLocalOwnerKpiItems();
+      if (latestLocalItems.length > 0) setKpiItems(latestLocalItems);
+      const latestLocalAtts = readLocalKpiAttachments();
+      if (latestLocalAtts.length > 0) setKpiAttachments(latestLocalAtts);
+    };
+    window.addEventListener("pa-db-hydrated", onSync);
+    window.addEventListener("pa-evidence-updated", onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pa-db-hydrated", onSync);
+      window.removeEventListener("pa-evidence-updated", onSync);
+      window.removeEventListener("storage", onSync);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeId]);
+
   const sections = Array.from(new Set(kpiItems.map((k) => k.section || "A"))).sort();
   const bgColors = ["#1565C0", "#1976D2", "#1E88E5", "#2196F3", "#00838F", "#6A1B9A"];
 
@@ -708,66 +873,73 @@ function KPIContent({ employeeId }: { employeeId: string }) {
             </tbody>
           </table>
       </DualScrollTableContainer>
-      {(() => {
-        let atts: Array<{ id: string; name: string; size?: number; url?: string; uploadedAt?: string }> = [];
-        try {
-          const raw = localStorage.getItem("pa_kpi_attachments_v1");
-          const map = raw ? (JSON.parse(raw) as Record<string, typeof atts>) : {};
-          const normId = normalizeEmployeeId(employeeId);
-          atts = map[normId] ?? map[employeeId] ?? [];
-        } catch {
-          atts = [];
-        }
-        if (!Array.isArray(atts) || atts.length === 0) return null;
-        return (
-          <div className="rounded-xl border border-sky-200/80 bg-sky-50/40 p-4 flex flex-col gap-2.5">
-            <div className="flex items-center gap-2">
-              <Paperclip className="w-4 h-4 text-sky-700" />
-              <span className="text-xs font-bold text-[#1A284F] uppercase tracking-wide">Lampiran KPI</span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
-                {atts.length} file terlampir
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {atts.map((att) => {
-                const isPreviewable = /\.(pdf|png|jpe?g|gif|webp)$/i.test(att.name || "");
-                return (
-                  <div
-                    key={att.id}
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-sky-200 text-xs text-gray-700 shadow-2xs"
-                  >
-                    <Paperclip className="w-3.5 h-3.5 text-sky-600 shrink-0" />
-                    <span className="font-medium text-[#1A284F] truncate max-w-[200px]">{att.name}</span>
-                    {att.url && isPreviewable && (
-                      <a
-                        href={att.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-50 text-sky-700 hover:bg-sky-100 text-[10px] font-semibold"
-                        title="Lihat langsung"
-                      >
-                        <Eye className="w-3 h-3" /> Lihat
-                      </a>
-                    )}
-                    {att.url && (
-                      <a
-                        href={att.url}
-                        download={att.name}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F]/20 text-[10px] font-semibold"
-                        title="Download lampiran"
-                      >
-                        <Download className="w-3 h-3" /> Download
-                      </a>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+      {kpiAttachments.length > 0 && (
+        <div className="rounded-xl border border-sky-200/80 bg-sky-50/40 p-4 flex flex-col gap-2.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Paperclip className="w-4 h-4 text-sky-700" />
+            <span className="text-xs font-bold text-[#1A284F] uppercase tracking-wide">Lampiran KPI</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+              {kpiAttachments.length} file terlampir
+            </span>
           </div>
-        );
-      })()}
+          <div className="flex flex-wrap gap-2">
+            {kpiAttachments.map((att) => {
+              const meta = classifyAttachmentType(att.name, att.mimeType);
+              const IconComp =
+                meta.kind === "image"
+                  ? ImageIcon
+                  : meta.kind === "excel"
+                    ? FileSpreadsheet
+                    : meta.kind === "pdf" || meta.kind === "word"
+                      ? FileText
+                      : Paperclip;
+              return (
+                <div
+                  key={att.id}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-sky-200 text-xs text-gray-700 shadow-2xs"
+                >
+                  <IconComp className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                  <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${meta.badgeClass}`}>
+                    {meta.badge}
+                  </span>
+                  <span className="font-medium text-[#1A284F] truncate max-w-[220px]" title={att.name}>
+                    {att.name}
+                  </span>
+                  {att.url && meta.isPreviewable && (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewAtt(att)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 text-[10px] font-semibold transition-colors"
+                      title="Lihat langsung"
+                    >
+                      <Eye className="w-3 h-3" /> Lihat
+                    </button>
+                  )}
+                  {att.url && (
+                    <button
+                      type="button"
+                      onClick={() => triggerAttachmentFileDownload(att.url, att.name)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F]/20 text-[10px] font-semibold transition-colors"
+                      title="Download lampiran"
+                    >
+                      <Download className="w-3 h-3" /> Download
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {previewAtt && (
+        <EvidenceViewerModal
+          name={previewAtt.name}
+          url={previewAtt.url}
+          mimeType={previewAtt.mimeType}
+          subtitle="Lampiran KPI Setting"
+          onClose={() => setPreviewAtt(null)}
+        />
+      )}
     </div>
   );
 }

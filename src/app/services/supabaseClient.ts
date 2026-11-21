@@ -200,9 +200,19 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       reg_no_ap2: apPair.regNoAp2,
       is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
       is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+      checker_units: Array.isArray(u.checkerUnits)
+        ? Array.from(new Set((u.checkerUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+        : [],
+      managed_units: Array.isArray(u.managedUnits)
+        ? Array.from(new Set((u.managedUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+        : [],
       updated_at: now,
     };
     ok = await restUpsert("pa_users", fullRow, "employee_id");
+    if (!ok) {
+      const { checker_units: _cu, managed_units: _mu, ...legacyRow } = fullRow;
+      ok = await restUpsert("pa_users", legacyRow, "employee_id");
+    }
     if (!ok) {
       // Fallback if 202611030001 alter table migration has not been run yet
       ok = await restUpsert(
@@ -254,10 +264,20 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
         reg_no_ap2: apPair.regNoAp2,
         is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
         is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+        checker_units: Array.isArray(u.checkerUnits)
+          ? Array.from(new Set((u.checkerUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+          : [],
+        managed_units: Array.isArray(u.managedUnits)
+          ? Array.from(new Set((u.managedUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+          : [],
         updated_at: now,
         };
       });
       ok = await restUpsert("pa_users", fullRows, "employee_id");
+      if (!ok) {
+        const legacyRows = fullRows.map(({ checker_units: _cu, managed_units: _mu, ...rest }) => rest);
+        ok = await restUpsert("pa_users", legacyRows, "employee_id");
+      }
       if (!ok) {
         const minRows = fullRows.map((r) => ({
           employee_id: r.employee_id,
@@ -401,6 +421,33 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       },
       "id",
     );
+  } else if (kind === "app-notification" && payload.notification) {
+    const n = payload.notification as {
+      employeeIds?: string[];
+      module?: string;
+      status?: string;
+      message?: string;
+      link?: string;
+    };
+    const targets = Array.isArray(n.employeeIds) ? n.employeeIds.filter(Boolean) : [];
+    if (targets.length > 0) {
+      const results = await Promise.all(
+        targets.map((empId) =>
+          restInsert("pa_app_notifications", {
+            recipient_id: String(empId),
+            employee_id: String(empId),
+            module: String(n.module || "PA"),
+            status: String(n.status || "Info"),
+            message: String(n.message || ""),
+            link: String(n.link || "/"),
+            is_read: false,
+          }),
+        ),
+      );
+      ok = results.some(Boolean);
+    } else {
+      ok = true;
+    }
   } else if (kind === "interview-schedule" && payload.schedule) {
     const s = payload.schedule as Record<string, unknown>;
     ok = await restUpsert(
@@ -498,11 +545,17 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
     );
   } else if (kind === "rca-submission" && payload.submission) {
     const sub = payload.submission as Record<string, unknown>;
+    const empKey = String(sub.employeeId ?? "E002").trim();
+    const rawDocKey = String(sub.key ?? sub.id ?? "");
+    const scopedDocKey =
+      empKey && rawDocKey && !rawDocKey.startsWith(`${empKey}::`)
+        ? `${empKey}::${rawDocKey}`
+        : rawDocKey;
     ok = await restUpsert(
       "pa_rca_submissions",
       {
-        doc_key: String(sub.key ?? sub.id),
-        employee_id: String(sub.employeeId ?? "E002"),
+        doc_key: scopedDocKey,
+        employee_id: empKey || "E002",
         period: String(sub.year ?? "2026"),
         kpi_indicator: String(sub.kpiIndicator ?? ""),
         periode: String(sub.periode ?? ""),
@@ -1244,9 +1297,233 @@ export async function uploadEvidenceFileToSupabase(
 
   // Fallback: simpan konten file (data URL) ke backend KV agar tetap bisa dibuka (bukan blob sementara)
   const dataUrl = await readFileAsDataUrl(file);
-  const persisted: UploadedEvidenceRecord = { ...fallbackRecord, url: dataUrl };
+  let finalUrl = dataUrl;
+  const safeNameFallback = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const fallbackStoragePath = `${fallbackRecord.period}/${fallbackRecord.moduleType.replace(/\s+/g, "_")}/${fallbackRecord.employeeId}/${fallbackRecord.id}_${safeNameFallback}`;
+  if (dataUrl) {
+    try {
+      const proxyRes = await fetch("/api/pa-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "evidence-upsert",
+          evidence: {
+            ...fallbackRecord,
+            storagePath: fallbackStoragePath,
+            dataUrl,
+          },
+        }),
+      });
+      if (proxyRes.ok) {
+        const proxyData = (await proxyRes.json().catch(() => null)) as { ok?: boolean; url?: string } | null;
+        if (proxyData?.ok && proxyData.url) {
+          finalUrl = proxyData.url;
+        }
+      }
+    } catch {
+      // ignore proxy error and upsert directly to PostgREST below
+    }
+    await restUpsert(
+      "pa_evidence_files",
+      {
+        id: fallbackRecord.id,
+        employee_id: fallbackRecord.employeeId,
+        employee_name: fallbackRecord.fullName,
+        company_unit: fallbackRecord.companyUnit,
+        division: fallbackRecord.division,
+        department: fallbackRecord.department,
+        position: fallbackRecord.position,
+        module_type: fallbackRecord.moduleType,
+        period: fallbackRecord.period,
+        month: fallbackRecord.month,
+        kpi_name: fallbackRecord.kpi,
+        file_name: fallbackRecord.fileName,
+        file_size: fallbackRecord.fileSize,
+        mime_type: fallbackRecord.mimeType,
+        storage_path: fallbackStoragePath,
+        public_url: finalUrl,
+        approval_status: fallbackRecord.approvalStatus,
+        submitted_date: fallbackRecord.submittedDate,
+      },
+      "id",
+    );
+  }
+  const persisted: UploadedEvidenceRecord = { ...fallbackRecord, url: finalUrl };
   if (dataUrl) persistEvidenceRecord(persisted);
   return persisted;
+}
+
+export interface HydratedKpiAttachmentItem {
+  id: string;
+  name: string;
+  size: number;
+  mimeType?: string;
+  url: string;
+  uploadedAt: string;
+}
+
+export function buildEmployeeIdMatchSet(rawEmployeeId: string): Set<string> {
+  const raw = String(rawEmployeeId ?? "").trim();
+  const out = new Set<string>();
+  if (!raw) return out;
+  out.add(raw);
+  out.add(raw.toUpperCase());
+  out.add(raw.toLowerCase());
+  const stripped = raw.replace(/^emp-mi-/i, "");
+  const prefMatch = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+  const pureDigits = /^\d+$/.test(stripped) ? stripped : undefined;
+  const digits = prefMatch ?? pureDigits;
+  if (digits) {
+    const cleanNum = String(Number(digits));
+    out.add(digits);
+    out.add(cleanNum);
+    out.add(`E${digits}`);
+    out.add(`E${digits.padStart(3, "0")}`);
+    out.add(`EMP-${digits}`);
+    out.add(`EMP-${digits.padStart(3, "0")}`);
+    out.add(`e${digits}`);
+    out.add(`emp-${digits.padStart(3, "0")}`);
+  }
+  return out;
+}
+
+/**
+ * Mengambil daftar Lampiran KPI Setting milik karyawan secara langsung dari Supabase
+ * (`pa_evidence_files` dengan `module_type = "Lampiran KPI Setting"` + `pa_kv_state` `pa_kpi_attachments_v1`)
+ * agar Approver (HR Check, AP1, AP2, Validator) lintas browser/perangkat selalu melihat lampiran terbaru.
+ */
+export async function fetchKpiAttachmentsForEmployee(employeeId: string): Promise<HydratedKpiAttachmentItem[]> {
+  const matchIds = buildEmployeeIdMatchSet(employeeId);
+  const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
+  if (lowerIds.size === 0) return [];
+
+  const [evRows, kvData] = await Promise.all([
+    restSelect<Record<string, unknown>>(
+      "pa_evidence_files",
+      "select=*&module_type=eq.Lampiran%20KPI%20Setting&order=created_at.asc",
+    ),
+    fetchVercelKvBootstrap(["pa_kpi_attachments_v1"]),
+  ]);
+
+  let kvMap: Record<string, HydratedKpiAttachmentItem[]> = {};
+  if (kvData?.kvMap?.pa_kpi_attachments_v1 && typeof kvData.kvMap.pa_kpi_attachments_v1 === "object") {
+    kvMap = kvData.kvMap.pa_kpi_attachments_v1 as Record<string, HydratedKpiAttachmentItem[]>;
+  } else {
+    try {
+      const directKv = await restSelect<{ state_value?: Record<string, HydratedKpiAttachmentItem[]> }>(
+        "pa_kv_state",
+        "select=state_value&state_key=eq.pa_kpi_attachments_v1",
+      );
+      if (directKv[0]?.state_value && typeof directKv[0].state_value === "object") {
+        kvMap = directKv[0].state_value;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const mergedById = new Map<string, HydratedKpiAttachmentItem>();
+  const seenNameSize = new Set<string>();
+
+  // 1. Dari pa_kv_state (pa_kpi_attachments_v1)
+  for (const [k, arr] of Object.entries(kvMap)) {
+    if (!lowerIds.has(k.trim().toLowerCase()) || !Array.isArray(arr)) continue;
+    for (const item of arr) {
+      if (!item || !item.name) continue;
+      const id = String(item.id || `${item.name}-${item.size ?? 0}`);
+      mergedById.set(id, {
+        id,
+        name: String(item.name),
+        size: Number(item.size ?? 0),
+        mimeType: item.mimeType ? String(item.mimeType) : undefined,
+        url: String(item.url ?? ""),
+        uploadedAt: String(item.uploadedAt ?? ""),
+      });
+      seenNameSize.add(`${String(item.name).toLowerCase()}::${Number(item.size ?? 0)}`);
+    }
+  }
+
+  // 2. Dari tabel relasional pa_evidence_files (sumber utama file terunggah di Storage / DB)
+  for (const r of evRows) {
+    const rEmp = String(r.employee_id ?? "").trim().toLowerCase();
+    if (!rEmp || !lowerIds.has(rEmp)) continue;
+    const id = String(r.id ?? "");
+    const fileName = String(r.file_name ?? "");
+    const fileSize = Number(r.file_size ?? 0);
+    const publicUrl = String(r.public_url ?? "");
+    const mimeType = String(r.mime_type ?? "");
+    if (!fileName) continue;
+    if (mergedById.has(id)) {
+      const existing = mergedById.get(id)!;
+      mergedById.set(id, {
+        ...existing,
+        url: publicUrl || existing.url,
+        mimeType: mimeType || existing.mimeType,
+        size: fileSize || existing.size,
+      });
+    } else {
+      const sig = `${fileName.toLowerCase()}::${fileSize}`;
+      if (seenNameSize.has(sig)) {
+        // Perbarui URL kosong bila entri KV sebelumnya tidak memiliki URL
+        for (const [mKey, mVal] of mergedById.entries()) {
+          if (`${mVal.name.toLowerCase()}::${mVal.size}` === sig && !mVal.url && publicUrl) {
+            mergedById.set(mKey, { ...mVal, url: publicUrl, mimeType: mimeType || mVal.mimeType });
+          }
+        }
+      } else {
+        mergedById.set(id || sig, {
+          id: id || sig,
+          name: fileName,
+          size: fileSize,
+          mimeType: mimeType || undefined,
+          url: publicUrl,
+          uploadedAt: String(r.submitted_date ?? ""),
+        });
+        seenNameSize.add(sig);
+      }
+    }
+  }
+
+  const finalList = Array.from(mergedById.values());
+  if (finalList.length > 0) {
+    try {
+      const localRaw = safeGetLocalRaw("pa_kpi_attachments_v1");
+      const localMap = localRaw ? (JSON.parse(localRaw) as Record<string, HydratedKpiAttachmentItem[]>) : {};
+      const stripped = String(employeeId ?? "").trim().replace(/^emp-mi-/i, "");
+      const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+      const canonKey = num ? `EMP-${num.padStart(3, "0")}` : stripped.toUpperCase();
+      localMap[canonKey] = finalList;
+      safeSetLocalJson("pa_kpi_attachments_v1", localMap);
+    } catch {
+      // ignore local cache quota
+    }
+  }
+  return finalList;
+}
+
+/** Mengambil baris KPI Setting milik karyawan langsung dari tabel `pa_kpi_settings` bila cache lokal belum terisi. */
+export async function fetchEmployeeKpiSettingsLive<T = Record<string, unknown>>(employeeId: string): Promise<T[]> {
+  const matchIds = buildEmployeeIdMatchSet(employeeId);
+  const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
+  if (lowerIds.size === 0) return [];
+  const rows = await restSelect<Record<string, unknown>>("pa_kpi_settings", "select=*&tab=eq.personal");
+  for (const row of rows) {
+    const rEmp = String(row.employee_id ?? "").trim().toLowerCase();
+    if (rEmp && lowerIds.has(rEmp) && Array.isArray(row.items) && row.items.length > 0) {
+      try {
+        const byEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
+        const stripped = String(employeeId ?? "").trim().replace(/^emp-mi-/i, "");
+        const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const canonKey = num ? `EMP-${num.padStart(3, "0")}` : stripped.toUpperCase();
+        byEmp[canonKey] = row.items;
+        safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
+      } catch {
+        // ignore
+      }
+      return row.items as T[];
+    }
+  }
+  return [];
 }
 
 export interface StoredAuditLogEntry {
@@ -2000,6 +2277,16 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
         email: String(kvU.email || dbU?.email || ""),
         regNoAp1: apPair.regNoAp1,
         regNoAp2: apPair.regNoAp2,
+        checkerUnits: Array.isArray(kvU.checkerUnits)
+          ? Array.from(new Set((kvU.checkerUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+          : Array.isArray(dbU?.checker_units)
+            ? Array.from(new Set((dbU.checker_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+            : undefined,
+        managedUnits: Array.isArray(kvU.managedUnits)
+          ? Array.from(new Set((kvU.managedUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+          : Array.isArray(dbU?.managed_units)
+            ? Array.from(new Set((dbU.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+            : undefined,
       };
     });
     const seenIds = new Set(mergedFromKv.map((u) => u.employeeId.toLowerCase()));
@@ -2029,6 +2316,12 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
             email: String(u.email ?? ""),
             isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
             isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+            checkerUnits: Array.isArray(u.checker_units)
+              ? Array.from(new Set((u.checker_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+              : undefined,
+            managedUnits: Array.isArray(u.managed_units)
+              ? Array.from(new Set((u.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+              : undefined,
           }));
     const synced = [...mergedFromKv, ...extraDbUsers].filter(
       (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
@@ -2063,6 +2356,12 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     email: String(u.email ?? ""),
     isHrUnitChecker: Boolean(u.is_hr_unit_checker ?? u.role === "HR Unit"),
     isHrIcfValidator: Boolean(u.is_hr_icf_validator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+    checkerUnits: Array.isArray(u.checker_units)
+      ? Array.from(new Set((u.checker_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+      : undefined,
+    managedUnits: Array.isArray(u.managed_units)
+      ? Array.from(new Set((u.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+      : undefined,
   })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
   safeSetLocalJson("pa_managed_users_v1", mapped);
   return mapped;
@@ -2529,17 +2828,19 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     const rcaRows = data.rcaSubmissions as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(rcaRows) && rcaRows.length > 0) {
       const existingRaw = safeGetLocalRaw("kpi_rca_submissions");
-      const existingList: Array<{ key?: string; id?: string }> = existingRaw ? JSON.parse(existingRaw) : [];
+      const existingList: Array<{ employeeId?: string; key?: string; id?: string }> = existingRaw ? JSON.parse(existingRaw) : [];
       const byKey = new Map<string, unknown>();
       for (const item of existingList) {
         const k = item?.key ?? item?.id;
-        if (k) byKey.set(k, item);
+        const emp = String(item?.employeeId ?? "").trim().toUpperCase();
+        if (k) byKey.set(`${emp}::${k}`, item);
       }
       for (const dbRow of rcaRows) {
-        const sub = dbRow.submission as { key?: string; id?: string } | undefined;
+        const sub = dbRow.submission as { employeeId?: string; key?: string; id?: string } | undefined;
         const k = String(sub?.key ?? sub?.id ?? dbRow.doc_key ?? "");
+        const emp = String(sub?.employeeId ?? dbRow.employee_id ?? "").trim().toUpperCase();
         if (k && sub) {
-          byKey.set(k, sub);
+          byKey.set(`${emp}::${k}`, sub.employeeId ? sub : { ...sub, employeeId: String(dbRow.employee_id ?? "") });
         }
       }
       if (byKey.size > 0) {
@@ -2626,6 +2927,60 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       }
       safeSetLocalJson("sg_goals_by_emp_v2", goalsByEmp);
       safeSetLocalJson("sg_checkin_by_emp_v2", checkinByEmp);
+    }
+
+    // 21. Hydrate Evidence files & Lampiran KPI Setting from dedicated backend table pa_evidence_files
+    const evidenceFilesDb = data.evidenceFiles as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(evidenceFilesDb) && evidenceFilesDb.length > 0) {
+      const mappedEvidence: UploadedEvidenceRecord[] = evidenceFilesDb
+        .filter((r) => Boolean(r && r.file_name && r.public_url))
+        .map((r) => ({
+          id: String(r.id ?? ""),
+          employeeId: String(r.employee_id ?? ""),
+          fullName: String(r.employee_name ?? ""),
+          companyUnit: canonicalizeDbCompanyUnit(r.company_unit ?? ""),
+          division: String(r.division ?? ""),
+          department: String(r.department ?? ""),
+          position: String(r.position ?? ""),
+          moduleType: String(r.module_type ?? ""),
+          period: String(r.period ?? "2026"),
+          month: String(r.month ?? "All"),
+          kpi: String(r.kpi_name ?? ""),
+          fileName: String(r.file_name ?? ""),
+          fileSize: Number(r.file_size ?? 0),
+          mimeType: String(r.mime_type ?? "application/octet-stream"),
+          url: String(r.public_url ?? ""),
+          approvalStatus: String(r.approval_status ?? "Pending"),
+          submittedDate: String(r.submitted_date ?? ""),
+        }));
+      if (mappedEvidence.length > 0) {
+        safeSetLocalJson(EVIDENCE_LIST_KEY, mappedEvidence);
+      }
+      let attMap: Record<string, HydratedKpiAttachmentItem[]> = {};
+      try {
+        attMap = JSON.parse(safeGetLocalRaw("pa_kpi_attachments_v1") ?? "{}") ?? {};
+      } catch {
+        attMap = {};
+      }
+      for (const ev of mappedEvidence) {
+        if (ev.moduleType !== "Lampiran KPI Setting" || !ev.employeeId) continue;
+        const stripped = ev.employeeId.trim().replace(/^emp-mi-/i, "");
+        const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const canonKey = num ? `EMP-${num.padStart(3, "0")}` : stripped.toUpperCase();
+        const existingList = Array.isArray(attMap[canonKey]) ? [...attMap[canonKey]] : [];
+        if (!existingList.some((x) => x.id === ev.id || (x.name === ev.fileName && x.size === ev.fileSize))) {
+          existingList.push({
+            id: ev.id,
+            name: ev.fileName,
+            size: ev.fileSize,
+            mimeType: ev.mimeType,
+            url: ev.url,
+            uploadedAt: ev.submittedDate,
+          });
+          attMap[canonKey] = existingList;
+        }
+      }
+      safeSetLocalJson("pa_kpi_attachments_v1", attMap);
     }
 
     _lastBackendStatus = {

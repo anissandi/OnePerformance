@@ -4,10 +4,12 @@ import {
   loadPersistedState,
   savePersistedState,
   mergeKvArrayById,
+  syncToSupabase,
   PA_APP_API_BASE,
   SUPABASE_ANON_KEY,
 } from "../services/supabaseClient";
 import {
+  findAllHrUnitCheckerUsersForCompany,
   getActiveUser,
   loadManagedUsers,
   resolveEffectiveUserGrouping,
@@ -687,6 +689,16 @@ export function pushEmployeeNotification(params: {
     clearedByEmployeeIds: [],
   };
   saveAllNotifications([item, ...loadAllNotifications()]);
+  void syncToSupabase({
+    kind: "app-notification",
+    notification: {
+      employeeIds: ids,
+      module: params.moduleName || "PA",
+      status: params.approvalStatus || "Info",
+      message: params.summary,
+      link: params.ctaRoute || "/",
+    },
+  });
 }
 
 /**
@@ -1235,21 +1247,7 @@ export function triggerApprovalTransactionNotification(params: {
     };
 
     const findUnitCheckerUsers = (companyName: string): ManagedUser[] => {
-      const hrUnitRoleUsers = allUsers.filter(
-        (u) =>
-          u.status === "Active" &&
-          u.company.trim().toLowerCase() === companyName.trim().toLowerCase() &&
-          u.role === "HR Unit" &&
-          u.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase(),
-      );
-      if (hrUnitRoleUsers.length > 0) return hrUnitRoleUsers;
-      return allUsers.filter(
-        (u) =>
-          u.status === "Active" &&
-          u.company.trim().toLowerCase() === companyName.trim().toLowerCase() &&
-          Boolean(u.isHrUnitChecker) &&
-          u.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase(),
-      );
+      return findAllHrUnitCheckerUsersForCompany(companyName, targetUser.employeeId, allUsers);
     };
 
     const findHrIcfValidators = (): ManagedUser[] => {

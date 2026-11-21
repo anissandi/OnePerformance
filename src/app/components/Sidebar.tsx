@@ -645,8 +645,12 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
         ? [{ to: `${prefix}/approvals/settings/kpi/group`, label: "KPI Business", icon: TrendingUp }]
         : []),
-      ...(canView("approvals_pa_setting") ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: Target }] : []),
-      ...(canView("approvals_pa_measurement") ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }] : []),
+      ...(canView("approvals_pa_setting") || Boolean(activeUser.isHrUnitChecker)
+        ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: Target }]
+        : []),
+      ...(canView("approvals_pa_measurement") || Boolean(activeUser.isHrUnitChecker)
+        ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }]
+        : []),
       ...(canView("approvals_mgmt_interview") ? [{ to: `${prefix}/approvals/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
       ...(canViewApprovalsDelegation ? [{ to: `${prefix}/approvals/delegation`, label: "Delegation", icon: UserCheck }] : []),
       ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
@@ -657,7 +661,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
           : []),
       ...(canView("approvals_open_lock") ? [{ to: `${prefix}/settings/open-lock`, label: "Open Lock", icon: LockOpen }] : []),
     ];
-    if (canView("approvals") && approvalSubs.length > 0) {
+    if ((canView("approvals") || Boolean(activeUser.isHrUnitChecker)) && approvalSubs.length > 0) {
       list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
     }
 

@@ -80,7 +80,7 @@ function normalizeApproverPairServer(rawAp1, rawAp2) {
   return { regNoAp1: a1, regNoAp2: a2 };
 }
 
-function toPaUserRow(u, now, minimal = false) {
+function toPaUserRow(u, now, mode = "full") {
   const apPair = normalizeApproverPairServer(u.regNoAp1 ?? u.reg_no_ap1, u.regNoAp2 ?? u.reg_no_ap2);
   const base = {
     employee_id: String(u.employeeId ?? u.employee_id ?? "").trim(),
@@ -98,8 +98,8 @@ function toPaUserRow(u, now, minimal = false) {
     last_login: String(u.lastLogin ?? u.last_login ?? ""),
     updated_at: now,
   };
-  if (minimal) return base;
-  return {
+  if (mode === "minimal" || mode === true) return base;
+  const extended = {
     ...base,
     no: String(u.no ?? ""),
     reg_no: String(u.regNo ?? u.reg_no ?? ""),
@@ -112,6 +112,22 @@ function toPaUserRow(u, now, minimal = false) {
     is_hr_icf_validator: Boolean(
       u.isHrIcfValidator ?? u.is_hr_icf_validator ?? (base.role === "HR ICF" || base.role === "Administrator"),
     ),
+  };
+  if (mode === "legacy") return extended;
+  const rawCheckerUnits = Array.isArray(u.checkerUnits)
+    ? u.checkerUnits
+    : Array.isArray(u.checker_units)
+      ? u.checker_units
+      : [];
+  const rawManagedUnits = Array.isArray(u.managedUnits)
+    ? u.managedUnits
+    : Array.isArray(u.managed_units)
+      ? u.managed_units
+      : [];
+  return {
+    ...extended,
+    checker_units: Array.from(new Set(rawCheckerUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
+    managed_units: Array.from(new Set(rawManagedUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
   };
 }
 
@@ -241,14 +257,22 @@ export default async function handler(req, res) {
         }
         const validUsers = body.users.filter((u) => u && String(u.employeeId ?? u.employee_id ?? "").trim());
         if (validUsers.length > 0) {
-          const fullRows = validUsers.map((u) => toPaUserRow(u, now, false));
+          const fullRows = validUsers.map((u) => toPaUserRow(u, now, "full"));
           let up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
             method: "POST",
             headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
             body: JSON.stringify(fullRows),
           });
           if (!up.ok) {
-            const minRows = validUsers.map((u) => toPaUserRow(u, now, true));
+            const legacyRows = validUsers.map((u) => toPaUserRow(u, now, "legacy"));
+            up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
+              method: "POST",
+              headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+              body: JSON.stringify(legacyRows),
+            });
+          }
+          if (!up.ok) {
+            const minRows = validUsers.map((u) => toPaUserRow(u, now, "minimal"));
             up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
               method: "POST",
               headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -265,14 +289,22 @@ export default async function handler(req, res) {
       }
 
       if (kind === "user-upsert" && body.user) {
-        const fullRow = toPaUserRow(body.user, now, false);
+        const fullRow = toPaUserRow(body.user, now, "full");
         let up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
           body: JSON.stringify(fullRow),
         });
         if (!up.ok) {
-          const minRow = toPaUserRow(body.user, now, true);
+          const legacyRow = toPaUserRow(body.user, now, "legacy");
+          up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify(legacyRow),
+          });
+        }
+        if (!up.ok) {
+          const minRow = toPaUserRow(body.user, now, "minimal");
           up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
             method: "POST",
             headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -327,6 +359,113 @@ export default async function handler(req, res) {
           headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
           body: JSON.stringify({ state_key: "pa_mi_cleared_2026_v1", state_value: true, updated_at: now }),
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      if (kind === "evidence-upsert" && body.evidence) {
+        const ev = body.evidence;
+        let finalUrl = String(ev.url ?? ev.public_url ?? "");
+        const rawDataUrl = String(ev.dataUrl ?? "");
+        const storagePath = String(
+          ev.storagePath ??
+            `${ev.period || "2026"}/${String(ev.moduleType || "Evidence").replace(/\s+/g, "_")}/${ev.employeeId || "EMP"}/${ev.id}_${String(ev.fileName || "file").replace(/[^a-zA-Z0-9._-]/g, "_")}`,
+        );
+        if (rawDataUrl.startsWith("data:") && (!finalUrl || finalUrl.startsWith("data:"))) {
+          try {
+            const match = rawDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              const mime = match[1] || ev.mimeType || "application/octet-stream";
+              const buf = Buffer.from(match[2], "base64");
+              const uploadUrl = `${cfg.url}/storage/v1/object/pa-evidence/${storagePath}`;
+              let stRes = await fetch(uploadUrl, {
+                method: "POST",
+                headers: {
+                  apikey: cfg.key,
+                  Authorization: `Bearer ${cfg.key}`,
+                  "Content-Type": mime,
+                  "x-upsert": "true",
+                },
+                body: buf,
+              });
+              if (!stRes.ok) {
+                // Auto-create public bucket `pa-evidence` if missing, then retry once
+                await fetch(`${cfg.url}/storage/v1/bucket`, {
+                  method: "POST",
+                  headers: {
+                    apikey: cfg.key,
+                    Authorization: `Bearer ${cfg.key}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({ id: "pa-evidence", name: "pa-evidence", public: true }),
+                });
+                stRes = await fetch(uploadUrl, {
+                  method: "POST",
+                  headers: {
+                    apikey: cfg.key,
+                    Authorization: `Bearer ${cfg.key}`,
+                    "Content-Type": mime,
+                    "x-upsert": "true",
+                  },
+                  body: buf,
+                });
+              }
+              if (stRes.ok) {
+                finalUrl = `${cfg.url}/storage/v1/object/public/pa-evidence/${storagePath}`;
+              } else if (!finalUrl) {
+                finalUrl = rawDataUrl;
+              }
+            }
+          } catch {
+            if (!finalUrl && rawDataUrl) finalUrl = rawDataUrl;
+          }
+        }
+        const up = await pgRest(cfg, "pa_evidence_files?on_conflict=id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            id: String(ev.id),
+            employee_id: String(ev.employeeId ?? ""),
+            employee_name: String(ev.fullName ?? ev.employeeName ?? ""),
+            company_unit: canonicalizeUnitName(ev.companyUnit || "PT RSUP (Industry)"),
+            division: String(ev.division || "-"),
+            department: String(ev.department || "-"),
+            position: String(ev.position || "-"),
+            module_type: String(ev.moduleType || "Evidence"),
+            period: String(ev.period || "2026"),
+            month: String(ev.month || "All"),
+            kpi_name: String(ev.kpi ?? ev.kpiName ?? ""),
+            file_name: String(ev.fileName || "attachment"),
+            file_size: Number(ev.fileSize || 0),
+            mime_type: String(ev.mimeType || "application/octet-stream"),
+            storage_path: storagePath,
+            public_url: finalUrl,
+            approval_status: String(ev.approvalStatus || "Pending"),
+            submitted_date: String(ev.submittedDate || now.slice(0, 10)),
+          }),
+        });
+        return res.status(200).json({ ok: up.ok, status: up.status, url: finalUrl, id: String(ev.id) });
+      }
+
+      if (kind === "app-notification" && body.notification) {
+        const n = body.notification;
+        const targets = Array.isArray(n.employeeIds) ? n.employeeIds : [n.recipientId || n.employeeId].filter(Boolean);
+        if (targets.length > 0) {
+          const rows = targets.map((empId) => ({
+            recipient_id: String(empId),
+            employee_id: String(empId),
+            module: String(n.module || "PA"),
+            status: String(n.status || "Info"),
+            message: String(n.message || ""),
+            link: String(n.link || "/"),
+            is_read: false,
+          }));
+          const ins = await pgRest(cfg, "pa_app_notifications", {
+            method: "POST",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify(rows),
+          });
+          return res.status(200).json({ ok: ins.ok, status: ins.status });
+        }
         return res.status(200).json({ ok: true });
       }
 
@@ -547,12 +686,18 @@ export default async function handler(req, res) {
 
       if (kind === "rca-submission" && body.submission) {
         const sub = body.submission;
+        const empKey = String(sub.employeeId ?? "E002").trim();
+        const rawDocKey = String(sub.key ?? sub.id ?? "");
+        const scopedDocKey =
+          empKey && rawDocKey && !rawDocKey.startsWith(`${empKey}::`)
+            ? `${empKey}::${rawDocKey}`
+            : rawDocKey;
         const r = await pgRest(cfg, "pa_rca_submissions?on_conflict=doc_key", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
           body: JSON.stringify({
-            doc_key: String(sub.key ?? sub.id),
-            employee_id: String(sub.employeeId ?? "E002"),
+            doc_key: scopedDocKey,
+            employee_id: empKey || "E002",
             period: String(sub.year ?? "2026"),
             kpi_indicator: String(sub.kpiIndicator ?? ""),
             periode: String(sub.periode ?? ""),

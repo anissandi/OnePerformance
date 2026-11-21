@@ -172,11 +172,20 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
     reg_no_ap2: apPair.regNoAp2,
     is_hr_unit_checker: Boolean(u.isHrUnitChecker ?? u.role === "HR Unit"),
     is_hr_icf_validator: Boolean(u.isHrIcfValidator ?? (u.role === "HR ICF" || u.role === "Administrator")),
+    checker_units: Array.isArray(u.checkerUnits)
+      ? Array.from(new Set((u.checkerUnits as unknown[]).map((x) => canonicalizeUnitName(x)).filter(Boolean)))
+      : [],
+    managed_units: Array.isArray(u.managedUnits)
+      ? Array.from(new Set((u.managedUnits as unknown[]).map((x) => canonicalizeUnitName(x)).filter(Boolean)))
+      : [],
     updated_at: now,
   };
   if (!fullRow.employee_id) return;
   const { error } = await client.from("pa_users").upsert(fullRow);
   if (error) {
+    const { checker_units: _cu, managed_units: _mu, ...legacyRow } = fullRow;
+    const { error: legacyErr } = await client.from("pa_users").upsert(legacyRow);
+    if (!legacyErr) return;
     await client.from("pa_users").upsert({
       employee_id: fullRow.employee_id,
       name: fullRow.name,
@@ -628,9 +637,15 @@ mainAppRoutes.post("/sync", async (c) => {
       });
     } else if (kind === "rca-submission" && body.submission) {
       const sub = body.submission;
+      const empKey = String(sub.employeeId ?? "E002").trim();
+      const rawDocKey = String(sub.key ?? sub.id ?? "");
+      const scopedDocKey =
+        empKey && rawDocKey && !rawDocKey.startsWith(`${empKey}::`)
+          ? `${empKey}::${rawDocKey}`
+          : rawDocKey;
       await client.from("pa_rca_submissions").upsert({
-        doc_key: String(sub.key ?? sub.id),
-        employee_id: String(sub.employeeId ?? "E002"),
+        doc_key: scopedDocKey,
+        employee_id: empKey || "E002",
         period: String(sub.year ?? "2026"),
         kpi_indicator: String(sub.kpiIndicator ?? ""),
         periode: String(sub.periode ?? ""),

@@ -22,7 +22,17 @@ import {
   type KpiTableScale,
 } from "../../components/KpiTableDisplayControls";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
-import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import {
+  buildEmployeeIdMatchSet,
+  fetchEmployeeKpiSettingsLive,
+  loadPersistedState,
+  mergeKvMapRecord,
+  safeGetLocalRaw,
+  safeSetLocalJson,
+  savePersistedState,
+  syncToSupabase,
+  uploadEvidenceFileToSupabase,
+} from "../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../store/notificationStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
@@ -100,6 +110,7 @@ type ComputeSpec =
   | { type: "avg"; sourceIdxs: number[] }
   | { type: "ref"; sourceIdx: number }
   | { type: "ratio_score"; negIdx: number; posIdx: number; multiplier: number }
+  | { type: "color_band"; actualIdx: number; targetIdx: number }
   | { type: "inverse_ratio"; numIdx: number; denomIdx: number }
   | { type: "threshold"; actualIdx: number; target: number };
 
@@ -158,6 +169,23 @@ const KPI_BASELINE_COLORS = [
 
 function kpiColorBandMeta(v: string) { return KPI_COLOR_BANDS.find((o) => o.value === v); }
 function kpiBaselineColorMeta(v: string) { return KPI_BASELINE_COLORS.find((o) => o.value === v); }
+
+function colorBandRank(v?: string): number {
+  const s = String(v ?? "").trim();
+  if (s === "95%-100%" || /^green$/i.test(s)) return 3;
+  if (s === "≥80%-<95%" || /^yellow$/i.test(s)) return 2;
+  if (s === "<80%" || /^red$/i.test(s)) return 1;
+  return 0;
+}
+
+function computeColorBandAchievementPct(actualBand: string, targetBand: string): number | null {
+  const actR = colorBandRank(actualBand);
+  if (actR === 0) return null;
+  const tgtR = colorBandRank(targetBand) || 3;
+  if (actR >= tgtR) return 100;
+  if (actR === 2) return 87.5;
+  return 70;
+}
 
 type CellKey = string; // `${kpiNo}__${subIdx}`
 
@@ -439,6 +467,14 @@ function computeCell(
     return pos >= neg * spec.multiplier ? "100%" : "0%";
   }
 
+  if (spec.type === "color_band") {
+    const actBand = getRaw(spec.actualIdx).trim();
+    const tgtBand = getRaw(spec.targetIdx).trim();
+    if (!actBand) return "—";
+    const pct = computeColorBandAchievementPct(actBand, tgtBand);
+    return pct !== null ? formatPct(pct) : "—";
+  }
+
   return "—";
 }
 
@@ -459,12 +495,15 @@ export function computeTotal2026(
       // Only consider months that have a target configured
       const monthData = months
         .map((m) => {
-          const target = parseNum(allCells[m.id]?.[ck(kpi.no, spec.targetIdx)] ?? "");
-          if (target === null) return null;
+          const rawTarget = (allCells[m.id]?.[ck(kpi.no, spec.targetIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label);
+          const isRangeStabilize =
+            kpi.polaritas === "Stabilize" && /^\s*-?\d+(?:\.\d+)?\s*[-–]\s*-?\d+(?:\.\d+)?\s*$/.test(rawTarget.replace(/,/g, ""));
+          const target = parseNum(rawTarget);
+          if (target === null && !isRangeStabilize) return null;
           const actual = parseNum(allCells[m.id]?.[ck(kpi.no, spec.actualIdx)] ?? "");
-          return { actual, target, hasActual: actual !== null };
+          return { actual, target: target ?? 0, rawTarget, hasActual: actual !== null };
         })
-        .filter((v): v is { actual: number | null; target: number; hasActual: boolean } => v !== null);
+        .filter((v): v is { actual: number | null; target: number; rawTarget: string; hasActual: boolean } => v !== null);
       if (!monthData.length) return "—";
 
       // If any configured month has no actual → 0%
@@ -473,17 +512,25 @@ export function computeTotal2026(
       const actuals = monthData.map((v) => v.actual as number);
 
       if (!kpi.subRowTargets) {
-        // Simple KPI: YTD actual / YTD target
+        // Simple KPI: YTD actual / YTD target sesuai Formula Setahun (Jumlah / Nilai Akhir / Rata-Rata)
         let ytdActual: number;
         let ytdTarget: number;
+        let ytdTargetRaw: string;
         if (kpi.formula === "Jumlah") {
           ytdActual = actuals.reduce((s, v) => s + v, 0);
           ytdTarget = monthData.reduce((s, v) => s + v.target, 0);
+          ytdTargetRaw = String(ytdTarget);
+        } else if (kpi.formula === "Nilai Akhir") {
+          ytdActual = actuals[actuals.length - 1];
+          ytdTarget = monthData[monthData.length - 1].target;
+          ytdTargetRaw = monthData[monthData.length - 1].rawTarget || String(ytdTarget);
         } else {
           ytdActual = actuals.reduce((s, v) => s + v, 0) / actuals.length;
           ytdTarget = monthData.reduce((s, v) => s + v.target, 0) / monthData.length;
+          const allSameRaw = monthData.every((v) => v.rawTarget.trim() === monthData[0].rawTarget.trim());
+          ytdTargetRaw = allSameRaw && monthData[0].rawTarget ? monthData[0].rawTarget : String(ytdTarget);
         }
-        const pct = computePolaritasAchievementPct(ytdActual, String(ytdTarget), ytdTarget, kpi.polaritas, spec.minimize);
+        const pct = computePolaritasAchievementPct(ytdActual, ytdTargetRaw, ytdTarget, kpi.polaritas, spec.minimize);
         return formatPct(pct);
       }
 
@@ -534,12 +581,51 @@ export function computeTotal2026(
       return formatPct(avg);
     }
 
+    if (spec.type === "color_band") {
+      const scores = months
+        .map((m): number | null => {
+          const actBand = (allCells[m.id]?.[ck(kpi.no, spec.actualIdx)] ?? "").trim();
+          const tgtBand = ((allCells[m.id]?.[ck(kpi.no, spec.targetIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)).trim();
+          return computeColorBandAchievementPct(actBand, tgtBand);
+        })
+        .filter((v): v is number => v !== null);
+      if (!scores.length) return "—";
+      const finalPct =
+        kpi.formula === "Nilai Akhir"
+          ? scores[scores.length - 1]
+          : scores.reduce((a, b) => a + b, 0) / scores.length;
+      return formatPct(finalPct);
+    }
+
     return "—";
   }
 
-  // Editable rows: aggregate raw values
+  // Color-band & Ratio-mask editable/target rows: tampilkan nilai terakhir / mask
   const isTargetRow = sub.label.toLowerCase().startsWith("target");
-  const rawVals = months.map((m) => parseNum(allCells[m.id]?.[ck(kpi.no, subIdx)] ?? ""));
+  if (kpi.colorIndicator || kpi.indicatorMode === "color") {
+    const rawStrs = months
+      .map((m) =>
+        isTargetRow
+          ? ((allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)).trim()
+          : (allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "").trim(),
+      )
+      .filter(Boolean);
+    return rawStrs.length > 0 ? rawStrs[rawStrs.length - 1] : "—";
+  }
+  if (kpi.indicatorMode === "ratio" && isTargetRow) {
+    const rawStrs = months
+      .map((m) => ((allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)).trim())
+      .filter(Boolean);
+    return rawStrs.length > 0 ? rawStrs[rawStrs.length - 1] : (kpi.target2026 || "—");
+  }
+
+  // Editable rows: aggregate raw values
+  const rawVals = months.map((m) => {
+    const raw = isTargetRow
+      ? (allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)
+      : (allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "");
+    return parseNum(raw);
+  });
 
   if (!isTargetRow && months.length > 0 && rawVals.some((v) => v === null)) {
     // Actual row: any month has no data → total = 0
@@ -724,29 +810,47 @@ function deriveTrackingPeriodeLabel(satuan?: string, trackingPeriod?: string): s
 }
 
 export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, unknown>>): KPIItem[] {
-  return rows.map((r, idx) => ({
-    no: String(r.no ?? idx + 1),
-    section: String(r.section ?? "A").toUpperCase() || "A",
-    sectionLabel: r.sectionLabel ? String(r.sectionLabel) : undefined,
-    sectionBobot: r.sectionBobot ? String(r.sectionBobot) : undefined,
-    trackingPeriod: deriveTrackingPeriodeLabel(String(r.satuan ?? ""), r.trackingPeriod ? String(r.trackingPeriod) : undefined),
-    perspektif: String(r.perspektif ?? "Proses"),
-    kpi: String(r.kpi ?? ""),
-    satuan: String(r.satuan ?? "%"),
-    formula: String(r.formula ?? "Jumlah"),
-    bobot: String(r.bobot ?? "0%"),
-    definisi: String(r.definisi ?? ""),
-    source: String(r.source ?? ""),
-    baseline2025: String(r.baseline2025 ?? ""),
-    target2026: String(r.target2026 ?? ""),
-    polaritas: (String(r.polaritas ?? "Maximize") as Polaritas),
-    detailFormula: String(r.detailFormula ?? ""),
-    keterangan: String(r.keterangan ?? ""),
-    subRows: mkSimple(String(r.polaritas ?? "") === "Minimize"),
-    monthlyTargets: (r.monthlyTargets as Record<string, string>) ?? {},
-    colorIndicator: Boolean(r.colorIndicator),
-    indicatorMode: (r.indicatorMode as KPIItem["indicatorMode"]) ?? "numeric",
-  }));
+  return rows.map((r, idx) => {
+    const rawMode = (r.indicatorMode as KPIItem["indicatorMode"]) ?? (r.colorIndicator ? "color" : "numeric");
+    const isColor = rawMode === "color" || Boolean(r.colorIndicator);
+    const isRatio = rawMode === "ratio";
+    const mt = (r.monthlyTargets && typeof r.monthlyTargets === "object" ? (r.monthlyTargets as Record<string, string>) : {});
+    const firstRatioStr = String(r.target2026 ?? Object.values(mt).find(Boolean) ?? "6:1");
+    const ratioMult = isRatio ? (parseInt(firstRatioStr.split(":")[0] ?? "6", 10) || 6) : undefined;
+    const negLabel = r.ratioNegativeLabel ? String(r.ratioNegativeLabel) : "News Negatif";
+    const posLabel = r.ratioPositiveLabel ? String(r.ratioPositiveLabel) : "News Positif";
+    const subRows: SubRow[] = isRatio
+      ? mkRatioScore(ratioMult ?? 6, negLabel, posLabel)
+      : isColor
+        ? mkColorBand()
+        : mkSimple(String(r.polaritas ?? "") === "Minimize");
+    return {
+      no: String(r.no ?? idx + 1),
+      section: String(r.section ?? "A").toUpperCase() || "A",
+      sectionLabel: r.sectionLabel ? String(r.sectionLabel) : undefined,
+      sectionBobot: r.sectionBobot ? String(r.sectionBobot) : undefined,
+      trackingPeriod: deriveTrackingPeriodeLabel(String(r.satuan ?? ""), r.trackingPeriod ? String(r.trackingPeriod) : undefined),
+      perspektif: String(r.perspektif ?? "Proses"),
+      kpi: String(r.kpi ?? ""),
+      satuan: String(r.satuan ?? "%"),
+      formula: String(r.formula ?? "Jumlah"),
+      bobot: String(r.bobot ?? "0%"),
+      definisi: String(r.definisi ?? ""),
+      source: String(r.source ?? ""),
+      baseline2025: String(r.baseline2025 ?? ""),
+      target2026: String(r.target2026 ?? ""),
+      polaritas: (String(r.polaritas ?? "Maximize") as Polaritas),
+      detailFormula: String(r.detailFormula ?? ""),
+      keterangan: String(r.keterangan ?? ""),
+      subRows,
+      monthlyTargets: mt,
+      colorIndicator: isColor,
+      indicatorMode: isColor ? "color" : rawMode,
+      ratioMultiplier: ratioMult,
+      ratioPositiveLabel: r.ratioPositiveLabel ? String(r.ratioPositiveLabel) : undefined,
+      ratioNegativeLabel: r.ratioNegativeLabel ? String(r.ratioNegativeLabel) : undefined,
+    };
+  });
 }
 
 export function resolveEmployeeTrackingKpiItems(employeeId: string): KPIItem[] {
@@ -867,6 +971,12 @@ const mkSimple = (minimize = false): SubRow[] => [
   { label: "% Pencapaian", bold: true, compute: { type: "ratio", actualIdx: 0, targetIdx: 1, minimize } },
 ];
 
+const mkColorBand = (): SubRow[] => [
+  { label: "Actual" },
+  { label: "Target" },
+  { label: "% Pencapaian", bold: true, compute: { type: "color_band", actualIdx: 0, targetIdx: 1 } },
+];
+
 const SUB_KPI3: SubRow[] = [
   { label: "Biaya Listrik" },
   { label: "Target Biaya" },
@@ -903,10 +1013,10 @@ const SUB_KPI4B: SubRow[] = [
   { label: "% Pencapaian Total", bold: true, compute: { type: "avg", sourceIdxs: [2, 5] } },
 ];
 
-// subRows for ratio score KPI: [0] News Negatif, [1] News Positif, [2] Target Ratio (locked), [3] % Pencapaian
-const mkRatioScore = (multiplier: number): SubRow[] => [
-  { label: "News Negatif" },
-  { label: "News Positif" },
+// subRows for ratio score KPI: [0] Negatif, [1] Positif, [2] Target Ratio (locked), [3] % Pencapaian
+const mkRatioScore = (multiplier: number, negLabel = "News Negatif", posLabel = "News Positif"): SubRow[] => [
+  { label: negLabel },
+  { label: posLabel },
   { label: "Target Ratio" },
   { label: "% Pencapaian", bold: true, compute: { type: "ratio_score", negIdx: 0, posIdx: 1, multiplier } },
 ];
@@ -1111,6 +1221,48 @@ const W_KPI = 270;
 
 // ─── Pre-fill helper ──────────────────────────────────────────────────────────
 
+export function resolveKpiMonthTarget(kpi: KPIItem, monthLabel: string): string {
+  const mt = kpi.monthlyTargets;
+  if (mt && typeof mt === "object") {
+    if (mt[monthLabel] !== undefined && String(mt[monthLabel]).trim() !== "") {
+      return String(mt[monthLabel]);
+    }
+    const shortEn = displayMonth(monthLabel);
+    if (mt[shortEn] !== undefined && String(mt[shortEn]).trim() !== "") {
+      return String(mt[shortEn]);
+    }
+    const lowerFull = monthLabel.toLowerCase();
+    const lowerShort = shortEn.toLowerCase();
+    for (const [k, v] of Object.entries(mt)) {
+      const kl = k.trim().toLowerCase();
+      if ((kl === lowerFull || kl === lowerShort) && String(v ?? "").trim() !== "") {
+        return String(v);
+      }
+    }
+  }
+  // Fallback apabila monthlyTargets kosong namun target2026 terisi (mis. hasil import Excel awal)
+  const hasAnyMonthly = mt && Object.values(mt).some((v) => String(v ?? "").trim() !== "");
+  if (!hasAnyMonthly && kpi.target2026 && String(kpi.target2026).trim() !== "") {
+    const rawTarget = String(kpi.target2026).trim();
+    if (
+      kpi.colorIndicator ||
+      kpi.indicatorMode === "color" ||
+      kpi.indicatorMode === "ratio" ||
+      kpi.formula === "Nilai Akhir" ||
+      kpi.formula === "Rata-Rata" ||
+      kpi.polaritas === "Stabilize"
+    ) {
+      return rawTarget;
+    }
+    const parsed = parseNum(rawTarget);
+    if (parsed !== null && kpi.formula === "Jumlah") {
+      return String(Math.round((parsed / 12) * 100) / 100);
+    }
+    return rawTarget;
+  }
+  return "";
+}
+
 function getPrefilledCells(monthLabel: string, itemsList: KPIItem[] = KPI_ITEMS): Record<CellKey, string> {
   const cells: Record<CellKey, string> = {};
   itemsList.forEach((kpi) => {
@@ -1121,15 +1273,11 @@ function getPrefilledCells(monthLabel: string, itemsList: KPIItem[] = KPI_ITEMS)
       });
     }
     // Fill simple "Target" sub-rows from monthlyTargets
-    const monthVal = kpi.monthlyTargets?.[monthLabel];
-    if (monthVal !== undefined) {
+    const monthVal = resolveKpiMonthTarget(kpi, monthLabel);
+    if (monthVal !== "") {
       kpi.subRows.forEach((sub, si) => {
-        if (!sub.compute && (sub.label === "Target" || sub.label === "Target LTI" || sub.label === "Target Ratio")) {
+        if (!sub.compute && sub.label.toLowerCase().startsWith("target")) {
           cells[ck(kpi.no, si)] = monthVal;
-          // For color-indicator KPIs, also pre-fill Realisasi with empty so select shows
-          if (kpi.colorIndicator && !cells[ck(kpi.no, si + 1)]) {
-            cells[ck(kpi.no, si + 1)] = "";
-          }
         }
       });
     }
@@ -1202,6 +1350,19 @@ function AddMonthModal({
   const [showEmptyConfirm, setShowEmptyConfirm] = useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
+  // Sinkronkan prefilled Target dari KPI Setting -> Monthly Target setiap kali daftar KPI atau bulan berubah
+  React.useEffect(() => {
+    if (!label) return;
+    const prefilled = getPrefilledCells(label, kpiItems);
+    setCells((prev) => {
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(prefilled)) {
+        next[k] = v;
+      }
+      return next;
+    });
+  }, [label, kpiItems]);
+
   const handleLabelChange = (newLabel: string) => {
     setLabel(newLabel);
     setCells(getPrefilledCells(newLabel, kpiItems));
@@ -1230,10 +1391,11 @@ function AddMonthModal({
   // Target per indikator: baris "Target" pada KPI yang sama (atau Target tahunan bila tidak ada)
   const targetFor = (kpi: KPIItem): string => {
     const tIdx = kpi.subRows.findIndex((sb) => !sb.compute && sb.label.toLowerCase().startsWith("target"));
-    return (tIdx >= 0 ? cells[ck(kpi.no, tIdx)] : "") || kpi.monthlyTargets?.[label] || kpi.target2026 || "";
+    return (tIdx >= 0 ? cells[ck(kpi.no, tIdx)] : "") || resolveKpiMonthTarget(kpi, label) || kpi.target2026 || "";
   };
   const separatorErrors: Record<string, string> = {};
-  KPI_ITEMS.forEach((kpi) => {
+  kpiItems.forEach((kpi) => {
+    if (kpi.colorIndicator || kpi.indicatorMode === "color" || kpi.indicatorMode === "ratio") return;
     const target = targetFor(kpi);
     kpi.subRows.forEach((sub, si) => {
       if (sub.compute || sub.label.toLowerCase().startsWith("target")) return;
@@ -1381,7 +1543,7 @@ function AddMonthModal({
                 const rowGroups: ModalRowGroup[] = [];
                 kpi.subRows.forEach((sub, si) => {
                   if (!sub.compute) return;
-                  if (sub.compute.type === "ratio") {
+                  if (sub.compute.type === "ratio" || sub.compute.type === "color_band") {
                     usedIndices.add(sub.compute.targetIdx);
                     usedIndices.add(sub.compute.actualIdx);
                     usedIndices.add(si);
@@ -1459,7 +1621,24 @@ function AddMonthModal({
                                   {targetSub.label}
                                 </label>
                                 <div className="flex items-center justify-between gap-1 text-xs border border-sky-200 bg-sky-50 rounded-lg px-3 py-2">
-                                  <span className="font-semibold text-sky-800">{cells[ck(kpi.no, grp.targetIdx)] || "—"}</span>
+                                  {kpi.colorIndicator || kpi.indicatorMode === "color" ? (
+                                    (() => {
+                                      const cv = cells[ck(kpi.no, grp.targetIdx)] || resolveKpiMonthTarget(kpi, label);
+                                      const cm = kpiColorBandMeta(cv);
+                                      return cm ? (
+                                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border" style={{ background: cm.bg, borderColor: cm.border, color: cm.color }}>
+                                          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cm.dot }} />
+                                          {cv}
+                                        </span>
+                                      ) : (
+                                        <span className="font-semibold text-sky-800">{cv || "—"}</span>
+                                      );
+                                    })()
+                                  ) : (
+                                    <span className="font-semibold text-sky-800">
+                                      {cells[ck(kpi.no, grp.targetIdx)] || resolveKpiMonthTarget(kpi, label) || "—"}
+                                    </span>
+                                  )}
                                   <Lock className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                                 </div>
                               </div>
@@ -1468,17 +1647,39 @@ function AddMonthModal({
                                   {actualSub.label}
                                   {empty && <span className="ml-1 text-[9px] text-red-500 normal-case font-normal">— wajib diisi</span>}
                                 </label>
-                                <input
-                                  type="text"
-                                  value={cells[ck(kpi.no, grp.actualIdx)] ?? ""}
-                                  onChange={(e) => setVal(ck(kpi.no, grp.actualIdx), e.target.value)}
-                                  placeholder="Masukkan nilai aktual"
-                                  className={`text-xs border rounded-lg px-3 py-2 outline-none transition-colors bg-white ${
-                                    empty || sepErr
-                                      ? "border-red-400 bg-red-50 focus:border-red-500 placeholder-red-300"
-                                      : "border-gray-200 focus:border-[#1A284F]"
-                                  }`}
-                                />
+                                {kpi.colorIndicator || kpi.indicatorMode === "color" ? (
+                                  (() => {
+                                    const curBand = cells[ck(kpi.no, grp.actualIdx)] ?? "";
+                                    const cm = kpiColorBandMeta(curBand);
+                                    return (
+                                      <select
+                                        value={curBand}
+                                        onChange={(e) => setVal(ck(kpi.no, grp.actualIdx), e.target.value)}
+                                        className={`text-xs font-semibold border rounded-lg px-3 py-2 outline-none cursor-pointer ${
+                                          empty ? "border-red-400 bg-red-50" : "border-gray-200"
+                                        }`}
+                                        style={cm ? { background: cm.bg, borderColor: cm.border, color: cm.color } : undefined}
+                                      >
+                                        <option value="">— Pilih Band Warna Aktual —</option>
+                                        {KPI_COLOR_BANDS.map((o) => (
+                                          <option key={o.value} value={o.value}>{o.value}</option>
+                                        ))}
+                                      </select>
+                                    );
+                                  })()
+                                ) : (
+                                  <input
+                                    type="text"
+                                    value={cells[ck(kpi.no, grp.actualIdx)] ?? ""}
+                                    onChange={(e) => setVal(ck(kpi.no, grp.actualIdx), e.target.value)}
+                                    placeholder="Masukkan nilai aktual"
+                                    className={`text-xs border rounded-lg px-3 py-2 outline-none transition-colors bg-white ${
+                                      empty || sepErr
+                                        ? "border-red-400 bg-red-50 focus:border-red-500 placeholder-red-300"
+                                        : "border-gray-200 focus:border-[#1A284F]"
+                                    }`}
+                                  />
+                                )}
                                 {sepErr && (
                                   <span className="flex items-start gap-1 text-[10px] font-medium text-red-600">
                                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -2581,11 +2782,19 @@ function KPITable({
 
   const getCellDisplay = (kpi: KPIItem, monthId: string, subIdx: number): string => {
     const sub = kpi.subRows[subIdx];
+    const monthObj = months.find((m) => m.id === monthId);
+    const getRawWithTargetFallback = (idx: number) => {
+      const storedVal = cells[monthId]?.[ck(kpi.no, idx)] ?? "";
+      const sRow = kpi.subRows[idx];
+      if (sRow && !sRow.compute && sRow.label.toLowerCase().startsWith("target") && !storedVal && monthObj) {
+        return resolveKpiMonthTarget(kpi, monthObj.label);
+      }
+      return storedVal;
+    };
     if (sub.compute) {
-      const getRaw = (idx: number) => cells[monthId]?.[ck(kpi.no, idx)] ?? "";
-      return computeCell(kpi.subRows, getRaw, subIdx, kpi.polaritas);
+      return computeCell(kpi.subRows, getRawWithTargetFallback, subIdx, kpi.polaritas);
     }
-    return cells[monthId]?.[ck(kpi.no, subIdx)] ?? "";
+    return getRawWithTargetFallback(subIdx);
   };
 
   const renderSectionRows = (sec: string) =>
@@ -2641,7 +2850,7 @@ function KPITable({
                   ) : kpi.target2026}
                 </td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-2 text-center" style={{ minWidth: 88 }}>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : "bg-orange-50 text-orange-700"}`}>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : kpi.polaritas === "Stabilize" ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700"}`}>
                     {kpi.polaritas}
                   </span>
                 </td>
@@ -2684,10 +2893,10 @@ function KPITable({
                     ? "bg-red-50 border-red-200"
                     : isComputed ? "bg-emerald-50/80 border-gray-200" : isTargetRow ? "bg-sky-50/70 border-gray-200" : sub.bold ? "bg-green-50/60 border-gray-200" : "bg-green-50 border-gray-200"
                 } ${isCellEditable ? "ring-1 ring-inset ring-blue-300" : ""}`} style={{ minWidth: 120 }}>
-                  {kpi.colorIndicator && !isComputed && sub.bold ? (
+                  {kpi.colorIndicator && !isComputed && isTargetRow ? (
                     /* Target sub-row for color-indicator KPI: read-only colored badge */
                     (() => {
-                      const cv = kpi.monthlyTargets?.[m.label] ?? "";
+                      const cv = val || resolveKpiMonthTarget(kpi, m.label);
                       const cm = kpiColorBandMeta(cv);
                       return cm ? (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold border" style={{ background: cm.bg, borderColor: cm.border, color: cm.color }}>
@@ -3762,6 +3971,9 @@ function KPIWorkspace({
       const ol = readOpenLockState();
       setOpenLockRequested(ol.requested);
       setOpenLockApproved(ol.approved);
+      setOpenLockRejected(ol.rejected);
+      setOpenLockNote(ol.note);
+      setOpenLockApprovedUntil(ol.approvedUntil);
       setWfRefreshTick((v) => v + 1);
     };
     window.addEventListener("focus", sync);
@@ -3782,26 +3994,29 @@ function KPIWorkspace({
   const [showOpenLockModal, setShowOpenLockModal] = useState(false);
   const readOpenLockState = () => {
     try {
-      const list = loadPersistedState<Array<{ employeeId?: string; module?: string; status?: string; approvalNote?: string }>>("pa_open_lock_requests_v1", []);
+      const list = loadPersistedState<Array<{ employeeId?: string; module?: string; status?: string; approvalNote?: string; approvedUntil?: string }>>("pa_open_lock_requests_v1", []);
       const normId = normalizeEmployeeId(activeUser.employeeId);
       const mine = (Array.isArray(list) ? list : []).filter(
         (r) => normalizeEmployeeId(String(r.employeeId ?? "")) === normId && String(r.module ?? "").toLowerCase().includes("kpi"),
       );
       const latest = mine[0];
+      const approvedReq = mine.find((r) => r.status === "approved");
       return {
         requested: mine.some((r) => r.status === "pending"),
-        approved: mine.some((r) => r.status === "approved"),
+        approved: Boolean(approvedReq),
         rejected: latest?.status === "rejected",
-        note: String(latest?.approvalNote ?? "").trim(),
+        note: String((approvedReq ?? latest)?.approvalNote ?? "").trim(),
+        approvedUntil: String(approvedReq?.approvedUntil ?? "").trim(),
       };
     } catch {
-      return { requested: false, approved: false, rejected: false, note: "" };
+      return { requested: false, approved: false, rejected: false, note: "", approvedUntil: "" };
     }
   };
   const [openLockRequested, setOpenLockRequested] = useState(() => readOpenLockState().requested);
   const [openLockApproved, setOpenLockApproved] = useState(() => readOpenLockState().approved);
   const [openLockRejected, setOpenLockRejected] = useState(() => readOpenLockState().rejected);
   const [openLockNote, setOpenLockNote] = useState(() => readOpenLockState().note);
+  const [openLockApprovedUntil, setOpenLockApprovedUntil] = useState(() => readOpenLockState().approvedUntil);
 
   // Edit request approval flow
   const [editRequestApproved, setEditRequestApproved] = useState(false);
@@ -3844,10 +4059,18 @@ function KPIWorkspace({
   // dan isinya disinkronkan 100% dengan definisi KPI di KPI Setting.
   const storedPersonalSettings = (() => {
     try {
-      const normId = normalizeEmployeeId(activeUser.employeeId);
+      const candidates = buildEmployeeIdMatchSet(activeUser.employeeId);
+      candidates.add(normalizeEmployeeId(activeUser.employeeId));
       const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
       const map = raw ? (JSON.parse(raw) as Record<string, Array<Record<string, unknown>>>) : {};
-      return map[normId] ?? map[activeUser.employeeId] ?? [];
+      for (const k of candidates) {
+        if (Array.isArray(map[k]) && map[k].length > 0) return map[k];
+      }
+      const lower = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+      for (const [k, v] of Object.entries(map)) {
+        if (lower.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) return v;
+      }
+      return [];
     } catch {
       return [];
     }
@@ -3855,6 +4078,23 @@ function KPIWorkspace({
   const trackingKpiItems: KPIItem[] = isKpiSettingValidated
     ? (storedPersonalSettings.length > 0 ? mapStoredSettingRowsToTrackingItems(storedPersonalSettings) : [])
     : [];
+
+  // Live-hydrate KPI Setting dari tabel Supabase `pa_kpi_settings` bila cache lokal belum tersedia
+  React.useEffect(() => {
+    if (!activeUser.employeeId) return;
+    let cancelled = false;
+    if (storedPersonalSettings.length === 0) {
+      void fetchEmployeeKpiSettingsLive(activeUser.employeeId).then((remoteRows) => {
+        if (!cancelled && remoteRows.length > 0) {
+          setWfRefreshTick((t) => t + 1);
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeUser.employeeId, isKpiSettingValidated]);
 
   const isBusinessSettingApproved = (() => {
     try {
@@ -3938,6 +4178,32 @@ function KPIWorkspace({
   React.useEffect(() => {
     saveKPITracking({ months, cellsMap }, activeUser);
   }, [months, cellsMap, activeUser.employeeId]);
+
+  // Pastikan nilai sel Target pada setiap bulan yang sudah ada selalu sinkron 100% dengan Monthly Target di KPI Setting
+  React.useEffect(() => {
+    if (months.length === 0 || trackingKpiItems.length === 0) return;
+    setCellsMap((prev) => {
+      let changed = false;
+      const next: Record<string, Record<CellKey, string>> = { ...prev };
+      for (const m of months) {
+        const prefilled = getPrefilledCells(m.label, trackingKpiItems);
+        const curMonthCells = { ...(next[m.id] ?? {}) };
+        let monthChanged = false;
+        for (const [cellK, targetVal] of Object.entries(prefilled)) {
+          if (targetVal !== "" && curMonthCells[cellK] !== targetVal) {
+            curMonthCells[cellK] = targetVal;
+            monthChanged = true;
+          }
+        }
+        if (monthChanged) {
+          next[m.id] = curMonthCells;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [months.map((m) => m.id).join("|"), JSON.stringify(trackingKpiItems.map((k) => ({ no: k.no, mt: k.monthlyTargets, t: k.target2026 })))]);
 
   // Persist submitted state per owner employee
   React.useEffect(() => {
@@ -4396,12 +4662,20 @@ function KPIWorkspace({
   // Tag RCA merah (pencapaian < 100% tetapi belum add RCA) pada bulan yang akan diajukan
   const missingRcaTags = (() => {
     const out: Array<{ kpiNo: string; monthId: string; monthLabel: string; kpiName: string }> = [];
+    const activeTrackingMap = isBusinessWorkspace ? businessCellsMap : cellsMap;
     for (const m of months) {
       if (validatedMonthLabels.has(m.label)) continue;
       for (const kpi of (isBusinessWorkspace ? businessTrackingItems : trackingKpiItems)) {
         kpi.subRows.forEach((sub, si) => {
           if (!sub.compute || sub.compute.type === "avg") return;
-          const getRaw = (idx: number) => cellsMap[m.id]?.[ck(kpi.no, idx)] ?? "";
+          const getRaw = (idx: number) => {
+            const storedVal = activeTrackingMap[m.id]?.[ck(kpi.no, idx)] ?? "";
+            const sRow = kpi.subRows[idx];
+            if (sRow && !sRow.compute && sRow.label.toLowerCase().startsWith("target") && !storedVal) {
+              return resolveKpiMonthTarget(kpi, m.label);
+            }
+            return storedVal;
+          };
           const n = parseNum(computeCell(kpi.subRows, getRaw, si, kpi.polaritas));
           if (n === null || n >= 100) return;
           const subMeta = getKpiSubItemMeta(kpi, si, m.id);
@@ -4799,7 +5073,7 @@ function KPIWorkspace({
           <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-green-600" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-green-700">
-              Akses telah dibuka oleh HR ICF. Anda dapat melengkapi dan submit KPI Tracking.
+              Akses telah dibuka oleh HR ICF. Anda dapat melengkapi dan submit KPI Tracking{openLockApprovedUntil ? ` s/d ${normalizeDateDDMMYYYY(openLockApprovedUntil)}` : ""}
             </p>
             {openLockNote && (
               <p className="text-xs text-green-700 mt-1">

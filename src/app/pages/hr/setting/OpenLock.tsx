@@ -196,15 +196,23 @@ const DIVISI_OPTIONS = [...new Set(MOCK_REQUESTS.map(r => r.divisi))].sort();
 const MODULE_OPTIONS = [...new Set(MOCK_REQUESTS.map(r => r.module))];
 
 function fmtDate(iso: string) {
+  const trimmed = String(iso ?? "").trim();
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) return trimmed;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [y, m, d] = trimmed.split("-");
+    return `${d}/${m}/${y}`;
+  }
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return trimmed || "—";
   return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
 }
 function fmtDateTime(iso: string) {
   const d = new Date(iso);
   return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
 }
-function daysPast(deadline: string) {
-  return Math.max(0, Math.floor((Date.now() - new Date(deadline).getTime()) / 86400000));
+function computeDaysLateFromDay16(): number {
+  const nowDay = new Date().getDate();
+  return nowDay >= 16 ? nowDay - 16 + 1 : 0;
 }
 
 function resolveKpiMeasurementDeadlineIso(fallbackIso: string): string {
@@ -329,7 +337,7 @@ function ApproveModal({
               <p className="font-semibold text-red-700">Deadline Terlewati</p>
               <p className="text-red-600 mt-0.5">
                 Deadline (Date Lock Per Month): <span className="font-bold">{fmtDate(resolveKpiMeasurementDeadlineIso(request.originalDeadline))}</span>
-                {" — "}<span className="font-bold">{daysPast(resolveKpiMeasurementDeadlineIso(request.originalDeadline))} hari</span> yang lalu
+                {" — "}<span className="font-bold">{computeDaysLateFromDay16()} hari</span>
               </p>
             </div>
           </div>
@@ -450,13 +458,13 @@ function DetailModal({ request, onClose }: { request: OpenLockRequest; onClose: 
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="bg-gray-50 rounded-xl px-3 py-2.5">
-              <p className="text-gray-400 mb-0.5">Deadline Original</p>
-              <p className="font-bold text-gray-800">{fmtDate(request.originalDeadline)}</p>
+            <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2.5">
+              <p className="text-red-600 mb-0.5">Deadline Terlewati</p>
+              <p className="font-bold text-red-700">{computeDaysLateFromDay16()} hari</p>
             </div>
             <div className="bg-gray-50 rounded-xl px-3 py-2.5">
               <p className="text-gray-400 mb-0.5">Diajukan</p>
-              <p className="font-bold text-gray-800">{fmtDateTime(request.submittedAt)}</p>
+              <p className="font-bold text-gray-800">{fmtDate(request.submittedAt)}</p>
             </div>
             {request.status === "approved" && request.approvedUntil && (
               <>
@@ -554,8 +562,7 @@ function RequestTable({
         <tbody>
           {rows.map((r, idx) => {
             const sm = STATUS_META[r.status];
-            const nowDay = new Date().getDate();
-            const daysLate = nowDay >= 16 ? nowDay - 16 + 1 : 0;
+            const daysLate = computeDaysLateFromDay16();
             const empKey = (r.employeeId || r.nip || "").toLowerCase();
             const totalReqCount = requestCountByEmp[empKey] ?? 1;
             const unitName = r.companyUnit || unitByEmp[empKey] || "—";
@@ -731,10 +738,15 @@ export function OpenLockPage() {
         },
       } : undefined);
       if (changedReq) {
+        const formattedUntil = fmtDate(until);
+        const approvedSummary = `Akses telah dibuka oleh HR ICF. Anda dapat melengkapi dan submit KPI Tracking s/d ${formattedUntil}`;
         pushEmployeeNotification({
           employeeIds: [changedReq.employeeId],
           title: `Open Lock ${changedReq.module} Disetujui`,
-          summary: `Permintaan Open Lock Anda untuk ${changedReq.module} (${changedReq.period}) telah disetujui hingga ${until}.`,
+          summary: approvedSummary,
+          body: note?.trim()
+            ? [approvedSummary, `Catatan untuk Karyawan: ${note.trim()}`]
+            : [approvedSummary],
           category: "Approval",
           moduleName: changedReq.module,
           approvalStatus: "Approved",

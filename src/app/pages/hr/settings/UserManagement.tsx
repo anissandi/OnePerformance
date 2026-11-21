@@ -8,6 +8,7 @@ import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, User
 import {
   defaultAllowedModulesForGrouping,
   getActiveUser,
+  getEffectiveCheckerUnits,
   loadManagedUsers,
   loadUnitGroupRules,
   normalizeApproverPair,
@@ -419,7 +420,15 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                   setForm(p => ({
                     ...p,
                     [key]: v,
-                    ...(key === "role" && v === "HR Unit" ? { isHrUnitChecker: true } : {}),
+                    ...(key === "role" && v === "HR Unit"
+                      ? {
+                          isHrUnitChecker: true,
+                          checkerUnits:
+                            p.checkerUnits && p.checkerUnits.length > 0
+                              ? p.checkerUnits
+                              : Array.from(new Set([p.company, ...(p.managedUnits ?? [])].filter(Boolean))),
+                        }
+                      : {}),
                     ...(key === "role" && (v === "HR ICF" || v === "Administrator") ? { isHrIcfValidator: true } : {}),
                   }));
                 }}>
@@ -440,12 +449,17 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                       ...p,
                       isHrUnitChecker: e.target.checked,
                       role: e.target.checked && p.role === "Employee" ? "HR Unit" : p.role,
+                      checkerUnits: e.target.checked
+                        ? p.checkerUnits && p.checkerUnits.length > 0
+                          ? p.checkerUnits
+                          : Array.from(new Set([p.company, ...(p.managedUnits ?? [])].filter(Boolean)))
+                        : [],
                     }))
                   }
                   className="rounded border-gray-300"
                 />
                 <span>
-                  <strong>Approval Check HR Unit Usaha</strong> (Checker KPI & SMART Goals unit usaha; bypass otomatis untuk pengajuan milik sendiri)
+                  <strong>Approval Check HR Unit Usaha</strong> (Checker KPI & SMART Goals — dapat Lintas Unit Usaha; bypass otomatis untuk pengajuan milik sendiri)
                 </span>
               </label>
               <label className="inline-flex items-center gap-2 cursor-pointer">
@@ -466,6 +480,24 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                 </span>
               </label>
             </div>
+            {(form.isHrUnitChecker || form.role === "HR Unit") && (
+              <div className="pt-2.5 border-t border-gray-200 space-y-1.5">
+                <MultiCheckboxDropdown
+                  label="Unit Usaha yang Di-Allow untuk HR Checker (Lintas Unit Usaha)"
+                  options={COMPANIES}
+                  selected={
+                    form.checkerUnits && form.checkerUnits.length > 0
+                      ? form.checkerUnits
+                      : Array.from(new Set([form.company, ...(form.managedUnits ?? [])].filter(Boolean)))
+                  }
+                  onChange={(next) => setForm((p) => ({ ...p, checkerUnits: next }))}
+                  placeholder="— Pilih Unit Usaha Checker —"
+                />
+                <p className="text-[11px] text-gray-500">
+                  Pilih satu atau lebih Company Unit yang dapat diperiksa (Check) dan dipantau di Analytics Dashboard oleh HR Checker ini.
+                </p>
+              </div>
+            )}
             <div className="pt-2.5 border-t border-gray-200 space-y-2.5">
               <div>
                 <p className="text-xs font-semibold text-[#1A284F]">Peran Approval Calibration</p>
@@ -1805,6 +1837,16 @@ export function UserManagementPage() {
     };
   }, []);
 
+  useEffect(() => {
+    setSearch("");
+    setRoleFilter("All Roles");
+    setStatusFilter("All Status");
+    setDivisiFilter("All Divisi");
+    setDeptFilter("All Departemen");
+    setCurrentPage(1);
+    setSelectedIds(new Set());
+  }, [selectedCompany]);
+
   if (!selectedCompany) {
     return (
       <CompanyUnitPicker
@@ -1842,7 +1884,12 @@ export function UserManagementPage() {
   const paginated = allFiltered.slice((page - 1) * pageSize, page * pageSize);
 
   function reset() {
-    setSearch(""); setRoleFilter("All Roles"); setStatusFilter("All Status"); setCurrentPage(1);
+    setSearch("");
+    setRoleFilter("All Roles");
+    setStatusFilter("All Status");
+    setDivisiFilter("All Divisi");
+    setDeptFilter("All Departemen");
+    setCurrentPage(1);
   }
 
   function handleSave(updated: User) {
@@ -2145,8 +2192,13 @@ export function UserManagementPage() {
                     <div className="flex flex-col items-start gap-1">
                       <RoleBadge role={user.role} />
                       {(user.role === "HR Unit" || user.isHrUnitChecker) && (
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 font-medium">
-                          Checker HR Unit
+                        <span
+                          className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 font-medium"
+                          title={getEffectiveCheckerUnits(user).join(", ")}
+                        >
+                          {getEffectiveCheckerUnits(user).length > 1
+                            ? `Checker HR (${getEffectiveCheckerUnits(user).length} Unit)`
+                            : "Checker HR Unit"}
                         </span>
                       )}
                       {(user.role === "HR ICF" || user.isHrIcfValidator) && (

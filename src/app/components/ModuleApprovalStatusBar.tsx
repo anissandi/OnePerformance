@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  canCheckerHandleCompanyUnit,
   findHrIcfValidatorUser,
   findHrUnitCheckerUserForCompany,
   getActiveUser,
@@ -147,8 +148,7 @@ export function ModuleApprovalStatusBar({
       const decUser = resolveUserByRef(allUsers, chkDec.approverName);
       if (
         decUser &&
-        decUser.role === "HR Unit" &&
-        decUser.company.trim().toLowerCase() === activeUser.company.trim().toLowerCase()
+        canCheckerHandleCompanyUnit(decUser, activeUser.company)
       ) {
         return decUser.name;
       }

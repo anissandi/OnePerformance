@@ -12,6 +12,7 @@ import {
   getActiveUser,
   getAllowedApprovalTypesForUser,
   getAuthorizedSubordinates,
+  canCheckerHandleCompanyUnit,
   isAdminOrHrIcfRole,
   isSameCompanyUnit,
   resolveReviewerRoleForTarget,
@@ -300,7 +301,9 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
         const unitUsers = allUsers.filter(
           (u) =>
             u.employeeId !== activeUser.employeeId &&
-            (authIds.has(u.employeeId.toLowerCase()) || isSameCompanyUnit(u.company, activeUser.company)),
+            (authIds.has(u.employeeId.toLowerCase()) ||
+              canCheckerHandleCompanyUnit(activeUser, u.company) ||
+              isSameCompanyUnit(u.company, activeUser.company)),
         );
         return unitUsers;
       }

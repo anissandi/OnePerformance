@@ -46,9 +46,12 @@ import {
   readCalibrationTargets, getModuleScoreGrade,
 } from "../../data/mockEmployees";
 import {
+  canCheckerHandleCompanyUnit,
+  getEffectiveCheckerUnits,
   getAuthorizedSubordinates,
   isAdminOrHrIcfRole,
   isExcludedFromAppraisalCalibration,
+  isSameCompanyUnit,
   loadManagedUsers,
   resolveUserAllowedModules,
   shouldBypassCheckerForSubmission,
@@ -1473,7 +1476,12 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const [tick, setTick] = useState(0);
   const scopeUser = getActiveUserForScope();
   const isGlobalViewer = isAdminOrHrIcfRole(scopeUser.role) || scopeUser.role === "BOD";
-  const isCheckerRole = Boolean(scopeUser.isHrUnitChecker || scopeUser.role === "HR Unit");
+  const isCheckerRole = !isGlobalViewer && Boolean(scopeUser.isHrUnitChecker || scopeUser.role === "HR Unit");
+  const checkerAllowedUnits = useMemo(
+    () => (isCheckerRole ? getEffectiveCheckerUnits(scopeUser) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isCheckerRole, scopeUser.employeeId, scopeUser.company, (scopeUser.checkerUnits ?? []).join(","), (scopeUser.managedUnits ?? []).join(","), tick],
+  );
   const isModuleScopedRole = scopeUser.role === "Supervisor";
   const globalLockedUnits = isGlobalViewer ? (lockedUnits ?? authLockedUnits) : undefined;
 
@@ -1486,12 +1494,16 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       getAuthorizedSubordinates(scopeUser, loadManagedUsers()).map((u) => u.employeeId.toLowerCase()),
     );
     if (isCheckerRole) {
-      // Checker: melihat seluruh Unit Usahanya (seperti GM Unit Usaha) + bawahan approver/multi-scope jika ada
-      return all.filter((u) => u.company === scopeUser.company || authorizedIds.has(u.employeeId.toLowerCase()));
+      // Checker: melihat seluruh karyawan di Company Unit yang di-allow pada konfigurasi Checker (Lintas Unit Usaha) + bawahan approver bila ada
+      return all.filter(
+        (u) =>
+          canCheckerHandleCompanyUnit(scopeUser, u.company) ||
+          authorizedIds.has(u.employeeId.toLowerCase()),
+      );
     }
     return all.filter((u) => authorizedIds.has(u.employeeId.toLowerCase()));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGlobalViewer, isCheckerRole, globalLockedUnits, scopeUser.employeeId, scopeUser.role, tick]);
+  }, [isGlobalViewer, isCheckerRole, checkerAllowedUnits.join(","), globalLockedUnits, scopeUser.employeeId, scopeUser.role, tick]);
 
   const moduleOptions = useMemo(() => {
     if (!isModuleScopedRole) return filterOptions.module;
@@ -1520,6 +1532,14 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       }
       return ["All Units", ...globalLockedUnits];
     }
+    if (isCheckerRole && checkerAllowedUnits.length > 0) {
+      const orderedChecker = [
+        ...filterOptions.companyUnit.slice(1).filter((u) => checkerAllowedUnits.some((cu) => isSameCompanyUnit(u, cu))),
+        ...checkerAllowedUnits.filter((cu) => !filterOptions.companyUnit.some((u) => isSameCompanyUnit(u, cu))),
+      ];
+      if (orderedChecker.length === 1) return [orderedChecker[0]];
+      if (orderedChecker.length > 1) return ["All Units", ...orderedChecker];
+    }
     const unitSet = new Set(allManagedActiveUsers.map((u) => u.company).filter(Boolean));
     const orderedUnits = [
       ...filterOptions.companyUnit.slice(1).filter((u) => unitSet.has(u)),
@@ -1532,7 +1552,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       return [orderedUnits[0]];
     }
     return ["All Units", ...orderedUnits];
-  }, [isGlobalViewer, globalLockedUnits, allManagedActiveUsers, scopeUser.company]);
+  }, [isGlobalViewer, isCheckerRole, checkerAllowedUnits, globalLockedUnits, allManagedActiveUsers, scopeUser.company]);
 
   const defaultCompanyUnit = companyUnitOptions.length === 1 ? companyUnitOptions[0] : "All Units";
 
@@ -1625,22 +1645,22 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         : liveEmployees.filter((e) => allowedIds.has(e.id.toLowerCase()));
       return unitEmployees.filter(
         (e) =>
-          (companyUnit === "All Units" || e.companyUnit === companyUnit) &&
-          (division === "All Divisions" || e.division === division) &&
-          (department === "All Departments" || e.department === department),
+          (companyUnit === "All Units" || isSameCompanyUnit(e.companyUnit, companyUnit)) &&
+          (isCheckerRole || division === "All Divisions" || e.division === division) &&
+          (isCheckerRole || department === "All Departments" || e.department === department),
       );
     },
-    [companyUnit, division, department, isGlobalViewer, globalLockedUnits, allManagedActiveUsers, liveEmployees],
+    [companyUnit, division, department, isCheckerRole, isGlobalViewer, globalLockedUnits, allManagedActiveUsers, liveEmployees],
   );
 
   const scopedUsers = useMemo(() => {
     return allManagedActiveUsers.filter(
       (u) =>
-        (companyUnit === "All Units" || u.company === companyUnit) &&
-        (division === "All Divisions" || u.division === division) &&
-        (department === "All Departments" || u.department === department),
+        (companyUnit === "All Units" || isSameCompanyUnit(u.company, companyUnit)) &&
+        (isCheckerRole || division === "All Divisions" || u.division === division) &&
+        (isCheckerRole || department === "All Departments" || u.department === department),
     );
-  }, [allManagedActiveUsers, companyUnit, division, department]);
+  }, [allManagedActiveUsers, companyUnit, division, department, isCheckerRole]);
 
   const workflows = useMemo(
     () => loadWorkflowRecords().filter((w) => matchesMonthFilter(w.submittedDate, month)),
@@ -1736,8 +1756,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
 
   const hasActiveFilters =
     companyUnit !== defaultCompanyUnit ||
-    division !== (divisionOptions[0] ?? "All Divisions") ||
-    department !== (departmentOptions[0] ?? "All Departments") ||
+    (!isCheckerRole && division !== (divisionOptions[0] ?? "All Divisions")) ||
+    (!isCheckerRole && department !== (departmentOptions[0] ?? "All Departments")) ||
     module !== "All Modules" ||
     year !== "2026" ||
     month !== "All Months";
@@ -1757,7 +1777,13 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
 
       {/* ── Slim Sticky Filter Bar ─────────────────────────────────────────── */}
       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border border-gray-100 rounded-xl px-4 py-2.5 shadow-sm">
-        <div className="grid gap-2.5 grid-cols-2 md:grid-cols-3 xl:grid-cols-6 items-end">
+        <div
+          className={
+            isCheckerRole
+              ? "grid gap-2.5 grid-cols-2 md:grid-cols-4 items-end"
+              : "grid gap-2.5 grid-cols-2 md:grid-cols-3 xl:grid-cols-6 items-end"
+          }
+        >
           <FilterSelect
             label={t("Company Unit")}
             options={companyUnitOptions}
@@ -1768,21 +1794,25 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
               setDepartment("All Departments");
             }}
           />
-          <FilterSelect
-            label="Division"
-            options={divisionOptions}
-            value={division}
-            onChange={(val) => {
-              setDivision(val);
-              setDepartment("All Departments");
-            }}
-          />
-          <FilterSelect
-            label="Department"
-            options={departmentOptions}
-            value={department}
-            onChange={setDepartment}
-          />
+          {!isCheckerRole && (
+            <FilterSelect
+              label="Division"
+              options={divisionOptions}
+              value={division}
+              onChange={(val) => {
+                setDivision(val);
+                setDepartment("All Departments");
+              }}
+            />
+          )}
+          {!isCheckerRole && (
+            <FilterSelect
+              label="Department"
+              options={departmentOptions}
+              value={department}
+              onChange={setDepartment}
+            />
+          )}
           <FilterSelect label={t("Module")}       options={moduleOptions}       value={module}       onChange={setModule} highlight />
           <FilterSelect label={t("Year")}         options={filterOptions.year}         value={year}         onChange={setYear} />
           <FilterSelect label={t("Month")}        options={filterOptions.month}        value={month}        onChange={setMonth} />

@@ -69,6 +69,8 @@ export interface ManagedUser {
   regNoAp2?: string;
   isHrUnitChecker?: boolean;
   isHrIcfValidator?: boolean;
+  /** Daftar Company Unit yang diizinkan untuk fungsi Checker HR Unit (Lintas Unit Usaha) */
+  checkerUnits?: string[];
   /** Peran khusus Role Director pada Calibration Approval: "approver" (Approve/Revision) atau "mengetahui" (Acknowledge) */
   directorCalibrationRole?: "approver" | "mengetahui" | "";
   /** Mapping Peran Approval Calibration per Company Unit ("approver" | "mengetahui" | "") */
@@ -150,6 +152,9 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
   const managedUnits = Array.isArray(user.managedUnits)
     ? Array.from(new Set(user.managedUnits.map((x) => canonicalizeCompanyUnitName(x)).filter(Boolean)))
     : user.managedUnits;
+  const checkerUnits = Array.isArray(user.checkerUnits)
+    ? Array.from(new Set(user.checkerUnits.map((x) => canonicalizeCompanyUnitName(x)).filter(Boolean)))
+    : user.checkerUnits;
   let calibrationRoleByUnit = user.calibrationRoleByUnit;
   if (calibrationRoleByUnit && typeof calibrationRoleByUnit === "object") {
     const nextCal: Record<string, "approver" | "mengetahui" | ""> = {};
@@ -158,7 +163,36 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     }
     calibrationRoleByUnit = nextCal;
   }
-  return { ...user, company, regNoAp1, regNoAp2, managedUnits, calibrationRoleByUnit };
+  return { ...user, company, regNoAp1, regNoAp2, managedUnits, checkerUnits, calibrationRoleByUnit };
+}
+
+/**
+ * Mengembalikan seluruh Company Unit yang diizinkan untuk fungsi HR Checker (`HR Unit` / `isHrUnitChecker`),
+ * mendukung operasional Lintas Unit Usaha sesuai konfigurasi di User Management & Access Management.
+ */
+export function getEffectiveCheckerUnits(user: ManagedUser): string[] {
+  if (!(user.role === "HR Unit" || Boolean(user.isHrUnitChecker))) return [];
+  const explicitChecker = (user.checkerUnits ?? [])
+    .map((u) => canonicalizeCompanyUnitName(u))
+    .filter(Boolean);
+  const extraManaged = (user.managedUnits ?? [])
+    .map((u) => canonicalizeCompanyUnitName(u))
+    .filter(Boolean);
+  const roleUnits = getRoleAllowedCompanyUnits(user.role)
+    .map((u) => canonicalizeCompanyUnitName(u))
+    .filter(Boolean);
+  if (explicitChecker.length > 0) {
+    return Array.from(new Set([...explicitChecker, ...extraManaged, ...roleUnits]));
+  }
+  const own = canonicalizeCompanyUnitName(user.company);
+  return Array.from(new Set([own, ...extraManaged, ...roleUnits].filter(Boolean)));
+}
+
+/** Mengecek apakah `viewer` berwenang sebagai HR Checker untuk `targetCompany` (termasuk Lintas Unit Usaha). */
+export function canCheckerHandleCompanyUnit(viewer: ManagedUser, targetCompany: string): boolean {
+  if (!(viewer.role === "HR Unit" || Boolean(viewer.isHrUnitChecker))) return false;
+  const allowed = getEffectiveCheckerUnits(viewer);
+  return allowed.some((u) => isSameCompanyUnit(targetCompany, u));
 }
 
 export const SAMBU_GROUP_COMPANIES = [
@@ -577,7 +611,15 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   const checkedBagianSet = new Set<string>(checkedBagians);
 
   const allowedUnits = new Set<string>(
-    [user.company, ...roleAllowedUnits, ...calInvolvedUnits, ...(user.managedUnits ?? [])].map(normOrgName).filter(Boolean),
+    [
+      user.company,
+      ...roleAllowedUnits,
+      ...calInvolvedUnits,
+      ...(user.managedUnits ?? []),
+      ...getEffectiveCheckerUnits(user),
+    ]
+      .map(normOrgName)
+      .filter(Boolean),
   );
   const allowedDivisions = new Set<string>(
     [user.division, ...(user.managedDivisions ?? [])].map(normOrgName).filter(Boolean),
@@ -730,7 +772,7 @@ export function getDirectApprovalRoleForTarget(
   if ((reg && ap2 === reg) || (emp && ap2 === emp) || (nm && ap2 === nm)) {
     return "ap2";
   }
-  if ((viewer.role === "HR Unit" || viewer.isHrUnitChecker) && viewer.company === target.company) {
+  if (canCheckerHandleCompanyUnit(viewer, target.company)) {
     return "checker";
   }
   return "view_only";
@@ -792,9 +834,8 @@ export function resolveWorkflowStageForTarget(
   const isHrUnitChecker = Boolean(
     !isSelf &&
       isFourStepModule &&
-      (viewer.role === "HR Unit" || viewer.isHrUnitChecker) &&
       target &&
-      normOrgName(viewer.company) === normOrgName(target.company),
+      canCheckerHandleCompanyUnit(viewer, target.company),
   );
   const isHrIcfValidator = Boolean(
     viewer.role === "HR ICF" ||
@@ -891,25 +932,44 @@ export function getScopedFilterOptionsForUser(
 ): ScopedHierarchyFilterOptions {
   const level = resolveUserAuthorityLevel(user);
   const subs = getStrictSubordinateUsers(user, allUsers);
-  const pool = subs.length > 0 ? subs : [user];
+  const checkerUnits = getEffectiveCheckerUnits(user);
+  const checkerPool =
+    checkerUnits.length > 0
+      ? allUsers.filter(
+          (u) =>
+            u.status === "Active" &&
+            u.employeeId.toLowerCase() !== user.employeeId.toLowerCase() &&
+            checkerUnits.some((cu) => isSameCompanyUnit(u.company, cu)),
+        )
+      : [];
+  const mergedMap = new Map<string, ManagedUser>();
+  for (const u of [...subs, ...checkerPool]) {
+    mergedMap.set(u.employeeId.toLowerCase(), u);
+  }
+  const mergedSubs = Array.from(mergedMap.values());
+  const pool = mergedSubs.length > 0 ? mergedSubs : [user];
 
   const uniq = (arr: (string | undefined)[]) =>
     Array.from(new Set(arr.map((v) => (v ?? "").trim()).filter(Boolean))).sort();
 
   const groupName = getGroupNameForUnit(user.company);
   const groupUnitsCount = getGroupCompaniesForUnit(user.company, user.managedUnits).length;
+  const checkerLabel =
+    checkerUnits.length > 1
+      ? `HR Checker Lintas Unit (${checkerUnits.length} Unit Usaha)`
+      : `HR Unit Usaha (${checkerUnits[0] ?? user.company})`;
   const LABEL_BY_LEVEL: Record<HierarchyAuthorityLevel, string> = {
     admin: "Administrator / HR ICF (Semua Unit Usaha)",
     bod: "Board of Directors (Semua Unit Group)",
     director_group: `Level Direktur Group (${groupName} — ${groupUnitsCount} Unit Usaha, GM, Divisi, Dept, Bagian & All Posisi)`,
     gm_unit: `Level GM Unit Usaha (${user.company})`,
     vgm_unit: `Level ${user.role === "Coordinator" ? "Coordinator" : "vGM"} (${user.company})`,
-    hr_unit: `HR Unit Usaha (${user.company})`,
+    hr_unit: checkerLabel,
     division: `Level Divisi (${user.division} — ${user.company})`,
     department: `Level Departemen (${user.department} · ${user.division})`,
     bagian: `Level Bagian (${user.bagian || user.department} · ${user.department})`,
     seksi: `Level Seksi (${user.bagian || user.department})`,
-    operational: `Level Individu (${user.name})`,
+    operational: checkerUnits.length > 0 ? checkerLabel : `Level Individu (${user.name})`,
   };
 
   return {
@@ -1395,24 +1455,40 @@ export function findHrIcfValidatorUser(allUsers = loadManagedUsers()): ManagedUs
 }
 
 /**
- * Checker resmi adalah user dengan role "HR Unit" pada Unit Usaha yang sama (ada filter unit usaha).
+ * Mengembalikan seluruh Checker resmi (sama unit maupun lintas unit usaha) yang berwenang memeriksa `companyName`.
+ */
+export function findAllHrUnitCheckerUsersForCompany(
+  companyName: string,
+  excludeEmployeeId?: string,
+  allUsers = loadManagedUsers(),
+): ManagedUser[] {
+  const exNorm = (excludeEmployeeId ?? "").trim().toLowerCase();
+  const eligible = allUsers.filter(
+    (u) =>
+      u.status === "Active" &&
+      (!exNorm || u.employeeId.trim().toLowerCase() !== exNorm) &&
+      canCheckerHandleCompanyUnit(u, companyName),
+  );
+  // Urutkan agar HR Unit pada unit asal didahulukan bila dibutuhkan tampilan nama tunggal, namun semua tetap diikutkan untuk notifikasi
+  return eligible.sort((a, b) => {
+    const aSame = isSameCompanyUnit(a.company, companyName) ? 0 : 1;
+    const bSame = isSameCompanyUnit(b.company, companyName) ? 0 : 1;
+    if (aSame !== bSame) return aSame - bSame;
+    const aRole = a.role === "HR Unit" ? 0 : 1;
+    const bRole = b.role === "HR Unit" ? 0 : 1;
+    return aRole - bRole;
+  });
+}
+
+/**
+ * Checker resmi utama untuk tampilan informasi alur approval `companyName` (mendukung Checker lintas unit).
  */
 export function findHrUnitCheckerUserForCompany(
   companyName: string,
   excludeEmployeeId?: string,
   allUsers = loadManagedUsers(),
 ): ManagedUser | undefined {
-  const targetCompany = normOrgName(companyName);
-  const exNorm = (excludeEmployeeId ?? "").trim().toLowerCase();
-  const matchesUnitAndNotSelf = (u: ManagedUser) =>
-    u.status === "Active" &&
-    normOrgName(u.company) === targetCompany &&
-    (!exNorm || u.employeeId.trim().toLowerCase() !== exNorm);
-
-  return (
-    allUsers.find((u) => matchesUnitAndNotSelf(u) && u.role === "HR Unit") ??
-    allUsers.find((u) => matchesUnitAndNotSelf(u) && Boolean(u.isHrUnitChecker))
-  );
+  return findAllHrUnitCheckerUsersForCompany(companyName, excludeEmployeeId, allUsers)[0];
 }
 
 /**
@@ -1424,6 +1500,7 @@ export function findHrUnitCheckerUserForCompany(
 export function getEffectiveLockedUnitsForUser(user: ManagedUser, allUsers = loadManagedUsers()): string[] | undefined {
   const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
   const extraManaged = (user.managedUnits ?? []).filter(Boolean);
+  const checkerUnits = getEffectiveCheckerUnits(user);
 
   if (isAdminOrHrIcfRole(user.role) || user.role === "BOD") {
     if (roleAllowedUnits.length > 0) {
@@ -1438,13 +1515,13 @@ export function getEffectiveLockedUnitsForUser(user: ManagedUser, allUsers = loa
 
   if (isDirectorRoleOrGrouping(user)) {
     if (roleAllowedUnits.length > 0) {
-      return Array.from(new Set([...roleAllowedUnits, ...extraManaged, ...authorizedUnits]));
+      return Array.from(new Set([...roleAllowedUnits, ...extraManaged, ...checkerUnits, ...authorizedUnits]));
     }
-    return Array.from(new Set([...getGroupCompaniesForUnit(user.company, extraManaged), ...authorizedUnits]));
+    return Array.from(new Set([...getGroupCompaniesForUnit(user.company, extraManaged), ...checkerUnits, ...authorizedUnits]));
   }
 
-  if (authorizedUnits.length > 0) {
-    return Array.from(new Set(authorizedUnits));
+  if (authorizedUnits.length > 0 || checkerUnits.length > 0) {
+    return Array.from(new Set([...authorizedUnits, ...checkerUnits]));
   }
 
   if (roleAllowedUnits.length > 0) {

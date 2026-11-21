@@ -141,7 +141,46 @@ function deriveCanonicalAlias(no: string): WorkflowAlias | undefined {
   return undefined;
 }
 
-export function loadWorkflowRecords(): WorkflowRecord[] { return read(KEY, []); }
+function sanitizeWorkflowAutoNote(rawNote?: string): string | undefined {
+  if (!rawNote) return undefined;
+  const cleaned = rawNote
+    .replace(/\s*\(Otomatis:\s*Approver\s*1\s*&\s*Approver\s*2[^)]*\)/gi, "")
+    .replace(/^Otomatis:\s*Approver\s*1\s*&\s*Approver\s*2.*$/gi, "")
+    .trim();
+  return cleaned || undefined;
+}
+
+function sanitizeWorkflowRecord(rec: WorkflowRecord): WorkflowRecord {
+  if (!rec || typeof rec !== "object") return rec;
+  const nextDecisions: WorkflowRecord["decisions"] = {};
+  if (rec.decisions && typeof rec.decisions === "object") {
+    for (const [k, v] of Object.entries(rec.decisions)) {
+      if (!v) continue;
+      nextDecisions[k as keyof WorkflowRecord["decisions"]] = {
+        ...v,
+        note: sanitizeWorkflowAutoNote(v.note),
+      };
+    }
+  }
+  const nextLog = Array.isArray(rec.decisionLog)
+    ? rec.decisionLog.map((e) => ({ ...e, note: sanitizeWorkflowAutoNote(e.note) }))
+    : rec.decisionLog;
+  const nextRev = Array.isArray(rec.revisionHistory)
+    ? rec.revisionHistory
+        .map((r) => ({ ...r, note: sanitizeWorkflowAutoNote(r.note) ?? "" }))
+        .filter((r) => Boolean(r.note))
+    : rec.revisionHistory;
+  return {
+    ...rec,
+    decisions: nextDecisions,
+    decisionLog: nextLog,
+    revisionHistory: nextRev,
+  };
+}
+
+export function loadWorkflowRecords(): WorkflowRecord[] {
+  return read<WorkflowRecord[]>(KEY, []).map(sanitizeWorkflowRecord);
+}
 export function workflowAlias(no: string): WorkflowAlias | undefined {
   ensureLegacyAliasesMigrated();
   return workflowAliasesMemory.get(no) ?? deriveCanonicalAlias(no);
@@ -287,7 +326,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       u.employeeId.trim().toLowerCase() === alias.employeeId.trim().toLowerCase(),
   );
   const resolvedCheckerName =
-    activeUser.role === "HR Unit"
+    activeUser.role === "HR Unit" || Boolean(activeUser.isHrUnitChecker)
       ? activeUser.name
       : findHrUnitCheckerUserForCompany(
           ownerUser?.company || activeUser.company,
@@ -352,7 +391,7 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
       decisions.approver2 = {
         status: mirrored,
         date: effectiveDate,
-        note: note?.trim() ? `${note.trim()} (Otomatis: Approver 1 & Approver 2 sama)` : "Otomatis: Approver 1 & Approver 2 adalah orang yang sama",
+        note: note?.trim() || undefined,
         approverName: actingName("approver1"),
       };
       if (assessments.approver1) assessments.approver2 = { ...assessments.approver1 };

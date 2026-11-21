@@ -341,6 +341,13 @@ export function DataSyncPage() {
             lastLogin: prev?.lastLogin ?? "",
             isHrUnitChecker: inferredRole === "HR Unit" ? true : prev?.isHrUnitChecker,
             isHrIcfValidator: inferredRole === "HR ICF" || inferredRole === "Administrator" ? true : prev?.isHrIcfValidator,
+            checkerUnits: prev?.checkerUnits,
+            managedUnits: prev?.managedUnits,
+            managedDivisions: prev?.managedDivisions,
+            managedDepartments: prev?.managedDepartments,
+            managedBagians: prev?.managedBagians,
+            calibrationRoleByUnit: prev?.calibrationRoleByUnit,
+            directorCalibrationRole: prev?.directorCalibrationRole,
           };
 
           if (existingIdx >= 0) {

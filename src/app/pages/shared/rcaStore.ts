@@ -151,7 +151,7 @@ export function saveRCASubmission(row: StoredRCASubmission, opts: { submitNow?: 
   };
   const all = loadAll();
   const idx = all.findIndex(
-    (r) => r.key === row.key && (!r.employeeId || normalizeEmployeeId(r.employeeId) === normEmpId),
+    (r) => r.key === row.key && normalizeEmployeeId(r.employeeId ?? "") === normEmpId,
   );
   if (idx >= 0) {
     all[idx] = row;
@@ -171,25 +171,28 @@ export function submitRCAsForMonths(employeeId: string, monthLabels: string[]): 
   const months = new Set(monthLabels);
   const all = loadAll();
   let count = 0;
-  let lastModified: StoredRCASubmission | undefined;
+  const modifiedRows: StoredRCASubmission[] = [];
   const today = formatTodayDDMMYYYY();
   const next = all.map((r) => {
-    const owned = !r.employeeId || normalizeEmployeeId(r.employeeId) === normEmpId;
+    const owned = Boolean(r.employeeId) && normalizeEmployeeId(r.employeeId) === normEmpId;
     if (!owned || !months.has(r.monthLabel)) return r;
     if (isAllActionPlansCompleted(r)) {
       const closedRow = { ...r, employeeId: normEmpId, approvalStatus: "Closed", submittedDate: today };
-      lastModified = closedRow;
+      modifiedRows.push(closedRow);
       count++;
       return closedRow;
     }
     if (r.approvalStatus === "Closed" || r.approvalStatus === "Validated") return r;
     count++;
     const updatedRow = { ...r, employeeId: normEmpId, approvalStatus: "Pending-Check", submittedDate: today };
-    lastModified = updatedRow;
+    modifiedRows.push(updatedRow);
     return updatedRow;
   });
   if (count > 0) {
-    saveAll(next, lastModified);
+    saveAll(next, modifiedRows[modifiedRows.length - 1]);
+    for (let i = 0; i < modifiedRows.length - 1; i++) {
+      void syncToSupabase({ kind: "rca-submission", submission: modifiedRows[i] });
+    }
     window.dispatchEvent(new Event("appraisal-updated"));
   }
   return count;
@@ -201,7 +204,9 @@ export function loadRCASubmissions(employeeId?: string): StoredRCASubmission[] {
   if (!targetId) return all;
   const normId = normalizeEmployeeId(targetId);
   return all.filter(
-    (r) => !r.employeeId || normalizeEmployeeId(r.employeeId) === normId || r.employeeId.toLowerCase() === targetId.toLowerCase(),
+    (r) =>
+      Boolean(r.employeeId) &&
+      (normalizeEmployeeId(r.employeeId) === normId || r.employeeId.toLowerCase() === targetId.toLowerCase()),
   );
 }
 
@@ -210,7 +215,11 @@ export function deleteRCASubmission(id: string): void {
   const toDelete = current.filter((r) => r.id === id || r.key === id);
   saveAll(current.filter((r) => r.id !== id && r.key !== id));
   for (const item of toDelete) {
-    void deleteBackendRecordFromSupabase("pa_rca_submissions", "doc_key", String(item.key ?? item.id));
+    const rawKey = String(item.key ?? item.id);
+    void deleteBackendRecordFromSupabase("pa_rca_submissions", "doc_key", rawKey);
+    if (item.employeeId) {
+      void deleteBackendRecordFromSupabase("pa_rca_submissions", "doc_key", `${item.employeeId}::${rawKey}`);
+    }
   }
 }
 
