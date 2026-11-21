@@ -1387,17 +1387,50 @@ export function buildEmployeeIdMatchSet(rawEmployeeId: string): Set<string> {
   return out;
 }
 
+export async function fetchVercelKvBootstrap(
+  keys: string[] = [],
+): Promise<{ ok: boolean; kvMap: Record<string, unknown> } | null> {
+  try {
+    const cleanKeys = keys.map((k) => encodeURIComponent(String(k).trim())).filter(Boolean).join(",");
+    const url = cleanKeys ? `/api/pa-sync?keys=${cleanKeys}` : "/api/pa-sync";
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.ok && (res.headers.get("content-type") || "").includes("application/json")) {
+      const json = (await res.json()) as { ok?: boolean; kvMap?: Record<string, unknown> };
+      if (json?.kvMap && typeof json.kvMap === "object") {
+        return { ok: true, kvMap: json.kvMap };
+      }
+    }
+  } catch {
+    // fallback to PostgREST below
+  }
+  try {
+    const query =
+      keys.length > 0
+        ? `select=state_key,state_value&state_key=in.(${keys.map((k) => encodeURIComponent(k.trim())).join(",")})`
+        : "select=state_key,state_value";
+    const rows = await restSelect<{ state_key?: string; state_value?: unknown }>("pa_kv_state", query);
+    const kvMap: Record<string, unknown> = {};
+    for (const r of rows) {
+      if (r?.state_key) kvMap[r.state_key] = r.state_value;
+    }
+    return { ok: true, kvMap };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Mengambil daftar Lampiran KPI Setting milik karyawan secara langsung dari Supabase
  * (`pa_evidence_files` dengan `module_type = "Lampiran KPI Setting"` + `pa_kv_state` `pa_kpi_attachments_v1`)
  * agar Approver (HR Check, AP1, AP2, Validator) lintas browser/perangkat selalu melihat lampiran terbaru.
  */
 export async function fetchKpiAttachmentsForEmployee(employeeId: string): Promise<HydratedKpiAttachmentItem[]> {
+  try {
   const matchIds = buildEmployeeIdMatchSet(employeeId);
   const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
   if (lowerIds.size === 0) return [];
 
-  const [evRows, kvData] = await Promise.all([
+  const [evRows, kvBoot] = await Promise.all([
     restSelect<Record<string, unknown>>(
       "pa_evidence_files",
       "select=*&module_type=eq.Lampiran%20KPI%20Setting&order=created_at.asc",
@@ -1405,22 +1438,10 @@ export async function fetchKpiAttachmentsForEmployee(employeeId: string): Promis
     fetchVercelKvBootstrap(["pa_kpi_attachments_v1"]),
   ]);
 
-  let kvMap: Record<string, HydratedKpiAttachmentItem[]> = {};
-  if (kvData?.kvMap?.pa_kpi_attachments_v1 && typeof kvData.kvMap.pa_kpi_attachments_v1 === "object") {
-    kvMap = kvData.kvMap.pa_kpi_attachments_v1 as Record<string, HydratedKpiAttachmentItem[]>;
-  } else {
-    try {
-      const directKv = await restSelect<{ state_value?: Record<string, HydratedKpiAttachmentItem[]> }>(
-        "pa_kv_state",
-        "select=state_value&state_key=eq.pa_kpi_attachments_v1",
-      );
-      if (directKv[0]?.state_value && typeof directKv[0].state_value === "object") {
-        kvMap = directKv[0].state_value;
-      }
-    } catch {
-      // ignore
-    }
-  }
+  const kvMap: Record<string, HydratedKpiAttachmentItem[]> =
+    kvBoot?.kvMap?.pa_kpi_attachments_v1 && typeof kvBoot.kvMap.pa_kpi_attachments_v1 === "object"
+      ? (kvBoot.kvMap.pa_kpi_attachments_v1 as Record<string, HydratedKpiAttachmentItem[]>)
+      : {};
 
   const mergedById = new Map<string, HydratedKpiAttachmentItem>();
   const seenNameSize = new Set<string>();
@@ -1499,10 +1520,14 @@ export async function fetchKpiAttachmentsForEmployee(employeeId: string): Promis
     }
   }
   return finalList;
+  } catch {
+    return [];
+  }
 }
 
 /** Mengambil baris KPI Setting milik karyawan langsung dari tabel `pa_kpi_settings` bila cache lokal belum terisi. */
 export async function fetchEmployeeKpiSettingsLive<T = Record<string, unknown>>(employeeId: string): Promise<T[]> {
+  try {
   const matchIds = buildEmployeeIdMatchSet(employeeId);
   const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
   if (lowerIds.size === 0) return [];
@@ -1524,6 +1549,47 @@ export async function fetchEmployeeKpiSettingsLive<T = Record<string, unknown>>(
     }
   }
   return [];
+  } catch {
+    return [];
+  }
+}
+
+/** Mengambil data SMART Goals (goals + checkin_entries) milik satu karyawan langsung dari tabel Supabase `pa_smart_goals`. */
+export async function fetchEmployeeSmartGoalsLive<TGoal = Record<string, unknown>, TCheckin = Record<string, unknown>>(
+  employeeId: string,
+): Promise<{ goals: TGoal[]; checkinEntries: TCheckin[]; status: string } | null> {
+  try {
+  const matchIds = buildEmployeeIdMatchSet(employeeId);
+  const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
+  if (lowerIds.size === 0) return null;
+  const rows = await restSelect<Record<string, unknown>>("pa_smart_goals", "select=*&order=updated_at.desc");
+  for (const row of rows) {
+    const rEmp = String(row.employee_id ?? "").trim().toLowerCase();
+    if (!rEmp || !lowerIds.has(rEmp)) continue;
+    const goals = Array.isArray(row.goals) ? (row.goals as TGoal[]) : [];
+    const checkinEntries = Array.isArray(row.checkin_entries) ? (row.checkin_entries as TCheckin[]) : [];
+    const status = String(row.status ?? "");
+    const stripped = String(employeeId ?? "").trim().replace(/^emp-mi-/i, "");
+    const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+    const canonKey = num ? `EMP-${num.padStart(3, "0")}` : stripped.toUpperCase();
+    try {
+      if (goals.length > 0) {
+        const gMap = JSON.parse(safeGetLocalRaw("sg_goals_by_emp_v2") ?? "{}") ?? {};
+        gMap[canonKey] = goals;
+        safeSetLocalJson("sg_goals_by_emp_v2", gMap);
+      }
+      const cMap = JSON.parse(safeGetLocalRaw("sg_checkin_by_emp_v2") ?? "{}") ?? {};
+      cMap[canonKey] = checkinEntries;
+      safeSetLocalJson("sg_checkin_by_emp_v2", cMap);
+    } catch {
+      // ignore
+    }
+    return { goals, checkinEntries, status };
+  }
+  return null;
+  } catch {
+    return null;
+  }
 }
 
 export interface StoredAuditLogEntry {
@@ -2917,11 +2983,11 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const rawEmp = String(row.employee_id ?? "").trim();
         if (!rawEmp) continue;
         const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
-        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp;
-        if (Array.isArray(row.goals) && row.goals.length > 0 && !goalsByEmp[normId]) {
+        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp.toUpperCase();
+        if (Array.isArray(row.goals) && row.goals.length > 0) {
           goalsByEmp[normId] = row.goals;
         }
-        if (Array.isArray(row.checkin_entries) && row.checkin_entries.length > 0 && !checkinByEmp[normId]) {
+        if (Array.isArray(row.checkin_entries)) {
           checkinByEmp[normId] = row.checkin_entries;
         }
       }

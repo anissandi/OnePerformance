@@ -16,7 +16,7 @@ import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAcces
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX } from "../../utils/excelUtils";
-import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { fetchEmployeeSmartGoalsLive, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -283,7 +283,7 @@ function ActionPlansSection({
 
   return (
     <div className="border-t border-gray-100 pt-4 flex flex-col gap-4">
-      <p className="text-[11px] font-bold uppercase tracking-widest text-[#1A284F]">Status Action Plans | Attainable</p>
+      <p className="text-[11px] font-bold uppercase tracking-widest text-[#1A284F]">Status Attainable</p>
 
       {/* Horizontal table */}
       <div className="overflow-x-auto rounded-xl border border-gray-200">
@@ -291,14 +291,14 @@ function ActionPlansSection({
           <thead>
             <tr>
               <th className="bg-[#1A284F] text-white text-left px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide w-28 align-middle border-r border-white/20">
-                Action Plan
+                Attainable
               </th>
               {goal.actionPlans.map((ap, idx) => (
                 <th
                   key={ap.id}
                   className={`bg-[#1A284F] text-white text-center px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide align-middle ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}
                 >
-                  Action Plan {idx + 1}
+                  Attainable {idx + 1}
                 </th>
               ))}
             </tr>
@@ -384,7 +384,7 @@ function ActionPlansSection({
                       {editable ? (
                         <textarea rows={2} value={extra.kendala}
                           onChange={(e) => setExtra(ap.id, { kendala: e.target.value })}
-                          placeholder="Tuliskan kendala atau hambatan yang menyebabkan action plan belum dilaksanakan..."
+                          placeholder="Tuliskan kendala atau hambatan yang menyebabkan attainable belum dilaksanakan..."
                           className="text-xs border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] bg-white resize-none" />
                       ) : (
                         <p className="text-xs text-gray-700 leading-relaxed bg-gray-50 rounded-lg px-3 py-2 min-h-[36px]">
@@ -485,11 +485,11 @@ function ActionPlansSection({
                   {/* ── Batal ── */}
                   {status === "Batal" && (
                     <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wide text-red-500">Alasan Action Plan Batal</label>
+                      <label className="text-[10px] font-bold uppercase tracking-wide text-red-500">Alasan Attainable Batal</label>
                       {editable ? (
                         <textarea rows={2} value={extra.alasanBatal}
                           onChange={(e) => setExtra(ap.id, { alasanBatal: e.target.value })}
-                          placeholder="Tuliskan alasan action plan dibatalkan..."
+                          placeholder="Tuliskan alasan attainable dibatalkan..."
                           className="text-xs border border-red-200 rounded-lg px-3 py-2 outline-none focus:border-red-400 bg-red-50/40 resize-none" />
                       ) : (
                         <p className="text-xs text-red-700 leading-relaxed bg-red-50 rounded-lg px-3 py-2 min-h-[36px]">
@@ -568,7 +568,24 @@ function GoalSection({
                       <span className="font-semibold text-[11px] text-gray-700">{row.title}</span>
                     </td>
                     <td className="border-t border-gray-100 px-3 py-2 text-[11px] text-gray-700 leading-relaxed align-top">
-                      {goal[row.key] || <span className="italic text-gray-300">—</span>}
+                      {row.key === "attainable" ? (
+                        goal.actionPlans && goal.actionPlans.some((ap) => ap.description?.trim()) ? (
+                          <div className="flex flex-col gap-1">
+                            {goal.actionPlans
+                              .filter((ap) => ap.description?.trim())
+                              .map((ap, apIdx) => (
+                                <div key={ap.id ?? apIdx} className="flex items-start gap-1.5">
+                                  <span className="font-bold text-[#1A284F] shrink-0">{apIdx + 1}.</span>
+                                  <span>{ap.description}</span>
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <span className="whitespace-pre-line">{goal.attainable || <span className="italic text-gray-300">—</span>}</span>
+                        )
+                      ) : (
+                        <span className="whitespace-pre-line">{goal[row.key] || <span className="italic text-gray-300">—</span>}</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -947,8 +964,8 @@ function SmartGoalsCheckInWorkspace({
     const user = ownerUser;
     const normId = normalizeEmployeeId(user.employeeId);
     const loaded = loadSubmittedGoals(user.employeeId);
-    // DEMO: Selain Administrator, karyawan yang belum bertransaksi melihat format tabel kosong
-    const source = loaded ?? (usesDemoSampleData(user) ? SAMPLE_GOALS : []);
+    // Isolasi ketat per user: hanya membaca SMART Goals milik user ini dari penyimpanan persisten Supabase
+    const source = loaded ?? [];
     const savedCheckIn = loadCheckInEntries(user.employeeId);
     const wfSetting = loadWorkflowRecords().find(
       (r) =>
@@ -996,37 +1013,42 @@ function SmartGoalsCheckInWorkspace({
     const isA1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
     const isChkDone = Boolean(chk && chk !== "Revision");
 
-    let nextLabel = "Draft (Belum Disubmit)";
+    let nextLabel = settingValidated ? "Draft (Belum Disubmit)" : `Menunggu Setting Validated (${curSettingLabel})`;
     let nextTone: "validated" | "in_progress" | "revision" | "submitted" = "submitted";
-    if (isRev) {
-      nextLabel = "Revision";
-      nextTone = "revision";
-    } else if (isVal) {
-      nextLabel = "Validated";
-      nextTone = "validated";
-    } else if (isA2Done) {
-      nextLabel = "Pending-Validate (HR ICF)";
-      nextTone = "in_progress";
-    } else if (isA1Done) {
-      nextLabel = "Pending-Approver 2";
-      nextTone = "in_progress";
-    } else if (isChkDone) {
-      nextLabel = "Pending-Approver 1";
-      nextTone = "in_progress";
-    } else if (wfRec) {
-      nextLabel = "Submitted · Pending Check HR Unit";
-      nextTone = "submitted";
+    if (settingValidated) {
+      if (isRev) {
+        nextLabel = "Revision";
+        nextTone = "revision";
+      } else if (isVal) {
+        nextLabel = "Validated";
+        nextTone = "validated";
+      } else if (isA2Done) {
+        nextLabel = "Pending-Validate (HR ICF)";
+        nextTone = "in_progress";
+      } else if (isA1Done) {
+        nextLabel = "Pending-Approver 2";
+        nextTone = "in_progress";
+      } else if (isChkDone) {
+        nextLabel = "Pending-Approver 1";
+        nextTone = "in_progress";
+      } else if (wfRec) {
+        nextLabel = "Submitted · Pending Check HR Unit";
+        nextTone = "submitted";
+      }
+    } else {
+      nextTone = curSettingLabel === "Revision" ? "revision" : "in_progress";
     }
 
-    const isLocked = Boolean(wfRec && !isRev);
+    const isLocked = Boolean(settingValidated && wfRec && !isRev);
     // S5: Tabel SMART Goals Measurement hanya terisi setelah SMART Goals Setting berstatus Validated
     const effectiveSource = settingValidated ? source : [];
     setGoals(effectiveSource);
     setSubmitted(isLocked);
     if (isLocked) setView("preview");
+    else setView("input");
     setStatusLabel(nextLabel);
     setStatusTone(nextTone);
-    setWfRecState(wfRec);
+    setWfRecState(settingValidated ? wfRec : undefined);
 
     setEntries(
       effectiveSource.map((g) => {
@@ -1079,17 +1101,25 @@ function SmartGoalsCheckInWorkspace({
   };
 
   useEffect(() => {
+    let cancelled = false;
     syncCheckInPageState();
+    void fetchEmployeeSmartGoalsLive(ownerUser.employeeId).then((remote) => {
+      if (!cancelled && remote) {
+        syncCheckInPageState();
+      }
+    });
     window.addEventListener("pa-auth-updated", syncCheckInPageState);
     window.addEventListener("appraisal-updated", syncCheckInPageState);
     window.addEventListener("pa-db-hydrated", syncCheckInPageState);
     window.addEventListener("storage", syncCheckInPageState);
     return () => {
+      cancelled = true;
       window.removeEventListener("pa-auth-updated", syncCheckInPageState);
       window.removeEventListener("appraisal-updated", syncCheckInPageState);
       window.removeEventListener("pa-db-hydrated", syncCheckInPageState);
       window.removeEventListener("storage", syncCheckInPageState);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerUser.employeeId]);
 
   const updateEntry = (goalId: number, updated: CheckInEntry) =>
@@ -1169,7 +1199,7 @@ function SmartGoalsCheckInWorkspace({
       goal.actionPlans.forEach((ap, apIdx) => {
         const st: LocalStatus = entry?.actionPlanStatuses?.[ap.id] ?? "-";
         const extra = entry?.actionPlanExtras?.[ap.id] ?? getDefaultExtra();
-        const apName = `${goal.label} — Action Plan ${apIdx + 1}`;
+        const apName = `${goal.label} — Attainable ${apIdx + 1}`;
         if (st === "-") {
           missing.push(`${apName}: Status belum dipilih`);
         } else if (st === "Belum dilaksanakan" && !extra.kendala.trim()) {
@@ -1184,7 +1214,7 @@ function SmartGoalsCheckInWorkspace({
         } else if (st === "Selesai" && extra.evidence.length === 0) {
           missing.push(`${apName}: Bukti/Evidence wajib diupload`);
         } else if (st === "Batal" && !extra.alasanBatal.trim()) {
-          missing.push(`${apName}: Alasan Action Plan Batal wajib diisi`);
+          missing.push(`${apName}: Alasan Attainable Batal wajib diisi`);
         }
       });
 

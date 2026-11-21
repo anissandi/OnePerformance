@@ -15,6 +15,7 @@ import { FORMS, type FormItem } from "../pages/employee/AppraisalForm";
 import { KPI_ITEMS, loadKPITracking } from "../pages/employee/KPIPage";
 import { SAMPLE_GOALS, ROWS } from "../pages/employee/SMARTGoals";
 import { loadCheckInEntries, loadSubmittedGoals, type StoredSmartGoalEvidenceFile } from "../pages/shared/smartGoalsStore";
+import { fetchEmployeeSmartGoalsLive } from "../services/supabaseClient";
 import { loadKPIComments, loadKPICommentsForEmployee, saveKPIComment } from "../pages/shared/kpiCommentsStore";
 import { loadEvidenceFiles, type StoredEvidenceFile } from "../pages/shared/kpiEvidenceStore";
 import { saveAssessment, loadAssessment, loadSGAssessment } from "../pages/shared/approvalsStore";
@@ -737,7 +738,7 @@ function SG_GoalCard({
         {totalAPs > 0 && (
           <div className="flex items-center gap-2">
             <div className="w-20 h-1.5 bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-green-400 rounded-full" style={{ width: `${pct}%` }} /></div>
-            <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} AP</span>
+            <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} Attainable</span>
           </div>
         )}
         {collapsed ? <ChevronDown className="w-4 h-4 text-white/60 shrink-0" /> : <ChevronUp className="w-4 h-4 text-white/60 shrink-0" />}
@@ -759,7 +760,24 @@ function SG_GoalCard({
                       <span className="font-semibold text-[11px] text-gray-700">{row.title}</span>
                     </td>
                     <td className="border-t border-gray-100 px-3 py-2 text-[11px] text-gray-700 leading-relaxed">
-                      {(goal[row.key as keyof typeof goal] as string) || <span className="italic text-gray-300">—</span>}
+                      {row.key === "attainable" ? (
+                        goal.actionPlans && goal.actionPlans.some((ap) => ap.description?.trim()) ? (
+                          <div className="flex flex-col gap-1">
+                            {goal.actionPlans
+                              .filter((ap) => ap.description?.trim())
+                              .map((ap, apIdx) => (
+                                <div key={ap.id ?? apIdx} className="flex items-start gap-1.5">
+                                  <span className="font-bold text-[#1A284F] shrink-0">{apIdx + 1}.</span>
+                                  <span>{ap.description}</span>
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <span className="whitespace-pre-line">{(goal[row.key as keyof typeof goal] as string) || <span className="italic text-gray-300">—</span>}</span>
+                        )
+                      ) : (
+                        <span className="whitespace-pre-line">{(goal[row.key as keyof typeof goal] as string) || <span className="italic text-gray-300">—</span>}</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -768,14 +786,14 @@ function SG_GoalCard({
           </div>
           {goal.actionPlans.length > 0 && (
             <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Action Plans</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Attainable</p>
               <div className="overflow-x-auto rounded-xl border border-gray-200">
                 <table className="w-full text-xs border-collapse" style={{ minWidth: `${180 + goal.actionPlans.length * 160}px` }}>
                   <thead>
                     <tr>
-                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-28 border-r border-white/20">Action Plans</th>
+                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-28 border-r border-white/20">Attainable</th>
                       {goal.actionPlans.map((ap, idx) => (
-                        <th key={ap.id} className={`bg-[#1A284F] text-white text-center px-3 py-2 text-[10px] font-bold uppercase tracking-wide ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}>Action Plan {idx + 1}</th>
+                        <th key={ap.id} className={`bg-[#1A284F] text-white text-center px-3 py-2 text-[10px] font-bold uppercase tracking-wide ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}>Attainable {idx + 1}</th>
                       ))}
                     </tr>
                   </thead>
@@ -1070,6 +1088,19 @@ function SmartGoalsApproverReview({
   companyUnit?: string;
 }) {
   const [previewEvidenceFile, setPreviewEvidenceFile] = useState<StoredSmartGoalEvidenceFile | null>(null);
+  const [, setSgRemoteTick] = useState(0);
+  React.useEffect(() => {
+    if (!employeeId) return;
+    let cancelled = false;
+    void fetchEmployeeSmartGoalsLive(employeeId).then((remote) => {
+      if (!cancelled && remote) {
+        setSgRemoteTick((t) => t + 1);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [employeeId]);
   const live = loadSubmittedGoals(employeeId);
   const goals = live && live.length > 0 ? live : [];
   const ownerCheckInEntries = loadCheckInEntries(employeeId);

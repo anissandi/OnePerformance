@@ -135,7 +135,7 @@ const INITIAL_MENUS: MenuItem[] = [
     ],
   },
   {
-    id: "history", label: "PA Cycle History", path: "/history", icon: "BookOpen",
+    id: "history", label: "PA Cycle History", path: "/history", icon: "History",
     isVisible: true, order: 10, roles: ["Administrator", "BOD", "Director", "GM", "HR Unit", "HR ICF", "Supervisor"] as Role[],
   },
   {
@@ -143,11 +143,11 @@ const INITIAL_MENUS: MenuItem[] = [
     isVisible: true, order: 11, roles: ALL_ROLES,
   },
   {
-    id: "feedback", label: "Feedback", path: "", icon: "MessageSquare",
+    id: "feedback", label: "Help & Feedback", path: "", icon: "MessageSquareWarning",
     isVisible: true, order: 11.5, roles: ALL_ROLES,
     children: [
-      { id: "feedback_form",     label: "Form Feedback",      path: "/feedback/form",      icon: "MessageSquare", isVisible: true, order: 1, roles: ALL_ROLES },
-      { id: "feedback_followup", label: "Follow-Up Feedback", path: "/feedback/follow-up", icon: "CheckSquare",   isVisible: true, order: 2, roles: ["Administrator", "HR ICF"] as Role[] },
+      { id: "feedback_form",     label: "Form Help & Feedback", path: "/help-feedback/form",      icon: "MessageSquareWarning", isVisible: true, order: 1, roles: ALL_ROLES },
+      { id: "feedback_followup", label: "Follow-Up Feedback",   path: "/help-feedback/follow-up", icon: "CheckSquare",          isVisible: true, order: 2, roles: ["Administrator", "HR ICF"] as Role[] },
     ],
   },
   {

@@ -1,9 +1,16 @@
 // @refresh reset
-import React, { useEffect, useState } from "react";
-import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, ChevronRight, Info, AlertTriangle, Clock, RotateCcw, Lock } from "lucide-react";
-import { loadSubmittedGoals, saveSubmittedGoals } from "../shared/smartGoalsStore";
+import React, { useEffect, useRef, useState } from "react";
+import { useBlocker } from "react-router";
+import { Plus, Trash2, Eye, CheckCircle2, FileText, Edit3, Send, Info, AlertTriangle } from "lucide-react";
+import {
+  formatSmartGoalAttainableVertical,
+  loadSubmittedGoals,
+  parseSmartGoalAttainablePoints,
+  saveSubmittedGoals,
+} from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
-import { getActiveUser, loadManagedUsers, useAuthStore, usesDemoSampleData, type ManagedUser } from "../../store/authStore";
+import { loadManagedUsers, useAuthStore, type ManagedUser } from "../../store/authStore";
+import { fetchEmployeeSmartGoalsLive } from "../../services/supabaseClient";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
 import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
@@ -283,10 +290,7 @@ function SmartTable({
                       const pts = parseAttainablePoints(g);
                       const commitPts = (nextPts: string[]) => {
                         const cleaned = nextPts.length > 0 ? nextPts : [""];
-                        const formatted = cleaned
-                          .map((p, idx) => `${idx + 1}. ${p}`)
-                          .filter(Boolean)
-                          .join("; ");
+                        const formatted = formatSmartGoalAttainableVertical(cleaned);
                         if (onSyncAttainablePlans) {
                           onSyncAttainablePlans(g.id, cleaned);
                         } else {
@@ -452,20 +456,24 @@ function InputView({
   goals,
   setGoals,
   onPreview,
+  onSubmit,
   onExport,
   onImport,
   canCreate = true,
   canEdit = true,
   canDelete = true,
+  canSubmit = true,
 }: {
   goals: SmartGoal[];
   setGoals: (updater: SmartGoal[] | ((prev: SmartGoal[]) => SmartGoal[])) => void;
   onPreview: () => void;
+  onSubmit: () => void;
   onExport: () => void;
   onImport: (file: File) => Promise<void>;
   canCreate?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
+  canSubmit?: boolean;
 }) {
   const [showMinModal, setShowMinModal] = useState(false);
 
@@ -487,10 +495,7 @@ function InputView({
   };
 
   const syncAttainablePlans = (id: number, points: string[]) => {
-    const formatted = points
-      .map((p, idx) => (p.length > 0 ? `${idx + 1}. ${p}` : ""))
-      .filter(Boolean)
-      .join("; ");
+    const formatted = formatSmartGoalAttainableVertical(points);
     setGoals((prev) =>
       prev.map((g) => {
         if (g.id !== id) return g;
@@ -559,7 +564,7 @@ function InputView({
     });
     return out;
   })();
-  const [previewTipOpen, setPreviewTipOpen] = useState(false);
+  const [submitTipOpen, setSubmitTipOpen] = useState(false);
 
   return (
     <div className="flex flex-col gap-6">
@@ -589,33 +594,48 @@ function InputView({
         onSyncAttainablePlans={syncAttainablePlans}
       />
 
-      <div className="flex justify-end gap-3 pt-2">
-        <Tooltip open={!allFilled && previewTipOpen} onOpenChange={setPreviewTipOpen}>
-          <TooltipTrigger asChild>
-            <span
-              tabIndex={0}
-              className="inline-flex"
-              onClick={() => { if (!allFilled) setPreviewTipOpen(true); }}
-            >
-              <button
-                onClick={onPreview}
-                disabled={!allFilled}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+      <div className="flex items-center justify-end gap-3 pt-2 flex-wrap">
+        <button
+          type="button"
+          onClick={onPreview}
+          disabled={goals.length === 0}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <Eye className="w-4 h-4" />
+          Preview
+        </button>
+        {canSubmit && (
+          <Tooltip open={!allFilled && submitTipOpen} onOpenChange={setSubmitTipOpen}>
+            <TooltipTrigger asChild>
+              <span
+                tabIndex={0}
+                className="inline-flex"
+                onMouseEnter={() => { if (!allFilled) setSubmitTipOpen(true); }}
+                onMouseLeave={() => setSubmitTipOpen(false)}
+                onClick={() => { if (!allFilled) setSubmitTipOpen((o) => !o); }}
               >
-                <Eye className="w-4 h-4" />
-                Preview
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top" align="end" className="max-w-sm bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
-            <p className="font-bold text-xs mb-1">Preview belum aktif — lengkapi data berikut ({previewMissing.length}):</p>
-            <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90 max-h-48 overflow-y-auto">
-              {previewMissing.slice(0, 8).map((m, i) => <li key={i}>{m}</li>)}
-              {previewMissing.length > 8 && <li>...dan {previewMissing.length - 8} lainnya.</li>}
-            </ul>
-          </TooltipContent>
-        </Tooltip>
+                <button
+                  type="button"
+                  onClick={onSubmit}
+                  disabled={!allFilled}
+                  className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+                >
+                  <Send className="w-4 h-4" />
+                  Submit for Approval
+                </button>
+              </span>
+            </TooltipTrigger>
+            {!allFilled && (
+              <TooltipContent side="top" align="end" className="max-w-sm bg-[#1A284F] text-white p-3 rounded-xl shadow-lg">
+                <p className="font-bold text-xs mb-1">Submit belum aktif — lengkapi data berikut ({previewMissing.length}):</p>
+                <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-white/90 max-h-48 overflow-y-auto">
+                  {previewMissing.slice(0, 8).map((m, i) => <li key={i}>{m}</li>)}
+                  {previewMissing.length > 8 && <li>...dan {previewMissing.length - 8} lainnya.</li>}
+                </ul>
+              </TooltipContent>
+            )}
+          </Tooltip>
+        )}
       </div>
 
       {showMinModal && <MinGoalsModal onClose={() => setShowMinModal(false)} />}
@@ -629,11 +649,26 @@ function PreviewView({
   goals,
   onBack,
   onSubmit,
+  canSubmit = true,
 }: {
   goals: SmartGoal[];
   onBack: () => void;
   onSubmit: () => void;
+  canSubmit?: boolean;
 }) {
+  const allFilled =
+    goals.length >= 3 &&
+    goals.every(
+      (g) =>
+        g.specific &&
+        g.measurable &&
+        g.attainable &&
+        g.relevant &&
+        g.timely &&
+        g.target &&
+        g.actionPlans.length >= 1 &&
+        g.actionPlans.every((ap) => ap.description.trim() !== ""),
+    );
   return (
     <div className="flex flex-col gap-6">
       <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700 font-medium flex items-center gap-2">
@@ -643,19 +678,24 @@ function PreviewView({
       <SmartTable goals={goals} editable={false} />
       <div className="flex justify-between gap-3 pt-2">
         <button
+          type="button"
           onClick={onBack}
           className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
         >
           <Edit3 className="w-4 h-4" />
           Back to Edit
         </button>
-        <button
-          onClick={onSubmit}
-          className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
-        >
-          <Send className="w-4 h-4" />
-          Submit for Approval
-        </button>
+        {canSubmit && (
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!allFilled}
+            className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Send className="w-4 h-4" />
+            Submit for Approval
+          </button>
+        )}
       </div>
     </div>
   );
@@ -841,11 +881,17 @@ function SMARTGoalsWorkspace({
       statusTone = "submitted";
     }
 
-    // DEMO: Selain Administrator, karyawan yang belum bertransaksi melihat format tabel kosong
-    const initialGoals = normalizedSaved && normalizedSaved.length > 0 ? normalizedSaved : usesDemoSampleData(ownerUser) ? SAMPLE_GOALS : [];
     const lockedSubmitted = Boolean(wfRec && !isRev);
+    const hasSaved = Boolean(normalizedSaved && normalizedSaved.length > 0);
+    // Isolasi ketat per user: hanya memuat SMART Goals milik user ini; bila belum ada & mode input aktif, siapkan 3 kolom kosong siap isi (tanpa dummy teks)
+    const initialGoals = hasSaved
+      ? normalizedSaved!
+      : !lockedSubmitted && !isViewOnly
+        ? [newGoal(1), newGoal(2), newGoal(3)]
+        : [];
     return {
       initialGoals,
+      hasSaved,
       lockedSubmitted,
       isRev,
       statusLabel,
@@ -857,33 +903,112 @@ function SMARTGoalsWorkspace({
   const init = readUserGoalsState();
   const [view, setView] = useState<View>(() => (init.lockedSubmitted || isViewOnly ? "results" : "input"));
   const [goals, setGoalsState] = useState<SmartGoal[]>(() => init.initialGoals);
-  const [resultGoals, setResultGoals] = useState<SmartGoal[]>(() => init.initialGoals);
+  const [resultGoals, setResultGoals] = useState<SmartGoal[]>(() => (init.hasSaved ? init.initialGoals : []));
   const [submitted, setSubmitted] = useState<boolean>(() => init.lockedSubmitted);
   const [statusLabel, setStatusLabel] = useState<string>(() => init.statusLabel);
   const [statusTone, setStatusTone] = useState<"validated" | "in_progress" | "revision" | "submitted">(() => init.statusTone);
   const [wfRecState, setWfRecState] = useState<WorkflowRecord | undefined>(() => init.wfRec);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [draftDirtyInSession, setDraftDirtyInSession] = useState(false);
+
+  const pinnedOwnerRef = useRef<ManagedUser>(ownerUser);
+  const latestGoalsRef = useRef<SmartGoal[]>(goals);
+  const submittedRef = useRef<boolean>(submitted);
+  const dirtyRef = useRef<boolean>(draftDirtyInSession);
+  useEffect(() => {
+    pinnedOwnerRef.current = ownerUser;
+  }, [ownerUser]);
+  useEffect(() => {
+    latestGoalsRef.current = goals;
+  }, [goals]);
+  useEffect(() => {
+    submittedRef.current = submitted;
+  }, [submitted]);
+  useEffect(() => {
+    dirtyRef.current = draftDirtyInSession;
+  }, [draftDirtyInSession]);
+
+  const hasAnyGoalContent = (list: SmartGoal[]): boolean =>
+    list.some(
+      (g) =>
+        Boolean(g.specific?.trim()) ||
+        Boolean(g.measurable?.trim()) ||
+        Boolean(g.attainable?.trim()) ||
+        Boolean(g.relevant?.trim()) ||
+        Boolean(g.timely?.trim()) ||
+        Boolean(g.bukti?.trim()) ||
+        Boolean(g.target?.trim()) ||
+        g.actionPlans.some((ap) => Boolean(ap.description?.trim())),
+    );
 
   // Setiap Create / Edit / Delete langsung disimpan ke database Supabase (pa_smart_goals + pa_kv_state)
   const updateGoalsAndPersist = (updater: SmartGoal[] | ((prev: SmartGoal[]) => SmartGoal[])) => {
+    setDraftDirtyInSession(true);
     setGoalsState((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       setResultGoals(next);
       saveSubmittedGoals(next, {
         submitWorkflow: false,
-        employeeId: ownerUser.employeeId,
-        ownerName: ownerUser.name,
+        employeeId: pinnedOwnerRef.current.employeeId,
+        ownerName: pinnedOwnerRef.current.name,
       });
       return next;
     });
   };
 
+  const shouldBlockDraftLeave =
+    !submitted && !isViewOnly && draftDirtyInSession && hasAnyGoalContent(goals);
+  const sgDraftBlocker = useBlocker(shouldBlockDraftLeave);
+
+  // Pastikan saat keluar halaman / tutup tab sebelum submit, Draft tersimpan ke Supabase khusus untuk user pemilik
   useEffect(() => {
+    if (sgDraftBlocker.state === "blocked" && !submittedRef.current && hasAnyGoalContent(latestGoalsRef.current)) {
+      saveSubmittedGoals(latestGoalsRef.current, {
+        submitWorkflow: false,
+        employeeId: pinnedOwnerRef.current.employeeId,
+        ownerName: pinnedOwnerRef.current.name,
+      });
+    }
+  }, [sgDraftBlocker.state]);
+
+  useEffect(() => {
+    const flushDraft = () => {
+      if (!submittedRef.current && dirtyRef.current && hasAnyGoalContent(latestGoalsRef.current)) {
+        saveSubmittedGoals(latestGoalsRef.current, {
+          submitWorkflow: false,
+          employeeId: pinnedOwnerRef.current.employeeId,
+          ownerName: pinnedOwnerRef.current.name,
+        });
+      }
+    };
+    window.addEventListener("beforeunload", flushDraft);
+    return () => {
+      window.removeEventListener("beforeunload", flushDraft);
+      flushDraft();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!loadSubmittedGoals(ownerUser.employeeId)) {
+      void fetchEmployeeSmartGoalsLive<SmartGoal>(ownerUser.employeeId).then((remote) => {
+        if (!cancelled && remote && remote.goals.length > 0) {
+          const refreshed = readUserGoalsState();
+          setGoalsState(refreshed.initialGoals);
+          setResultGoals(refreshed.hasSaved ? refreshed.initialGoals : []);
+          setSubmitted(refreshed.lockedSubmitted);
+          setStatusLabel(refreshed.statusLabel);
+          setStatusTone(refreshed.statusTone);
+          setWfRecState(refreshed.wfRec);
+        }
+      });
+    }
     const sync = () => {
+      if (cancelled || dirtyRef.current) return;
       const next = readUserGoalsState();
       setGoalsState(next.initialGoals);
-      setResultGoals(next.initialGoals);
+      setResultGoals(next.hasSaved ? next.initialGoals : []);
       setSubmitted(next.lockedSubmitted);
       setStatusLabel(next.statusLabel);
       setStatusTone(next.statusTone);
@@ -897,17 +1022,20 @@ function SMARTGoalsWorkspace({
     window.addEventListener("pa-db-hydrated", sync);
     window.addEventListener("storage", sync);
     return () => {
+      cancelled = true;
       window.removeEventListener("pa-auth-updated", sync);
       window.removeEventListener("appraisal-updated", sync);
       window.removeEventListener("pa-db-hydrated", sync);
       window.removeEventListener("storage", sync);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerUser.employeeId, isViewOnly]);
 
   const handleExport = () => {
+    const sourceList = submitted || isViewOnly ? resultGoals : goals;
     const exportGoals: SmartGoal[] =
-      goals.length > 0
-        ? goals
+      sourceList.length > 0
+        ? sourceList
         : [1, 2, 3].map((n) => ({
             id: n,
             label: `Goals ${n}`,
@@ -921,42 +1049,65 @@ function SMARTGoalsWorkspace({
             actionPlans: [{ id: n * 100 + 1, description: "" }],
           }));
 
-    const colCount = 1 + exportGoals.length;
-    const colWidths = [30, ...exportGoals.map(() => 36)];
+    const colWidths = [32, ...exportGoals.map(() => 38)];
     const rowsOut: StyledExcelCell[][] = [];
     const merges: StyledExcelMerge[] = [];
-    const rowHeights: Record<number, number> = { 0: 28 };
+    const rowHeights: Record<number, number> = { 0: 30 };
+    const TABLE_BORDER_HEX = "1E293B";
 
     // Header utama persis tabel SMART Goals di layar: SMART Goals | Goals 1 | Goals 2 | ...
     rowsOut.push([
-      { value: "SMART Goals", style: { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "left", borderColor: "334155" } },
+      { value: "SMART Goals", style: { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center", vAlign: "center", borderColor: TABLE_BORDER_HEX } },
       ...exportGoals.map((g, gi): StyledExcelCell => ({
         value: g.label || `Goals ${gi + 1}`,
-        style: { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center", borderColor: "334155" },
+        style: { bg: EXCEL_THEME.headerNavyBg, fg: EXCEL_THEME.white, bold: true, align: "center", vAlign: "center", borderColor: TABLE_BORDER_HEX },
       })),
     ]);
 
-    // Baris kriteria S, M, A, R, T, Target (persis ROWS di layar)
-    ROWS.forEach((rowDef, ri) => {
-      const zebra = ri % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
+    // Baris kriteria S, M, A, R, T, Bukti, Target (persis tabel sistem + garis border penuh + Attainable poin bernomor vertikal ke bawah)
+    ROWS.forEach((rowDef) => {
+      const isTargetRow = rowDef.key === "target";
+      const labelBg = isTargetRow ? "EFF6FF" : "FFFFFF";
+      const cellBg = isTargetRow ? "EFF6FF" : "FFFFFF";
       const rIdx = rowsOut.length;
+      let maxLineCount = 3;
+      const goalCells = exportGoals.map((g): StyledExcelCell => {
+        const cellVal =
+          rowDef.key === "attainable"
+            ? formatSmartGoalAttainableVertical(parseSmartGoalAttainablePoints(g))
+            : String(g[rowDef.key] ?? "");
+        const lineCount = Math.max(1, cellVal.split("\n").length, Math.ceil(cellVal.length / 42));
+        if (lineCount > maxLineCount) maxLineCount = lineCount;
+        return {
+          value: cellVal,
+          style: {
+            bg: cellBg,
+            fg: EXCEL_THEME.textDark,
+            align: "left",
+            vAlign: "top",
+            wrap: true,
+            borderColor: TABLE_BORDER_HEX,
+          },
+        };
+      });
       rowsOut.push([
         {
-          value: `${rowDef.title}\n(${rowDef.desc})`,
-          style: { bg: "EEF2FF", fg: EXCEL_THEME.headerNavyBg, bold: true, align: "left", vAlign: "top" },
+          value: `${rowDef.title}\n${rowDef.desc}`,
+          style: {
+            bg: labelBg,
+            fg: "111827",
+            bold: true,
+            align: "left",
+            vAlign: "top",
+            wrap: true,
+            borderColor: TABLE_BORDER_HEX,
+          },
         },
-        ...exportGoals.map((g): StyledExcelCell => ({
-          value: String(g[rowDef.key] ?? ""),
-          style: { bg: zebra, fg: EXCEL_THEME.textDark, align: "left", vAlign: "top" },
-        })),
+        ...goalCells,
       ]);
-      rowHeights[rIdx] = 44;
+      rowHeights[rIdx] = Math.min(180, Math.max(54, maxLineCount * 16 + 14));
     });
 
-    // Baris pemisah kosong
-    rowsOut.push(Array.from({ length: colCount }, () => ({ value: "" })));
-
-    // Section Banner ACTION PLANS berwarna biru persis UI
     exportStyledXLSX(`SMART_Goals_2026_${ownerUser.employeeId}.xlsx`, {
       sheetName: "SMART Goals",
       colWidths,
@@ -1014,7 +1165,19 @@ function SMARTGoalsWorkspace({
 
             if (fieldKey) {
               imported.forEach((gObj, gi) => {
-                (gObj[fieldKey!] as unknown as string) = String(r[gi + 1] ?? "").trim();
+                const rawCell = String(r[gi + 1] ?? "").trim();
+                if (fieldKey === "attainable") {
+                  const pts = parseSmartGoalAttainablePoints({ attainable: rawCell });
+                  gObj.attainable = formatSmartGoalAttainableVertical(pts);
+                  if (pts.length > 0 && gObj.actionPlans.length === 0) {
+                    gObj.actionPlans = pts.map((description, pIdx) => ({
+                      id: Date.now() + gi * 100 + pIdx + 1,
+                      description,
+                    }));
+                  }
+                } else {
+                  (gObj[fieldKey!] as unknown as string) = rawCell;
+                }
               });
             }
           } else if (/^action\s*plan/i.test(col0) || col0) {
@@ -1032,6 +1195,19 @@ function SMARTGoalsWorkspace({
 
         // Pastikan setiap goal minimal memiliki 1 slot action plan agar form rapi
         imported.forEach((gObj, gi) => {
+          if (gObj.actionPlans.length > 0) {
+            const pts = gObj.actionPlans.map((ap) => ap.description.trim()).filter(Boolean);
+            if (pts.length > 0) {
+              gObj.attainable = formatSmartGoalAttainableVertical(pts);
+            }
+          } else if (gObj.attainable) {
+            const pts = parseSmartGoalAttainablePoints({ attainable: gObj.attainable });
+            gObj.attainable = formatSmartGoalAttainableVertical(pts);
+            gObj.actionPlans = pts.map((description, pIdx) => ({
+              id: Date.now() + gi * 100 + pIdx + 1,
+              description,
+            }));
+          }
           if (gObj.actionPlans.length === 0) {
             gObj.actionPlans.push({ id: Date.now() + gi * 100 + 99, description: "" });
           }
@@ -1042,7 +1218,7 @@ function SMARTGoalsWorkspace({
         );
         if (nonEmptyGoals.length > 0) {
           updateGoalsAndPersist(nonEmptyGoals.map((g, idx) => ({ ...g, label: `Goals ${idx + 1}` })));
-          toast.success(`${nonEmptyGoals.length} SMART Goals beserta Action Plan berhasil di-upload.`);
+          toast.success(`${nonEmptyGoals.length} SMART Goals beserta Attainable berhasil di-upload.`);
         } else {
           toast.error("File Excel belum berisi data SMART Goals.");
         }
@@ -1071,18 +1247,21 @@ function SMARTGoalsWorkspace({
       const imported: SmartGoal[] = rows
         .filter((r) => r.some((c) => c.trim()))
         .map((r, idx) => {
+          const rawAttainable = attainableIdx >= 0 ? String(r[attainableIdx] ?? "") : "";
           const rawAps = apIdx >= 0 ? String(r[apIdx] ?? "") : "";
-          const parsedAps = rawAps
-            .split(/[;\n]+/)
-            .map((s) => s.replace(/^\d+\.\s*/, "").trim())
-            .filter(Boolean)
-            .map((description, j) => ({ id: Date.now() + idx * 100 + j, description }));
+          const ptsFromApCol = parseSmartGoalAttainablePoints({ attainable: rawAps });
+          const ptsFromAttCol = parseSmartGoalAttainablePoints({ attainable: rawAttainable });
+          const effectivePts = ptsFromAttCol.length > 0 ? ptsFromAttCol : ptsFromApCol;
+          const parsedAps = effectivePts.map((description, j) => ({
+            id: Date.now() + idx * 100 + j + 1,
+            description,
+          }));
           return {
             id: Date.now() + idx,
             label: (goalsIdx >= 0 && r[goalsIdx]?.trim()) || `Goals ${idx + 1}`,
             specific: specificIdx >= 0 ? r[specificIdx] ?? "" : "",
             measurable: measurableIdx >= 0 ? r[measurableIdx] ?? "" : "",
-            attainable: attainableIdx >= 0 ? r[attainableIdx] ?? "" : "",
+            attainable: effectivePts.length > 0 ? formatSmartGoalAttainableVertical(effectivePts) : rawAttainable,
             relevant: relevantIdx >= 0 ? r[relevantIdx] ?? "" : "",
             timely: timelyIdx >= 0 ? r[timelyIdx] ?? "" : "",
             bukti: buktiIdx >= 0 ? r[buktiIdx] ?? "" : "",
@@ -1106,12 +1285,13 @@ function SMARTGoalsWorkspace({
 
   const handleSuccessClose = () => {
     setShowSuccess(false);
+    setDraftDirtyInSession(false);
     setSubmitted(true);
     setResultGoals(goals);
     saveSubmittedGoals(goals, {
       submitWorkflow: true,
-      employeeId: ownerUser.employeeId,
-      ownerName: ownerUser.name,
+      employeeId: pinnedOwnerRef.current.employeeId,
+      ownerName: pinnedOwnerRef.current.name,
     });
     const next = readUserGoalsState();
     setStatusLabel(next.statusLabel);
@@ -1145,11 +1325,15 @@ function SMARTGoalsWorkspace({
           goals={goals}
           setGoals={updateGoalsAndPersist}
           onPreview={() => setView("preview")}
+          onSubmit={() => {
+            if (canCreate || canEdit) setShowConfirm(true);
+          }}
           onExport={handleExport}
           onImport={handleImport}
           canCreate={canCreate}
           canEdit={canEdit}
           canDelete={canDelete}
+          canSubmit={canCreate || canEdit}
         />
       )}
       {!submitted && !isViewOnly && view === "preview" && (
@@ -1159,6 +1343,7 @@ function SMARTGoalsWorkspace({
           onSubmit={() => {
             if (canCreate || canEdit) setShowConfirm(true);
           }}
+          canSubmit={canCreate || canEdit}
         />
       )}
       {(submitted || isViewOnly) && (
@@ -1180,6 +1365,37 @@ function SMARTGoalsWorkspace({
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}
       {showSuccess && <SuccessModal onClose={handleSuccessClose} />}
+      {sgDraftBlocker.state === "blocked" && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-7 text-center border border-sky-100">
+            <div className="w-14 h-14 rounded-full bg-sky-50 border border-sky-200 flex items-center justify-center mx-auto mb-4">
+              <CheckCircle2 className="w-7 h-7 text-sky-600" />
+            </div>
+            <h3 className="font-bold text-[#1A284F] text-lg mb-2">Tersimpan Otomatis sebagai Draft</h3>
+            <p className="text-gray-600 text-sm leading-relaxed mb-6">
+              Data SMART Goals yang telah Anda isi (<strong>{goals.length} Goals</strong>) belum di-submit dan telah{" "}
+              <strong className="text-sky-700">otomatis disimpan sebagai Draft</strong> ke sistem. Anda dapat melanjutkan
+              pengisian kembali kapan saja saat membuka halaman ini.
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => sgDraftBlocker.reset?.()}
+                className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Tetap di Halaman Ini
+              </button>
+              <button
+                type="button"
+                onClick={() => sgDraftBlocker.proceed?.()}
+                className="px-5 py-2.5 rounded-xl bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors"
+              >
+                OK, Tinggalkan Halaman
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

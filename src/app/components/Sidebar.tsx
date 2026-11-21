@@ -30,6 +30,9 @@ import {
   LockOpen,
   Bell,
   UserCheck,
+  SlidersHorizontal,
+  History,
+  MessageSquareWarning,
 } from "lucide-react";
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import { getDelegatedModuleFlagsForUser } from "../store/delegationStore";
@@ -39,6 +42,24 @@ import { useAccessManagement } from "../pages/hr/settings/AccessManagement";
 import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../pages/hr/settings/MenuManagement";
 
 type Role = "hr" | "employee" | "supervisor" | "bod";
+
+function getMenuColorTheme(label: string): string {
+  const l = label.toLowerCase();
+  if (l.includes("dashboard")) return "text-sky-600";
+  if (l.includes("cycle") || l.includes("history")) return "text-indigo-600";
+  if (l.includes("module")) return "text-violet-600";
+  if (l.includes("setting") || l.includes("configuration")) return "text-slate-600";
+  if (l.includes("measurement") || l.includes("kpi") || l.includes("tracking")) return "text-emerald-600";
+  if (l.includes("smart")) return "text-amber-600";
+  if (l.includes("rca")) return "text-rose-600";
+  if (l.includes("approval") || l.includes("check")) return "text-teal-600";
+  if (l.includes("monitoring")) return "text-cyan-600";
+  if (l.includes("calibration")) return "text-fuchsia-600";
+  if (l.includes("help") || l.includes("feedback")) return "text-orange-600";
+  if (l.includes("document") || l.includes("evidence")) return "text-blue-600";
+  if (l.includes("override") || l.includes("lock")) return "text-red-600";
+  return "text-slate-600";
+}
 
 interface NavSubChild {
   to: string;
@@ -73,7 +94,7 @@ const hrLinks = [
     subLinks: [
       { to: "/hr/approvals/settings/kpi/group", label: "KPI Business", icon: TrendingUp },
       { to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock },
-      { to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target },
+      { to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: SlidersHorizontal },
       { to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen },
     ]
   },
@@ -110,7 +131,7 @@ const hrLinks = [
       { to: "/hr/evidence/management-interview", label: "Management Interview", icon: MessageSquare },
     ]
   },
-  { to: "/hr/history", icon: BookOpen, label: "PA Cycle History" },
+  { to: "/hr/history", icon: History, label: "PA Cycle History" },
   { to: "/hr/documents", icon: BookOpen, label: "Documents" },
   {
     label: "Setting",
@@ -145,7 +166,7 @@ const supervisorLinks = [
     icon: CheckSquare,
     subLinks: [
       { to: "/supervisor/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock },
-      { to: "/supervisor/appraisals/setting", label: "Performance Appraisal Setting", icon: Target },
+      { to: "/supervisor/appraisals/setting", label: "Performance Appraisal Setting", icon: SlidersHorizontal },
     ]
   },
   { to: "/supervisor/summary", icon: LayoutList, label: "Performance Appraisal Summary" },
@@ -163,7 +184,7 @@ const supervisorLinks = [
   },
   {
     label: "Performance Appraisal Setting",
-    icon: Target,
+    icon: SlidersHorizontal,
     subLinks: [
       { to: "/supervisor/setting/kpi", label: "KPI", icon: TrendingUp },
       { to: "/supervisor/setting/smart-goals", label: "SMART Goals", icon: Lightbulb },
@@ -190,7 +211,7 @@ const supervisorLinks = [
       { to: "/supervisor/calibration/management-interview", label: "Management Interview", icon: MessageSquare },
     ]
   },
-  { to: "/supervisor/history", icon: BookOpen, label: "PA Cycle History" },
+  { to: "/supervisor/history", icon: History, label: "PA Cycle History" },
   { to: "/supervisor/documents", icon: BookOpen, label: "Documents" },
 ];
 
@@ -201,7 +222,7 @@ const bodLinks = [
     icon: CheckSquare,
     subLinks: [
       { to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock },
-      { to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target },
+      { to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: SlidersHorizontal },
       { to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare },
       { to: "/bod/approvals/delegation", label: "Delegation", icon: UserCheck },
       { to: "/bod/approvals/calibration", label: "Calibration", icon: Target },
@@ -228,7 +249,7 @@ const bodLinks = [
     ]
   },
   { to: "/bod/management-interview/assessment", icon: MessageSquare, label: "Management Interview" },
-  { to: "/bod/history", icon: BookOpen, label: "PA Cycle History" },
+  { to: "/bod/history", icon: History, label: "PA Cycle History" },
   { to: "/bod/documents", icon: BookOpen, label: "Documents" },
 ];
 
@@ -238,7 +259,7 @@ const employeeLinks = [
   { to: "/employee/appraisal", icon: FileText, label: "My Performance Appraisal" },
   {
     label: "Performance Appraisal Setting",
-    icon: Target,
+    icon: SlidersHorizontal,
     subLinks: [
       { to: "/employee/setting/kpi",         label: "KPI",         icon: TrendingUp   },
       { to: "/employee/setting/smart-goals", label: "SMART Goals", icon: Lightbulb    },
@@ -370,7 +391,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("pa_setting_project") ? [{ to: "/hr/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
       ];
       if (canView("pa_setting") && paSettingSubs.length > 0) {
-        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+        list.push({ label: "Performance Appraisal Setting", icon: SlidersHorizontal, subLinks: paSettingSubs });
       }
       const paMeasSubs: NavSubLink[] = [
         ...(canView("pa_measurement_kpi") ? [{ to: "/hr/measurement/kpi-tracking", label: "KPI Tracking", icon: TrendingUp }] : []),
@@ -389,7 +410,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
           ? [{ to: "/hr/approvals/settings/kpi/group", label: "KPI Business", icon: TrendingUp }]
           : []),
-        ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+        ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: SlidersHorizontal }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/hr/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
         ...(canViewApprovalsDelegation ? [{ to: "/hr/approvals/delegation", label: "Delegation", icon: UserCheck }] : []),
@@ -437,17 +458,17 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       if (evLink) list.push(evLink);
 
       if (canView("history")) {
-        list.push({ to: "/hr/history", icon: BookOpen, label: "PA Cycle History" });
+        list.push({ to: "/hr/history", icon: History, label: "PA Cycle History" });
       }
       if (canView("documents")) {
         list.push({ to: "/hr/documents", icon: BookOpen, label: "Documents" });
       }
       {
         const fbSubs: NavSubLink[] = [
-          ...(canView("feedback_form") ? [{ to: "/hr/feedback/form", label: "Form Feedback", icon: MessageSquare }] : []),
-          ...(canView("feedback_followup") ? [{ to: "/hr/feedback/follow-up", label: "Follow-Up Feedback", icon: CheckSquare }] : []),
+          ...(canView("feedback_form") ? [{ to: "/hr/help-feedback/form", label: "Form Help & Feedback", icon: MessageSquareWarning }] : []),
+          ...(canView("feedback_followup") ? [{ to: "/hr/help-feedback/follow-up", label: "Follow-Up Feedback", icon: CheckSquare }] : []),
         ];
-        if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Feedback", icon: MessageSquare, subLinks: fbSubs });
+        if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Help & Feedback", icon: MessageSquareWarning, subLinks: fbSubs });
       }
       if (canView("override")) {
         list.push({ to: "/hr/override", icon: Shield, label: "Management Override" });
@@ -484,7 +505,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("pa_setting_project") && hasProject ? [{ to: "/bod/setting/project", label: "Project Outside Job Scope", icon: FolderKanban }] : []),
       ];
       if (canView("pa_setting") && paSettingSubs.length > 0) {
-        list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+        list.push({ label: "Performance Appraisal Setting", icon: SlidersHorizontal, subLinks: paSettingSubs });
       }
 
       const paMeasSubs: NavSubLink[] = [
@@ -504,7 +525,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
           ? [{ to: "/bod/approvals/settings/kpi/gm", label: "KPI Business", icon: TrendingUp }]
           : []),
-        ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: Target }] : []),
+        ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: SlidersHorizontal }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
         ...(canViewApprovalsDelegation ? [{ to: "/bod/approvals/delegation", label: "Delegation", icon: UserCheck }] : []),
@@ -552,17 +573,17 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       if (evLink) list.push(evLink);
 
       if (canView("history")) {
-        list.push({ to: "/bod/history", icon: BookOpen, label: "PA Cycle History" });
+        list.push({ to: "/bod/history", icon: History, label: "PA Cycle History" });
       }
       if (canView("documents")) {
         list.push({ to: "/bod/documents", icon: BookOpen, label: "Documents" });
       }
       {
         const fbSubs: NavSubLink[] = [
-          ...(canView("feedback_form") ? [{ to: "/bod/feedback/form", label: "Form Feedback", icon: MessageSquare }] : []),
-          ...(canView("feedback_followup") ? [{ to: "/bod/feedback/follow-up", label: "Follow-Up Feedback", icon: CheckSquare }] : []),
+          ...(canView("feedback_form") ? [{ to: "/bod/help-feedback/form", label: "Form Help & Feedback", icon: MessageSquareWarning }] : []),
+          ...(canView("feedback_followup") ? [{ to: "/bod/help-feedback/follow-up", label: "Follow-Up Feedback", icon: CheckSquare }] : []),
         ];
-        if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Feedback", icon: MessageSquare, subLinks: fbSubs });
+        if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Help & Feedback", icon: MessageSquareWarning, subLinks: fbSubs });
       }
 
       const settingLink = buildSettingLink("/bod");
@@ -623,7 +644,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       ...(canView("pa_setting_project") && hasProject ? [{ to: `${prefix}/setting/project`, label: "Project Outside Job Scope", icon: FolderKanban }] : []),
     ];
     if (canView("pa_setting") && paSettingSubs.length > 0) {
-      list.push({ label: "Performance Appraisal Setting", icon: Target, subLinks: paSettingSubs });
+      list.push({ label: "Performance Appraisal Setting", icon: SlidersHorizontal, subLinks: paSettingSubs });
     }
 
     // 5. Performance Appraisal Measurement
@@ -646,7 +667,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ? [{ to: `${prefix}/approvals/settings/kpi/group`, label: "KPI Business", icon: TrendingUp }]
         : []),
       ...(canView("approvals_pa_setting") || Boolean(activeUser.isHrUnitChecker)
-        ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: Target }]
+        ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: SlidersHorizontal }]
         : []),
       ...(canView("approvals_pa_measurement") || Boolean(activeUser.isHrUnitChecker)
         ? [{ to: `${prefix}/approvals/measurement`, label: "Performance Appraisal Measurement", icon: Clock }]
@@ -698,7 +719,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
     // 9. PA Cycle History
     if (canView("history")) {
-      list.push({ to: `${prefix}/history`, icon: BookOpen, label: "PA Cycle History" });
+      list.push({ to: `${prefix}/history`, icon: History, label: "PA Cycle History" });
     }
 
     // 10. Documents
@@ -707,10 +728,10 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     }
     {
       const fbSubs: NavSubLink[] = [
-        ...(canView("feedback_form") ? [{ to: `${prefix}/feedback/form`, label: "Form Feedback", icon: MessageSquare }] : []),
-        ...(canView("feedback_followup") ? [{ to: `${prefix}/feedback/follow-up`, label: "Follow-Up Feedback", icon: CheckSquare }] : []),
+        ...(canView("feedback_form") ? [{ to: `${prefix}/help-feedback/form`, label: "Form Help & Feedback", icon: MessageSquareWarning }] : []),
+        ...(canView("feedback_followup") ? [{ to: `${prefix}/help-feedback/follow-up`, label: "Follow-Up Feedback", icon: CheckSquare }] : []),
       ];
-      if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Feedback", icon: MessageSquare, subLinks: fbSubs });
+      if (canView("feedback") && fbSubs.length > 0) list.push({ label: "Help & Feedback", icon: MessageSquareWarning, subLinks: fbSubs });
     }
 
     const evLink = buildEvidenceLink(prefix);
@@ -861,7 +882,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                     className={`w-11 h-11 flex items-center justify-center rounded-xl transition-colors relative ${
                       groupActive || isFlyoutOpen
                         ? "bg-[#1A284F] text-white shadow-sm"
-                        : "text-gray-600 hover:bg-gray-200/60 hover:text-gray-900"
+                        : `${getMenuColorTheme(link.label)} hover:bg-gray-200/60`
                     }`}
                   >
                     <link.icon className="w-5 h-5 shrink-0" />
@@ -879,7 +900,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
               <div key={idx} className="mb-2">
                 <button
                   onClick={() => toggleMenu(idx)}
-                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-600 hover:bg-gray-100/50 rounded-xl transition-colors text-left"
+                  className={`w-full flex items-center justify-between px-4 py-3 text-sm font-medium ${getMenuColorTheme(link.label)} hover:bg-gray-100/50 rounded-xl transition-colors text-left`}
                 >
                   <div className="flex items-center gap-3">
                     <link.icon className="w-5 h-5" />
@@ -904,7 +925,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                                 else next.add(subKey as any);
                                 return next;
                               })}
-                              className="w-full flex items-center justify-between pl-12 pr-4 py-2.5 text-xs font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-100/50 rounded-xl transition-colors"
+                              className={`w-full flex items-center justify-between pl-12 pr-4 py-2.5 text-xs font-medium ${getMenuColorTheme(sub.label)} hover:bg-gray-100/50 rounded-xl transition-colors`}
                             >
                               <div className="flex items-center gap-2">
                                 {SubIcon && <SubIcon className="w-4 h-4" />}
@@ -920,7 +941,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                                     to={child.to}
                                     className={({ isActive }) =>
                                       `flex items-center gap-2 pl-16 pr-4 py-2 text-[11px] font-medium rounded-xl transition-colors ${
-                                        isActive ? "bg-[#1A284F] text-white shadow-sm" : "text-gray-400 hover:text-gray-700 hover:bg-gray-100/50"
+                                        isActive ? "bg-[#1A284F] text-white shadow-sm" : `${getMenuColorTheme(child.label)} hover:bg-gray-100/50`
                                       }`
                                     }
                                   >
@@ -940,7 +961,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                           to={sub.to || ""}
                           className={({ isActive }) =>
                             `flex items-center gap-2 pl-12 pr-4 py-2.5 text-xs font-medium rounded-xl transition-colors ${
-                              isActive ? "bg-[#1A284F] text-white shadow-sm" : "text-gray-500 hover:text-gray-800 hover:bg-gray-100/50"
+                              isActive ? "bg-[#1A284F] text-white shadow-sm" : `${getMenuColorTheme(sub.label)} hover:bg-gray-100/50`
                             }`
                           }
                         >
@@ -970,7 +991,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                 } flex items-center rounded-xl text-sm font-medium transition-colors ${
                   isActive 
                     ? "bg-[#1A284F] text-white shadow-sm" 
-                    : "text-gray-600 hover:bg-gray-200/60 hover:text-gray-800"
+                    : `${getMenuColorTheme(link.label)} hover:bg-gray-200/60`
                 }`
               }
             >

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { CheckCircle2, Clock, XCircle, Eye, X, ChevronRight, Search, Filter, ThumbsUp, RotateCcw, Lightbulb, User, Calendar, Target, AlertTriangle, Activity, TrendingUp, ChevronDown, ChevronUp, Paperclip, Star, Info, BarChart2 } from "lucide-react";
 import { EMPLOYEES } from "../hr/monitoring/monitoringData";
-import { loadSubmittedGoals, upsertApprovalDecision } from "../shared/smartGoalsStore";
+import { loadSubmittedGoals, parseSmartGoalAttainablePoints, upsertApprovalDecision } from "../shared/smartGoalsStore";
 import { ROWS, SAMPLE_GOALS } from "../employee/SMARTGoals";
 import type { SmartGoal } from "../employee/SMARTGoals";
+import { SmartGoalsProgressCard } from "../../components/SmartGoalsProgressCard";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -295,80 +296,16 @@ function StatusOverviewCard({
   const openAPs = sedang + belum + dash;
   const apPct = totalAPs > 0 ? Math.round((closedAPs / totalAPs) * 100) : 0;
 
+  void totalGoals; void openGoals; void closedGoals; void goalsPct;
+  void totalAPs; void openAPs; void closedAPs; void apPct;
+  void selesai; void sedang; void belum; void batal;
   return (
-    <div className="border border-[#1A284F]/20 rounded-2xl overflow-hidden bg-gradient-to-br from-[#1A284F] to-[#253660] shadow-sm">
-      <div className="px-5 py-2.5 flex items-center gap-2 border-b border-white/10">
-        <Activity className="w-3.5 h-3.5 text-white/60" />
-        <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Status Progress Keseluruhan</span>
-      </div>
-
-      <div className="px-5 py-4 grid grid-cols-3 gap-4 divide-x divide-white/10">
-        {/* Goals */}
-        <div className="flex flex-col gap-2 pr-4">
-          <div className="flex items-center gap-1.5">
-            <Target className="w-3 h-3 text-blue-300" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Goals</span>
-          </div>
-          <div className="flex items-end gap-1.5">
-            <span className="text-2xl font-bold text-white leading-none">{totalGoals}</span>
-            <span className="text-xs text-white/50 mb-0.5">Total</span>
-          </div>
-          <div className="flex flex-col gap-0.5 text-[11px]">
-            <div className="flex justify-between"><span className="text-white/50">Open</span><span className="font-semibold text-white">{openGoals}</span></div>
-            <div className="flex justify-between"><span className="text-white/50">Closed</span><span className="font-semibold text-green-400">{closedGoals}</span></div>
-          </div>
-          <div className="flex flex-col gap-1 mt-0.5">
-            <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-              <div className="h-full bg-green-500 rounded-full" style={{ width: `${goalsPct}%` }} />
-            </div>
-            <span className="text-[10px] text-white/40">{goalsPct}%</span>
-          </div>
-        </div>
-
-        {/* Action Plans */}
-        <div className="flex flex-col gap-2 px-4">
-          <div className="flex items-center gap-1.5">
-            <TrendingUp className="w-3 h-3 text-green-300" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Action Plans</span>
-          </div>
-          <div className="flex items-end gap-1.5">
-            <span className="text-2xl font-bold text-white leading-none">{totalAPs}</span>
-            <span className="text-xs text-white/50 mb-0.5">Total</span>
-          </div>
-          <div className="flex flex-col gap-0.5 text-[11px]">
-            <div className="flex justify-between"><span className="text-white/50">Open</span><span className="font-semibold text-white">{openAPs}</span></div>
-            <div className="flex justify-between"><span className="text-white/50">Closed</span><span className="font-semibold text-green-400">{closedAPs}</span></div>
-          </div>
-          <div className="flex flex-col gap-1 mt-0.5">
-            <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-              <div className="h-full bg-green-500 rounded-full" style={{ width: `${apPct}%` }} />
-            </div>
-            <span className="text-[10px] text-white/40">{apPct}%</span>
-          </div>
-        </div>
-
-        {/* Breakdown */}
-        <div className="flex flex-col gap-2 pl-4">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Breakdown Status</span>
-          <div className="flex flex-col gap-1.5">
-            {[
-              { label: "Selesai", count: selesai, dot: "bg-green-500", text: "text-green-400" },
-              { label: "Sedang", count: sedang, dot: "bg-amber-400", text: "text-amber-400" },
-              { label: "Belum", count: belum, dot: "bg-gray-400", text: "text-gray-400" },
-              { label: "Batal", count: batal, dot: "bg-red-500", text: "text-red-400" },
-            ].map(({ label, count, dot, text }) => (
-              <div key={label} className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
-                  <span className="text-[11px] text-white/60">{label}</span>
-                </div>
-                <span className={`text-xs font-bold ${text}`}>{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
+    <SmartGoalsProgressCard
+      variant="light"
+      goals={goals.map((g) => ({ id: g.id, actionPlanIds: g.actionPlans.map((ap) => ap.id) }))}
+      getActionPlanStatus={(_goalId, apId) => apStatuses[apId as number] ?? "-"}
+      getGoalStatus={(goalId) => targetActuals.find((t) => t.goalId === goalId)?.status ?? ""}
+    />
   );
 }
 
@@ -403,7 +340,7 @@ function GoalReviewCard({
               <div className="w-20 h-1.5 bg-white/20 rounded-full overflow-hidden">
                 <div className="h-full bg-green-400 rounded-full" style={{ width: `${pct}%` }} />
               </div>
-              <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} AP</span>
+              <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} Attainable</span>
             </div>
           )}
           {collapsed
@@ -430,8 +367,26 @@ function GoalReviewCard({
                       <span className="font-semibold text-[11px] text-gray-700">{row.title}</span>
                     </td>
                     <td className="border-t border-gray-100 px-3 py-2 text-[11px] text-gray-700 leading-relaxed">
-                      {(goal[row.key as keyof SmartGoal] as string) || (
-                        <span className="italic text-gray-300">—</span>
+                      {row.key === "attainable" ? (
+                        (() => {
+                          const pts = parseSmartGoalAttainablePoints(goal);
+                          return pts.length > 0 ? (
+                            <div className="flex flex-col gap-1">
+                              {pts.map((pt, idx) => (
+                                <div key={idx} className="flex items-start gap-1.5">
+                                  <span className="font-bold text-[#1A284F] shrink-0">{idx + 1}.</span>
+                                  <span>{pt}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="italic text-gray-300">—</span>
+                          );
+                        })()
+                      ) : (
+                        (goal[row.key as keyof SmartGoal] as string) || (
+                          <span className="italic text-gray-300">—</span>
+                        )
                       )}
                     </td>
                   </tr>
@@ -443,15 +398,15 @@ function GoalReviewCard({
           {/* Action Plans — horizontal status table */}
           {goal.actionPlans.length > 0 && (
             <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Action Plans</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Attainable</p>
               <div className="overflow-x-auto rounded-xl border border-gray-200">
                 <table className="w-full text-xs border-collapse" style={{ minWidth: `${180 + goal.actionPlans.length * 160}px` }}>
                   <thead>
                     <tr>
-                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-24 align-middle border-r border-white/20">Action Plan</th>
+                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-24 align-middle border-r border-white/20">Attainable</th>
                       {goal.actionPlans.map((ap, idx) => (
                         <th key={ap.id} className={`bg-[#1A284F] text-white text-center px-3 py-2 text-[10px] font-bold uppercase tracking-wide ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}>
-                          AP {idx + 1}
+                          Attainable {idx + 1}
                         </th>
                       ))}
                     </tr>

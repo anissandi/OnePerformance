@@ -237,6 +237,36 @@ function write(record: WorkflowRecord) {
     },
   });
 }
+
+/** Menghapus/me-reset status workflow fase tertentu milik satu karyawan ketika definisi Setting diperbarui ulang. */
+export function resetWorkflowPhaseForEmployee(
+  employeeId: string,
+  module: string,
+  phase: WorkflowRecord["phase"],
+  year = "2026",
+): void {
+  const normId = normalizeEmployeeId(employeeId);
+  if (!normId) return;
+  const docKey = keyFor(normId, module, phase, year);
+  const current = loadWorkflowRecords();
+  if (!current.some((r) => r.key === docKey)) return;
+  const remaining = current.filter((r) => r.key !== docKey);
+  safeSetLocalJson(KEY, remaining);
+  savePersistedState(KEY, remaining, {
+    kind: "workflow-document",
+    doc: {
+      key: docKey,
+      employeeId: normId,
+      module,
+      phase,
+      year,
+      status: "Cancelled",
+      version: 1,
+      payload: { key: docKey, employeeId: normId, module, phase, year, cancelled: true },
+    },
+  });
+  window.dispatchEvent(new Event("appraisal-updated"));
+}
 export function submitWorkflowModule(
   module: string,
   phase: WorkflowRecord["phase"] = "measurement",

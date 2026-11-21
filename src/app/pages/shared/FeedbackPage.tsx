@@ -221,7 +221,7 @@ export function FeedbackPage({ tab }: { tab: Tab }) {
   const td = "px-3 py-3 text-xs text-gray-700 align-top";
 
   if (!canForm && !canFollowUp) {
-    return <div className="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Anda tidak memiliki akses ke menu Feedback.</div>;
+    return <div className="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Anda tidak memiliki akses ke menu Help & Feedback.</div>;
   }
 
   return (
@@ -232,7 +232,7 @@ export function FeedbackPage({ tab }: { tab: Tab }) {
             <MessageSquare className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-gray-800">Feedback</h1>
+            <h1 className="text-lg font-bold text-gray-800">Help & Feedback</h1>
             <p className="mt-0.5 text-xs text-gray-400">Sampaikan kendala aplikasi, modul penilaian, atau masukan lainnya.</p>
           </div>
         </div>
@@ -250,15 +250,15 @@ export function FeedbackPage({ tab }: { tab: Tab }) {
         <div className="flex w-fit gap-1 rounded-xl bg-gray-100 p-1">
           {canForm && (
             <button
-              onClick={() => navigate(`${base}/feedback/form`)}
+              onClick={() => navigate(`${base}/help-feedback/form`)}
               className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${activeTab === "form" ? "bg-white text-[#1A284F] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
             >
-              <MessageSquarePlus className="h-3.5 w-3.5" /> Form Feedback
+              <MessageSquarePlus className="h-3.5 w-3.5" /> Form Help & Feedback
             </button>
           )}
           {canFollowUp && (
             <button
-              onClick={() => navigate(`${base}/feedback/follow-up`)}
+              onClick={() => navigate(`${base}/help-feedback/follow-up`)}
               className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${activeTab === "follow-up" ? "bg-white text-[#1A284F] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
             >
               <CheckSquare className="h-3.5 w-3.5" /> Follow-Up Feedback

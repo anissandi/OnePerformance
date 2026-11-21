@@ -1,11 +1,140 @@
 import type { SmartGoal } from "../employee/SMARTGoals";
-import { normalizeEmployeeId, submitWorkflowModule } from "./appraisalWorkflowStore";
-import { mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
+import { normalizeEmployeeId, resetWorkflowPhaseForEmployee, submitWorkflowModule } from "./appraisalWorkflowStore";
+import {
+  buildEmployeeIdMatchSet,
+  mergeKvMapRecord,
+  safeGetLocalRaw,
+  safeSetLocalJson,
+  savePersistedState,
+  syncToSupabase,
+} from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 
 const GOALS_BY_EMP_KEY = "sg_goals_by_emp_v2";
 const CHECKIN_BY_EMP_KEY = "sg_checkin_by_emp_v2";
+
+/** Memecah teks Attainable atau array actionPlans menjadi daftar poin bersih (tanpa awalan nomor/bullet). */
+export function parseSmartGoalAttainablePoints(
+  goal: Partial<Pick<SmartGoal, "attainable" | "actionPlans">>,
+): string[] {
+  const fromPlans = Array.isArray(goal.actionPlans)
+    ? goal.actionPlans.map((ap) => String(ap?.description ?? "").trim()).filter(Boolean)
+    : [];
+  if (fromPlans.length > 0) return fromPlans;
+  const raw = String(goal.attainable ?? "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/\r?\n|;\s*|\s+(?=\d+[.)]\s+)/)
+    .map((line) => line.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, "").trim())
+    .filter(Boolean);
+}
+
+/** Memformat daftar poin Attainable menjadi poin bernomor vertikal ke bawah (`1. ...\n2. ...\n3. ...`). */
+export function formatSmartGoalAttainableVertical(points: string[]): string {
+  return points
+    .map((p) => String(p ?? "").trim())
+    .filter(Boolean)
+    .map((p, idx) => `${idx + 1}. ${p}`)
+    .join("\n");
+}
+
+/** Menormalisasi daftar SMART Goals agar `attainable` dan `actionPlans` selalu sinkron dalam format poin bernomor ke bawah. */
+export function normalizeSmartGoalsList(goals: SmartGoal[]): SmartGoal[] {
+  return goals.map((g, gi) => {
+    const pts = parseSmartGoalAttainablePoints(g);
+    const existingPlans = Array.isArray(g.actionPlans) ? g.actionPlans : [];
+    const syncedPlans =
+      pts.length > 0
+        ? pts.map((desc, idx) => ({
+            id: existingPlans[idx]?.id ?? (Number(g.id || gi + 1) * 1000 + idx + 1),
+            description: desc,
+          }))
+        : existingPlans.length > 0
+          ? existingPlans
+          : [{ id: Number(g.id || gi + 1) * 1000 + 1, description: "" }];
+    const formattedAttainable =
+      pts.length > 0 ? formatSmartGoalAttainableVertical(pts) : String(g.attainable ?? "");
+    return {
+      ...g,
+      label: g.label || `Goals ${gi + 1}`,
+      attainable: formattedAttainable,
+      actionPlans: syncedPlans,
+    };
+  });
+}
+
+/**
+ * Menyelaraskan isi SMART Goals Measurement (`StoredCheckInEntry[]`) dengan SMART Goals Setting terbaru:
+ * - Menghapus goal Measurement lama yang sudah tidak ada di Setting terbaru
+ * - Menghapus status/progress/kendala/evidence pada poin Attainable lama yang dihapus atau berubah deskripsinya
+ * - Me-reset status Target vs Actual apabila kalimat Target pada Setting berubah
+ */
+export function reconcileCheckInEntriesWithGoals(
+  latestGoals: SmartGoal[],
+  prevGoals: SmartGoal[] | null,
+  existingEntries: StoredCheckInEntry[],
+): StoredCheckInEntry[] {
+  if (!Array.isArray(latestGoals) || latestGoals.length === 0) return [];
+  const prevGoalMap = new Map<number, SmartGoal>((prevGoals ?? []).map((g) => [g.id, g]));
+  const out: StoredCheckInEntry[] = [];
+
+  for (const g of latestGoals) {
+    const prevEntry = existingEntries.find((e) => e.goalId === g.id);
+    if (!prevEntry) continue;
+    const prevGoal = prevGoalMap.get(g.id);
+    const prevApDescById = new Map<number, string>(
+      (prevGoal?.actionPlans ?? []).map((ap) => [ap.id, String(ap.description ?? "").trim()]),
+    );
+    const nextStatuses: Record<number, string> = {};
+    const nextProgress: Record<number, number> = {};
+    const nextKendala: Record<number, string> = {};
+    const nextAlasanBatal: Record<number, string> = {};
+    const nextEvidence: Record<number, StoredSmartGoalEvidenceFile[]> = {};
+
+    for (const ap of g.actionPlans ?? []) {
+      const curDesc = String(ap.description ?? "").trim();
+      const oldDesc = prevApDescById.get(ap.id);
+      if (oldDesc !== undefined && oldDesc !== curDesc) continue;
+      if (prevEntry.actionPlanStatuses?.[ap.id] !== undefined) {
+        nextStatuses[ap.id] = prevEntry.actionPlanStatuses[ap.id];
+      }
+      if (prevEntry.actionPlanProgress?.[ap.id] !== undefined) {
+        nextProgress[ap.id] = prevEntry.actionPlanProgress[ap.id];
+      }
+      if (prevEntry.actionPlanKendala?.[ap.id] !== undefined) {
+        nextKendala[ap.id] = prevEntry.actionPlanKendala[ap.id];
+      }
+      if (prevEntry.actionPlanAlasanBatal?.[ap.id] !== undefined) {
+        nextAlasanBatal[ap.id] = prevEntry.actionPlanAlasanBatal[ap.id];
+      }
+      if (prevEntry.actionPlanEvidence?.[ap.id] !== undefined) {
+        nextEvidence[ap.id] = prevEntry.actionPlanEvidence[ap.id];
+      }
+    }
+
+    const targetChanged =
+      prevGoal !== undefined && String(prevGoal.target ?? "").trim() !== String(g.target ?? "").trim();
+
+    out.push({
+      goalId: g.id,
+      actual: targetChanged ? "" : (prevEntry.actual ?? ""),
+      achievement: targetChanged ? "" : (prevEntry.achievement ?? ""),
+      kendala: prevEntry.kendala ?? "",
+      rencanaLanjut: prevEntry.rencanaLanjut ?? "",
+      actionPlanStatuses: nextStatuses,
+      actionPlanProgress: nextProgress,
+      actionPlanKendala: nextKendala,
+      actionPlanAlasanBatal: nextAlasanBatal,
+      actionPlanEvidence: nextEvidence,
+      targetAchievementStatus: targetChanged ? "" : (prevEntry.targetAchievementStatus ?? ""),
+      alasanTidakTercapai: targetChanged ? "" : (prevEntry.alasanTidakTercapai ?? ""),
+      evidenceFiles: targetChanged ? [] : (prevEntry.evidenceFiles ?? []),
+    });
+  }
+
+  return out;
+}
 
 export interface StoredSmartGoalEvidenceFile {
   name: string;
@@ -46,17 +175,39 @@ export function saveSubmittedGoals(
       ? `${activeUser.name} | atas nama ${options.ownerName}`
       : activeUser.name;
     const isFinalSubmit = options?.submitWorkflow ?? true;
+    const normalizedGoals = normalizeSmartGoalsList(goals);
     const map = readGoalsByEmpMap();
-    map[normId] = goals;
+    const prevGoalsForEmp = map[normId] ?? null;
+    map[normId] = normalizedGoals;
     safeSetLocalJson(GOALS_BY_EMP_KEY, map);
-    void mergeKvMapRecord(GOALS_BY_EMP_KEY, normId, goals);
+    void mergeKvMapRecord(GOALS_BY_EMP_KEY, normId, normalizedGoals);
+
+    // Sinkronkan & gantikan data Measurement lama agar selalu sesuai dengan SMART Goals Setting terbaru milik user ini
+    const checkinMap = readCheckinByEmpMap();
+    const existingCheckins = loadCheckInEntries(empId);
+    const syncedCheckins = reconcileCheckInEntriesWithGoals(normalizedGoals, prevGoalsForEmp, existingCheckins);
+    checkinMap[normId] = syncedCheckins;
+    safeSetLocalJson(CHECKIN_BY_EMP_KEY, checkinMap);
+    void mergeKvMapRecord(CHECKIN_BY_EMP_KEY, normId, syncedCheckins);
+
+    let nextDecisionsForEmp = loadApprovalDecisions(empId);
+    if (isFinalSubmit) {
+      // Saat SMART Goals Setting baru/revisi di-submit, bersihkan status approval Measurement lama agar tidak menyisakan history usang
+      resetWorkflowPhaseForEmployee(empId, "SMART Goals", "measurement", "2026");
+      const remainingAllDecs = loadApprovalDecisions().filter(
+        (d) => normalizeEmployeeId(d.employeeId) !== normId,
+      );
+      safeSetLocalJson(APPROVAL_KEY, remainingAllDecs);
+      nextDecisionsForEmp = [];
+    }
+
     void syncToSupabase({
       kind: "smart-goals",
       employeeId: empId,
       period: "2026",
-      goals,
-      checkinEntries: loadCheckInEntries(empId),
-      approvalDecisions: loadApprovalDecisions(empId),
+      goals: normalizedGoals,
+      checkinEntries: syncedCheckins,
+      approvalDecisions: nextDecisionsForEmp,
       status: isFinalSubmit ? "Submitted-Setting" : "Draft-Setting",
       audit: {
         userId: activeUser.employeeId,
@@ -65,8 +216,8 @@ export function saveSubmittedGoals(
         module: "SMART Goals",
         subModule: "SMART Goals Setting",
         description: isFinalSubmit
-          ? `Submitted ${goals.length} SMART Goals for approval (${empId}) by ${actorLabel}`
-          : `Saved SMART Goals draft (${goals.length} goals) for ${empId} by ${actorLabel}`,
+          ? `Submitted ${normalizedGoals.length} SMART Goals for approval (${empId}) by ${actorLabel}`
+          : `Saved SMART Goals draft (${normalizedGoals.length} goals) for ${empId} by ${actorLabel}`,
       },
     });
     if (isFinalSubmit) {
@@ -79,9 +230,22 @@ export function saveSubmittedGoals(
 
 export function loadSubmittedGoals(employeeId?: string): SmartGoal[] | null {
   try {
-    const normId = normalizeEmployeeId(employeeId ?? getActiveUser().employeeId);
+    const rawTarget = employeeId !== undefined ? employeeId : getActiveUser().employeeId;
+    if (!String(rawTarget ?? "").trim()) return null;
+    const candidates = buildEmployeeIdMatchSet(rawTarget);
+    candidates.add(normalizeEmployeeId(rawTarget));
     const map = readGoalsByEmpMap();
-    if (map[normId] && map[normId].length > 0) return map[normId];
+    for (const k of candidates) {
+      if (Array.isArray(map[k]) && map[k].length > 0) {
+        return normalizeSmartGoalsList(map[k]);
+      }
+    }
+    const lower = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+    for (const [k, v] of Object.entries(map)) {
+      if (lower.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) {
+        return normalizeSmartGoalsList(v);
+      }
+    }
     return null;
   } catch {
     return null;
@@ -159,6 +323,7 @@ export function saveCheckInEntries(
         loadApprovalDecisions().filter(
           (decision) => normalizeEmployeeId(decision.employeeId) !== normId,
         ),
+        empId,
       );
       submitWorkflowModule("SMART Goals", "measurement", formatTodayDDMMYYYY(), empId);
     }
@@ -167,9 +332,19 @@ export function saveCheckInEntries(
 
 export function loadCheckInEntries(employeeId?: string): StoredCheckInEntry[] {
   try {
-    const normId = normalizeEmployeeId(employeeId ?? getActiveUser().employeeId);
+    const rawTarget = employeeId !== undefined ? employeeId : getActiveUser().employeeId;
+    if (!String(rawTarget ?? "").trim()) return [];
+    const candidates = buildEmployeeIdMatchSet(rawTarget);
+    candidates.add(normalizeEmployeeId(rawTarget));
     const map = readCheckinByEmpMap();
-    return map[normId] ?? [];
+    for (const k of candidates) {
+      if (Array.isArray(map[k])) return map[k];
+    }
+    const lower = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+    for (const [k, v] of Object.entries(map)) {
+      if (lower.has(k.toLowerCase()) && Array.isArray(v)) return v;
+    }
+    return [];
   } catch {
     return [];
   }
@@ -192,17 +367,24 @@ export interface StoredApprovalDecision {
   employeeId: string;
 }
 
-export function saveApprovalDecisions(decisions: StoredApprovalDecision[]): void {
+export function saveApprovalDecisions(decisions: StoredApprovalDecision[], targetEmployeeId?: string): void {
   try {
-    savePersistedState(APPROVAL_KEY, decisions, {
-      kind: "smart-goals",
-      employeeId: "E002",
-      period: "2026",
-      goals: loadSubmittedGoals() ?? [],
-      checkinEntries: loadCheckInEntries(),
-      approvalDecisions: decisions,
-      status: "Reviewed",
-    });
+    const empId = targetEmployeeId?.trim();
+    if (empId) {
+      const normId = normalizeEmployeeId(empId);
+      const empDecisions = decisions.filter((d) => normalizeEmployeeId(d.employeeId) === normId);
+      savePersistedState(APPROVAL_KEY, decisions, {
+        kind: "smart-goals",
+        employeeId: empId,
+        period: "2026",
+        goals: loadSubmittedGoals(empId) ?? [],
+        checkinEntries: loadCheckInEntries(empId),
+        approvalDecisions: empDecisions,
+        status: "Reviewed",
+      });
+    } else {
+      savePersistedState(APPROVAL_KEY, decisions);
+    }
   } catch { /* ignore */ }
 }
 
@@ -234,5 +416,5 @@ export function upsertApprovalDecision(decision: StoredApprovalDecision): void {
   } else {
     current.push(normalizedDecision);
   }
-  saveApprovalDecisions(current);
+  saveApprovalDecisions(current, decision.employeeId);
 }

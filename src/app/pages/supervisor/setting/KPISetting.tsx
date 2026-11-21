@@ -2585,11 +2585,13 @@ function LihatKpiAtasanModal({
     const supUser = currentTab?.user;
     if (!supUser?.employeeId) return;
     let cancelled = false;
-    void fetchEmployeeKpiSettingsLive<KPISetting>(supUser.employeeId).then((remote) => {
-      if (!cancelled && remote.length > 0) {
-        setRemoteTick((t) => t + 1);
-      }
-    });
+    void fetchEmployeeKpiSettingsLive<KPISetting>(supUser.employeeId)
+      .then((remote) => {
+        if (!cancelled && remote.length > 0) {
+          setRemoteTick((t) => t + 1);
+        }
+      })
+      .catch(() => {});
     const onHydrated = () => {
       if (!cancelled) setRemoteTick((t) => t + 1);
     };
@@ -6926,11 +6928,13 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     setKpiAttachments(readAttachmentsForCurrentScope());
     if (!isCorporate && effectiveOwner.employeeId) {
       let cancelled = false;
-      void fetchKpiAttachmentsForEmployee(effectiveOwner.employeeId).then((remote) => {
-        if (!cancelled && remote.length > 0) {
-          setKpiAttachments(remote);
-        }
-      });
+      void fetchKpiAttachmentsForEmployee(effectiveOwner.employeeId)
+        .then((remote) => {
+          if (!cancelled && remote.length > 0) {
+            setKpiAttachments(remote);
+          }
+        })
+        .catch(() => {});
       return () => {
         cancelled = true;
       };

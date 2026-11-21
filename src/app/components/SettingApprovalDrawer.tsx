@@ -3,13 +3,14 @@ import React, { useEffect, useState } from "react";
 import { X, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Lightbulb, ClipboardList, Layers, Eye, User, Building2, Calendar, MessageSquare, Paperclip, Download, FileSpreadsheet, FileText, Image as ImageIcon } from "lucide-react";
 import { type ApprovalRow } from "./ReviewDrawer";
 import { ROWS, SAMPLE_GOALS, type SmartGoal } from "../pages/employee/SMARTGoals";
-import { loadSubmittedGoals } from "../pages/shared/smartGoalsStore";
+import { loadSubmittedGoals, normalizeSmartGoalsList, parseSmartGoalAttainablePoints } from "../pages/shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
 import { EvidenceViewerModal } from "./EvidenceViewerModal";
 import {
   buildEmployeeIdMatchSet,
   fetchEmployeeKpiSettingsLive,
+  fetchEmployeeSmartGoalsLive,
   fetchKpiAttachmentsForEmployee,
   type HydratedKpiAttachmentItem,
 } from "../services/supabaseClient";
@@ -515,10 +516,33 @@ export function SettingApprovalDrawer({ row, onClose, onApprove, onRevision, rea
 // ── SMART Goals Setting content ───────────────────────────────────────────────
 
 function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
-  const [openGoal, setOpenGoal] = useState<number | null>(null);
+  const [goals, setGoals] = useState<SmartGoal[]>(() => loadSubmittedGoals(employeeId) ?? []);
 
-  const live = loadSubmittedGoals(employeeId);
-  const goals: SmartGoal[] = live && live.length > 0 ? live : [];
+  useEffect(() => {
+    let cancelled = false;
+    const local = loadSubmittedGoals(employeeId);
+    setGoals(local ?? []);
+    if (!local || local.length === 0) {
+      void fetchEmployeeSmartGoalsLive<SmartGoal>(employeeId).then((remote) => {
+        if (!cancelled && remote && remote.goals.length > 0) {
+          setGoals(normalizeSmartGoalsList(remote.goals));
+        }
+      });
+    }
+    const onSync = () => {
+      if (!cancelled) {
+        const latest = loadSubmittedGoals(employeeId);
+        if (latest) setGoals(latest);
+      }
+    };
+    window.addEventListener("pa-db-hydrated", onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pa-db-hydrated", onSync);
+      window.removeEventListener("storage", onSync);
+    };
+  }, [employeeId]);
 
   if (goals.length === 0) {
     return (
@@ -533,7 +557,7 @@ function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
       <div className="flex items-center gap-2">
         <Lightbulb className="w-4 h-4 text-amber-500" />
         <h3 className="font-bold text-gray-800 text-sm">SMART Goals Setting — 2026</h3>
-        <span className="ml-auto text-xs text-gray-400">{goals.length} goal{goals.length !== 1 ? "s" : ""} · {goals.reduce((s, g) => s + g.actionPlans.length, 0)} action plans</span>
+        <span className="ml-auto text-xs text-gray-400">{goals.length} goal{goals.length !== 1 ? "s" : ""} · {goals.reduce((s, g) => s + parseSmartGoalAttainablePoints(g).length, 0)} attainable</span>
       </div>
 
       {/* SMART criteria table */}
@@ -563,9 +587,27 @@ function SmartGoalsSettingContent({ employeeId }: { employeeId: string }) {
                 </td>
                 {goals.map((g) => (
                   <td key={g.id} className="border border-gray-200 align-top px-3 py-2.5">
-                    <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-wrap min-h-[60px]">
-                      {(g[row.key as keyof typeof g] as string) || <span className="text-gray-300 italic">—</span>}
-                    </p>
+                    {row.key === "attainable" ? (
+                      (() => {
+                        const pts = parseSmartGoalAttainablePoints(g);
+                        return pts.length > 0 ? (
+                          <div className="flex flex-col gap-1 text-[11px] text-gray-700 leading-relaxed min-h-[60px]">
+                            {pts.map((pt, idx) => (
+                              <div key={idx} className="flex items-start gap-1.5">
+                                <span className="font-bold text-[#1A284F] shrink-0">{idx + 1}.</span>
+                                <span>{pt}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-gray-300 italic min-h-[60px]">—</p>
+                        );
+                      })()
+                    ) : (
+                      <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-wrap min-h-[60px]">
+                        {(g[row.key as keyof typeof g] as string) || <span className="text-gray-300 italic">—</span>}
+                      </p>
+                    )}
                   </td>
                 ))}
               </tr>
