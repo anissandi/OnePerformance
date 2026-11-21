@@ -524,7 +524,15 @@ export function getTransitiveApproverSubordinateIds(
   allUsers = loadManagedUsers(),
 ): Set<string> {
   const transitiveSubIds = new Set<string>();
-  const seedIdentities = resolveApproverIdentities(user, "KPI", undefined, allUsers);
+  const kpiIdentities = resolveApproverIdentities(user, "KPI", undefined, allUsers);
+  const sgIdentities = resolveApproverIdentities(user, "SMART Goals", undefined, allUsers);
+  const seenSeed = new Set<string>();
+  const seedIdentities = [...kpiIdentities, ...sgIdentities].filter((u) => {
+    const k = u.employeeId.toLowerCase();
+    if (seenSeed.has(k)) return false;
+    seenSeed.add(k);
+    return true;
+  });
   const queue: ManagedUser[] = seedIdentities.length > 0 ? [...seedIdentities] : [user];
   const visited = new Set<string>(queue.map((u) => u.employeeId.toLowerCase()));
 
@@ -1376,7 +1384,7 @@ function withDelegatedAllowedModules(user: ManagedUser, base: AppraisalModuleNam
   if ((flags.kpiSetting || flags.kpiTracking) && !next.includes("KPI (Setting/Measurement)")) {
     next.push("KPI (Setting/Measurement)");
   }
-  if (flags.smartGoalsSetting && !next.includes("SMART Goals (Setting/Measurement)")) {
+  if ((flags.smartGoalsSetting || flags.smartGoalsMeasurement) && !next.includes("SMART Goals (Setting/Measurement)")) {
     next.push("SMART Goals (Setting/Measurement)");
   }
   return next;

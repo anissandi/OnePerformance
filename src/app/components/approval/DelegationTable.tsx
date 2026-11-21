@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Ban, ChevronDown, Eye, Filter, Pencil, PlayCircle, RotateCcw, Search, X } from "lucide-react";
+import { Ban, Check, ChevronDown, Eye, Filter, Pencil, PlayCircle, RotateCcw, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   canUserAccessEmployeeData,
@@ -68,6 +68,7 @@ function OrgFilterBar({
   positionFilter,
   onPositionChange,
   onReset,
+  hideSectionFilter = false,
 }: {
   search: string;
   onSearchChange: (v: string) => void;
@@ -75,7 +76,7 @@ function OrgFilterBar({
   unitOptions: string[];
   divisionOptions: string[];
   departmentOptions: string[];
-  sectionOptions: string[];
+  sectionOptions?: string[];
   positionOptions: string[];
   unitFilter: string;
   onUnitChange: (v: string) => void;
@@ -83,14 +84,15 @@ function OrgFilterBar({
   onDivisionChange: (v: string) => void;
   departmentFilter: string;
   onDepartmentChange: (v: string) => void;
-  sectionFilter: string;
-  onSectionChange: (v: string) => void;
+  sectionFilter?: string;
+  onSectionChange?: (v: string) => void;
   positionFilter: string;
   onPositionChange: (v: string) => void;
   onReset: () => void;
+  hideSectionFilter?: boolean;
 }) {
   const hasFilter = Boolean(
-    search || unitFilter || divisionFilter || departmentFilter || sectionFilter || positionFilter,
+    search || unitFilter || divisionFilter || departmentFilter || (!hideSectionFilter && sectionFilter) || positionFilter,
   );
   const selectCls =
     "h-9 rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 outline-none focus:border-[#1A284F]";
@@ -127,12 +129,14 @@ function OrgFilterBar({
           <option key={opt} value={opt}>{opt}</option>
         ))}
       </select>
-      <select value={sectionFilter} onChange={(e) => onSectionChange(e.target.value)} className={selectCls} aria-label="Filter Bagian">
-        <option value="">Semua Bagian</option>
-        {sectionOptions.map((opt) => (
-          <option key={opt} value={opt}>{opt}</option>
-        ))}
-      </select>
+      {!hideSectionFilter && (
+        <select value={sectionFilter ?? ""} onChange={(e) => onSectionChange?.(e.target.value)} className={selectCls} aria-label="Filter Bagian">
+          <option value="">Semua Bagian</option>
+          {(sectionOptions ?? []).map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      )}
       <select value={positionFilter} onChange={(e) => onPositionChange(e.target.value)} className={selectCls} aria-label="Filter Jabatan">
         <option value="">Semua Jabatan</option>
         {positionOptions.map((opt) => (
@@ -299,6 +303,68 @@ const ACCESS_KEYS: Array<[keyof DelegationAccess, string]> = [
   ["approve", "Approve"],
 ];
 
+type DelegationModuleField = "kpiSetting" | "kpiTracking" | "smartGoalsSetting" | "smartGoalsMeasurement";
+
+const DELEGATION_MODULE_COLUMNS: Array<{
+  key: DelegationModuleField;
+  header: string;
+  tagLabel: string;
+  activeCls: string;
+  inactiveCls: string;
+}> = [
+  {
+    key: "kpiSetting",
+    header: "KPI Setting",
+    tagLabel: "KPI Setting",
+    activeCls: "border-blue-300 bg-blue-100/90 text-blue-800 ring-1 ring-blue-200/70 shadow-2xs",
+    inactiveCls: "border-blue-200/60 bg-blue-50/40 text-slate-400 hover:border-blue-300 hover:bg-blue-50/90 hover:text-blue-700",
+  },
+  {
+    key: "kpiTracking",
+    header: "KPI Tracking",
+    tagLabel: "KPI Tracking",
+    activeCls: "border-cyan-300 bg-cyan-100/90 text-cyan-800 ring-1 ring-cyan-200/70 shadow-2xs",
+    inactiveCls: "border-cyan-200/60 bg-cyan-50/40 text-slate-400 hover:border-cyan-300 hover:bg-cyan-50/90 hover:text-cyan-700",
+  },
+  {
+    key: "smartGoalsSetting",
+    header: "SMART Goals Setting",
+    tagLabel: "SMART Goals Setting",
+    activeCls: "border-emerald-300 bg-emerald-100/90 text-emerald-800 ring-1 ring-emerald-200/70 shadow-2xs",
+    inactiveCls: "border-emerald-200/60 bg-emerald-50/40 text-slate-400 hover:border-emerald-300 hover:bg-emerald-50/90 hover:text-emerald-700",
+  },
+  {
+    key: "smartGoalsMeasurement",
+    header: "SMART Goals Measurement",
+    tagLabel: "SMART Goals Measurement",
+    activeCls: "border-amber-300 bg-amber-100/90 text-amber-800 ring-1 ring-amber-200/70 shadow-2xs",
+    inactiveCls: "border-amber-200/60 bg-amber-50/40 text-slate-400 hover:border-amber-300 hover:bg-amber-50/90 hover:text-amber-700",
+  },
+];
+
+const ACCESS_TAG_THEMES: Record<keyof DelegationAccess, { active: string; inactive: string }> = {
+  view: {
+    active: "border-sky-300 bg-sky-100/90 text-sky-800 ring-1 ring-sky-200/70 shadow-2xs",
+    inactive: "border-slate-200 bg-slate-50/80 text-slate-400 hover:border-sky-200 hover:bg-sky-50/70 hover:text-sky-700",
+  },
+  create: {
+    active: "border-emerald-300 bg-emerald-100/90 text-emerald-800 ring-1 ring-emerald-200/70 shadow-2xs",
+    inactive: "border-slate-200 bg-slate-50/80 text-slate-400 hover:border-emerald-200 hover:bg-emerald-50/70 hover:text-emerald-700",
+  },
+  edit: {
+    active: "border-amber-300 bg-amber-100/90 text-amber-800 ring-1 ring-amber-200/70 shadow-2xs",
+    inactive: "border-slate-200 bg-slate-50/80 text-slate-400 hover:border-amber-200 hover:bg-amber-50/70 hover:text-amber-700",
+  },
+  delete: {
+    active: "border-rose-300 bg-rose-100/90 text-rose-800 ring-1 ring-rose-200/70 shadow-2xs",
+    inactive: "border-slate-200 bg-slate-50/80 text-slate-400 hover:border-rose-200 hover:bg-rose-50/70 hover:text-rose-700",
+  },
+  approve: {
+    active: "border-teal-300 bg-teal-100/90 text-teal-800 ring-1 ring-teal-200/70 shadow-2xs",
+    inactive: "border-slate-200 bg-slate-50/80 text-slate-400 hover:border-teal-200 hover:bg-teal-50/70 hover:text-teal-700",
+  },
+};
+
 /**
  * Tabel Delegation (dipakai di Settings → Approval Management dan Approvals → Delegation).
  * Hanya karyawan ber-grouping Ka./Wa.Ka.Bagian ke atas yang boleh memberi & menerima delegasi.
@@ -311,7 +377,6 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
   const [unitFilter, setUnitFilter] = useState("");
   const [divisionFilter, setDivisionFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
-  const [sectionFilter, setSectionFilter] = useState("");
   const [positionFilter, setPositionFilter] = useState("");
 
   const isSelf = (u: ManagedUser) => lc(u.employeeId) === lc(activeUser.employeeId);
@@ -344,7 +409,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
       ),
     [basePool, unitFilter, divisionFilter],
   );
-  const sectionOptions = useMemo(
+  const positionOptions = useMemo(
     () =>
       uniqSorted(
         basePool
@@ -354,36 +419,20 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
               (!divisionFilter || u.division === divisionFilter) &&
               (!departmentFilter || u.department === departmentFilter),
           )
-          .map((u) => u.bagian),
-      ),
-    [basePool, unitFilter, divisionFilter, departmentFilter],
-  );
-  const positionOptions = useMemo(
-    () =>
-      uniqSorted(
-        basePool
-          .filter(
-            (u) =>
-              (!unitFilter || u.company === unitFilter) &&
-              (!divisionFilter || u.division === divisionFilter) &&
-              (!departmentFilter || u.department === departmentFilter) &&
-              (!sectionFilter || (u.bagian || "") === sectionFilter),
-          )
           .map((u) => u.position),
       ),
-    [basePool, unitFilter, divisionFilter, departmentFilter, sectionFilter],
+    [basePool, unitFilter, divisionFilter, departmentFilter],
   );
 
   const rows = basePool
     .filter((u) => !unitFilter || u.company === unitFilter)
     .filter((u) => !divisionFilter || u.division === divisionFilter)
     .filter((u) => !departmentFilter || u.department === departmentFilter)
-    .filter((u) => !sectionFilter || (u.bagian || "") === sectionFilter)
     .filter((u) => !positionFilter || u.position === positionFilter)
     .filter(
       (u) =>
         !search ||
-        [u.name, u.employeeId, u.regNo, u.company, u.division, u.department, u.bagian, u.position].some((v) =>
+        [u.name, u.employeeId, u.regNo, u.company, u.division, u.department, u.position].some((v) =>
           lc(v).includes(lc(search)),
         ),
     )
@@ -406,9 +455,24 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
     const becameActive = saved.active && saved.delegateEmployeeId && (!base.active || base.delegateEmployeeId !== saved.delegateEmployeeId);
     const becameStopped = base.active && !saved.active && Boolean(base.delegateEmployeeId);
     if (becameActive) {
-      const mods = [saved.kpiSetting && "KPI Setting", saved.kpiTracking && "KPI Tracking", saved.smartGoalsSetting && "SMART Goals Setting"].filter(Boolean).join(", ");
+      const mods = [
+        saved.kpiSetting && "KPI Setting",
+        saved.kpiTracking && "KPI Tracking",
+        saved.smartGoalsSetting && "SMART Goals Setting",
+        saved.smartGoalsMeasurement && "SMART Goals Measurement",
+      ]
+        .filter(Boolean)
+        .join(", ");
       const perms = ACCESS_KEYS.filter(([k]) => saved.access?.[k]).map(([, lbl]) => lbl).join(", ");
-      const targetRoute = saved.kpiSetting ? "/setting/kpi" : saved.kpiTracking ? "/measurement/kpi-tracking" : saved.smartGoalsSetting ? "/setting/smart-goals" : "/approvals";
+      const targetRoute = saved.kpiSetting
+        ? "/setting/kpi"
+        : saved.kpiTracking
+        ? "/measurement/kpi-tracking"
+        : saved.smartGoalsSetting
+        ? "/setting/smart-goals"
+        : saved.smartGoalsMeasurement
+        ? "/measurement/smart-goals"
+        : "/approvals";
       pushEmployeeNotification({
         employeeIds: [saved.delegateEmployeeId],
         title: "Anda Ditunjuk sebagai Penerima Delegasi",
@@ -420,7 +484,12 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
         senderName: activeUser.name,
       });
     } else if (becameStopped) {
-      const prevMods = [base.kpiSetting && "KPI Setting", base.kpiTracking && "KPI Tracking", base.smartGoalsSetting && "SMART Goals Setting"]
+      const prevMods = [
+        base.kpiSetting && "KPI Setting",
+        base.kpiTracking && "KPI Tracking",
+        base.smartGoalsSetting && "SMART Goals Setting",
+        base.smartGoalsMeasurement && "SMART Goals Measurement",
+      ]
         .filter(Boolean)
         .join(", ");
       pushEmployeeNotification({
@@ -437,11 +506,11 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
   return (
     <div className="space-y-4">
       {mode === "approvals" ? (
-        <div className="flex items-start gap-2 rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-xs text-indigo-800">
+        <div className="flex items-start gap-2 rounded-2xl border border-sky-200/80 bg-sky-50/60 px-4 py-3 text-xs text-sky-900">
           <Eye className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Atur delegasi milik Anda sendiri: pilih karyawan penerima delegasi pada kolom <strong>Delegasi Kepada</strong>,
-            centang modul & hak akses, lalu klik <strong>Start</strong>.
+            klik tag modul &amp; tag hak akses untuk memilih atau menonaktifkan, lalu klik <strong>Start</strong>.
           </span>
         </div>
       ) : (
@@ -452,19 +521,17 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
         unitOptions={unitOptions}
         divisionOptions={divisionOptions}
         departmentOptions={departmentOptions}
-        sectionOptions={sectionOptions}
         positionOptions={positionOptions}
         unitFilter={unitFilter}
-        onUnitChange={(v) => { setUnitFilter(v); setDivisionFilter(""); setDepartmentFilter(""); setSectionFilter(""); setPositionFilter(""); }}
+        onUnitChange={(v) => { setUnitFilter(v); setDivisionFilter(""); setDepartmentFilter(""); setPositionFilter(""); }}
         divisionFilter={divisionFilter}
-        onDivisionChange={(v) => { setDivisionFilter(v); setDepartmentFilter(""); setSectionFilter(""); setPositionFilter(""); }}
+        onDivisionChange={(v) => { setDivisionFilter(v); setDepartmentFilter(""); setPositionFilter(""); }}
         departmentFilter={departmentFilter}
-        onDepartmentChange={(v) => { setDepartmentFilter(v); setSectionFilter(""); setPositionFilter(""); }}
-        sectionFilter={sectionFilter}
-        onSectionChange={(v) => { setSectionFilter(v); setPositionFilter(""); }}
+        onDepartmentChange={(v) => { setDepartmentFilter(v); setPositionFilter(""); }}
         positionFilter={positionFilter}
         onPositionChange={setPositionFilter}
-        onReset={() => { setSearch(""); setUnitFilter(""); setDivisionFilter(""); setDepartmentFilter(""); setSectionFilter(""); setPositionFilter(""); }}
+        onReset={() => { setSearch(""); setUnitFilter(""); setDivisionFilter(""); setDepartmentFilter(""); setPositionFilter(""); }}
+        hideSectionFilter
       />
       )}
       <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
@@ -480,33 +547,34 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                 "Unit Usaha",
                 "Divisi",
                 "Departemen",
-                "Bagian",
                 "Jabatan",
                 "Delegasi Kepada",
-                "KPI Setting",
-                "KPI Tracking",
-                "SMART Goals (Setting/Measurement)",
-                "Hak Akses",
               ].map((h) => (
                 <th key={h} className="whitespace-nowrap px-3 py-2.5 text-left font-semibold">{h}</th>
               ))}
+              {DELEGATION_MODULE_COLUMNS.map((col) => (
+                <th key={col.key} className="whitespace-nowrap px-3 py-2.5 text-center font-semibold">{col.header}</th>
+              ))}
+              <th className="whitespace-nowrap px-3 py-2.5 text-left font-semibold">Hak Akses</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((u, i) => {
               const d = delegations[u.employeeId.toUpperCase()] ?? blankDelegation(u.employeeId);
-              const canStart = Boolean(d.delegateEmployeeId) && (d.kpiSetting || d.kpiTracking || d.smartGoalsSetting);
+              const canStart =
+                Boolean(d.delegateEmployeeId) &&
+                (d.kpiSetting || d.kpiTracking || d.smartGoalsSetting || d.smartGoalsMeasurement);
               const rowOptions = eligibleDelegatesPool.filter(
                 (c) => lc(c.employeeId) !== lc(u.employeeId) && isSameCompanyUnit(c.company, u.company),
               );
               return (
-                <tr key={u.employeeId} className={`border-t border-gray-100 ${d.active ? "bg-emerald-50/40" : ""}`}>
+                <tr key={u.employeeId} className={`border-t border-gray-100 transition-colors ${d.active ? "bg-emerald-50/40" : "hover:bg-slate-50/60"}`}>
                   <td className="px-3 py-2">{i + 1}</td>
                   <td className="px-3 py-2">
                     <button
                       type="button"
                       disabled={!d.active && !canStart}
-                      title={d.active ? "Hentikan delegasi (Stop)" : canStart ? "Mulai delegasi (Start)" : "Pilih Delegasi Kepada & minimal 1 modul"}
+                      title={d.active ? "Hentikan delegasi (Stop)" : canStart ? "Mulai delegasi (Start)" : "Pilih Delegasi Kepada & aktifkan minimal 1 tag modul"}
                       onClick={() => update(u, { active: !d.active }, d.active ? "Stop delegation" : "Start delegation")}
                       className={`rounded-lg p-1.5 disabled:opacity-30 ${d.active ? "text-rose-600 hover:bg-rose-50" : "text-emerald-600 hover:bg-emerald-50"}`}
                     >
@@ -519,7 +587,6 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                   <td className="whitespace-nowrap px-3 py-2">{u.company}</td>
                   <td className="px-3 py-2">{u.division || "-"}</td>
                   <td className="px-3 py-2">{u.department || "-"}</td>
-                  <td className="px-3 py-2">{u.bagian || "-"}</td>
                   <td className="px-3 py-2">{u.position || "-"}</td>
                   <td className="px-3 py-2">
                     <EmployeePicker
@@ -529,24 +596,52 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                       onChange={(id) => update(u, { delegateEmployeeId: id, active: id ? d.active : false }, "Set Delegation To")}
                     />
                   </td>
-                  {(["kpiSetting", "kpiTracking", "smartGoalsSetting"] as const).map((k) => (
-                    <td key={k} className="px-3 py-2 text-center">
-                      <input type="checkbox" checked={d[k]} onChange={() => update(u, { [k]: !d[k] }, `Toggle ${k}`)} className="h-4 w-4 accent-[#1A284F]" />
-                    </td>
-                  ))}
+                  {DELEGATION_MODULE_COLUMNS.map((col) => {
+                    const active = Boolean(d[col.key]);
+                    return (
+                      <td key={col.key} className="px-2.5 py-2 text-center">
+                        <button
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => update(u, { [col.key]: !active }, `Toggle ${col.key}`)}
+                          className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold transition-all cursor-pointer select-none ${
+                            active ? col.activeCls : col.inactiveCls
+                          }`}
+                        >
+                          {active ? (
+                            <Check className="h-3 w-3 shrink-0 stroke-[2.5]" />
+                          ) : (
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+                          )}
+                          <span>{col.tagLabel}</span>
+                        </button>
+                      </td>
+                    );
+                  })}
                   <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-2">
-                      {ACCESS_KEYS.map(([k, label]) => (
-                        <label key={k} className="inline-flex items-center gap-1 whitespace-nowrap">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(d.access?.[k])}
-                            onChange={() => update(u, { access: { ...d.access, [k]: !d.access?.[k] } }, `Toggle access ${k}`)}
-                            className="h-3.5 w-3.5 accent-[#1A284F]"
-                          />
-                          {label}
-                        </label>
-                      ))}
+                    <div className="flex flex-nowrap items-center gap-1.5">
+                      {ACCESS_KEYS.map(([k, label]) => {
+                        const active = Boolean(d.access?.[k]);
+                        const theme = ACCESS_TAG_THEMES[k];
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => update(u, { access: { ...d.access, [k]: !active } }, `Toggle access ${k}`)}
+                            className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all cursor-pointer select-none ${
+                              active ? theme.active : theme.inactive
+                            }`}
+                          >
+                            {active ? (
+                              <Check className="h-3 w-3 shrink-0 stroke-[2.5]" />
+                            ) : (
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+                            )}
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </td>
                 </tr>
@@ -559,7 +654,9 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
         </table>
       </div>
       <p className="text-[11px] text-gray-500">
-        Delegasi aktif membuat karyawan yang ditunjuk menerima notifikasi & task approval sesuai modul yang dicentang (akses Approve wajib),
+        Klik tag modul (<strong>KPI Setting</strong>, <strong>KPI Tracking</strong>, <strong>SMART Goals Setting</strong>,{" "}
+        <strong>SMART Goals Measurement</strong>) serta tag <strong>Hak Akses</strong> untuk memilih atau menonaktifkan pilihan.
+        Delegasi aktif membuat karyawan yang ditunjuk menerima akses modul, notifikasi, serta task approval sesuai tag modul yang aktif (tag <strong>Approve</strong> wajib aktif untuk persetujuan),
         dan nama approver tercatat sebagai <strong>"Nama Delegasi | atas nama Nama Pemberi Delegasi"</strong>.
       </p>
     </div>

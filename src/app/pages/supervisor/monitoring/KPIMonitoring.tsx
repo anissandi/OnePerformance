@@ -1,6 +1,7 @@
 // @refresh reset
 import React, { useEffect, useState } from "react";
-import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
+import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, Users, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
@@ -1140,18 +1141,14 @@ export function SupervisorMonitoringKPI() {
         <p className="text-gray-500 text-sm">{TEAM_UNIT} · {TEAM_DIV}</p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[
-          { label:"Team Members",     value: TEAM_EMPLOYEES.length,           sub:"in your department",                              color:"text-[#1A284F]", bg:"bg-[#1A284F]/5" },
-          { label:"Fully Submitted",  value: totalSubmitted,                  sub:`${TEAM_EMPLOYEES.length - totalSubmitted} incomplete`, color:"text-green-700", bg:"bg-green-50" },
-          { label:"Avg. Achievement", value:`${avgAch}%`,                     sub:"across active KPIs",                              color:"text-blue-700",  bg:"bg-blue-50" },
-          { label:"Pending RCA",      value: rcaPending,                      sub:"requires follow-up",                              color:"text-rose-700",  bg:"bg-rose-50" },
-        ].map((s) => (
-          <div key={s.label} className={`rounded-2xl border border-gray-100 px-5 py-4 ${s.bg}`}>
-            <p className="text-xs text-gray-500 mb-1">{s.label}</p>
-            <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-            <p className="text-[11px] text-gray-400 mt-0.5">{s.sub}</p>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {([
+          { label: "Team Members",     value: TEAM_EMPLOYEES.length, sub: "in your department",                                tone: "navy" as AnalyticsCardTone,    icon: <Users className="w-5 h-5" /> },
+          { label: "Fully Submitted",  value: totalSubmitted,        sub: `${TEAM_EMPLOYEES.length - totalSubmitted} incomplete`, tone: "emerald" as AnalyticsCardTone, icon: <CheckCircle2 className="w-5 h-5" /> },
+          { label: "Avg. Achievement", value: `${avgAch}%`,          sub: "across active KPIs",                                tone: "teal" as AnalyticsCardTone,    icon: <TrendingUp className="w-5 h-5" /> },
+          { label: "Pending RCA",      value: rcaPending,            sub: "requires follow-up",                                tone: "rose" as AnalyticsCardTone,    icon: <AlertCircle className="w-5 h-5" /> },
+        ]).map((s, idx) => (
+          <AnalyticsStatCard key={s.label} title={s.label} value={s.value} subtitle={s.sub} icon={s.icon} tone={s.tone} index={idx} />
         ))}
       </div>
 

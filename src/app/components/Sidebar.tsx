@@ -314,8 +314,12 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     if (menuId === "pa_setting" && (delegFlags.kpiSetting || delegFlags.smartGoalsSetting)) return true;
     if (menuId === "pa_setting_kpi" && delegFlags.kpiSetting) return true;
     if (menuId === "pa_setting_smart" && delegFlags.smartGoalsSetting) return true;
-    if (menuId === "pa_measurement" && delegFlags.kpiTracking) return true;
+    if (menuId === "pa_measurement" && (delegFlags.kpiTracking || delegFlags.smartGoalsMeasurement)) return true;
     if (menuId === "pa_measurement_kpi" && delegFlags.kpiTracking) return true;
+    if (menuId === "pa_measurement_smart" && delegFlags.smartGoalsMeasurement) return true;
+    if (menuId === "approvals" && (delegFlags.approveSetting || delegFlags.approveMeasurement)) return true;
+    if (menuId === "approvals_pa_setting" && delegFlags.approveSetting) return true;
+    if (menuId === "approvals_pa_measurement" && delegFlags.approveMeasurement) return true;
     return isMenuVisibleInMenuManagement(menuId) && Boolean(rolePerms[menuId]?.view);
   };
 

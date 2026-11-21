@@ -13,6 +13,7 @@ import type { StoredCheckInEntry } from "../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { getActiveUser, loadManagedUsers, useAuthStore, usesDemoSampleData, type ManagedUser } from "../../store/authStore";
 import { DELEGATION_EVENT, getReceivedWorkspaceDelegations, type DelegationAccess } from "../../store/delegationStore";
+import { DelegatedWorkspaceBanner } from "../../components/approval/DelegatedWorkspaceBanner";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX } from "../../utils/excelUtils";
@@ -1296,11 +1297,20 @@ function SmartGoalsCheckInWorkspace({
           <p className="text-gray-500 text-sm">2026 Performance Appraisal — {goals.length} goal{goals.length !== 1 ? "s" : ""}</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          <ExportImportButton onExport={handleExport} onImport={handleImport} size="sm" />
+          <ExportImportButton onExport={handleExport} onImport={canModify ? handleImport : undefined} size="sm" />
         </div>
       </div>
 
       {tabsSlot}
+
+      {delegationAccess && (
+        <DelegatedWorkspaceBanner
+          delegator={ownerUser}
+          actorName={getActiveUser().name}
+          access={delegationAccess}
+          moduleLabel="SMART Goals Measurement"
+        />
+      )}
 
       <ModuleApprovalStatusBar
         module="SMART Goals"
@@ -1488,7 +1498,7 @@ function SmartGoalsCheckInWorkspace({
 }
 
 /**
- * SMART Goals Measurement: penerima delegasi SMART Goals (Setting/Measurement) melihat SMART Goals pemberi
+ * SMART Goals Measurement: penerima delegasi SMART Goals Measurement melihat SMART Goals pemberi
  * delegasi berdampingan (tab) dengan SMART Goals Measurement miliknya sendiri.
  */
 export function SmartGoalsCheckInPage() {
@@ -1505,7 +1515,7 @@ export function SmartGoalsCheckInPage() {
   }, []);
 
   const usersPool = allUsers.length > 0 ? allUsers : loadManagedUsers();
-  const received = getReceivedWorkspaceDelegations(activeUser.employeeId, "smartGoalsSetting", usersPool);
+  const received = getReceivedWorkspaceDelegations(activeUser.employeeId, "smartGoalsMeasurement", usersPool);
   const workspaces: Array<{ id: string; label: string; owner: ManagedUser; access?: DelegationAccess }> = [
     ...received.map((d) => ({
       id: `deleg-${d.delegator.employeeId}`,

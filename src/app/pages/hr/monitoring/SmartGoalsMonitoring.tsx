@@ -1,6 +1,7 @@
 // @refresh reset
 import React, { useState, useMemo, useEffect } from "react";
 import { Search, Lightbulb, CheckCircle2, AlertCircle, Clock, ChevronUp, ChevronDown, Eye, X, Filter, Users, Target, ListChecks, ShieldCheck, BarChart2, TrendingUp } from "lucide-react";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { EMPLOYEES, filterMonitoringByModuleAccess } from "./monitoringData";
 import { loadSubmittedGoals, loadCheckInEntries } from "../../shared/smartGoalsStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
@@ -462,13 +463,13 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
     : 0;
 
   const STAT_CARDS = [
-    { label: "Total Employees",            value: totalEmployees,            sub: "registered",                                            color: "text-[#1A284F]",  bg: "bg-[#1A284F]/5",  Icon: Users },
-    { label: "Total Goals",                value: totalGoals,                sub: "across all employees",                                  color: "text-amber-700",  bg: "bg-amber-50",     Icon: Target },
-    { label: "Total Action Plans",         value: totalActionPlans,          sub: "supporting all goals",                                  color: "text-violet-700", bg: "bg-violet-50",    Icon: ListChecks },
-    { label: "Goals Setting Validated",    value: goalsSettingValidated,     sub: `${totalEmployees - goalsSettingValidated} not validated`, color: "text-green-700",  bg: "bg-green-50",     Icon: ShieldCheck },
-    { label: "Goals Measurement Validated",value: goalsMeasurementValidated, sub: `of ${goalsSettingValidated} setting-validated`,          color: "text-teal-700",   bg: "bg-teal-50",      Icon: CheckCircle2 },
-    { label: "Goals Avg. Completion",      value: `${goalsAvgCompletion}%`,  sub: "average goal completion rate",                          color: "text-blue-700",   bg: "bg-blue-50",      Icon: BarChart2 },
-    { label: "APS Avg. Completion",        value: `${apsAvgCompletion}%`,    sub: "average action plan completion",                        color: "text-indigo-700", bg: "bg-indigo-50",    Icon: TrendingUp },
+    { label: "Total Employees",             value: totalEmployees,            sub: "registered",                                              tone: "navy" as AnalyticsCardTone,       Icon: Users },
+    { label: "Total Goals",                 value: totalGoals,                sub: "across all employees",                                    tone: "terracotta" as AnalyticsCardTone, Icon: Target },
+    { label: "Total Action Plans",          value: totalActionPlans,          sub: "supporting all goals",                                    tone: "plum" as AnalyticsCardTone,       Icon: ListChecks },
+    { label: "Goals Setting Validated",     value: goalsSettingValidated,     sub: `${totalEmployees - goalsSettingValidated} not validated`, tone: "emerald" as AnalyticsCardTone,    Icon: ShieldCheck },
+    { label: "Goals Measurement Validated", value: goalsMeasurementValidated, sub: `of ${goalsSettingValidated} setting-validated`,            tone: "teal" as AnalyticsCardTone,       Icon: CheckCircle2 },
+    { label: "Goals Avg. Completion",       value: `${goalsAvgCompletion}%`,  sub: "average goal completion rate",                            tone: "slate" as AnalyticsCardTone,      Icon: BarChart2 },
+    { label: "APS Avg. Completion",         value: `${apsAvgCompletion}%`,    sub: "average action plan completion",                          tone: "navy" as AnalyticsCardTone,       Icon: TrendingUp },
   ];
 
   return (
@@ -485,16 +486,18 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
       </div>
 
       {/* Stats — 7 cards in specified order */}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
-        {STAT_CARDS.map(s => (
-          <div key={s.label} className={`rounded-2xl border border-gray-100 px-4 py-4 ${s.bg} flex flex-col gap-1`}>
-            <div className="flex items-center gap-1.5 mb-0.5">
-              <s.Icon className={`w-3.5 h-3.5 ${s.color} shrink-0`} />
-              <p className="text-[11px] text-gray-500 leading-tight">{s.label}</p>
-            </div>
-            <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-            <p className="text-[10px] text-gray-400">{s.sub}</p>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+        {STAT_CARDS.map((s, idx) => (
+          <AnalyticsStatCard
+            key={s.label}
+            title={s.label}
+            value={s.value}
+            subtitle={s.sub}
+            icon={<s.Icon className="w-4 h-4" />}
+            tone={s.tone}
+            index={idx}
+            compact
+          />
         ))}
       </div>
 

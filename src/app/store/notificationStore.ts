@@ -1215,7 +1215,11 @@ export function triggerApprovalTransactionNotification(params: {
       const direct = findApproverUser(targetUser.regNoAp1);
       if (direct && direct.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
         // Delegasi aktif milik approver juga menerima notifikasi approval
-        const delegateIds = getActiveDelegateIdsForDelegator(direct.employeeId, canonicalMod);
+        const delegateIds = getActiveDelegateIdsForDelegator(
+          direct.employeeId,
+          canonicalMod,
+          isSettingPhase ? "setting" : "measurement",
+        );
         const delegates = allUsers.filter((u) => delegateIds.some((id) => id.toUpperCase() === u.employeeId.toUpperCase()));
         return [direct, ...delegates];
       }
@@ -1233,7 +1237,11 @@ export function triggerApprovalTransactionNotification(params: {
       const direct = findApproverUser(targetUser.regNoAp2);
       if (direct && direct.employeeId.toUpperCase() !== targetUser.employeeId.toUpperCase()) {
         // Delegasi aktif milik approver juga menerima notifikasi approval
-        const delegateIds = getActiveDelegateIdsForDelegator(direct.employeeId, canonicalMod);
+        const delegateIds = getActiveDelegateIdsForDelegator(
+          direct.employeeId,
+          canonicalMod,
+          isSettingPhase ? "setting" : "measurement",
+        );
         const delegates = allUsers.filter((u) => delegateIds.some((id) => id.toUpperCase() === u.employeeId.toUpperCase()));
         return [direct, ...delegates];
       }

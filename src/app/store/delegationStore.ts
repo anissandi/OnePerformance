@@ -24,6 +24,7 @@ export interface DelegationRecord {
   kpiSetting: boolean;
   kpiTracking: boolean;
   smartGoalsSetting: boolean;
+  smartGoalsMeasurement: boolean;
   access: DelegationAccess;
   active: boolean;
   updatedAt: string;
@@ -39,7 +40,20 @@ const sameEmp = (a: string, b: string) => Boolean(a && b) && (norm(a) === norm(b
 
 export function loadDelegations(): Record<string, DelegationRecord> {
   const raw = loadPersistedState<Record<string, DelegationRecord>>(DELEGATION_KEY, {});
-  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const normalized: Record<string, DelegationRecord> = {};
+  for (const [k, rec] of Object.entries(raw)) {
+    if (!rec || typeof rec !== "object") continue;
+    normalized[k] = {
+      ...rec,
+      kpiSetting: Boolean(rec.kpiSetting),
+      kpiTracking: Boolean(rec.kpiTracking),
+      smartGoalsSetting: Boolean(rec.smartGoalsSetting),
+      smartGoalsMeasurement: Boolean(rec.smartGoalsMeasurement),
+      access: { ...EMPTY_ACCESS, ...(rec.access ?? {}) },
+    };
+  }
+  return normalized;
 }
 
 export function getDelegationFor(delegatorEmployeeId: string): DelegationRecord | undefined {
@@ -55,6 +69,7 @@ export function blankDelegation(delegatorEmployeeId: string): DelegationRecord {
     kpiSetting: false,
     kpiTracking: false,
     smartGoalsSetting: false,
+    smartGoalsMeasurement: false,
     access: { ...EMPTY_ACCESS },
     active: false,
     updatedAt: "",
@@ -92,7 +107,11 @@ export function saveDelegation(record: DelegationRecord, actor: { employeeId: st
   return next;
 }
 
-export type DelegationModuleKey = "kpiSetting" | "kpiTracking" | "smartGoalsSetting";
+export type DelegationModuleKey =
+  | "kpiSetting"
+  | "kpiTracking"
+  | "smartGoalsSetting"
+  | "smartGoalsMeasurement";
 
 /** Modul approval yang dicakup delegasi untuk tipe modul & fase tertentu. */
 export function delegationModuleKeyFor(moduleType: string, phase?: "setting" | "measurement"): DelegationModuleKey[] {
@@ -106,8 +125,11 @@ export function delegationModuleKeyFor(moduleType: string, phase?: "setting" | "
   }
   if (m === "rca" || m.startsWith("rca")) return ["kpiTracking"];
   if (m.startsWith("smart")) {
-    if (phase === "measurement" || m.includes("measurement")) return [];
-    return ["smartGoalsSetting"];
+    if (phase === "setting") return ["smartGoalsSetting"];
+    if (phase === "measurement") return ["smartGoalsMeasurement"];
+    if (m.includes("setting")) return ["smartGoalsSetting"];
+    if (m.includes("measurement") || m.includes("tracking") || m.includes("check")) return ["smartGoalsMeasurement"];
+    return ["smartGoalsSetting", "smartGoalsMeasurement"];
   }
   return [];
 }
@@ -206,7 +228,7 @@ export interface ReceivedWorkspaceDelegation {
 
 /**
  * Daftar delegasi aktif yang DITERIMA oleh `delegateEmployeeId` untuk modul workspace tertentu
- * (`kpiSetting` | `kpiTracking` | `smartGoalsSetting`) dengan minimal satu hak akses (`view`/`create`/`edit`/`delete`).
+ * (`kpiSetting` | `kpiTracking` | `smartGoalsSetting` | `smartGoalsMeasurement`) dengan minimal satu hak akses (`view`/`create`/`edit`/`delete`).
  */
 export function getReceivedWorkspaceDelegations(
   delegateEmployeeId: string,
@@ -236,16 +258,32 @@ export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): {
   kpiSetting: boolean;
   kpiTracking: boolean;
   smartGoalsSetting: boolean;
+  smartGoalsMeasurement: boolean;
+  approveSetting: boolean;
+  approveMeasurement: boolean;
 } {
-  const out = { kpiSetting: false, kpiTracking: false, smartGoalsSetting: false };
+  const out = {
+    kpiSetting: false,
+    kpiTracking: false,
+    smartGoalsSetting: false,
+    smartGoalsMeasurement: false,
+    approveSetting: false,
+    approveMeasurement: false,
+  };
   if (!delegateEmployeeId) return out;
   for (const rec of Object.values(loadDelegations())) {
     if (!rec.active || !rec.delegateEmployeeId) continue;
-    if (!hasWorkspaceDelegationAccess(rec.access)) continue;
     if (!sameEmp(rec.delegateEmployeeId, delegateEmployeeId)) continue;
-    if (rec.kpiSetting) out.kpiSetting = true;
-    if (rec.kpiTracking) out.kpiTracking = true;
-    if (rec.smartGoalsSetting) out.smartGoalsSetting = true;
+    if (hasWorkspaceDelegationAccess(rec.access)) {
+      if (rec.kpiSetting) out.kpiSetting = true;
+      if (rec.kpiTracking) out.kpiTracking = true;
+      if (rec.smartGoalsSetting) out.smartGoalsSetting = true;
+      if (rec.smartGoalsMeasurement) out.smartGoalsMeasurement = true;
+    }
+    if (rec.access?.approve) {
+      if (rec.kpiSetting || rec.smartGoalsSetting) out.approveSetting = true;
+      if (rec.kpiTracking || rec.smartGoalsMeasurement) out.approveMeasurement = true;
+    }
   }
   return out;
 }

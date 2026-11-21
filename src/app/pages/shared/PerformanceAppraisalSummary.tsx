@@ -1,6 +1,7 @@
 // @refresh reset
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Download, ChevronDown, ChevronUp, ChevronsUpDown, Eye, X, Star } from "lucide-react";
+import { Award, Download, ChevronDown, ChevronUp, ChevronsUpDown, Eye, TrendingUp, Users, X, Star } from "lucide-react";
+import { ANALYTICS_CARD_TONES, AnalyticsStatCard } from "../../components/AnalyticsStatCard";
 import { EXCEL_THEME, exportStyledXLSX, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
 import type { Employee, CalibrationTarget, ScoreGrade } from "../../data/mockEmployees";
 import {
@@ -750,24 +751,53 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
         </div>
       </div>
 
-      <div className="grid grid-cols-8 gap-3">
-        <div className="col-span-2 bg-gradient-to-br from-sky-50/90 via-white to-blue-50/40 border border-sky-200/80 rounded-2xl p-5 shadow-sm flex flex-col gap-1">
-          <p className="text-xs font-semibold text-sky-700 uppercase tracking-wide">Total Employees</p>
-          <p className="text-3xl font-bold text-[#1A284F]">{filtered.length}</p>
-          <p className="text-xs text-sky-600/80">Appraisal approved</p>
-        </div>
-        <div className="col-span-2 bg-gradient-to-br from-indigo-50/90 via-white to-violet-50/40 border border-indigo-200/80 rounded-2xl p-5 shadow-sm flex flex-col gap-1">
-          <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Average Score</p>
-          <p className="text-3xl font-bold text-[#1A284F]">{avgScore}</p>
-          <p className="text-xs text-indigo-600/80">Across all modules</p>
-        </div>
-        <div className="col-span-4 bg-gradient-to-br from-emerald-50/70 via-white to-teal-50/35 border border-emerald-200/75 rounded-2xl p-5 shadow-sm">
-          <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3">Grade Distribution</p>
-          <div className="flex items-center gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-8 gap-3.5">
+        <AnalyticsStatCard
+          className="lg:col-span-2"
+          title="Total Employees"
+          value={filtered.length}
+          subtitle="Appraisal approved"
+          icon={<Users className="w-5 h-5" />}
+          tone="navy"
+          index={0}
+        />
+        <AnalyticsStatCard
+          className="lg:col-span-2"
+          title="Average Score"
+          value={avgScore}
+          subtitle="Across all modules"
+          icon={<TrendingUp className="w-5 h-5" />}
+          tone="plum"
+          index={1}
+        />
+        <div
+          style={{ animationDelay: "100ms" }}
+          className={`sm:col-span-2 lg:col-span-4 group relative overflow-hidden bg-gradient-to-br ${ANALYTICS_CARD_TONES.emerald.gradient} border ${ANALYTICS_CARD_TONES.emerald.border} rounded-2xl p-4 flex flex-col justify-between min-h-[126px] shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion`}
+        >
+          <div
+            className="pointer-events-none absolute -right-5 -bottom-6 w-28 h-28 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+            style={{ backgroundColor: `${ANALYTICS_CARD_TONES.emerald.accentHex}0D` }}
+          />
+          <div className="flex items-start justify-between gap-2 relative z-10 mb-2.5">
+            <div>
+              <p className="text-xs font-medium text-gray-500">Grade Distribution</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">Distribusi perolehan grade seluruh modul</p>
+            </div>
+            <div
+              className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+              style={{ backgroundColor: ANALYTICS_CARD_TONES.emerald.accentHex }}
+            >
+              <Award className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="grid grid-cols-6 gap-2 relative z-10">
             {gradeCounts.map(({ grade, count }) => (
-              <div key={grade} className="flex-1 flex flex-col items-center gap-1">
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${gradeColor(grade)}`}>{grade}</span>
-                <span className="text-lg font-bold text-gray-800">{count}</span>
+              <div
+                key={grade}
+                className="flex flex-col items-center justify-center gap-1 rounded-xl bg-white/80 border border-[#D3EBE1]/80 py-1.5 px-1 transition-transform duration-200 hover:-translate-y-0.5 shadow-2xs"
+              >
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${gradeColor(grade)}`}>{grade}</span>
+                <span className="text-base font-extrabold text-[#111827] tabular-nums leading-tight">{count}</span>
               </div>
             ))}
           </div>

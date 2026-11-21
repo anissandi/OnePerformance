@@ -1,6 +1,7 @@
 // @refresh reset
 import React, { useEffect, useState } from "react";
-import { FolderKanban, CheckCircle2, AlertCircle, Clock, Search, Filter, Download, ShieldCheck, ShieldX, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { FolderKanban, CheckCircle2, AlertCircle, Clock, Lightbulb, Search, Filter, Download, ShieldCheck, ShieldX, TrendingUp, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { loadAllIcfProjectsByEmployee } from "../../../store/projectStore";
 import { getProjectApprovalStatus, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
@@ -318,19 +319,15 @@ export function SupervisorMonitoringProject() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        {[
-          { label: "Total Projects",           value: totalProjects,  sub: "across your team",       color: "text-[#1A284F]",  bg: "bg-[#1A284F]/5" },
-          { label: "SS Project",               value: ssCount,        sub: "Suggestion System",      color: "text-amber-700",  bg: "bg-amber-50"    },
-          { label: "QCC Project",              value: qccCount,       sub: "Quality Control Circle", color: "text-indigo-700", bg: "bg-indigo-50"   },
-          { label: "QCP Project",              value: qcpCount,       sub: "Quality Control Project",color: "text-teal-700",   bg: "bg-teal-50"     },
-          { label: "Total Project Done",        value: doneCount,      sub: "progress status Done",    color: "text-rose-700",   bg: "bg-rose-50"     },
-        ].map((s) => (
-          <div key={s.label} className={`rounded-2xl border border-gray-100 px-5 py-4 ${s.bg}`}>
-            <p className="text-xs text-gray-500 mb-1">{s.label}</p>
-            <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-            <p className="text-[11px] text-gray-400 mt-0.5">{s.sub}</p>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+        {([
+          { label: "Total Projects",     value: totalProjects, sub: "across your team",        tone: "navy" as AnalyticsCardTone,       icon: <FolderKanban className="w-5 h-5" /> },
+          { label: "SS Project",         value: ssCount,       sub: "Suggestion System",       tone: "terracotta" as AnalyticsCardTone, icon: <Lightbulb className="w-5 h-5" />    },
+          { label: "QCC Project",        value: qccCount,      sub: "Quality Control Circle",  tone: "slate" as AnalyticsCardTone,      icon: <ShieldCheck className="w-5 h-5" />  },
+          { label: "QCP Project",        value: qcpCount,      sub: "Quality Control Project", tone: "teal" as AnalyticsCardTone,       icon: <TrendingUp className="w-5 h-5" />   },
+          { label: "Total Project Done", value: doneCount,     sub: "progress status Done",    tone: "emerald" as AnalyticsCardTone,    icon: <CheckCircle2 className="w-5 h-5" /> },
+        ]).map((s, idx) => (
+          <AnalyticsStatCard key={s.label} title={s.label} value={s.value} subtitle={s.sub} icon={s.icon} tone={s.tone} index={idx} />
         ))}
       </div>
 

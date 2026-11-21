@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Search, MessageSquare, CheckCircle2, AlertCircle, Filter, Calendar, XCircle } from "lucide-react";
+import { Search, MessageSquare, CheckCircle2, AlertCircle, Filter, Calendar, Users, XCircle } from "lucide-react";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 import { getPenilai1Score, subscribeScores } from "../../supervisor/managementInterviewScoreStore";
 import { getEntries, subscribe as subscribeSchedules } from "../../supervisor/interviewScheduleStore";
@@ -235,18 +236,14 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[
-          { label: "Total Employees",    value: filteredEmployees.length, sub: "registered",          color: "text-[#1A284F]", bg: "bg-[#1A284F]/5" },
-          { label: "Interview Done",     value: done,                     sub: "completed",            color: "text-green-700", bg: "bg-green-50"    },
-          { label: "Scheduled",          value: scheduled,                sub: "awaiting execution",   color: "text-blue-700",  bg: "bg-blue-50"     },
-          { label: "Not Yet Scheduled",  value: notScheduled,             sub: `Avg score: ${avgScore}`, color: "text-amber-700", bg: "bg-amber-50"  },
-        ].map((s) => (
-          <div key={s.label} className={`rounded-2xl border border-gray-100 px-5 py-4 ${s.bg}`}>
-            <p className="text-xs text-gray-500 mb-1">{s.label}</p>
-            <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-            <p className="text-[11px] text-gray-400 mt-0.5">{s.sub}</p>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {([
+          { label: "Total Employees",   value: filteredEmployees.length, sub: "registered",             tone: "navy" as AnalyticsCardTone,       icon: <Users className="w-5 h-5" /> },
+          { label: "Interview Done",    value: done,                     sub: "completed",              tone: "emerald" as AnalyticsCardTone,    icon: <CheckCircle2 className="w-5 h-5" /> },
+          { label: "Scheduled",         value: scheduled,                sub: "awaiting execution",     tone: "teal" as AnalyticsCardTone,       icon: <Calendar className="w-5 h-5" /> },
+          { label: "Not Yet Scheduled", value: notScheduled,             sub: `Avg score: ${avgScore}`, tone: "terracotta" as AnalyticsCardTone, icon: <MessageSquare className="w-5 h-5" /> },
+        ]).map((s, idx) => (
+          <AnalyticsStatCard key={s.label} title={s.label} value={s.value} subtitle={s.sub} icon={s.icon} tone={s.tone} index={idx} />
         ))}
       </div>
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { MessageSquare, CheckCircle2, Calendar, X, Eye, Building2, ClipboardEdit, Save, AlertCircle, Info } from "lucide-react";
+import { MessageSquare, CheckCircle2, Calendar, Users, X, Eye, Building2, ClipboardEdit, Save, AlertCircle, Info } from "lucide-react";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { getEntries, subscribe, updateEntry, type ScheduleEntry } from "../interviewScheduleStore";
 import { NAME_TO_EMP_ID, setPenilai1Score } from "../managementInterviewScoreStore";
 import { setMIPenilaiResult } from "../managementInterviewResultStore";
@@ -816,6 +817,31 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
           </div>
         )}
       </div>
+
+      {/* Stats */}
+      {(() => {
+        const activeSchedules = schedEntries.filter((e) => e.status !== "Cancelled");
+        const totalParticipants = activeSchedules.reduce(
+          (sum, e) => sum + (e.addedUsers?.length ?? 0) + (e.otherUsers?.length ?? 0),
+          0,
+        );
+        const assessedCount = activeSchedules.filter(
+          (e) => Boolean(assessmentsMap[e.id] && assessmentsMap[e.id].length > 0),
+        ).length;
+        const pendingCount = Math.max(0, activeSchedules.length - assessedCount);
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {([
+              { label: "Total Schedules",    value: schedEntries.length, sub: `${activeSchedules.length} active sessions`, tone: "navy" as AnalyticsCardTone,       icon: <Calendar className="w-5 h-5" /> },
+              { label: "Total Participants", value: totalParticipants,   sub: "across active schedules",                   tone: "teal" as AnalyticsCardTone,       icon: <Users className="w-5 h-5" /> },
+              { label: "Assessed",           value: assessedCount,       sub: "submitted interview scores",               tone: "emerald" as AnalyticsCardTone,    icon: <CheckCircle2 className="w-5 h-5" /> },
+              { label: "Pending Assessment", value: pendingCount,        sub: "awaiting interviewer input",               tone: "terracotta" as AnalyticsCardTone, icon: <MessageSquare className="w-5 h-5" /> },
+            ]).map((s, idx) => (
+              <AnalyticsStatCard key={s.label} title={s.label} value={s.value} subtitle={s.sub} icon={s.icon} tone={s.tone} index={idx} />
+            ))}
+          </div>
+        );
+      })()}
 
       {/* HR Schedules table */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
