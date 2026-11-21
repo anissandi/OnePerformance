@@ -43,22 +43,38 @@ import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../pages/hr/s
 
 type Role = "hr" | "employee" | "supervisor" | "bod";
 
-function getMenuColorTheme(label: string): string {
-  const l = label.toLowerCase();
-  if (l.includes("dashboard")) return "text-sky-600";
-  if (l.includes("cycle") || l.includes("history")) return "text-indigo-600";
-  if (l.includes("module")) return "text-violet-600";
-  if (l.includes("setting") || l.includes("configuration")) return "text-slate-600";
-  if (l.includes("measurement") || l.includes("kpi") || l.includes("tracking")) return "text-emerald-600";
-  if (l.includes("smart")) return "text-amber-600";
-  if (l.includes("rca")) return "text-rose-600";
-  if (l.includes("approval") || l.includes("check")) return "text-teal-600";
-  if (l.includes("monitoring")) return "text-cyan-600";
-  if (l.includes("calibration")) return "text-fuchsia-600";
-  if (l.includes("help") || l.includes("feedback")) return "text-orange-600";
-  if (l.includes("document") || l.includes("evidence")) return "text-blue-600";
-  if (l.includes("override") || l.includes("lock")) return "text-red-600";
-  return "text-slate-600";
+const SOFT_PROFESSIONAL_ICON_COLORS = [
+  "#3B6EA8", // Soft Steel Blue
+  "#248277", // Seafoam Teal
+  "#C07A28", // Warm Ochre Amber
+  "#5558B8", // Soft Royal Indigo
+  "#2E8555", // Muted Emerald
+  "#B84A4A", // Soft Crimson Brick
+  "#2378A6", // Cerulean Sky
+  "#6E56A8", // Muted Amethyst Violet
+  "#C76332", // Burnt Sienna Orange
+  "#1F8699", // Pacific Cyan
+  "#5B8731", // Olive Moss Green
+  "#B55068", // Muted Berry Rose
+  "#475569", // Cool Slate
+  "#85643A", // Warm Bronze Taupe
+  "#2F5597", // Navy Cobalt
+  "#3B7A47", // Pine Leaf
+  "#9E6224", // Copper Ochre
+  "#464A8C", // Twilight Indigo
+  "#1D6863", // Spruce Petrol
+  "#9A4C5E", // Soft Bordeaux
+  "#52796F", // Eucalyptus Green
+  "#5E6472", // Charcoal Blue-Grey
+] as const;
+
+function shuffleUniqueSoftColors(): string[] {
+  const arr = [...SOFT_PROFESSIONAL_ICON_COLORS];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 interface NavSubChild {
@@ -767,11 +783,14 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
   const [expandedMenus, setExpandedMenus] = useState<Set<number>>(getInitialExpanded);
   const [collapsedFlyout, setCollapsedFlyout] = useState<{ idx: number; top: number } | null>(null);
+  const [collapsedTooltip, setCollapsedTooltip] = useState<{ idx: number; centerY: number; label: string } | null>(null);
+  const [collapsedIconColors, setCollapsedIconColors] = useState<string[]>(() => shuffleUniqueSoftColors());
   const flyoutRef = useRef<HTMLDivElement>(null);
 
   // Auto-expand when navigating to a child route (e.g. from notification)
   useEffect(() => {
     setCollapsedFlyout(null);
+    setCollapsedTooltip(null);
     setExpandedMenus((prev) => {
       const next = new Set(prev);
       links.forEach((link, idx) => {
@@ -793,21 +812,40 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
   }, [location.pathname]);
 
   useEffect(() => {
-    if (!collapsed) {
+    if (collapsed) {
+      setCollapsedIconColors(shuffleUniqueSoftColors());
+    } else {
       setCollapsedFlyout(null);
+      setCollapsedTooltip(null);
     }
   }, [collapsed]);
 
   useEffect(() => {
     if (!collapsedFlyout) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (flyoutRef.current && !flyoutRef.current.contains(e.target as Node)) {
-        setCollapsedFlyout(null);
-      }
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (flyoutRef.current?.contains(target)) return;
+      if (target.closest(`[data-collapsed-menu-trigger="${collapsedFlyout.idx}"]`)) return;
+      setCollapsedFlyout(null);
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [collapsedFlyout]);
+
+  const openCollapsedSubmenuFlyout = (idx: number, triggerEl: HTMLElement) => {
+    const subLinks = links[idx]?.subLinks ?? [];
+    let rowCount = 0;
+    subLinks.forEach((s: any) => {
+      rowCount += 1;
+      if (s.children?.length) rowCount += s.children.length;
+    });
+    const estHeight = Math.min(window.innerHeight - 32, 56 + rowCount * 38);
+    const rect = triggerEl.getBoundingClientRect();
+    const safeTop = Math.max(16, Math.min(rect.top, window.innerHeight - estHeight - 16));
+    setCollapsedTooltip(null);
+    setCollapsedFlyout({ idx, top: safeTop });
+  };
 
   const isSubLinkGroupActive = (link: NavTopLink) => {
     return Boolean(
@@ -855,40 +893,43 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       </div>
 
       <div
+        onScroll={() => {
+          if (collapsedTooltip) setCollapsedTooltip(null);
+        }}
         className={`py-5 flex flex-col gap-1.5 flex-1 overflow-y-auto ${
           collapsed ? "px-2 items-center" : "px-4"
         }`}
       >
         {links.map((link, idx) => {
+          const collapsedColor = collapsedIconColors[idx % collapsedIconColors.length];
           if (link.subLinks) {
             const isExpanded = expandedMenus.has(idx);
             const groupActive = isSubLinkGroupActive(link);
 
             if (collapsed) {
               const isFlyoutOpen = collapsedFlyout?.idx === idx;
+              const isHighlighted = groupActive || isFlyoutOpen;
               return (
                 <div key={idx} className="w-full flex justify-center">
                   <button
                     type="button"
-                    title={link.label}
+                    data-collapsed-menu-trigger={idx}
+                    onMouseEnter={(e) => openCollapsedSubmenuFlyout(idx, e.currentTarget)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const safeTop = Math.max(16, Math.min(rect.top, window.innerHeight - 320));
-                      setCollapsedFlyout((prev) =>
-                        prev?.idx === idx ? null : { idx, top: safeTop },
-                      );
+                      openCollapsedSubmenuFlyout(idx, e.currentTarget);
                     }}
+                    style={!isHighlighted ? { color: collapsedColor } : undefined}
                     className={`w-11 h-11 flex items-center justify-center rounded-xl transition-colors relative ${
-                      groupActive || isFlyoutOpen
+                      isHighlighted
                         ? "bg-[#1A284F] text-white shadow-sm"
-                        : `${getMenuColorTheme(link.label)} hover:bg-gray-200/60`
+                        : "hover:bg-gray-200/60"
                     }`}
                   >
                     <link.icon className="w-5 h-5 shrink-0" />
                     <span
                       className={`absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full ${
-                        groupActive || isFlyoutOpen ? "bg-amber-300" : "bg-gray-400/70"
+                        isHighlighted ? "bg-amber-300" : "bg-gray-400/70"
                       }`}
                     />
                   </button>
@@ -900,7 +941,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
               <div key={idx} className="mb-2">
                 <button
                   onClick={() => toggleMenu(idx)}
-                  className={`w-full flex items-center justify-between px-4 py-3 text-sm font-medium ${getMenuColorTheme(link.label)} hover:bg-gray-100/50 rounded-xl transition-colors text-left`}
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-gray-100/50 rounded-xl transition-colors text-left"
                 >
                   <div className="flex items-center gap-3">
                     <link.icon className="w-5 h-5" />
@@ -925,7 +966,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                                 else next.add(subKey as any);
                                 return next;
                               })}
-                              className={`w-full flex items-center justify-between pl-12 pr-4 py-2.5 text-xs font-medium ${getMenuColorTheme(sub.label)} hover:bg-gray-100/50 rounded-xl transition-colors`}
+                              className="w-full flex items-center justify-between pl-12 pr-4 py-2.5 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-gray-100/50 rounded-xl transition-colors"
                             >
                               <div className="flex items-center gap-2">
                                 {SubIcon && <SubIcon className="w-4 h-4" />}
@@ -941,7 +982,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                                     to={child.to}
                                     className={({ isActive }) =>
                                       `flex items-center gap-2 pl-16 pr-4 py-2 text-[11px] font-medium rounded-xl transition-colors ${
-                                        isActive ? "bg-[#1A284F] text-white shadow-sm" : `${getMenuColorTheme(child.label)} hover:bg-gray-100/50`
+                                        isActive ? "bg-[#1A284F] text-white shadow-sm" : "text-slate-600 hover:text-slate-800 hover:bg-gray-100/50"
                                       }`
                                     }
                                   >
@@ -961,7 +1002,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                           to={sub.to || ""}
                           className={({ isActive }) =>
                             `flex items-center gap-2 pl-12 pr-4 py-2.5 text-xs font-medium rounded-xl transition-colors ${
-                              isActive ? "bg-[#1A284F] text-white shadow-sm" : `${getMenuColorTheme(sub.label)} hover:bg-gray-100/50`
+                              isActive ? "bg-[#1A284F] text-white shadow-sm" : "text-slate-600 hover:text-slate-800 hover:bg-gray-100/50"
                             }`
                           }
                         >
@@ -981,8 +1022,27 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
               key={idx}
               to={link.to || ""}
               end={link.exact}
-              title={collapsed ? link.label : undefined}
-              onClick={() => setCollapsedFlyout(null)}
+              onMouseEnter={(e) => {
+                if (!collapsed) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                setCollapsedFlyout(null);
+                setCollapsedTooltip({
+                  idx,
+                  centerY: rect.top + rect.height / 2,
+                  label: link.label,
+                });
+              }}
+              onMouseLeave={() => {
+                if (!collapsed) return;
+                setCollapsedTooltip((prev) => (prev?.idx === idx ? null : prev));
+              }}
+              onClick={() => {
+                setCollapsedFlyout(null);
+                setCollapsedTooltip(null);
+              }}
+              style={({ isActive }) =>
+                collapsed && !isActive ? { color: collapsedColor } : undefined
+              }
               className={({ isActive }) => 
                 `${
                   collapsed
@@ -991,7 +1051,9 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                 } flex items-center rounded-xl text-sm font-medium transition-colors ${
                   isActive 
                     ? "bg-[#1A284F] text-white shadow-sm" 
-                    : `${getMenuColorTheme(link.label)} hover:bg-gray-200/60`
+                    : collapsed
+                      ? "hover:bg-gray-200/60"
+                      : "text-slate-600 hover:text-slate-800 hover:bg-gray-200/60"
                 }`
               }
             >
@@ -1002,12 +1064,28 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         })}
       </div>
 
+      {/* Instant Tooltip saat mode Collapsed untuk menu tanpa Submenu */}
+      {collapsed && collapsedTooltip !== null && (
+        <div
+          style={{ top: collapsedTooltip.centerY }}
+          className="pointer-events-none fixed left-[78px] z-50 -translate-y-1/2 flex items-center"
+        >
+          <div className="w-2 h-2 -mr-1 rotate-45 bg-[#1A284F] rounded-[1px]" />
+          <div className="whitespace-nowrap rounded-lg bg-[#1A284F] px-3 py-1.5 text-xs font-medium text-white shadow-lg">
+            {collapsedTooltip.label}
+          </div>
+        </div>
+      )}
+
       {/* Flyout Submenu saat mode Collapsed */}
       {collapsed && collapsedFlyout !== null && links[collapsedFlyout.idx]?.subLinks && (
         <div
           ref={flyoutRef}
-          style={{ top: collapsedFlyout.top }}
-          className="fixed left-[76px] z-50 w-64 bg-white rounded-2xl border border-gray-200 shadow-xl py-3 px-2.5 max-h-[80vh] overflow-y-auto"
+          style={{
+            top: collapsedFlyout.top,
+            maxHeight: `calc(100vh - ${collapsedFlyout.top + 16}px)`,
+          }}
+          className="fixed left-[76px] z-50 w-64 bg-white rounded-2xl border border-gray-200 shadow-xl py-3 px-2.5 overflow-y-auto"
         >
           <div className="px-3 pb-2 mb-1.5 border-b border-gray-100 flex items-center gap-2">
             {(() => {
@@ -1038,7 +1116,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                             `flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-xl transition-colors ${
                               isActive
                                 ? "bg-[#1A284F] text-white shadow-sm"
-                                : "text-gray-600 hover:text-gray-900 hover:bg-gray-100/70"
+                                : "text-slate-600 hover:text-slate-800 hover:bg-gray-100/70"
                             }`
                           }
                         >
@@ -1059,7 +1137,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                     `flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-xl transition-colors ${
                       isActive
                         ? "bg-[#1A284F] text-white shadow-sm"
-                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100/70"
+                        : "text-slate-600 hover:text-slate-800 hover:bg-gray-100/70"
                     }`
                   }
                 >
