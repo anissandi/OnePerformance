@@ -1275,7 +1275,7 @@ function ScoreGradeDistributionDashboard({
         <div className="flex-1">
           <h3 className="font-bold text-gray-900 text-base">Score / Grade Distribution</h3>
           <p className="text-xs text-gray-500">
-            Actual employee distribution vs calibration targets{moduleLabel}
+            Actual employee distribution vs Setting (EOY){moduleLabel}
           </p>
         </div>
         {module !== "All Modules" && (
@@ -1329,7 +1329,7 @@ function ScoreGradeDistributionDashboard({
                     return (
                       <div className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 shadow-lg text-xs">
                         <p className="font-bold mb-1" style={{ color: cg?.color }}>{d.grade}</p>
-                        <p className="text-gray-500">Target: <span className="font-semibold text-gray-700">{d.areaTarget}%</span></p>
+                        <p className="text-gray-500">Setting (EOY): <span className="font-semibold text-gray-700">{d.areaTarget}%</span></p>
                         <p className="text-gray-500">Actual: <span className="font-semibold text-gray-700">{d.areaActual}%</span> ({d.actualCount} employees)</p>
                       </div>
                     );
@@ -1339,7 +1339,7 @@ function ScoreGradeDistributionDashboard({
                   key="area-target"
                   type="monotone"
                   dataKey="areaTarget"
-                  name="Target"
+                  name="Setting (EOY)"
                   stroke="#6366F1"
                   strokeWidth={2}
                   strokeDasharray="5 3"
@@ -1370,7 +1370,7 @@ function ScoreGradeDistributionDashboard({
           <div className="flex items-center gap-5 mt-3 text-xs text-gray-500">
             <div className="flex items-center gap-2">
               <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#6366F1" strokeWidth="2" strokeDasharray="5 3" /></svg>
-              <span>Target (calibration)</span>
+              <span>Setting (EOY)</span>
             </div>
             <div className="flex items-center gap-2">
               <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#06B6D4" strokeWidth="2.5" /></svg>
@@ -1379,10 +1379,10 @@ function ScoreGradeDistributionDashboard({
           </div>
         </div>
 
-        {/* ── Target vs Actual Proportion ─────────────────────────────────── */}
+        {/* ── Setting (EOY) vs Actual Proportion ──────────────────────────── */}
         <div>
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            Target vs Actual Proportion (%)
+            Setting (EOY) vs Actual Proportion (%)
           </p>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
@@ -1413,7 +1413,7 @@ function ScoreGradeDistributionDashboard({
                 />
                 <YAxis key="yaxis" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#9CA3AF" }} tickFormatter={v => `${v}%`} />
                 <Tooltip key="tooltip" formatter={(v: number) => `${v}%`} />
-                <Bar key="bar-target" dataKey="barTarget" name="Target" radius={[4, 4, 0, 0]} fill="#C7D2FE" isAnimationActive={true} animationDuration={850} animationEasing="ease-out" />
+                <Bar key="bar-target" dataKey="barTarget" name="Setting (EOY)" radius={[4, 4, 0, 0]} fill="#C7D2FE" isAnimationActive={true} animationDuration={850} animationEasing="ease-out" />
                 <Bar key="bar-actual" dataKey="barActual" name="Actual" radius={[4, 4, 0, 0]} isAnimationActive={true} animationDuration={950} animationEasing="ease-out">
                   {bellData.map((d, i) => (
                     <Cell key={`ad-bar-cell-${i}`} fill={d.color} />

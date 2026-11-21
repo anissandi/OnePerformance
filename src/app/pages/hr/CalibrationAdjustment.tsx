@@ -443,7 +443,7 @@ function BellCurveChart({
 
   const SettingDot = (props: any) => {
     const { cx, cy } = props;
-    return <Dot cx={cx} cy={cy} r={5} fill="#1A284F" stroke="#fff" strokeWidth={2} />;
+    return <Dot cx={cx} cy={cy} r={5} fill="#06B6D4" stroke="#fff" strokeWidth={2} />;
   };
 
   const AktualDot = (props: any) => {
@@ -453,14 +453,14 @@ function BellCurveChart({
 
   const KalibrasiDot = (props: any) => {
     const { cx, cy } = props;
-    if (!hasCalibration) return <Dot cx={cx} cy={cy} r={3.5} fill="#FCD34D" stroke="#fff" strokeWidth={1.5} />;
-    return <Dot cx={cx} cy={cy} r={5} fill="#D97706" stroke="#fff" strokeWidth={2} />;
+    if (!hasCalibration) return <Dot cx={cx} cy={cy} r={3.5} fill="#94A3B8" stroke="#fff" strokeWidth={1.5} />;
+    return <Dot cx={cx} cy={cy} r={5} fill="#1A284F" stroke="#fff" strokeWidth={2} />;
   };
 
   const legendPayload = [
-    { value: "Setting (SOY)",   type: "square" as const, color: "#1A284F" },
+    { value: "Setting (SOY)",   type: "square" as const, color: "#06B6D4" },
     { value: "Aktual",          type: "square" as const, color: "#0D9488" },
-    { value: "Kalibrasi (EOY)", type: "square" as const, color: "#D97706" },
+    { value: "Kalibrasi (EOY)", type: "square" as const, color: "#1A284F" },
   ];
 
   return (
@@ -490,13 +490,13 @@ function BellCurveChart({
                 formatter={(value) => <span className="text-xs text-gray-600 font-medium">{value}</span>}
               />
               {/* Bars */}
-              <Bar key="bc-bar-setting" dataKey="Setting (SOY)"   name="Setting (SOY)"   fill="#1A284F" fillOpacity={0.22} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-setting" dataKey="Setting (SOY)"   name="Setting (SOY)"   fill="#06B6D4" fillOpacity={0.26} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
               <Bar key="bc-bar-actual"  dataKey="Aktual"          name="Aktual"          fill="#0D9488" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-cal"     dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#D97706" fillOpacity={0.28} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-cal"     dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#1A284F" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
               {/* Lines */}
-              <Line key="bc-line-setting" type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke="#1A284F" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}   activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
+              <Line key="bc-line-setting" type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke="#06B6D4" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}   activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
               <Line key="bc-line-actual"  type="monotone" dataKey="Aktual"          name="Aktual"          stroke="#0D9488" strokeWidth={2.5}                       dot={<AktualDot />}    activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
-              <Line key="bc-line-cal"     type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? "#D97706" : "#FCD34D"} strokeWidth={hasCalibration ? 2.5 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6 } : false} isAnimationActive={false} legendType="none" />
+              <Line key="bc-line-cal"     type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? "#1A284F" : "#CBD5E1"} strokeWidth={hasCalibration ? 2.5 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6 } : false} isAnimationActive={false} legendType="none" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -515,8 +515,8 @@ function BellCurveChart({
                 <div className="flex-1 min-w-0">
                   <div className="grid grid-cols-3 gap-2.5 text-[11px] leading-snug">
                     <div>
-                      <span className="block text-[10px] font-semibold text-[#1A284F]/75">Setting</span>
-                      <span className="font-bold text-[#1A284F] tabular-nums">{d["Setting (SOY)"]}%</span>
+                      <span className="block text-[10px] font-semibold text-cyan-600">Setting</span>
+                      <span className="font-bold text-cyan-600 tabular-nums">{d["Setting (SOY)"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingHC} org)</span>
                     </div>
                     <div>
@@ -525,10 +525,10 @@ function BellCurveChart({
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.actualHC} org)</span>
                     </div>
                     <div>
-                      <span className="block text-[10px] font-semibold text-amber-700/90">Kalibrasi</span>
+                      <span className="block text-[10px] font-semibold text-[#1A284F]/85">Kalibrasi</span>
                       {hasCalibration ? (
                         <>
-                          <span className="font-bold text-amber-700 tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
+                          <span className="font-bold text-[#1A284F] tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
                           <span className="block text-[10px] text-gray-400 tabular-nums">
                             ({d.calibratedHC}{diffCalVsAct !== 0 ? ` · ${diffCalVsAct > 0 ? `+${diffCalVsAct}` : diffCalVsAct}` : ""})
                           </span>
@@ -795,22 +795,29 @@ function CatatanKalibrasi({ comment, evidenceFiles, onLightbox, emptyLabel }: {
   onLightbox: (f: EvidenceFile) => void;
   emptyLabel?: string;
 }) {
-  const hasContent = !!comment || !!(evidenceFiles?.length);
+  const trimmedComment = comment?.trim() ?? "";
+  const hasContent = !!trimmedComment || !!(evidenceFiles?.length);
   if (!hasContent) {
     return (
       <div className="flex items-center gap-2 px-3 py-2.5 bg-white/60 border border-gray-200 rounded-xl">
-        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Info</span>
-        <p className="text-xs text-gray-400">{emptyLabel ?? "Tidak ada catatan kalibrasi"}</p>
+        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 shrink-0">Note</span>
+        <p className="text-xs text-gray-500">{emptyLabel ?? "Tidak ada kalibrasi"}</p>
       </div>
     );
   }
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Catatan Kalibrasi</p>
-      {comment && (
+      {trimmedComment ? (
         <div className="bg-white/70 border border-amber-200 rounded-xl px-3 py-2.5">
-          <p className="text-[10px] font-semibold text-amber-600 uppercase tracking-wide mb-1">Komentar</p>
-          <p className="text-xs text-gray-800 whitespace-pre-wrap leading-relaxed">{comment}</p>
+          <div className="flex items-center gap-1.5 mb-1">
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">Note</span>
+          </div>
+          <p className="text-xs text-gray-800 whitespace-pre-wrap leading-relaxed">{trimmedComment}</p>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2.5 bg-white/60 border border-gray-200 rounded-xl">
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 shrink-0">Note</span>
+          <p className="text-xs text-gray-500">{emptyLabel ?? "Tidak ada kalibrasi"}</p>
         </div>
       )}
       {evidenceFiles && evidenceFiles.length > 0 && (
@@ -1056,23 +1063,30 @@ function AppraisalDetailCard({
                       { label: "Project Outside",       score: effectiveScores.projectOutsideJobScope, weight: empWeights.projectOutsideJobScope },
                     ] as { label: string; score: number | null; weight: number; isMI?: boolean; isYtd?: boolean }[])
                       .filter(r => r.weight > 0)
-                      .map(r => (
+                      .map(r => {
+                        const modStyle = r.score != null ? scoreBadgeStyle(r.score, emp.companyUnit) : null;
+                        return (
                         <div key={r.label} className="flex items-center justify-between text-[10px]">
-                          <span className={`flex items-center gap-1 ${r.isMI ? "text-indigo-600 font-semibold" : "text-gray-500"}`}>
+                          <span className={`flex items-center gap-1 ${r.isMI ? "text-gray-700 font-semibold" : "text-gray-600"}`}>
                             {r.label}
                             {r.isYtd && (
                               <span className="px-1 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 font-bold text-[9px]">YTD</span>
                             )}
                             {r.isMI && r.score !== null && (
-                              <span className="px-1 py-0.5 rounded bg-indigo-100 text-indigo-600 font-bold text-[9px]">Assessment</span>
+                              <span className="px-1 py-0.5 rounded bg-sky-100 text-sky-700 border border-sky-200 font-bold text-[9px]">Assessment</span>
                             )}
-                            <span className="text-gray-300">({Math.round(r.weight * 100)}%)</span>
+                            <span className="text-gray-400">({Math.round(r.weight * 100)}%)</span>
                           </span>
-                          <span className={`font-bold tabular-nums ${r.score == null ? "text-gray-300" : r.isMI ? "text-indigo-700" : "text-gray-700"}`}>
-                            {r.score != null ? `${r.score.toFixed(1)}%` : "—"}
-                          </span>
+                          {r.score != null && modStyle ? (
+                            <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums text-[10px] ${modStyle.pill}`}>
+                              {r.score.toFixed(1)}%
+                            </span>
+                          ) : (
+                            <span className="font-bold tabular-nums text-gray-300">—</span>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                   </div>
                 </div>
                 {(() => {
@@ -1100,7 +1114,7 @@ function AppraisalDetailCard({
                         )}
                         {!hasAdj && <p className="text-[10px] mt-1.5 text-gray-400">Belum ada penyesuaian kalibrasi</p>}
                       </div>
-                      <CatatanKalibrasi comment={comment} evidenceFiles={evidenceFiles} onLightbox={setLightbox} emptyLabel={hasAdj ? "Ada penyesuaian nilai final dari kalibrasi dengan mempertimbangkan supporting data yang dimiliki" : "Tidak ada kalibrasi untuk tahun ini"} />
+                      <CatatanKalibrasi comment={comment} evidenceFiles={evidenceFiles} onLightbox={setLightbox} emptyLabel={hasAdj ? "Ada penyesuaian nilai final dari kalibrasi dengan mempertimbangkan supporting data yang dimiliki" : "Tidak ada kalibrasi"} />
                     </div>
                   );
                 })()}
@@ -1333,6 +1347,16 @@ function EmployeeAdjustmentSection({
   const [evidence,   setEvidence]   = useState<Record<string, EvidenceFile[]>>(() =>
     loadPersistedState("pa_calibration_adj_evidence_v1", {})
   );
+  const [openNotes,  setOpenNotes]  = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const syncNotesAndEvidence = () => {
+      setComments(loadPersistedState("pa_calibration_adj_comments_v1", {}));
+      setEvidence(loadPersistedState("pa_calibration_adj_evidence_v1", {}));
+    };
+    window.addEventListener("pa-db-hydrated", syncNotesAndEvidence);
+    return () => window.removeEventListener("pa-db-hydrated", syncNotesAndEvidence);
+  }, []);
   const [sortKey,    setSortKey]    = useState<string | null>(null);
   const [sortDir,    setSortDir]    = useState<"asc" | "desc">("asc");
   const [freeEdit,   setFreeEdit]   = useState(false);
@@ -1458,8 +1482,23 @@ function EmployeeAdjustmentSection({
 
   const resetEmp = (id: string) => {
     setAdjustments(prev => { const n = { ...prev }; delete n[id]; return n; });
-    setComments(prev   => { const n = { ...prev }; delete n[id]; return n; });
-    setEvidence(prev   => { const n = { ...prev }; delete n[id]; return n; });
+    setComments(prev => {
+      const n = { ...prev };
+      delete n[id];
+      savePersistedState("pa_calibration_adj_comments_v1", n);
+      return n;
+    });
+    setEvidence(prev => {
+      const n = { ...prev };
+      delete n[id];
+      savePersistedState("pa_calibration_adj_evidence_v1", n);
+      return n;
+    });
+    setOpenNotes(prev => {
+      const n = { ...prev };
+      delete n[id];
+      return n;
+    });
   };
 
   const thBase = "border border-gray-600 px-2 py-2.5 text-center text-xs font-semibold text-white whitespace-nowrap";
@@ -1654,8 +1693,8 @@ function EmployeeAdjustmentSection({
         )}
       </div>
 
-      {/* 6 Summary cards — 1 baris proporsional dengan palet warna profesional */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[minmax(118px,0.8fr)_minmax(118px,0.8fr)_minmax(180px,1.55fr)_minmax(180px,1.55fr)_minmax(180px,1.55fr)_minmax(195px,1.65fr)] gap-2.5 mb-4 items-stretch">
+      {/* 5 Summary cards — 1 baris proporsional dengan palet warna profesional */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[minmax(135px,0.9fr)_minmax(135px,0.9fr)_minmax(215px,1.7fr)_minmax(215px,1.7fr)_minmax(215px,1.7fr)] gap-3 mb-4 items-stretch">
         {/* 1. Total Karyawan (SOY) */}
         <div className="bg-gradient-to-br from-[#1A284F]/[0.08] via-slate-50 to-white border border-[#1A284F]/20 rounded-xl px-3.5 py-3 flex flex-col justify-between shadow-2xs">
           <p className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide leading-snug">Total Karyawan (SOY)</p>
@@ -1716,8 +1755,8 @@ function EmployeeAdjustmentSection({
         </div>
 
         {/* 5. Distribusi Grade — Kalibrasi (EOY) */}
-        <div className="bg-gradient-to-br from-amber-50/90 via-orange-50/30 to-white border border-amber-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Kalibrasi (EOY)">
+        <div className="bg-gradient-to-br from-[#1A284F]/[0.09] via-slate-50/70 to-white border border-[#1A284F]/25 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Kalibrasi (EOY)">
             Distribusi Grade — Kalibrasi (EOY)
           </p>
           <div className="grid grid-cols-6 gap-1">
@@ -1726,11 +1765,11 @@ function EmployeeAdjustmentSection({
               const cntAfter  = gradeSummaryAfter[g]  ?? 0;
               const diff      = cntAfter - cntBefore;
               return (
-                <div key={g} className="flex flex-col items-center bg-white/85 border border-amber-100 rounded-lg py-1 px-0.5">
+                <div key={g} className="flex flex-col items-center bg-white/90 border border-slate-200 rounded-lg py-1 px-0.5">
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
                     {g}
                   </span>
-                  <span className="text-xs font-extrabold text-amber-950 tabular-nums mt-1">
+                  <span className="text-xs font-extrabold text-[#1A284F] tabular-nums mt-1">
                     {adjustedCount > 0 ? cntAfter : 0}
                   </span>
                   {adjustedCount > 0 && diff !== 0 && (
@@ -1738,35 +1777,6 @@ function EmployeeAdjustmentSection({
                       {diff > 0 ? `+${diff}` : diff}
                     </span>
                   )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* 6. Distribusi Grade - Summary */}
-        <div className="bg-gradient-to-br from-emerald-50/85 via-amber-50/30 to-white border border-emerald-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-emerald-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade - Summary">
-            Distribusi Grade - Summary
-          </p>
-          <div className="grid grid-cols-6 gap-1">
-            {gradeKeys.map((g) => {
-              const soyCnt   = soyScopeStats.byGrade[g] ?? 0;
-              const finalCnt = gradeSummaryAfter[g] ?? 0;
-              const variance = finalCnt - soyCnt;
-              return (
-                <div key={g} className="flex flex-col items-center bg-white/85 border border-emerald-100 rounded-lg py-1 px-0.5" title={`Grade ${g}: Final EOY ${finalCnt} vs Setting SOY ${soyCnt}`}>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
-                    {g}
-                  </span>
-                  <span className="text-[11px] font-extrabold text-slate-800 tabular-nums mt-1 leading-none">
-                    {finalCnt}/{soyCnt}
-                  </span>
-                  <span className={`text-[9px] font-bold tabular-nums leading-none mt-0.5 ${
-                    variance > 0 ? "text-amber-600" : variance < 0 ? "text-rose-600" : "text-emerald-600"
-                  }`}>
-                    {variance > 0 ? `+${variance}` : variance === 0 ? "0" : variance}
-                  </span>
                 </div>
               );
             })}
@@ -2024,7 +2034,7 @@ function EmployeeAdjustmentSection({
                   <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
                     <div className="inline-flex items-center justify-center gap-1">
                       <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${kpiStyle.pill}`}>
-                        {emp.base.kpi}%
+                        {Math.round(emp.base.kpi)}%
                       </span>
                       {emp.kpiIsYtd && (
                         <span
@@ -2038,13 +2048,13 @@ function EmployeeAdjustmentSection({
                   </td>
                   <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
                     <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${prjStyle.pill}`}>
-                      {emp.base.projectOutsideJobScope}%
+                      {Math.round(emp.base.projectOutsideJobScope)}%
                     </span>
                   </td>
                   <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
                     {emp.base.smartGoals != null && sgStyle ? (
                       <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${sgStyle.pill}`}>
-                        {emp.base.smartGoals}%
+                        {Math.round(emp.base.smartGoals)}%
                       </span>
                     ) : (
                       <span className="text-slate-300">—</span>
@@ -2053,7 +2063,7 @@ function EmployeeAdjustmentSection({
                   <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
                     {emp.base.appraisalForm != null && afStyle ? (
                       <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${afStyle.pill}`}>
-                        {emp.base.appraisalForm}%
+                        {Math.round(emp.base.appraisalForm)}%
                       </span>
                     ) : (
                       <span className="text-slate-300">—</span>
@@ -2062,7 +2072,7 @@ function EmployeeAdjustmentSection({
                   <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
                     {emp.base.managerialSkill != null && msStyle ? (
                       <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${msStyle.pill}`}>
-                        {emp.base.managerialSkill}%
+                        {Math.round(emp.base.managerialSkill)}%
                       </span>
                     ) : (
                       <span className="text-slate-300">—</span>
@@ -2071,7 +2081,7 @@ function EmployeeAdjustmentSection({
                   <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
                     {liveMi != null && miStyle ? (
                       <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${miStyle.pill}`}>
-                        {liveMi.toFixed(2)}%
+                        {Math.round(liveMi)}%
                       </span>
                     ) : (
                       <span className="text-slate-300">—</span>
@@ -2137,95 +2147,143 @@ function EmployeeAdjustmentSection({
 
                   {supportingColumns.map((column) => <td key={column.key} className="border border-slate-200/60 px-3 py-2.5 text-center text-xs font-medium tabular-nums text-slate-700">{column.value(emp) ?? "—"}</td>)}
 
-                  {/* Aksi */}
-                  <td className="border border-slate-200/60 px-2 py-2.5 align-top">
-                    {editMode && hasAdj ? (
+                  {/* Bukti (Upload File & Note) */}
+                  <td className="border border-slate-200/60 px-2.5 py-2.5 align-top min-w-[215px]">
+                    {editMode ? (
                       <div className="flex flex-col gap-1.5">
-                        {/* Comment */}
-                        <textarea
-                          rows={2}
-                          placeholder="Tambah komentar..."
-                          value={comments[emp.id] ?? ""}
-                          onChange={e => {
-                            const val = e.target.value;
-                            setComments(prev => {
-                              const next = { ...prev, [emp.id]: val };
-                              savePersistedState("pa_calibration_adj_comments_v1", next);
-                              return next;
-                            });
-                          }}
-                          className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-[#1A284F]/30 placeholder-gray-300 text-gray-700"
-                        />
-                        {/* Upload evidence */}
-                        <label className="flex items-center gap-1.5 cursor-pointer px-2 py-1.5 border border-dashed border-blue-300 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors">
-                          <Upload className="w-3 h-3 shrink-0" />
-                          <span className="text-[10px] font-semibold">Upload Bukti</span>
-                          <input type="file" multiple className="hidden"
-                            onChange={e => {
-                              const rawFiles = Array.from(e.target.files ?? []);
-                              const files: EvidenceFile[] = rawFiles.map(f => ({
-                                name: f.name,
-                                objectUrl: URL.createObjectURL(f),
-                                mimeType: f.type || "application/octet-stream",
-                              }));
-                              if (files.length) {
-                                rawFiles.forEach((rawFile) => {
-                                  void uploadEvidenceFileToSupabase(rawFile, {
-                                    employeeId: emp.employeeId,
-                                    employeeName: emp.name,
-                                    moduleType: "Calibration",
-                                    period: "2026",
-                                    month: "Year-End",
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setOpenNotes((prev) => ({ ...prev, [emp.id]: !(prev[emp.id] ?? (hasAdj || Boolean(comments[emp.id]))) }))}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-semibold transition-colors cursor-pointer ${
+                              (openNotes[emp.id] ?? (hasAdj || Boolean(comments[emp.id])))
+                                ? "bg-amber-100 text-amber-800 border-amber-300"
+                                : "bg-white text-slate-600 border-slate-200 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200"
+                            }`}
+                          >
+                            <MessageSquare className="w-3 h-3 shrink-0" />
+                            <span>{comments[emp.id]?.trim() ? "Note" : "+ Note"}</span>
+                          </button>
+                          <label className="inline-flex items-center gap-1 cursor-pointer px-2 py-1 border border-dashed border-sky-300 bg-white rounded-lg text-sky-700 hover:bg-sky-50 transition-colors">
+                            <Upload className="w-3 h-3 shrink-0" />
+                            <span className="text-[10px] font-semibold">Upload File</span>
+                            <input
+                              type="file"
+                              multiple
+                              className="hidden"
+                              onChange={e => {
+                                const rawFiles = Array.from(e.target.files ?? []);
+                                const tempFiles: EvidenceFile[] = rawFiles.map(f => ({
+                                  name: f.name,
+                                  objectUrl: URL.createObjectURL(f),
+                                  mimeType: f.type || "application/octet-stream",
+                                }));
+                                if (tempFiles.length) {
+                                  setEvidence(prev => {
+                                    const next = { ...prev, [emp.id]: [...(prev[emp.id] ?? []), ...tempFiles] };
+                                    savePersistedState("pa_calibration_adj_evidence_v1", next);
+                                    return next;
                                   });
-                                });
-                                setEvidence(prev => {
-                                  const next = { ...prev, [emp.id]: [...(prev[emp.id] ?? []), ...files] };
-                                  savePersistedState("pa_calibration_adj_evidence_v1", next);
-                                  return next;
-                                });
-                              }
-                              e.target.value = "";
+                                  rawFiles.forEach((rawFile, idxFile) => {
+                                    const localBlobUrl = tempFiles[idxFile]?.objectUrl;
+                                    void uploadEvidenceFileToSupabase(rawFile, {
+                                      employeeId: emp.employeeId,
+                                      employeeName: emp.name,
+                                      companyUnit: emp.companyUnit,
+                                      division: emp.divisionName,
+                                      department: emp.departmentName,
+                                      position: emp.positionName,
+                                      moduleType: "Calibration",
+                                      period: "2026",
+                                      month: "Year-End",
+                                    }).then((uploaded) => {
+                                      if (!uploaded?.url) return;
+                                      setEvidence(prev => {
+                                        const list = prev[emp.id] ?? [];
+                                        const updatedList = list.map((item) =>
+                                          item.objectUrl === localBlobUrl ? { ...item, objectUrl: uploaded.url } : item,
+                                        );
+                                        const next = { ...prev, [emp.id]: updatedList };
+                                        savePersistedState("pa_calibration_adj_evidence_v1", next);
+                                        return next;
+                                      });
+                                    });
+                                  });
+                                }
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                          {(hasAdj || Boolean(comments[emp.id]?.trim()) || (evidence[emp.id]?.length ?? 0) > 0) && (
+                            <button
+                              type="button"
+                              onClick={() => resetEmp(emp.id)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors text-[10px] font-semibold border border-rose-200 cursor-pointer"
+                              title="Reset kalibrasi, note, dan bukti baris ini"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>Reset</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {(openNotes[emp.id] ?? (hasAdj || Boolean(comments[emp.id]))) && (
+                          <textarea
+                            rows={2}
+                            placeholder="Tambahkan note kalibrasi..."
+                            value={comments[emp.id] ?? ""}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setComments(prev => {
+                                const next = { ...prev, [emp.id]: val };
+                                savePersistedState("pa_calibration_adj_comments_v1", next);
+                                return next;
+                              });
                             }}
+                            className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-[#1A284F]/30 placeholder-slate-400 text-slate-700"
                           />
-                        </label>
+                        )}
+
                         {/* Evidence file list */}
                         {(evidence[emp.id]?.length ?? 0) > 0 && (
                           <div className="flex flex-col gap-1">
                             {evidence[emp.id].map((f, i) => (
-                              <div key={i} className="flex items-center gap-1 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5">
-                                <Paperclip className="w-2.5 h-2.5 text-blue-400 shrink-0" />
-                                <span className="text-[10px] text-blue-700 truncate max-w-[110px]">{f.name}</span>
-                                <button onClick={() => setEvidence(prev => ({ ...prev, [emp.id]: prev[emp.id].filter((_, j) => j !== i) }))}
-                                  className="ml-auto text-gray-300 hover:text-red-400 transition-colors shrink-0">
+                              <div key={i} className="flex items-center gap-1 bg-white/90 border border-sky-200 rounded-md px-2 py-0.5">
+                                <Paperclip className="w-2.5 h-2.5 text-sky-500 shrink-0" />
+                                <span className="text-[10px] text-sky-800 truncate max-w-[130px]">{f.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setEvidence(prev => {
+                                    const next = { ...prev, [emp.id]: prev[emp.id].filter((_, j) => j !== i) };
+                                    savePersistedState("pa_calibration_adj_evidence_v1", next);
+                                    return next;
+                                  })}
+                                  className="ml-auto text-gray-300 hover:text-red-500 transition-colors shrink-0 cursor-pointer"
+                                >
                                   <X className="w-2.5 h-2.5" />
                                 </button>
                               </div>
                             ))}
                           </div>
                         )}
-                        {/* Reset */}
-                        <button onClick={() => resetEmp(emp.id)}
-                          className="flex items-center gap-1 px-2 py-1 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors text-[10px] font-semibold border border-red-100">
-                          <RotateCcw className="w-3 h-3" /> Reset
-                        </button>
                       </div>
-                    ) : !editMode && (comments[emp.id] || (evidence[emp.id]?.length ?? 0) > 0) ? (
+                    ) : (comments[emp.id]?.trim() || (evidence[emp.id]?.length ?? 0) > 0) ? (
                       <div className="flex flex-col gap-1">
-                        {comments[emp.id] && (
-                          <div className="flex items-start gap-1">
-                            <MessageSquare className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />
-                            <p className="text-[10px] text-gray-600 line-clamp-2">{comments[emp.id]}</p>
+                        {comments[emp.id]?.trim() && (
+                          <div className="flex items-start gap-1.5">
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 shrink-0">Note</span>
+                            <p className="text-[10px] text-slate-700 line-clamp-2">{comments[emp.id]}</p>
                           </div>
                         )}
                         {(evidence[emp.id]?.length ?? 0) > 0 && (
-                          <div className="flex items-center gap-1 text-blue-500">
+                          <div className="flex items-center gap-1 text-sky-600">
                             <Paperclip className="w-3 h-3 shrink-0" />
                             <span className="text-[10px] font-semibold">{evidence[emp.id]!.length} file</span>
                           </div>
                         )}
                       </div>
                     ) : (
-                      <span className="inline-block w-4" />
+                      <span className="text-slate-300 text-xs">—</span>
                     )}
                   </td>
                 </tr>
@@ -2543,7 +2601,7 @@ function CalibrationPanel({
               <div className="flex flex-wrap items-center gap-6 bg-gray-50 border border-gray-100 rounded-xl px-5 py-3">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Legend:</p>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-[#1A284F] inline-block" />
+                  <span className="w-4 h-3 rounded-sm bg-[#06B6D4] inline-block" />
                   <span className="text-xs text-gray-700 font-semibold">Setting (SOY)</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2551,7 +2609,7 @@ function CalibrationPanel({
                   <span className="text-xs text-gray-700 font-semibold">Aktual</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-amber-600 inline-block" />
+                  <span className="w-4 h-3 rounded-sm bg-[#1A284F] inline-block" />
                   <span className="text-xs text-gray-700 font-semibold">Kalibrasi (EOY)</span>
                 </div>
               </div>
