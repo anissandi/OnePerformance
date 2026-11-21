@@ -1,16 +1,14 @@
 import {
   getModuleWeightFraction,
-  loadUnitScoreWeights,
   resolveGradeForScore,
   SCORE_WEIGHT_EVENT,
-  weightColumnFromGrouping,
 } from "../shared/scoringWeightStore";
 // @refresh reset
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { getPenilai1ScoreAsPercent, subscribeScores } from "../supervisor/managementInterviewScoreStore";
-import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye } from "lucide-react";
+import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye, Check } from "lucide-react";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Dot } from "recharts";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
@@ -59,6 +57,7 @@ type Employee = {
   id: string; employeeId: string; name: string; nip: string; level: EmpLevel;
   groupingLabel: string;
   positionName: string;
+  allowedModules?: string[];
   bagianId: string; departemenenId: string; divisiId: string;
   companyUnit?: string;
   divisionName?: string;
@@ -91,29 +90,43 @@ const LEVEL_WEIGHTS: Record<EmpLevel, Record<keyof EmpScores, number>> = {
   "Kepala Divisi":     { kpi:.40, smartGoals:.10, appraisalForm:.10, managerialSkill:.20, managementInterview:.10, projectOutsideJobScope:.10 },
 };
 
-function resolveEmployeeWeights(emp: Pick<Employee, "level" | "groupingLabel" | "companyUnit">): Record<keyof EmpScores, number> {
+function resolveEmployeeWeights(
+  emp: Pick<Employee, "level" | "groupingLabel" | "companyUnit" | "allowedModules">,
+): Record<keyof EmpScores, number> {
   const unitName = emp.companyUnit || "PT RSUP (Industry)";
-  const weightsMap = loadUnitScoreWeights(unitName);
-  const col = weightColumnFromGrouping(emp.groupingLabel, unitName);
-  const kpi = getModuleWeightFraction(weightsMap, "KPI", col, emp.groupingLabel, unitName);
-  const smartGoals = getModuleWeightFraction(weightsMap, "SMART Goals", col, emp.groupingLabel, unitName);
-  const appraisalForm = getModuleWeightFraction(weightsMap, "Appraisal Form", col, emp.groupingLabel, unitName);
-  const managerialSkill = getModuleWeightFraction(weightsMap, "Managerial Skill", col, emp.groupingLabel, unitName);
-  const managementInterview = getModuleWeightFraction(weightsMap, "Management Interview", col, emp.groupingLabel, unitName);
-  const projectOutsideJobScope = getModuleWeightFraction(weightsMap, "Project Outside Job Scope", col, emp.groupingLabel, unitName);
+  const allowed = emp.allowedModules ?? [];
+  const hasKpi = allowed.length === 0 || allowed.includes("KPI (Setting/Measurement)");
+  const hasSg = allowed.length === 0 || allowed.includes("SMART Goals (Setting/Measurement)");
+  const hasAf = allowed.length === 0 || allowed.includes("Appraisals Form");
+  const hasPrj = allowed.length === 0 || allowed.includes("Project Outside Job Scope");
+  const hasMs = allowed.includes("Managerial Skill");
+  const hasMi = allowed.includes("Management Interview");
+
+  const kpi = hasKpi ? getModuleWeightFraction(unitName, emp.groupingLabel, "KPI", 0) : 0;
+  const smartGoals = hasSg ? getModuleWeightFraction(unitName, emp.groupingLabel, "SMART Goals", 0) : 0;
+  const appraisalForm = hasAf ? getModuleWeightFraction(unitName, emp.groupingLabel, "Appraisal Form", 0) : 0;
+  const projectOutsideJobScope = hasPrj ? getModuleWeightFraction(unitName, emp.groupingLabel, "Project Outside Job Scope", 0) : 0;
+  const managerialSkill = hasMs ? getModuleWeightFraction(unitName, emp.groupingLabel, "Managerial Skill", 0) : 0;
+  const configuredMi = getModuleWeightFraction(unitName, emp.groupingLabel, "Management Interview", 0);
+  const managementInterview = hasMi ? (configuredMi > 0 ? configuredMi : 0.1) : 0;
+
   const sum = kpi + smartGoals + appraisalForm + managerialSkill + managementInterview + projectOutsideJobScope;
-  if (sum <= 0) return LEVEL_WEIGHTS[emp.level];
+  if (!Number.isFinite(sum) || sum <= 0) return LEVEL_WEIGHTS[emp.level];
   return { kpi, smartGoals, appraisalForm, managerialSkill, managementInterview, projectOutsideJobScope };
 }
 
-function calcEmployeeFinalScore(emp: Pick<Employee, "level" | "groupingLabel" | "companyUnit">, s: EmpScores): number {
+function calcEmployeeFinalScore(
+  emp: Pick<Employee, "level" | "groupingLabel" | "companyUnit" | "allowedModules">,
+  s: EmpScores,
+): number {
   const w = resolveEmployeeWeights(emp);
-  return s.kpi * w.kpi
-    + s.smartGoals * w.smartGoals
-    + s.appraisalForm * w.appraisalForm
+  const raw = (s.kpi ?? 0) * w.kpi
+    + (s.smartGoals ?? 0) * w.smartGoals
+    + (s.appraisalForm ?? 0) * w.appraisalForm
     + (s.managerialSkill ?? 0) * w.managerialSkill
     + (s.managementInterview ?? 0) * w.managementInterview
-    + s.projectOutsideJobScope * w.projectOutsideJobScope;
+    + (s.projectOutsideJobScope ?? 0) * w.projectOutsideJobScope;
+  return Number.isFinite(raw) ? raw : 0;
 }
 
 const GRADE_HEX: Record<string, string> = { "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B" };
@@ -121,6 +134,48 @@ function gradeFromScore(n: number, companyName?: string): { grade: string; color
   const grade = resolveGradeForScore(n, companyName);
   return { grade, color: GRADE_HEX[grade] ?? "#6B7280" };
 }
+
+const GRADE_SCORE_PILL_STYLE: Record<string, { pill: string; text: string }> = {
+  "A+": { pill: "bg-emerald-50/95 text-emerald-700 border-emerald-200/90", text: "text-emerald-700" },
+  A:    { pill: "bg-blue-50/95 text-blue-700 border-blue-200/90",         text: "text-blue-700"    },
+  B:    { pill: "bg-amber-50/95 text-amber-700 border-amber-200/90",      text: "text-amber-700"   },
+  C:    { pill: "bg-orange-50/95 text-orange-700 border-orange-200/90",   text: "text-orange-700"  },
+  D:    { pill: "bg-red-50/95 text-red-600 border-red-200/90",            text: "text-red-600"     },
+  E:    { pill: "bg-rose-50/95 text-rose-800 border-rose-200/90",         text: "text-rose-800"    },
+};
+
+function scoreBadgeStyle(score: number, companyName?: string): { grade: string; pill: string; text: string } {
+  const safeScore = Number.isFinite(score) ? score : 0;
+  const { grade } = gradeFromScore(safeScore, companyName);
+  const theme = GRADE_SCORE_PILL_STYLE[grade] ?? { pill: "bg-slate-100 text-slate-700 border-slate-200", text: "text-slate-700" };
+  return { grade, ...theme };
+}
+
+const SOFT_ROW_PALETTE = [
+  "bg-sky-50/55 hover:bg-sky-100/65",
+  "bg-emerald-50/45 hover:bg-emerald-100/55",
+  "bg-amber-50/40 hover:bg-amber-100/55",
+  "bg-cyan-50/50 hover:bg-cyan-100/60",
+];
+
+const SUPPORTING_TAG_THEMES: Record<string, { active: string; inactive: string }> = {
+  mangkir: {
+    active: "bg-rose-600 text-white border-rose-600 shadow-xs",
+    inactive: "bg-rose-50/85 text-rose-700 border-rose-200 hover:bg-rose-100/80 hover:border-rose-300",
+  },
+  pelanggaran: {
+    active: "bg-orange-600 text-white border-orange-600 shadow-xs",
+    inactive: "bg-orange-50/85 text-orange-700 border-orange-200 hover:bg-orange-100/80 hover:border-orange-300",
+  },
+  kecelakaanKerja: {
+    active: "bg-amber-600 text-white border-amber-600 shadow-xs",
+    inactive: "bg-amber-50/85 text-amber-800 border-amber-200 hover:bg-amber-100/80 hover:border-amber-300",
+  },
+  projek: {
+    active: "bg-teal-600 text-white border-teal-600 shadow-xs",
+    inactive: "bg-teal-50/85 text-teal-700 border-teal-200 hover:bg-teal-100/80 hover:border-teal-300",
+  },
+};
 
 
 function buildLiveCalibrationEmployees(): Employee[] {
@@ -162,6 +217,7 @@ function buildLiveCalibrationEmployees(): Employee[] {
       level,
       groupingLabel: grouping,
       positionName: actualPositionName,
+      allowedModules,
       bagianId,
       departemenenId: deptId,
       divisiId,
@@ -397,14 +453,14 @@ function BellCurveChart({
 
   const KalibrasiDot = (props: any) => {
     const { cx, cy } = props;
-    if (!hasCalibration) return <Dot cx={cx} cy={cy} r={3.5} fill="#C4B5FD" stroke="#fff" strokeWidth={1.5} />;
-    return <Dot cx={cx} cy={cy} r={5} fill="#7C3AED" stroke="#fff" strokeWidth={2} />;
+    if (!hasCalibration) return <Dot cx={cx} cy={cy} r={3.5} fill="#FCD34D" stroke="#fff" strokeWidth={1.5} />;
+    return <Dot cx={cx} cy={cy} r={5} fill="#D97706" stroke="#fff" strokeWidth={2} />;
   };
 
   const legendPayload = [
     { value: "Setting (SOY)",   type: "square" as const, color: "#1A284F" },
     { value: "Aktual",          type: "square" as const, color: "#0D9488" },
-    { value: "Kalibrasi (EOY)", type: "square" as const, color: "#7C3AED" },
+    { value: "Kalibrasi (EOY)", type: "square" as const, color: "#D97706" },
   ];
 
   return (
@@ -426,7 +482,7 @@ function BellCurveChart({
               <CartesianGrid key="bc-grid" strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis key="bc-xaxis" dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#374151", fontWeight: 600 }} dy={6} />
               <YAxis key="bc-yaxis" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={v => `${v}%`} domain={[0, "auto"]} />
-              <Tooltip key="bc-tooltip" content={<CustomTooltip />} cursor={{ fill: "rgba(99,102,241,0.04)" }} />
+              <Tooltip key="bc-tooltip" content={<CustomTooltip />} cursor={{ fill: "rgba(26,40,79,0.04)" }} />
               <Legend
                 key="bc-legend"
                 payload={legendPayload}
@@ -436,57 +492,57 @@ function BellCurveChart({
               {/* Bars */}
               <Bar key="bc-bar-setting" dataKey="Setting (SOY)"   name="Setting (SOY)"   fill="#1A284F" fillOpacity={0.22} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
               <Bar key="bc-bar-actual"  dataKey="Aktual"          name="Aktual"          fill="#0D9488" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-cal"     dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#7C3AED" fillOpacity={0.26} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-cal"     dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#D97706" fillOpacity={0.28} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
               {/* Lines */}
               <Line key="bc-line-setting" type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke="#1A284F" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}   activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
               <Line key="bc-line-actual"  type="monotone" dataKey="Aktual"          name="Aktual"          stroke="#0D9488" strokeWidth={2.5}                       dot={<AktualDot />}    activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
-              <Line key="bc-line-cal"     type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? "#7C3AED" : "#C4B5FD"} strokeWidth={hasCalibration ? 2.5 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6 } : false} isAnimationActive={false} legendType="none" />
+              <Line key="bc-line-cal"     type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? "#D97706" : "#FCD34D"} strokeWidth={hasCalibration ? 2.5 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6 } : false} isAnimationActive={false} legendType="none" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
 
         {/* Info Grade di samping Bell Curve — sinkron dengan Setting (SOY), Aktual & Kalibrasi (EOY) */}
-        <div className="w-full lg:w-64 shrink-0 flex flex-col gap-2 justify-center">
+        <div className="w-full lg:w-80 xl:w-[360px] shrink-0 flex flex-col gap-2.5 justify-center">
           {data.map(d => {
             const comparePct = hasCalibration ? d["Kalibrasi (EOY)"] : d["Aktual"];
             const diffSoy = parseFloat((comparePct - d["Setting (SOY)"]).toFixed(1));
             const diffCalVsAct = hasCalibration ? d.calibratedHC - d.actualHC : 0;
             const color = gradeColors[d.grade] ?? "#6B7280";
             return (
-              <div key={d.grade} className="flex items-center gap-2.5 bg-slate-50/80 rounded-xl px-3 py-2 border border-slate-200/80">
+              <div key={d.grade} className="flex items-center gap-3 bg-slate-50/85 rounded-xl px-3.5 py-2.5 border border-slate-200/80">
                 <span className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-xs"
                   style={{ background: color }}>{d.grade}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="grid grid-cols-3 gap-1 text-[10px] leading-tight">
+                  <div className="grid grid-cols-3 gap-2.5 text-[11px] leading-snug">
                     <div>
-                      <span className="block text-[9px] font-semibold text-[#1A284F]/70">SOY</span>
+                      <span className="block text-[10px] font-semibold text-[#1A284F]/75">Setting</span>
                       <span className="font-bold text-[#1A284F] tabular-nums">{d["Setting (SOY)"]}%</span>
-                      <span className="block text-[9px] text-gray-400 tabular-nums">({d.settingHC})</span>
+                      <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingHC} org)</span>
                     </div>
                     <div>
-                      <span className="block text-[9px] font-semibold text-teal-700/80">Aktual</span>
+                      <span className="block text-[10px] font-semibold text-teal-700/85">Aktual</span>
                       <span className="font-bold text-teal-700 tabular-nums">{d["Aktual"]}%</span>
-                      <span className="block text-[9px] text-gray-400 tabular-nums">({d.actualHC})</span>
+                      <span className="block text-[10px] text-gray-400 tabular-nums">({d.actualHC} org)</span>
                     </div>
                     <div>
-                      <span className="block text-[9px] font-semibold text-violet-700/80">Kalibrasi</span>
+                      <span className="block text-[10px] font-semibold text-amber-700/90">Kalibrasi</span>
                       {hasCalibration ? (
                         <>
-                          <span className="font-bold text-violet-700 tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
-                          <span className="block text-[9px] text-gray-400 tabular-nums">
+                          <span className="font-bold text-amber-700 tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
+                          <span className="block text-[10px] text-gray-400 tabular-nums">
                             ({d.calibratedHC}{diffCalVsAct !== 0 ? ` · ${diffCalVsAct > 0 ? `+${diffCalVsAct}` : diffCalVsAct}` : ""})
                           </span>
                         </>
                       ) : (
                         <>
                           <span className="font-semibold text-gray-300 tabular-nums">0%</span>
-                          <span className="block text-[9px] text-gray-300">—</span>
+                          <span className="block text-[10px] text-gray-300">—</span>
                         </>
                       )}
                     </div>
                   </div>
                 </div>
-                <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded tabular-nums ${
+                <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-md tabular-nums ${
                   diffSoy > 0 ? "bg-emerald-50 text-emerald-700" : diffSoy < 0 ? "bg-rose-50 text-rose-600" : "bg-gray-100 text-gray-500"
                 }`} title={hasCalibration ? "Selisih Kalibrasi (EOY) terhadap Setting (SOY)" : "Selisih Aktual terhadap Setting (SOY)"}>
                   {diffSoy > 0 ? `+${diffSoy}%` : diffSoy < 0 ? `${diffSoy}%` : "0%"}
@@ -885,11 +941,13 @@ function AppraisalDetailCard({
 
   // Use effectiveScores (includes live MI score from BOD assessment) for current score
   const currentScore = isCurrentYear ? parseFloat(calcEmployeeFinalScore(emp, effectiveScores).toFixed(2)) : 0;
-  const hasAdj       = isCurrentYear && parseFloat(finalScore.toFixed(2)) !== currentScore;
-  const diff         = parseFloat((finalScore - currentScore).toFixed(2));
+  const safeFinal    = Number.isFinite(finalScore) ? parseFloat(finalScore.toFixed(2)) : currentScore;
+  const hasAdj       = isCurrentYear && Math.abs(safeFinal - currentScore) > 0.0001;
+  const effectiveFinalScore = hasAdj ? safeFinal : currentScore;
+  const diff         = parseFloat((effectiveFinalScore - currentScore).toFixed(2));
 
   const currentGrade = gradeFromScore(currentScore, emp.companyUnit);
-  const finalGrade   = gradeFromScore(finalScore, emp.companyUnit);
+  const finalGrade   = gradeFromScore(effectiveFinalScore, emp.companyUnit);
 
   const divisiName   = emp.divisionName && emp.divisionName !== "—" ? emp.divisionName : "—";
   const deptName     = emp.departmentName && emp.departmentName !== "—" ? emp.departmentName : "—";
@@ -922,9 +980,9 @@ function AppraisalDetailCard({
   const rcaClosed     = closedRcaSubs.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="bg-white shadow-2xl w-full max-w-2xl h-full overflow-y-auto flex flex-col border-l border-gray-200">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[840px] max-h-[90vh] overflow-y-auto flex flex-col border border-gray-100">
 
         {/* Header */}
         <div className="sticky top-0 z-10 bg-white flex items-start justify-between px-6 pt-5 pb-4 border-b border-gray-100">
@@ -1018,14 +1076,14 @@ function AppraisalDetailCard({
                   </div>
                 </div>
                 {(() => {
-                  const { scoreColor, gradeColor } = finalCardColors(finalScore, currentScore, finalGrade, currentGrade);
+                  const { scoreColor, gradeColor } = finalCardColors(effectiveFinalScore, currentScore, finalGrade, currentGrade);
                   return (
                     <div className="bg-green-50/60 border border-green-200 rounded-2xl px-5 py-4 flex flex-col gap-3">
                       <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide">Final — Setelah Kalibrasi</p>
                       <div>
                         <div className="flex items-end gap-2">
-                          <span className="text-3xl font-black tabular-nums" style={{ color: scoreColor }}>{finalScore.toFixed(1)}%</span>
-                          <span className="text-lg font-black mb-0.5" style={{ color: gradeColor }}>{finalGrade.grade}</span>
+                          <span className="text-3xl font-black tabular-nums" style={{ color: hasAdj ? scoreColor : currentGrade.color }}>{effectiveFinalScore.toFixed(1)}%</span>
+                          <span className="text-lg font-black mb-0.5" style={{ color: hasAdj ? gradeColor : currentGrade.color }}>{finalGrade.grade}</span>
                           {hasAdj && (
                             <span className="text-sm font-bold tabular-nums mb-0.5" style={{ color: scoreColor }}>
                               {diff > 0 ? "+" : ""}{diff.toFixed(1)}
@@ -1033,7 +1091,7 @@ function AppraisalDetailCard({
                           )}
                         </div>
                         <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(finalScore, 100)}%`, background: scoreColor }} />
+                          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(effectiveFinalScore, 100)}%`, background: hasAdj ? scoreColor : currentGrade.color }} />
                         </div>
                         {hasAdj && finalGrade.grade !== currentGrade.grade && (
                           <p className="text-[10px] mt-1.5 font-semibold" style={{ color: gradeColor }}>
@@ -1337,7 +1395,10 @@ function EmployeeAdjustmentSection({
     return applyYearEndScorePolicy(emp.employeeId, emp.base);
   };
   const getBase  = (emp: Employee) => parseFloat(calcEmployeeFinalScore(emp, getEffectiveScores(emp)).toFixed(2));
-  const getFinal = (emp: Employee) => adjustments[emp.id] ?? getBase(emp);
+  const getFinal = (emp: Employee) => {
+    const adj = adjustments[emp.id];
+    return typeof adj === "number" && Number.isFinite(adj) ? adj : getBase(emp);
+  };
 
   const posisiOptions = useMemo(() => {
     const set = new Set<string>();
@@ -1363,7 +1424,7 @@ function EmployeeAdjustmentSection({
   });
 
   const adjustedCount = unitEmployees.filter(
-    (e) => !isYearEndInactive(e.employeeId) && e.id in adjustments && Math.abs((adjustments[e.id] ?? getBase(e)) - getBase(e)) > 0.0001,
+    (e) => !isYearEndInactive(e.employeeId) && e.id in adjustments && Number.isFinite(adjustments[e.id]) && Math.abs(getFinal(e) - getBase(e)) > 0.0001,
   ).length;
 
   const setFinal = (emp: Employee, val: number) =>
@@ -1600,7 +1661,7 @@ function EmployeeAdjustmentSection({
           <p className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide leading-snug">Total Karyawan (SOY)</p>
           <div className="mt-1.5">
             <p className="text-2xl font-black text-[#1A284F] tabular-nums leading-none">{soyScopeStats.hc}</p>
-            <p className="text-[10px] text-slate-500 font-medium mt-1">Target Awal Tahun</p>
+            <p className="text-[10px] text-slate-600 font-semibold mt-1">Setting (SOY)</p>
           </div>
         </div>
 
@@ -1617,17 +1678,17 @@ function EmployeeAdjustmentSection({
         </div>
 
         {/* 3. Distribusi Grade — Setting (SOY) */}
-        <div className="bg-gradient-to-br from-indigo-50/85 via-blue-50/35 to-white border border-indigo-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-indigo-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Setting (SOY)">
+        <div className="bg-gradient-to-br from-cyan-50/90 via-slate-50/50 to-white border border-cyan-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-cyan-900 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Setting (SOY)">
             Distribusi Grade — Setting (SOY)
           </p>
           <div className="grid grid-cols-6 gap-1">
             {gradeKeys.map((g) => (
-              <div key={g} className="flex flex-col items-center bg-white/80 border border-indigo-100 rounded-lg py-1 px-0.5">
+              <div key={g} className="flex flex-col items-center bg-white/85 border border-cyan-100 rounded-lg py-1 px-0.5">
                 <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
                   {g}
                 </span>
-                <span className="text-xs font-extrabold text-indigo-950 tabular-nums mt-1">
+                <span className="text-xs font-extrabold text-cyan-950 tabular-nums mt-1">
                   {soyScopeStats.byGrade[g] ?? 0}
                 </span>
               </div>
@@ -1655,8 +1716,8 @@ function EmployeeAdjustmentSection({
         </div>
 
         {/* 5. Distribusi Grade — Kalibrasi (EOY) */}
-        <div className="bg-gradient-to-br from-violet-50/85 via-purple-50/30 to-white border border-violet-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-violet-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Kalibrasi (EOY)">
+        <div className="bg-gradient-to-br from-amber-50/90 via-orange-50/30 to-white border border-amber-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Kalibrasi (EOY)">
             Distribusi Grade — Kalibrasi (EOY)
           </p>
           <div className="grid grid-cols-6 gap-1">
@@ -1665,11 +1726,11 @@ function EmployeeAdjustmentSection({
               const cntAfter  = gradeSummaryAfter[g]  ?? 0;
               const diff      = cntAfter - cntBefore;
               return (
-                <div key={g} className="flex flex-col items-center bg-white/80 border border-violet-100 rounded-lg py-1 px-0.5">
+                <div key={g} className="flex flex-col items-center bg-white/85 border border-amber-100 rounded-lg py-1 px-0.5">
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
                     {g}
                   </span>
-                  <span className="text-xs font-extrabold text-violet-950 tabular-nums mt-1">
+                  <span className="text-xs font-extrabold text-amber-950 tabular-nums mt-1">
                     {adjustedCount > 0 ? cntAfter : 0}
                   </span>
                   {adjustedCount > 0 && diff !== 0 && (
@@ -1794,19 +1855,37 @@ function EmployeeAdjustmentSection({
           </span>
         )}
       </label>
-      <fieldset className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+      <fieldset className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
         <legend className="px-1 text-xs font-semibold text-gray-600">Tampilkan Kolom Tambahan</legend>
-        <div className="flex flex-wrap gap-x-4 gap-y-3">
-          {SUPPORTING_COLUMNS.map((column) => <label key={column.key} className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-gray-700">
-            <input type="checkbox" checked={!!visibleColumns[column.key]} onChange={(event) => {
-              const checked = event.target.checked;
-              setVisibleColumns((previous) => ({ ...previous, [column.key]: checked }));
-              if (!checked && sortKey === column.key) setSortKey(null);
-            }} className="h-4 w-4 rounded accent-[#1A284F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300" />
-            {column.label}
-          </label>)}
+        <div className="flex flex-wrap items-center gap-2 mt-0.5">
+          {SUPPORTING_COLUMNS.map((column) => {
+            const active = !!visibleColumns[column.key];
+            const tagTheme = SUPPORTING_TAG_THEMES[column.key] ?? SUPPORTING_TAG_THEMES.projek;
+            return (
+              <button
+                key={column.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => {
+                  const nextChecked = !active;
+                  setVisibleColumns((previous) => ({ ...previous, [column.key]: nextChecked }));
+                  if (!nextChecked && sortKey === column.key) setSortKey(null);
+                }}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all cursor-pointer select-none ${
+                  active ? tagTheme.active : tagTheme.inactive
+                }`}
+              >
+                {active ? (
+                  <Check className="w-3.5 h-3.5 shrink-0 stroke-[2.5]" />
+                ) : (
+                  <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60 shrink-0" />
+                )}
+                <span>{column.label}</span>
+              </button>
+            );
+          })}
         </div>
-        <p className="mt-2 text-[11px] text-gray-500">Default tersembunyi. Centang untuk menampilkan, hilangkan centang untuk menyembunyikan.</p>
+        <p className="mt-2 text-[11px] text-gray-500">Default tersembunyi. Klik tag untuk menampilkan kolom pada tabel, klik kembali untuk menyembunyikan.</p>
       </fieldset>
       </div>
 
@@ -1882,11 +1961,23 @@ function EmployeeAdjustmentSection({
             ) : sorted.map((emp, idx) => {
               const base      = getBase(emp);
               const final     = getFinal(emp);
-              const hasAdj    = !!adjustments[emp.id];
+              const hasAdj    = emp.id in adjustments && Number.isFinite(adjustments[emp.id]) && Math.abs(final - base) > 0.0001;
               const diff      = parseFloat((final - base).toFixed(2));
               const diffPct   = base > 0 ? parseFloat(((diff / base) * 100).toFixed(2)) : 0;
               const bGrade    = gradeFromScore(base, unitName || emp.companyUnit);
               const fGrade    = gradeFromScore(final, unitName || emp.companyUnit);
+              const unitForGrade = unitName || emp.companyUnit;
+              const kpiStyle  = scoreBadgeStyle(emp.base.kpi, unitForGrade);
+              const prjStyle  = scoreBadgeStyle(emp.base.projectOutsideJobScope, unitForGrade);
+              const sgStyle   = emp.base.smartGoals != null ? scoreBadgeStyle(emp.base.smartGoals, unitForGrade) : null;
+              const afStyle   = emp.base.appraisalForm != null ? scoreBadgeStyle(emp.base.appraisalForm, unitForGrade) : null;
+              const msStyle   = emp.base.managerialSkill != null ? scoreBadgeStyle(emp.base.managerialSkill, unitForGrade) : null;
+              const liveMi    = getEffectiveScores(emp).managementInterview;
+              const miStyle   = liveMi != null ? scoreBadgeStyle(liveMi, unitForGrade) : null;
+              const finalStyle = scoreBadgeStyle(final, unitForGrade);
+              const rowSoftBg = hasAdj
+                ? "bg-amber-50/85 hover:bg-amber-100/75 ring-1 ring-inset ring-amber-300/70"
+                : SOFT_ROW_PALETTE[idx % SOFT_ROW_PALETTE.length];
               const step      = freeEdit ? 1.0 : parseFloat((base * 0.01).toFixed(2));
               const minFinal  = freeEdit ? 0   : parseFloat((base * 0.95).toFixed(2));
               const maxFinal  = freeEdit ? 100 : parseFloat((base * 1.05).toFixed(2));
@@ -1904,35 +1995,37 @@ function EmployeeAdjustmentSection({
               const posisiName = emp.positionName || "—";
 
               return (
-                <tr key={emp.id} className={`border-b border-gray-100 transition-colors ${hasAdj ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-gray-50/60"}`}>
-                  <td className="border border-gray-100 px-3 py-2 text-center text-gray-400 text-xs">{idx + 1}</td>
+                <tr key={emp.id} className={`border-b border-slate-200/70 transition-colors ${rowSoftBg}`}>
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center text-slate-500 font-medium text-xs tabular-nums">{idx + 1}</td>
 
-                  <td className="border border-gray-100 px-3 py-2 whitespace-nowrap font-mono text-xs text-gray-600">{emp.employeeId}</td>
+                  <td className="border border-slate-200/60 px-3 py-2.5 whitespace-nowrap font-mono text-xs font-medium text-slate-700">{emp.employeeId}</td>
 
-                  <td className="border border-gray-100 px-3 py-2">
+                  <td className="border border-slate-200/60 px-3 py-2.5">
                     <div className="flex items-center gap-1.5">
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-[#1A284F] text-xs leading-tight truncate">{emp.name}</p>
                       </div>
                       <button onClick={() => setDetailEmp(emp)}
-                        className="shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors"
+                        className="shrink-0 p-1.5 rounded-lg text-slate-500 hover:text-[#1A284F] hover:bg-white/80 transition-colors cursor-pointer"
                         title="View Detail">
                         <Eye className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </td>
 
-                  <td className="border border-gray-100 px-3 py-2 text-xs text-gray-700">{divisiName}</td>
-                  <td className="border border-gray-100 px-3 py-2 text-xs text-gray-700">{deptName}</td>
-                  <td className="border border-gray-100 px-3 py-2 text-xs text-gray-700">{bagianName}</td>
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-xs text-slate-700">{divisiName}</td>
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-xs text-slate-700">{deptName}</td>
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-xs text-slate-700">{bagianName}</td>
 
-                  <td className="border border-gray-100 px-3 py-2 text-xs text-gray-700 whitespace-nowrap">
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-xs text-slate-700 whitespace-nowrap">
                     {posisiName}
                   </td>
 
-                  <td className="border border-gray-100 px-3 py-2 text-center bg-gray-50 text-xs font-semibold text-gray-600">
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
                     <div className="inline-flex items-center justify-center gap-1">
-                      <span>{emp.base.kpi}%</span>
+                      <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${kpiStyle.pill}`}>
+                        {emp.base.kpi}%
+                      </span>
                       {emp.kpiIsYtd && (
                         <span
                           className="px-1 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 text-[9px] font-bold leading-none"
@@ -1943,44 +2036,65 @@ function EmployeeAdjustmentSection({
                       )}
                     </div>
                   </td>
-                  <td className="border border-gray-100 px-3 py-2 text-center bg-gray-50 text-xs font-semibold text-gray-600">
-                    {emp.base.projectOutsideJobScope}%
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
+                    <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${prjStyle.pill}`}>
+                      {emp.base.projectOutsideJobScope}%
+                    </span>
                   </td>
-                  <td className="border border-gray-100 px-3 py-2 text-center bg-[#f7f8fc] text-xs text-gray-600">
-                    {emp.base.smartGoals != null ? `${emp.base.smartGoals}%` : "—"}
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
+                    {emp.base.smartGoals != null && sgStyle ? (
+                      <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${sgStyle.pill}`}>
+                        {emp.base.smartGoals}%
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
                   </td>
-                  <td className="border border-gray-100 px-3 py-2 text-center bg-[#f7f8fc] text-xs text-gray-600">
-                    {emp.base.appraisalForm != null ? `${emp.base.appraisalForm}%` : "—"}
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
+                    {emp.base.appraisalForm != null && afStyle ? (
+                      <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${afStyle.pill}`}>
+                        {emp.base.appraisalForm}%
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
                   </td>
-                  <td className="border border-gray-100 px-3 py-2 text-center bg-[#f7f8fc] text-xs text-gray-600">
-                    {emp.base.managerialSkill != null ? `${emp.base.managerialSkill}%` : <span className="text-gray-300">—</span>}
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
+                    {emp.base.managerialSkill != null && msStyle ? (
+                      <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${msStyle.pill}`}>
+                        {emp.base.managerialSkill}%
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
                   </td>
-                  <td className="border border-gray-100 px-3 py-2 text-center bg-[#f7f8fc] text-xs text-gray-600">
-                    {(() => {
-                      const live = getEffectiveScores(emp).managementInterview;
-                      return live != null
-                        ? <span className="text-indigo-700 font-semibold">{live.toFixed(2)}%</span>
-                        : <span className="text-gray-300">—</span>;
-                    })()}
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center text-xs">
+                    {liveMi != null && miStyle ? (
+                      <span className={`inline-block px-2 py-0.5 rounded-md border font-bold tabular-nums ${miStyle.pill}`}>
+                        {liveMi.toFixed(2)}%
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
                   </td>
 
                   {/* Nilai Akhir – editable ±5% of base score */}
-                  <td className="border border-gray-100 px-2 py-2 text-center">
+                  <td className="border border-slate-200/60 px-2.5 py-2.5 text-center">
                     {editMode ? (
                       empReadyForCal ? (
                         <div className="flex flex-col items-center gap-0.5">
                           <div className="flex items-center gap-0.5">
                             <button disabled={!canDec}
                               onClick={() => setFinal(emp, Math.max(minFinal, parseFloat((final - step).toFixed(2))))}
-                              className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-gray-700 font-bold text-xs transition-colors select-none">−</button>
-                            <span className={`w-16 text-center font-bold text-sm tabular-nums ${diff > 0 ? "text-emerald-600" : diff < 0 ? "text-red-500" : "text-gray-800"}`}>
+                              className="w-5 h-5 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-slate-700 font-bold text-xs transition-colors select-none">−</button>
+                            <span className={`px-1.5 py-0.5 rounded-md border text-center font-bold text-xs tabular-nums min-w-[64px] ${finalStyle.pill}`}>
                               {final.toFixed(2)}%
                             </span>
                             <button disabled={!canInc}
                               onClick={() => setFinal(emp, Math.min(maxFinal, parseFloat((final + step).toFixed(2))))}
-                              className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-gray-700 font-bold text-xs transition-colors select-none">+</button>
+                              className="w-5 h-5 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-slate-700 font-bold text-xs transition-colors select-none">+</button>
                           </div>
-                          <span className={`text-[10px] font-bold tabular-nums ${diffPct > 0 ? "text-emerald-500" : diffPct < 0 ? "text-red-400" : "text-gray-300"}`}>
+                          <span className={`text-[10px] font-bold tabular-nums ${diffPct > 0 ? "text-emerald-600" : diffPct < 0 ? "text-rose-500" : "text-slate-400"}`}>
                             {diffPct > 0 ? `+${diffPct.toFixed(1)}%` : diffPct < 0 ? `${diffPct.toFixed(1)}%` : "base"}
                           </span>
                         </div>
@@ -1989,19 +2103,21 @@ function EmployeeAdjustmentSection({
                           className="flex flex-col items-center gap-0.5"
                           title="Seluruh modul wajib (termasuk KPI Full-Year 12 Bulan) harus berstatus Validated sebelum dapat dikalibrasi"
                         >
-                          <span className="font-bold text-sm tabular-nums text-gray-400">{final.toFixed(2)}%</span>
+                          <span className={`inline-block px-2 py-0.5 rounded-md border font-bold text-xs tabular-nums ${finalStyle.pill}`}>
+                            {final.toFixed(2)}%
+                          </span>
                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-semibold whitespace-nowrap">
                             <Lock className="w-2.5 h-2.5" /> Perlu Validated
                           </span>
                         </div>
                       )
                     ) : (
-                      <div className="flex flex-col items-center">
-                        <span className={`font-bold text-sm tabular-nums ${diff !== 0 ? (diff > 0 ? "text-emerald-600" : "text-red-500") : "text-gray-800"}`}>
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className={`inline-block px-2.5 py-0.5 rounded-md border font-bold text-xs tabular-nums ${finalStyle.pill}`}>
                           {final.toFixed(2)}%
                         </span>
                         {diff !== 0 && (
-                          <span className={`text-[10px] font-bold ${diffPct > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          <span className={`text-[10px] font-bold tabular-nums ${diffPct > 0 ? "text-emerald-600" : "text-rose-500"}`}>
                             {diffPct > 0 ? "+" : ""}{diffPct.toFixed(1)}%
                           </span>
                         )}
@@ -2010,17 +2126,19 @@ function EmployeeAdjustmentSection({
                   </td>
 
                   {/* Grade */}
-                  <td className="border border-gray-100 px-3 py-2 text-center">
-                    <span className="font-bold text-sm" style={{ color: fGrade.color }}>{fGrade.grade}</span>
+                  <td className="border border-slate-200/60 px-3 py-2.5 text-center">
+                    <span className="inline-flex items-center justify-center min-w-[30px] px-2 py-0.5 rounded-md text-xs font-extrabold text-white shadow-2xs" style={{ background: fGrade.color }}>
+                      {fGrade.grade}
+                    </span>
                     {fGrade.grade !== bGrade.grade && (
                       <p className="text-[10px] text-gray-400 line-through leading-none mt-0.5">{bGrade.grade}</p>
                     )}
                   </td>
 
-                  {supportingColumns.map((column) => <td key={column.key} className="border border-gray-100 px-3 py-2 text-center text-xs tabular-nums text-gray-700">{column.value(emp) ?? "—"}</td>)}
+                  {supportingColumns.map((column) => <td key={column.key} className="border border-slate-200/60 px-3 py-2.5 text-center text-xs font-medium tabular-nums text-slate-700">{column.value(emp) ?? "—"}</td>)}
 
                   {/* Aksi */}
-                  <td className="border border-gray-100 px-2 py-2 align-top">
+                  <td className="border border-slate-200/60 px-2 py-2.5 align-top">
                     {editMode && hasAdj ? (
                       <div className="flex flex-col gap-1.5">
                         {/* Comment */}
@@ -2322,8 +2440,9 @@ function CalibrationPanel({
           ? applyYearEndScorePolicy(emp.employeeId, { ...emp.base, managementInterview: miScores[emp.id] })
           : applyYearEndScorePolicy(emp.employeeId, emp.base);
       const baseScore = parseFloat(calcEmployeeFinalScore(emp, effScores).toFixed(2));
-      const finalScore = liveAdjustments[emp.id] ?? baseScore;
-      if (emp.id in liveAdjustments && Math.abs(finalScore - baseScore) > 0.0001) {
+      const rawAdj = liveAdjustments[emp.id];
+      const finalScore = typeof rawAdj === "number" && Number.isFinite(rawAdj) ? rawAdj : baseScore;
+      if (emp.id in liveAdjustments && typeof rawAdj === "number" && Number.isFinite(rawAdj) && Math.abs(finalScore - baseScore) > 0.0001) {
         adjustedCount++;
       }
 
@@ -2432,7 +2551,7 @@ function CalibrationPanel({
                   <span className="text-xs text-gray-700 font-semibold">Aktual</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-violet-600 inline-block" />
+                  <span className="w-4 h-3 rounded-sm bg-amber-600 inline-block" />
                   <span className="text-xs text-gray-700 font-semibold">Kalibrasi (EOY)</span>
                 </div>
               </div>
