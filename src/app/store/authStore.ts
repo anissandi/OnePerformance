@@ -1443,14 +1443,36 @@ export function getAllowedApprovalTypesForUser(
     return baseList;
   }
 
-  const effectiveGrouping = resolveEffectiveUserGrouping(user);
-  if (user.role === "HR Unit") {
-    if (effectiveGrouping === "Operasional") {
-      return mode === "setting"
-        ? ["KPI", "SMART Goals"]
-        : ["KPI", "SMART Goals", "Inter-Department Feedback"];
+  // Untuk role yang di-allow sebagai HR Unit Checker:
+  // - Jika TIDAK memiliki bawahan langsung/hirarkis, hanya munculkan filter KPI & SMART Goals.
+  // - Jika memiliki bawahan yang memiliki akses modul lain selain KPI & SMART Goals, munculkan filter yang sesuai.
+  const isCheckerUser =
+    user.role === "HR Unit" ||
+    Boolean(user.isHrUnitChecker) ||
+    getEffectiveCheckerUnits(user).length > 0;
+  if (isCheckerUser) {
+    if (mode === "setting") {
+      return ["KPI", "SMART Goals"];
     }
-    return baseList;
+    const allUsers = loadManagedUsers();
+    const subs = getStrictSubordinateUsers(user, allUsers).filter(
+      (s) => s.status === "Active" && s.employeeId.trim().toLowerCase() !== user.employeeId.trim().toLowerCase(),
+    );
+    if (subs.length === 0) {
+      return ["KPI", "SMART Goals"];
+    }
+    const subMods = new Set<AppraisalModuleName>();
+    for (const sub of subs) {
+      for (const m of resolveUserAllowedModules(sub)) {
+        subMods.add(m);
+      }
+    }
+    const allowedForChecker: string[] = ["KPI", "SMART Goals"];
+    if (subMods.has("Appraisals Form")) allowedForChecker.push("Appraisal Form");
+    if (subMods.has("Managerial Skill")) allowedForChecker.push("Managerial Skill");
+    if (subMods.has("Project Outside Job Scope")) allowedForChecker.push("Project");
+    if (subMods.has("Inter-Departement Feedback")) allowedForChecker.push("Inter-Department Feedback");
+    return allowedForChecker;
   }
 
   // Setiap Approver (Supervisor, GM, Director, dll.) dapat memiliki bawahan lintas grouping

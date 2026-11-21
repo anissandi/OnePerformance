@@ -9,6 +9,7 @@ import { Input } from "../../components/ui/input";
 import { ReviewDrawer, type ApprovalRow } from "../../components/ReviewDrawer";
 import { FeedbackApprovalDrawer } from "../../components/FeedbackApprovalDrawer";
 import { SettingApprovalDrawer } from "../../components/SettingApprovalDrawer";
+import { KpiTrackingEditReviewDrawer } from "../../components/KpiTrackingEditReviewDrawer";
 import { TargetEditRequestsSection } from "../../components/TargetEditRequestsSection";
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
 import { applyOverrides, resolveDynamicApprovalRowsForUser, saveOverride } from "../shared/approvalsStore";
@@ -27,9 +28,9 @@ import {
   approveKpiTrackingEditRequest,
   getKpiTrackingEditApprovalRowsForViewer,
   KPI_TRACKING_EDIT_EVENT,
-  loadKpiTrackingEditRequests,
   refreshKpiTrackingEditRequestsFromBackend,
   rejectKpiTrackingEditRequest,
+  reviseKpiTrackingEditRequest,
 } from "../../store/kpiTrackingEditStore";
 
 const BASE_CHECKIN: ApprovalRow[] = [];
@@ -412,6 +413,7 @@ function ApprovalsTable({
   const [reviewRow, setReviewRow]                         = useState<ApprovalRow | null>(null);
   const [reviewFromHistory, setReviewFromHistory]         = useState(false);
   const [editReviewRow, setEditReviewRow]                 = useState<ApprovalRow | null>(null);
+  const [editReviewReadOnly, setEditReviewReadOnly]       = useState(false);
   const PAGE_SIZE = 8;
 
   const toggleFilter = (name: string) => setOpenFilter(openFilter === name ? null : name);
@@ -479,6 +481,7 @@ function ApprovalsTable({
       const reqId = row.no.slice("KPITREDIT::".length);
       approveKpiTrackingEditRequest(reqId, activeUser);
       setEditReviewRow(null);
+      setEditReviewReadOnly(false);
       setActiveTab("Approval History");
       return;
     }
@@ -487,11 +490,22 @@ function ApprovalsTable({
     setActiveTab("Approval History");
   };
 
+  const handleRevisionEdit = (row: ApprovalRow, note: string) => {
+    if (row.no.startsWith("KPITREDIT::")) {
+      const reqId = row.no.slice("KPITREDIT::".length);
+      reviseKpiTrackingEditRequest(reqId, activeUser, note);
+      setEditReviewRow(null);
+      setEditReviewReadOnly(false);
+      setActiveTab("Approval History");
+    }
+  };
+
   const handleRejectEdit = (row: ApprovalRow, note?: string) => {
     if (row.no.startsWith("KPITREDIT::")) {
       const reqId = row.no.slice("KPITREDIT::".length);
       rejectKpiTrackingEditRequest(reqId, activeUser, note);
       setEditReviewRow(null);
+      setEditReviewReadOnly(false);
       setActiveTab("Approval History");
       return;
     }
@@ -730,7 +744,7 @@ function ApprovalsTable({
                     })()}
                     {activeTab === "Pending Task" && row.status === "Edit Request" && (
                       <button
-                        onClick={() => setEditReviewRow(row)}
+                        onClick={() => { setEditReviewRow(row); setEditReviewReadOnly(false); }}
                         className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold rounded-xl bg-amber-600 border border-amber-600 text-white hover:bg-amber-700 shadow-sm transition-all whitespace-nowrap"
                         title="Review Edit Request"
                       >
@@ -740,7 +754,19 @@ function ApprovalsTable({
                     {/* Approval History tab */}
                     {isHistory && (
                       <>
-                        <button onClick={() => { setReviewRow(row); setReviewFromHistory(true); }} className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors" title="View">
+                        <button
+                          onClick={() => {
+                            if (row.no.startsWith("KPITREDIT::")) {
+                              setEditReviewRow(row);
+                              setEditReviewReadOnly(true);
+                            } else {
+                              setReviewRow(row);
+                              setReviewFromHistory(true);
+                            }
+                          }}
+                          className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                          title="View"
+                        >
                           <Eye className="w-5 h-5" />
                         </button>
                         <HistoryTag status={row.status} type={row.type} />
@@ -785,6 +811,7 @@ function ApprovalsTable({
           reviewerRole={reviewRow.reviewerRoleForRow ?? reviewerRole}
           onClose={() => setReviewRow(null)}
           onAssessed={() => window.dispatchEvent(new Event("feedback-updated"))}
+          readOnly={reviewFromHistory}
         />
       )}
       {reviewRow && !isSetting && reviewRow.type !== "Inter-Department Feedback" && (
@@ -794,12 +821,23 @@ function ApprovalsTable({
         <SettingApprovalDrawer row={reviewRow} onClose={() => setReviewRow(null)} onApprove={(note) => handleApprove(reviewRow, note)} onRevision={(note) => handleRevision(reviewRow, note)} readOnly={reviewFromHistory} />
       )}
       {editReviewRow && (
-        <EditRequestReviewModal
-          row={editReviewRow}
-          onAccept={() => handleAcceptEdit(editReviewRow)}
-          onReject={(note) => handleRejectEdit(editReviewRow, note)}
-          onClose={() => setEditReviewRow(null)}
-        />
+        editReviewRow.no.startsWith("KPITREDIT::") ? (
+          <KpiTrackingEditReviewDrawer
+            row={editReviewRow}
+            readOnly={editReviewReadOnly}
+            onAccept={() => handleAcceptEdit(editReviewRow)}
+            onRevision={(note) => handleRevisionEdit(editReviewRow, note)}
+            onReject={(reason) => handleRejectEdit(editReviewRow, reason)}
+            onClose={() => { setEditReviewRow(null); setEditReviewReadOnly(false); }}
+          />
+        ) : (
+          <EditRequestReviewModal
+            row={editReviewRow}
+            onAccept={() => handleAcceptEdit(editReviewRow)}
+            onReject={(note) => handleRejectEdit(editReviewRow, note)}
+            onClose={() => setEditReviewRow(null)}
+          />
+        )
       )}
     </div>
   );

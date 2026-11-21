@@ -25,6 +25,7 @@ import { MS_ITEMS, type MSItem } from "../pages/supervisor/ManagerialSkillCheckI
 import { KPITableView } from "./KPITableView";
 import { UnifiedRCADetailTable } from "./UnifiedRCADetailTable";
 import { FeedbackApprovalDrawer } from "./FeedbackApprovalDrawer";
+import { getLatestEditedCellsDiffForEmployee } from "../store/kpiTrackingEditStore";
 import {
   getActiveUser,
   loadManagedUsers,
@@ -412,7 +413,7 @@ function KPIReview({ row }: { row: ApprovalRow }) {
   );
   const [evidenceFiles, setEvidenceFiles] = useState<StoredEvidenceFile[]>(() => loadEvidenceFiles(row.employeeId));
   const [rcaSubmissions, setRcaSubmissions] = useState<StoredRCASubmission[]>(() => loadRCASubmissions(row.employeeId));
-  const [highlightedRcaKey, setHighlightedRcaKey] = useState<string | null>(null);
+  const [highlightedRcaMonth, setHighlightedRcaMonth] = useState<string | null>(null);
   const [showRcaTable, setShowRcaTable] = useState<boolean>(true);
   const [previewEvFile, setPreviewEvFile] = useState<StoredEvidenceFile | null>(null);
 
@@ -453,17 +454,30 @@ function KPIReview({ row }: { row: ApprovalRow }) {
 
   const ownerMonths = trackingSnap.months;
   const ownerCellsMap = trackingSnap.cellsMap;
+  const editedCellsDiff = React.useMemo(() => {
+    const normId = normalizeEmployeeId(row.employeeId);
+    const wf = loadWorkflowRecords().find(
+      (r) =>
+        r.year === "2026" &&
+        r.module === "KPI" &&
+        r.phase === "measurement" &&
+        (r.employeeId === normId || r.employeeId.toLowerCase() === row.employeeId.toLowerCase()),
+    );
+    return wf?.editedCellsDiff ?? getLatestEditedCellsDiffForEmployee(row.employeeId);
+  }, [row.employeeId, trackingSnap]);
 
   const handleClickRcaTag = (sub: StoredRCASubmission) => {
     setShowRcaTable(true);
-    setHighlightedRcaKey(sub.key);
+    const targetMonth = sub.monthLabel || sub.periode || "";
+    setHighlightedRcaMonth(targetMonth);
     window.setTimeout(() => {
       const rowEl = document.querySelector(`[data-rca-row-key="${CSS.escape(sub.key)}"]`);
+      const bannerEl = rowEl?.closest("tbody")?.querySelector(`[data-rca-month-group]`);
       const containerEl = document.getElementById("approver-unified-rca-table");
-      (rowEl ?? containerEl)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      (rowEl ?? bannerEl ?? containerEl)?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 60);
     window.setTimeout(() => {
-      setHighlightedRcaKey((curr) => (curr === sub.key ? null : curr));
+      setHighlightedRcaMonth((curr) => (curr === targetMonth ? null : curr));
     }, 5000);
   };
 
@@ -491,6 +505,7 @@ function KPIReview({ row }: { row: ApprovalRow }) {
           cells={ownerCellsMap}
           rcaSubmissions={rcaSubmissions}
           onPreviewRCA={handleClickRcaTag}
+          editedCellsDiff={editedCellsDiff}
         />
       )}
 
@@ -499,7 +514,7 @@ function KPIReview({ row }: { row: ApprovalRow }) {
         <UnifiedRCADetailTable
           containerId="approver-unified-rca-table"
           submissions={rcaSubmissions}
-          highlightedKey={highlightedRcaKey}
+          highlightedMonth={highlightedRcaMonth}
           title="Root Cause Analysis (RCA) — Semua Bulan (Riwayat & Bulan Berjalan)"
           subtitle="Menampilkan pembaruan terakhir dari karyawan untuk bulan berjalan maupun bulan-bulan sebelumnya. Baris berstatus Close ditandai hijau lembut."
         />

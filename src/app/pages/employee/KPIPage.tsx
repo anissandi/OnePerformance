@@ -47,7 +47,7 @@ import {
   usesDemoSampleData,
   type ManagedUser,
 } from "../../store/authStore";
-import { cancelSubmittedKpiMeasurement, getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type KpiMonthState } from "../shared/appraisalWorkflowStore";
+import { cancelSubmittedKpiMeasurement, getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type EditedKpiCellDiff, type KpiMonthState } from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import {
@@ -4101,6 +4101,7 @@ function KPIWorkspace({
   // Edit request approval flow (persisted in pa_kpi_tracking_edit_requests_v1)
   const pendingEditRequest = Boolean(activeEditRequest && activeEditRequest.stage.startsWith("pending_"));
   const editRequestApproved = activeEditRequest?.stage === "approved";
+  const editRequestRevision = activeEditRequest?.stage === "revision";
   const editRequestRejected = activeEditRequest?.stage === "rejected";
   const editRequestDate = activeEditRequest?.requestedAt ?? "";
   const approvedEditTargets = editRequestApproved ? (activeEditRequest?.targets ?? []) : [];
@@ -5075,15 +5076,32 @@ function KPIWorkspace({
           {isCurrentTabValidated && !isViewOnly && (
             <>
               {canCreate && !kpiModuleScheduleEval.moduleInactive && !kpiModuleScheduleEval.beforeStartDate && (
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(true)}
-                  disabled={MONTH_OPTIONS.filter((m) => !months.some((em) => em.label === m) && kpiModuleScheduleEval.allowedMonthLabels.includes(m)).length === 0}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add Month
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} className="inline-flex">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (editRequestApproved) return;
+                          setShowAddModal(true);
+                        }}
+                        disabled={
+                          editRequestApproved ||
+                          MONTH_OPTIONS.filter((m) => !months.some((em) => em.label === m) && kpiModuleScheduleEval.allowedMonthLabels.includes(m)).length === 0
+                        }
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add Month
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  {editRequestApproved && (
+                    <TooltipContent side="bottom" className="max-w-xs bg-[#1A284F] text-white px-3 py-2 rounded-xl shadow-lg text-[11px]">
+                      Tombol Add Month dinonaktifkan sementara selama mode Edit KPI Tracking aktif. Silakan klik <strong>Re-submit</strong> setelah selesai melakukan perubahan.
+                    </TooltipContent>
+                  )}
+                </Tooltip>
               )}
               {!submitted && !isLockedByDeadline && (
                 view === "input" ? (
@@ -5312,14 +5330,50 @@ function KPIWorkspace({
               onClick={() => {
                 const _d = new Date();
                 const dateStr = `${String(_d.getDate()).padStart(2, "0")}/${String(_d.getMonth() + 1).padStart(2, "0")}/${_d.getFullYear()}`;
+                const activeKpis = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
+                const currentCells = isBusinessWorkspace ? businessCellsMap : cellsMap;
+                const prevSnap = activeEditRequest?.previousCellsSnapshot ?? {};
+                const diffMap: Record<string, EditedKpiCellDiff> = {};
+                for (const t of approvedEditTargets) {
+                  const kpiObj = activeKpis.find((k) => k.no === t.kpiNo);
+                  const mObj = months.find((m) => m.id === t.monthId);
+                  if (!kpiObj || !mObj) continue;
+                  kpiObj.subRows.forEach((sub, si) => {
+                    if (sub.compute || sub.label.toLowerCase().startsWith("target")) return;
+                    const cKey = ck(kpiObj.no, si);
+                    const beforeVal = String(prevSnap[mObj.id]?.[cKey] ?? "").trim();
+                    const afterVal = String(currentCells[mObj.id]?.[cKey] ?? "").trim();
+                    if (beforeVal !== afterVal) {
+                      diffMap[`${mObj.id}::${kpiObj.no}__${si}`] = {
+                        before: beforeVal || "—",
+                        after: afterVal || "—",
+                        kpiNo: kpiObj.no,
+                        monthId: mObj.id,
+                        monthLabel: mObj.label,
+                        subLabel: sub.label,
+                        updatedAt: dateStr,
+                      };
+                    }
+                  });
+                }
                 const editedMonthIds = new Set(approvedEditTargets.map((t) => t.monthId));
                 const editedMonthLabels = months.filter((m) => editedMonthIds.has(m.id)).map((m) => m.label);
                 saveKPITracking({ months, cellsMap }, activeUser);
-                completeKpiTrackingEditSession(activeUser.employeeId);
+                completeKpiTrackingEditSession(activeUser.employeeId, diffMap);
                 setActiveEditRequest(undefined);
                 setSubmittedDate(dateStr);
                 setSubmitted(true);
-                submitWorkflowModule("KPI", "measurement", dateStr, activeUser.employeeId, editedMonthLabels.length > 0 ? editedMonthLabels : months.map((m) => m.label));
+                submitWorkflowModule(
+                  "KPI",
+                  "measurement",
+                  dateStr,
+                  activeUser.employeeId,
+                  editedMonthLabels.length > 0 ? editedMonthLabels : months.map((m) => m.label),
+                  {
+                    isEditResubmit: true,
+                    editedCellsDiff: diffMap,
+                  },
+                );
                 toast.success("Perubahan KPI Tracking berhasil disimpan dan diajukan kembali ke Approver.");
               }}
               className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b] transition-colors"
@@ -5327,6 +5381,31 @@ function KPIWorkspace({
               <Send className="w-3 h-3" /> Re-submit
             </button>
           </div>
+        </div>
+      )}
+
+      {submitted && editRequestRevision && activeEditRequest && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50/75 px-3.5 py-2.5 space-y-1">
+          {(() => {
+            const lastRev = [...activeEditRequest.decisions].reverse().find((d) => d.decision === "Revision");
+            const revRole = lastRev?.roleLabel || "Approver";
+            return (
+              <>
+                <p className="text-[11px] font-bold text-orange-800">
+                  Catatan / Riwayat Revisi {revRole} (Request Edit KPI Tracking)
+                </p>
+                <div className="bg-white border border-orange-100 rounded px-2.5 py-1.5 text-[11px] flex items-start justify-between gap-2">
+                  <div>
+                    <span className="font-semibold text-gray-800">
+                      {revRole}{lastRev?.approverName ? ` (${lastRev.approverName})` : ""}:{" "}
+                    </span>
+                    <span className="text-gray-700">{lastRev?.note || "Silakan perbaiki dan ajukan kembali Request Edit KPI Tracking."}</span>
+                  </div>
+                  {lastRev?.decidedAt && <span className="text-[10px] text-gray-400 shrink-0">{lastRev.decidedAt}</span>}
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -5512,7 +5591,7 @@ function KPIWorkspace({
               editable={view === "input" && !submitted && !isLockedByDeadline && !isViewOnly}
               editableMonthId={(!submitted && !isLockedByDeadline && !isViewOnly && (canEdit || canCreate) && months.length > 0 && !validatedMonthLabels.has(months[months.length - 1].label)) ? months[months.length - 1].id : null}
               onRemoveMonth={canDelete ? removeMonth : undefined}
-              onAddMonth={canCreate ? () => setShowAddModal(true) : undefined}
+              onAddMonth={canCreate && !editRequestApproved ? () => setShowAddModal(true) : undefined}
               cells={isBusinessWorkspace ? businessCellsMap : cellsMap}
               onCellChange={canEdit || canCreate ? (isBusinessWorkspace ? updateBusinessCell : updateCell) : undefined}
               onCellBlur={handleCellBlur}

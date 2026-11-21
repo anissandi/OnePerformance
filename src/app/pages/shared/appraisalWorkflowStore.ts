@@ -17,6 +17,16 @@ import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateForm
 export const MOCK_EMPLOYEE_ID = "EMP-002";
 const KEY = "appraisal_workflow_v1";
 const ALIASES_KEY = "appraisal_row_aliases_v1";
+export interface EditedKpiCellDiff {
+  before: string;
+  after: string;
+  kpiNo: string;
+  monthId: string;
+  monthLabel: string;
+  subLabel: string;
+  updatedAt: string;
+}
+
 export interface WorkflowRecord {
   key: string;
   employeeId: string;
@@ -38,6 +48,10 @@ export interface WorkflowRecord {
   submittedMonths?: string[];
   /** KPI Measurement: bulan yang sudah Validated oleh HR ICF. */
   validatedMonths?: string[];
+  /** Menandai pengajuan berasal dari Re-submit Perubahan Edit KPI Tracking */
+  isEditResubmit?: boolean;
+  /** Daftar sel KPI Tracking yang berubah saat Re-submit Edit KPI Tracking (`${monthId}::${kpiNo}__${subIdx}`) */
+  editedCellsDiff?: Record<string, EditedKpiCellDiff>;
 }
 export type WorkflowLogStage = "checker" | "approver1" | "approver2" | "validator";
 export interface WorkflowDecisionLogEntry {
@@ -273,6 +287,10 @@ export function submitWorkflowModule(
   date = formatTodayDDMMYYYY(),
   employeeId = getActiveUser().employeeId || MOCK_EMPLOYEE_ID,
   months?: string[],
+  options?: {
+    isEditResubmit?: boolean;
+    editedCellsDiff?: Record<string, EditedKpiCellDiff>;
+  },
 ) {
   const normalizedDate = normalizeDateDDMMYYYY(date);
   const effectiveDate = normalizedDate === "—" ? formatTodayDDMMYYYY() : normalizedDate;
@@ -295,6 +313,10 @@ export function submitWorkflowModule(
         checker: { status: "Bypassed", date: effectiveDate },
       }
     : {};
+  const isResubmitEdit = Boolean(options?.isEditResubmit);
+  const mergedEditedDiff = isResubmitEdit
+    ? { ...(existing?.editedCellsDiff ?? {}), ...(options?.editedCellsDiff ?? {}) }
+    : existing?.editedCellsDiff;
   write({
     key,
     employeeId: normalizeEmployeeId(employeeId),
@@ -308,10 +330,14 @@ export function submitWorkflowModule(
     decisionLog: existing ? getRecordDecisionLog(existing) : [],
     submittedMonths,
     validatedMonths,
+    isEditResubmit: isResubmitEdit,
+    editedCellsDiff: mergedEditedDiff,
   });
   triggerApprovalTransactionNotification({
     employeeId: normalizeEmployeeId(employeeId),
-    moduleName: `${module} (${phase === "setting" ? "Setting" : "Measurement"})`,
+    moduleName: isResubmitEdit
+      ? "Re-submit Perubahan Edit KPI Tracking"
+      : `${module} (${phase === "setting" ? "Setting" : "Measurement"})`,
     rawStatus: "Submitted",
     approverName: getActiveUser().name,
   });

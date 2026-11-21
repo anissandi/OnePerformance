@@ -10,10 +10,18 @@ import {
   Paperclip, Eye, Download, FileText, X, MessageSquare, Users,
 } from "lucide-react";
 import {
-  KPI_ITEMS, computeTotal2026, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
+  computeKPIAchievement,
+  parseBobotDecimal,
+  loadKPITracking,
+  resolveEmployeeTrackingKpiItems,
+  type KPIItem,
+  type MonthEntry,
 } from "../employee/KPIPage";
 import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
+import { KPITableView } from "../../components/KPITableView";
+import { UnifiedRCADetailTable } from "../../components/UnifiedRCADetailTable";
+import { fetchEmployeeKpiSettingsLive, fetchEmployeeKpiTrackingLive } from "../../services/supabaseClient";
 import { SmartGoalsScoreHistory } from "../../components/SmartGoalsScoreHistory";
 import { InterDeptFeedbackAppraisalSummary } from "../../components/InterDeptFeedbackAppraisalSummary";
 import { AppraisalRCASection } from "../employee/RCAPage";
@@ -57,12 +65,6 @@ function fmtBytesStaff(b: number): string {
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function canPreviewStaff(name: string, type: string): boolean {
-  return /image\/(jpeg|png|gif|webp)/.test(type)
-    || /\.(jpg|jpeg|png|gif|webp|pdf)$/i.test(name)
-    || type === "application/pdf";
-}
-
 function StaffEvidenceChip({ file }: { file: StoredEvidenceFile }) {
   const [viewing, setViewing] = React.useState<StoredEvidenceFile | null>(null);
   return (
@@ -87,21 +89,6 @@ function StaffEvidenceChip({ file }: { file: StoredEvidenceFile }) {
 
 // ─── KPI Tab — live data from KPI Tracking store ─────────────────────────────
 
-const PERSP_COLOR: Record<string, string> = {
-  "Finansial":                       "text-blue-700 bg-blue-50",
-  "Proses":                          "text-purple-700 bg-purple-50",
-  "Environment, Health & Safety":    "text-green-700 bg-green-50",
-  "Customer":                        "text-orange-700 bg-orange-50",
-  "Learning & Growth":               "text-pink-700 bg-pink-50",
-};
-
-function getPctColor(val: string): string {
-  if (!val || val === "—") return "text-gray-300 font-normal";
-  const n = parseFloat(val.replace(/,/g, "").replace(/%$/, "").trim());
-  if (isNaN(n)) return "text-gray-700";
-  return n >= 100 ? "text-green-700" : "text-rose-600";
-}
-
 function displayMonthLabel(label: string): string {
   return label.replace(/-\d{2}$/, "");
 }
@@ -110,19 +97,35 @@ function KPITab() {
   const { activeUser } = useAuthStore();
   const [tick, setTick] = useState(0);
   useEffect(() => {
+    let cancelled = false;
     const onSync = () => setTick((t) => t + 1);
+    void Promise.all([
+      fetchEmployeeKpiSettingsLive(activeUser.employeeId),
+      fetchEmployeeKpiTrackingLive<MonthEntry>(activeUser.employeeId),
+    ]).then(() => {
+      if (!cancelled) setTick((t) => t + 1);
+    });
     window.addEventListener("appraisal-updated", onSync);
     window.addEventListener("pa-auth-updated", onSync);
+    window.addEventListener("pa-db-hydrated", onSync);
     window.addEventListener("storage", onSync);
     return () => {
+      cancelled = true;
       window.removeEventListener("appraisal-updated", onSync);
       window.removeEventListener("pa-auth-updated", onSync);
+      window.removeEventListener("pa-db-hydrated", onSync);
       window.removeEventListener("storage", onSync);
     };
-  }, []);
+  }, [activeUser.employeeId]);
+  const ownerKpiItems = React.useMemo<KPIItem[]>(
+    () => resolveEmployeeTrackingKpiItems(activeUser.employeeId),
+    [activeUser.employeeId, tick],
+  );
   const { months, cellsMap } = React.useMemo(() => loadKPITracking(activeUser.employeeId), [activeUser.employeeId, tick]);
   const evidenceFiles = React.useMemo(() => loadEvidenceFiles(activeUser.employeeId), [activeUser.employeeId, tick]);
   const kpiComments = React.useMemo(() => loadKPICommentsForEmployee(activeUser.employeeId), [activeUser.employeeId, tick]);
+  const rcaSubmissions = React.useMemo(() => loadRCASubmissions(activeUser.employeeId), [activeUser.employeeId, tick]);
+  const [highlightedRcaMonth, setHighlightedRcaMonth] = useState<string | null>(null);
   const wfKpiMeas = React.useMemo(() => {
     const normId = normalizeEmployeeId(activeUser.employeeId);
     return loadWorkflowRecords().find(
@@ -161,152 +164,6 @@ function KPITab() {
     return map;
   }, [evidenceFiles]);
 
-  const sectionScore = (sec: "A" | "B") =>
-    KPI_ITEMS.filter((k) => k.section === sec).reduce((s, k) => {
-      const ach = computeKPIAchievement(k, cellsMap, months);
-      if (ach === null) return s;
-      return s + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
-    }, 0);
-
-  const scoreA = sectionScore("A");
-  const scoreB = sectionScore("B");
-  const totalNilai = scoreA + scoreB;
-  const totalBobot = KPI_ITEMS.reduce((s, k) => s + parseFloat(k.bobot.replace("%", "")), 0);
-  const currentMonthLabel = months.length > 0 ? displayMonthLabel(months[months.length - 1].label) : null;
-
-  const nilaiColor =
-    totalNilai >= 100
-      ? { row: "bg-emerald-50 border-emerald-200", label: "text-emerald-800", val: "text-emerald-700", valBg: "bg-emerald-100", tag: "bg-emerald-200/80 text-emerald-700 border-emerald-300/70" }
-      : totalNilai >= 75
-      ? { row: "bg-indigo-50 border-indigo-200", label: "text-indigo-800", val: "text-indigo-700", valBg: "bg-indigo-100", tag: "bg-indigo-200/80 text-indigo-700 border-indigo-300/70" }
-      : totalNilai >= 50
-      ? { row: "bg-amber-50 border-amber-200", label: "text-amber-800", val: "text-amber-700", valBg: "bg-amber-100", tag: "bg-amber-200/80 text-amber-700 border-amber-300/70" }
-      : { row: "bg-rose-50 border-rose-200", label: "text-rose-800", val: "text-rose-700", valBg: "bg-rose-100", tag: "bg-rose-200/80 text-rose-700 border-rose-300/70" };
-
-  const KPI_COL = { no: 38, persp: 86, kpi: 206, bobot: 50, baseline: 62, target: 62, detail: 158, track: 122, total: 78, ach: 90 };
-  const KPI_MIN_MONTH_W = 52;
-  const KPI_FIXED_W = KPI_COL.no + KPI_COL.persp + KPI_COL.kpi + KPI_COL.bobot + KPI_COL.baseline + KPI_COL.target + KPI_COL.detail + KPI_COL.track + KPI_COL.total + KPI_COL.ach;
-  const colSpanFull = 8 + months.length + 2;
-  const minTableW = KPI_FIXED_W + months.length * KPI_MIN_MONTH_W;
-
-  const renderSection = (sec: "A" | "B") =>
-    KPI_ITEMS.filter((k) => k.section === sec).map((kpi, kpiIdx) => {
-      const rs = kpi.subRows.length;
-      const ach = computeKPIAchievement(kpi, cellsMap, months);
-      const cappedAch = ach !== null ? Math.min(ach, 100) : null;
-      const score = cappedAch !== null ? (cappedAch / 100) * parseBobotDecimal(kpi.bobot) * 100 : null;
-      const achColor = ach !== null ? (ach >= 100 ? "text-green-700" : "text-rose-600") : "text-gray-300";
-      const rowBg = kpiIdx % 2 === 0 ? "bg-white" : "bg-slate-50/60";
-
-      return kpi.subRows.map((sub, si) => {
-        const isFirst = si === 0;
-        const isComputed = !!sub.compute;
-        const isTarget = !sub.compute && sub.label.toLowerCase().startsWith("target");
-        const totalVal = computeTotal2026(kpi, si, cellsMap, months);
-        const totalColor = isComputed || sub.bold ? getPctColor(totalVal) : totalVal === "—" ? "text-gray-300" : "text-blue-800";
-
-        return (
-          <tr key={`${kpi.no}-${si}`} className={rowBg}>
-            {isFirst && (
-              <>
-                <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center text-xs font-semibold text-gray-400 align-middle">
-                  {kpi.no}
-                </td>
-                <td rowSpan={rs} className="border border-gray-200 py-2 px-2 align-middle" style={{ overflow: "hidden" }}>
-                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md inline-block leading-snug break-words ${PERSP_COLOR[kpi.perspektif] ?? "text-gray-700 bg-gray-100"}`}>
-                    {kpi.perspektif}
-                  </span>
-                </td>
-                <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-xs font-medium text-gray-800 leading-snug align-middle" style={{ overflow: "hidden" }}>
-                  {kpi.kpi}
-                </td>
-                <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center align-middle">
-                  <span className="px-1.5 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{kpi.bobot}</span>
-                </td>
-                <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center align-middle">
-                  <span className="text-[10px] font-semibold text-gray-600">{kpi.baseline2025 || "—"}</span>
-                </td>
-                <td rowSpan={rs} className="border border-gray-200 py-2 px-2 text-center align-middle">
-                  <span className="text-[10px] font-bold text-[#1A284F]">{kpi.target2026 || "—"}</span>
-                </td>
-                <td rowSpan={rs} className="border border-gray-200 py-2 px-3 align-top" style={{ overflow: "hidden" }}>
-                  <p className="text-[9px] text-gray-500 leading-relaxed line-clamp-4" style={{ wordBreak: "break-word" }}>{kpi.detailFormula || "—"}</p>
-                </td>
-              </>
-            )}
-
-            <td className={`border border-gray-200 py-1 px-3 text-[10px] align-middle ${
-              isComputed ? "bg-emerald-50/80 text-emerald-700" : isTarget ? "bg-sky-50/70 text-sky-700 font-semibold" : sub.bold ? "bg-green-50/60 font-bold text-gray-800" : "text-gray-600"
-            }`}>
-              {sub.label}
-              {isComputed && <span className="ml-1 text-[9px] text-emerald-500 font-normal">(auto)</span>}
-            </td>
-
-            {months.map((m) => {
-              const cellKey = `${kpi.no}__${si}`;
-              let val: string;
-              if (!sub.compute) {
-                val = cellsMap[m.id]?.[cellKey] ?? "—";
-              } else {
-                const spec = sub.compute;
-                const getRaw = (idx: number) => cellsMap[m.id]?.[`${kpi.no}__${idx}`] ?? "";
-                if (spec.type === "ratio") {
-                  const target = parseFloat((getRaw(spec.targetIdx) || "").replace(/,/g, ""));
-                  if (isNaN(target)) { val = "—"; }
-                  else {
-                    const actual = parseFloat((getRaw(spec.actualIdx) || "").replace(/,/g, ""));
-                    if (isNaN(actual)) { val = "0%"; }
-                    else if (target === 0) { val = actual === 0 ? "100%" : "0%"; }
-                    else {
-                      const pct = spec.minimize ? (actual <= target ? 100 : (target / actual) * 100) : (actual / target) * 100;
-                      val = pct.toFixed(1) + "%";
-                    }
-                  }
-                } else { val = "—"; }
-              }
-              const isEmpty = !sub.compute && !isTarget && (!val || val === "—");
-              return (
-                <td key={m.id} className={`border border-gray-200 text-center py-1 px-1 text-[10px] ${
-                  isComputed ? "bg-emerald-50/60" : isTarget ? "bg-sky-50/50" : sub.bold ? "bg-green-50/40" : ""
-                } ${isEmpty ? "bg-red-50/60" : ""}`}>
-                  {isComputed ? (
-                    <span className={`font-bold ${getPctColor(val)}`}>{val}</span>
-                  ) : isTarget ? (
-                    <span className="font-semibold text-sky-700">{val}</span>
-                  ) : (
-                    <span className={`${sub.bold ? "font-bold text-gray-800" : isEmpty ? "text-red-300" : "text-gray-700"}`}>{val || "—"}</span>
-                  )}
-                </td>
-              );
-            })}
-
-            <td className={`border border-gray-200 text-center py-1 px-2 text-[10px] ${
-              isComputed ? "bg-blue-50/80" : sub.bold ? "bg-blue-50/40" : "bg-blue-50/20"
-            }`}>
-              <span className={`${sub.bold ? "font-bold" : ""} ${totalColor}`}>{totalVal}</span>
-            </td>
-
-            {isFirst && (
-              <td rowSpan={rs} className="border border-gray-200 text-center bg-[#0a2a4a]/5 py-2 px-2 align-middle">
-                {ach !== null ? (
-                  <div className="flex flex-col items-center gap-1">
-                    <span className={`text-xs font-bold ${achColor}`}>{ach.toFixed(1)}%</span>
-                    <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-                      <div className={`h-1.5 rounded-full ${ach >= 100 ? "bg-green-500" : "bg-rose-500"}`} style={{ width: `${Math.min(ach, 100)}%` }} />
-                    </div>
-                    <span className="text-[9px] text-gray-400">Score Bobot</span>
-                    <span className={`text-xs font-bold ${achColor}`}>{score !== null ? score.toFixed(2) + "%" : "—"}</span>
-                  </div>
-                ) : (
-                  <span className="text-gray-300 text-xs">—</span>
-                )}
-              </td>
-            )}
-          </tr>
-        );
-      });
-    });
-
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -327,83 +184,39 @@ function KPITab() {
         )}
       </div>
 
-      <div className="overflow-auto rounded-xl border border-gray-200 shadow-sm bg-white" style={{ maxHeight: "calc(100vh - 340px)" }}>
-        <table className="w-full border-collapse text-xs" style={{ minWidth: minTableW }}>
-          <thead className="sticky top-0 z-10">
-            <tr className="bg-[#1A284F] text-white">
-              <th className="border border-[#1A284F]/30 py-3 px-2 text-center text-xs font-semibold" style={{ minWidth: KPI_COL.no, width: KPI_COL.no }}>No</th>
-              <th className="border border-[#1A284F]/30 py-3 px-2 text-left text-xs font-semibold" style={{ minWidth: KPI_COL.persp, width: KPI_COL.persp }}>Perspektif</th>
-              <th className="border border-[#1A284F]/30 py-3 px-3 text-left text-xs font-semibold" style={{ minWidth: KPI_COL.kpi, width: KPI_COL.kpi }}>KPI</th>
-              <th className="border border-[#1A284F]/30 py-3 px-2 text-center text-xs font-semibold" style={{ minWidth: KPI_COL.bobot, width: KPI_COL.bobot }}>Bobot</th>
-              <th className="border border-[#1A284F]/30 py-3 px-2 text-center text-xs font-semibold" style={{ minWidth: KPI_COL.baseline, width: KPI_COL.baseline }}>Baseline<br /><span className="text-[9px] font-normal text-white/60">2025</span></th>
-              <th className="border border-[#1A284F]/30 py-3 px-2 text-center text-xs font-semibold" style={{ minWidth: KPI_COL.target, width: KPI_COL.target }}>Target<br /><span className="text-[9px] font-normal text-white/60">2026</span></th>
-              <th className="border border-[#1A284F]/30 py-3 px-3 text-left text-xs font-semibold" style={{ minWidth: KPI_COL.detail, width: KPI_COL.detail }}>Detail Formula</th>
-              <th className="border border-[#1A284F]/30 py-3 px-3 text-center text-xs font-semibold" style={{ minWidth: KPI_COL.track, width: KPI_COL.track }}>Tracking</th>
-              {months.map((m) => (
-                <th key={m.id} className="border border-[#1A284F]/30 py-3 px-1 text-center text-xs font-semibold whitespace-nowrap" style={{ minWidth: KPI_MIN_MONTH_W, width: KPI_MIN_MONTH_W }}>
-                  {displayMonthLabel(m.label)}
-                </th>
-              ))}
-              {months.length === 0 && (
-                <th className="border border-[#1A284F]/30 py-3 px-2 text-center text-[10px] font-medium text-white/40 italic" style={{ minWidth: 60 }}>
-                  — bulan —
-                </th>
-              )}
-              <th className="border border-[#1A284F]/30 py-3 px-2 text-center text-xs font-semibold bg-[#0F3460]" style={{ minWidth: KPI_COL.total, width: KPI_COL.total }}>Total</th>
-              <th className="border border-[#1A284F]/30 py-3 px-2 text-center text-xs font-semibold bg-[#0a2a4a]" style={{ minWidth: KPI_COL.ach, width: KPI_COL.ach }}>Achievement</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colSpan={colSpanFull - 1} className="py-2 px-4 text-white text-[11px] font-bold uppercase tracking-widest border" style={{ background: "#1565C0", borderColor: "#1565C0" }}>
-                A. Objective KPI — Bobot 20%
-              </td>
-              <td className="py-2 px-2 text-center text-white text-[11px] font-bold border" style={{ background: "#1565C0", borderColor: "#1565C0" }}>
-                {KPI_ITEMS.some((k) => k.section === "A" && computeKPIAchievement(k, cellsMap, months) !== null) ? scoreA.toFixed(2) + "%" : "—"}
-              </td>
-            </tr>
-            {renderSection("A")}
-            <tr>
-              <td colSpan={colSpanFull - 1} className="py-2 px-4 text-white text-[11px] font-bold uppercase tracking-widest border" style={{ background: "#1976D2", borderColor: "#1976D2" }}>
-                B. Functional KPI — Bobot 80%
-              </td>
-              <td className="py-2 px-2 text-center text-white text-[11px] font-bold border" style={{ background: "#1976D2", borderColor: "#1976D2" }}>
-                {KPI_ITEMS.some((k) => k.section === "B" && computeKPIAchievement(k, cellsMap, months) !== null) ? scoreB.toFixed(2) + "%" : "—"}
-              </td>
-            </tr>
-            {renderSection("B")}
-            <tr>
-              <td colSpan={colSpanFull} className="py-1 border border-[#1A284F]/10 bg-[#1A284F]/5" />
-            </tr>
-            {([
-              { label: "Total KPI Items", value: `${KPI_ITEMS.length} KPI` },
-              { label: "Total Bobot KPI", value: `${totalBobot.toFixed(0)}%` },
-            ]).map(({ label, value }) => (
-              <tr key={label} className="bg-[#1A284F]/5">
-                <td colSpan={colSpanFull - 1} className="border border-gray-200 py-2 px-4 text-xs font-bold text-[#1A284F]">{label}</td>
-                <td className="border border-gray-200 py-2 px-3 text-center text-xs font-bold text-[#1A284F]">{value}</td>
-              </tr>
-            ))}
-            <tr className={nilaiColor.row}>
-              <td colSpan={colSpanFull - 1} className={`border border-gray-200 py-3 px-4 text-sm font-extrabold tracking-wide ${nilaiColor.label}`}>
-                Total Nilai KPI
-              </td>
-              <td className={`border border-gray-200 py-2 px-3 text-center ${nilaiColor.valBg}`}>
-                <div className="flex flex-col items-center gap-0.5">
-                  <span className={`text-base font-black tracking-tight ${nilaiColor.val}`}>
-                    {totalNilai.toFixed(2)}%
-                  </span>
-                  {currentMonthLabel && (
-                    <span className={`inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded border ${nilaiColor.tag} leading-tight`}>
-                      s.d. {currentMonthLabel} · belum final
-                    </span>
-                  )}
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      {ownerKpiItems.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 py-10 px-4 text-center text-xs text-gray-500">
+          Belum ada data KPI Tracking pada akun Anda. Silakan susun dan validasi KPI Setting lalu lengkapi KPI Tracking di menu Measurement.
+        </div>
+      ) : (
+        <>
+          <KPITableView
+            kpiItems={ownerKpiItems}
+            months={months}
+            cells={cellsMap}
+            rcaSubmissions={rcaSubmissions}
+            onPreviewRCA={(sub) => {
+              const m = sub.monthLabel || sub.periode || "";
+              setHighlightedRcaMonth(m);
+              window.setTimeout(() => {
+                document.getElementById("staff-mypa-rca-table")?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }, 60);
+              window.setTimeout(() => {
+                setHighlightedRcaMonth((curr) => (curr === m ? null : curr));
+              }, 5000);
+            }}
+          />
+          {rcaSubmissions.length > 0 && (
+            <UnifiedRCADetailTable
+              containerId="staff-mypa-rca-table"
+              submissions={rcaSubmissions}
+              highlightedMonth={highlightedRcaMonth}
+              title="Root Cause Analysis (RCA) — Semua Bulan"
+              subtitle="Status RCA terkini yang terhubung langsung dengan tag RCA pada tabel KPI Tracking Anda."
+            />
+          )}
+        </>
+      )}
 
       {/* ── History Evidence ── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -1545,9 +1358,11 @@ export function ProjectOutsideTab() {
 
 const HISTORICAL_SCORES_EDWARD: Record<string, { kpi: number; smart: number; appraisal: number; project: number; overall: number }> = {};
 
-function getKPIScore2026(): number | null {
-  const { months, cellsMap } = loadKPITracking();
-  const total = KPI_ITEMS.reduce((s, k) => {
+function getKPIScore2026(employeeId?: string): number | null {
+  const { months, cellsMap } = loadKPITracking(employeeId);
+  const ownerItems = employeeId ? resolveEmployeeTrackingKpiItems(employeeId) : [];
+  if (ownerItems.length === 0 || months.length === 0) return null;
+  const total = ownerItems.reduce((s, k) => {
     const ach = computeKPIAchievement(k, cellsMap, months);
     if (ach === null) return s;
     return s + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;

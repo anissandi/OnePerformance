@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getActiveDelegateIdsForDelegator } from "./delegationStore";
 import {
   loadPersistedState,
@@ -1404,14 +1404,22 @@ export function triggerApprovalTransactionNotification(params: {
 }
 
 export function useNotificationStore(userOverride?: ManagedUser) {
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const onUpdate = () => setTick((t) => t + 1);
+    let rafId: number | null = null;
+    const onUpdate = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        setTick((t) => t + 1);
+      });
+    };
     window.addEventListener(NOTIFICATIONS_UPDATED_EVENT, onUpdate);
     window.addEventListener("pa-auth-updated", onUpdate);
     window.addEventListener("pa-db-hydrated", onUpdate);
     window.addEventListener("storage", onUpdate);
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       window.removeEventListener(NOTIFICATIONS_UPDATED_EVENT, onUpdate);
       window.removeEventListener("pa-auth-updated", onUpdate);
       window.removeEventListener("pa-db-hydrated", onUpdate);
@@ -1420,10 +1428,16 @@ export function useNotificationStore(userOverride?: ManagedUser) {
   }, []);
 
   const activeUser = userOverride ?? getActiveUser();
-  const userNotifications = getNotificationsForUser(activeUser);
-  const unreadCount = userNotifications.filter((n) => !n.isRead).length;
-  const allNotifications = loadAllNotifications();
-  const autoTemplates = loadAutoNotificationTemplates();
+  const userNotifications = useMemo(
+    () => getNotificationsForUser(activeUser),
+    [tick, activeUser.employeeId, activeUser.role, activeUser.company],
+  );
+  const unreadCount = useMemo(
+    () => userNotifications.filter((n) => !n.isRead).length,
+    [userNotifications],
+  );
+  const allNotifications = useMemo(() => loadAllNotifications(), [tick]);
+  const autoTemplates = useMemo(() => loadAutoNotificationTemplates(), [tick]);
 
   return {
     notifications: userNotifications,

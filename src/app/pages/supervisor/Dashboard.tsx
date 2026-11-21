@@ -22,7 +22,7 @@ import {
 } from "../../store/authStore";
 import { getLiveUserModuleApprovals, loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../../utils/dateFormat";
-import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { getLiveTransactionalEmployeeById } from "../../data/mockEmployees";
 import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
 import { projectApprovalRows } from "../../store/projectStore";
 import { feedbackApprovalRows } from "../shared/interDepartmentFeedbackStore";
@@ -376,6 +376,10 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
       );
       if (!stageForRec) continue;
 
+      const isEditResubmitKpi = Boolean(rec.module === "KPI" && rec.phase === "measurement" && rec.isEditResubmit);
+      const modTitleLabel = isEditResubmitKpi
+        ? "Re-submit Perubahan Edit KPI Tracking"
+        : `${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"})`;
       let actionType: ActionType = mod === "Appraisal Form" ? "Complete Assessment" : "Approve";
       let noteText = "";
 
@@ -385,25 +389,25 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
           // Sebelum di-Check oleh HR Unit Usaha -> HANYA muncul di HR Unit Checker, TIDAK muncul di Approver 1!
           if (stageForRec !== "checker") continue;
           actionType = "Approve";
-          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} menunggu pemeriksaan (Check) HR Unit Anda.`;
+          noteText = `Pengajuan ${modTitleLabel} dari ${sub.name} menunggu pemeriksaan (Check) HR Unit Anda.`;
         } else if (!a1Done) {
           if (stageForRec !== "approver1") continue;
           actionType = "Approve";
-          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} telah di-Check HR Unit dan menunggu Approval 1 Anda.`;
+          noteText = `Pengajuan ${modTitleLabel} dari ${sub.name} telah di-Check HR Unit dan menunggu Approval 1 Anda.`;
         } else if (!a2Done) {
           if (stageForRec !== "approver2") continue;
           actionType = "Approve";
-          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} telah disetujui Approver 1 dan menunggu Approval 2 Anda.`;
+          noteText = `Pengajuan ${modTitleLabel} dari ${sub.name} telah disetujui Approver 1 dan menunggu Approval 2 Anda.`;
         } else {
           // a2Done && !validatorDone -> masuk ke HR ICF / Administrator untuk di-Validate!
           if (stageForRec !== "validator") continue;
           actionType = "Review & Validate";
-          noteText = `Pengajuan ${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"}) dari ${sub.name} telah disetujui Approver 2 dan menunggu Validasi (Validate) HR ICF Anda.`;
+          noteText = `Pengajuan ${modTitleLabel} dari ${sub.name} telah disetujui Approver 2 dan menunggu Validasi (Validate) HR ICF Anda.`;
         }
       } else {
         if (stageForRec === "approver1" && a1Done) continue;
         if (stageForRec === "approver2" && (!a1Done || a2Done)) continue;
-        noteText = `Pengajuan ${rec.module} (${rec.phase}) dari ${sub.name} menunggu ${stageForRec === "approver2" ? "Approval 2" : "Approval 1"} Anda.`;
+        noteText = `Pengajuan ${modTitleLabel} dari ${sub.name} menunggu ${stageForRec === "approver2" ? "Approval 2" : "Approval 1"} Anda.`;
       }
 
       seenKeys.add(`${normalizeEmployeeId(sub.employeeId)}:${mod}:${rec.phase}`);
@@ -416,7 +420,7 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
         division: sub.division,
         module: mod,
         phase: rec.phase,
-        submissionType: `${rec.module} (${rec.phase === "setting" ? "Setting" : "Measurement"})`,
+        submissionType: modTitleLabel,
         actionNeeded: actionType,
         submittedDate: rec.submittedDate || formatTodayDDMMYYYY(),
         notes: noteText,
@@ -813,21 +817,30 @@ function stepFillPct(mod: ModuleApprovalData): number {
 function MilestoneProgress() {
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const onRefresh = () => setTick((t) => t + 1);
+    let rafId: number | null = null;
+    const onRefresh = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        setTick((t) => t + 1);
+      });
+    };
     window.addEventListener("appraisal-updated", onRefresh);
     window.addEventListener("pa-auth-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
     window.addEventListener("storage", onRefresh);
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("pa-db-hydrated", onRefresh);
       window.removeEventListener("storage", onRefresh);
     };
   }, []);
-  const liveModules = getLiveUserModuleApprovals(true);
+  const activeUser = getActiveUser();
+  const liveModules = useMemo(() => getLiveUserModuleApprovals(true), [tick, activeUser.employeeId]);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
@@ -888,7 +901,7 @@ function MilestoneProgress() {
 
               {mod.module === "KPI (Tracking)" ? (
 
-                <KpiMonthlyApprovalBar employeeId={getActiveUser().employeeId} />
+                <KpiMonthlyApprovalBar employeeId={activeUser.employeeId} />
 
               ) : (
 
@@ -1028,47 +1041,10 @@ interface ModuleApprovalData {
   steps: ApprovalStep[];
 }
 
-const MODULE_APPROVALS: ModuleApprovalData[] = new Proxy([] as ModuleApprovalData[], {
-  get(_target, prop, receiver) {
-    const list = getLiveUserModuleApprovals(true);
-    const value = Reflect.get(list, prop, receiver);
-    return typeof value === "function" ? value.bind(list) : value;
-  },
-});
-
-const MY_APPRAISAL_SUMMARY = new Proxy(
-  {
-    currentScore: 0,
-    currentGrade: "—",
-    modulesApproved: 0,
-    modulesTotal: 7,
-    lastUpdated: "—",
-    yearEnd: "Dec 2026",
-    status: "In Progress" as const,
-  },
-  {
-    get(_target, prop: string) {
-      const mods = getLiveUserModuleApprovals(true);
-      const activeUser = getActiveUser();
-      const emps = getLiveTransactionalEmployees();
-      const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase()) ?? emps[0];
-      const summary = {
-        currentScore: me?.totalScore ?? 0,
-        currentGrade: me?.grade && me.grade !== "N/A" ? me.grade : "—",
-        modulesApproved: mods.filter((m) => m.overallStatus === "Approved").length,
-        modulesTotal: mods.length,
-        lastUpdated: me?.approvalCompleteDate ?? "—",
-        yearEnd: "Dec 2026",
-        status: (mods.every((m) => m.overallStatus === "Approved") ? "Done" : "In Progress") as "In Progress",
-      };
-      return summary[prop as keyof typeof summary];
-    },
-  },
-);
-
-function ModuleApprovalPopup({ onClose }: { onClose: () => void }) {
+function ModuleApprovalPopup({ modules, onClose }: { modules: ModuleApprovalData[]; onClose: () => void }) {
   const [selected, setSelected] = useState(0);
-  const mod = MODULE_APPROVALS[selected];
+  const mod = modules[selected] ?? modules[0];
+  if (!mod) return null;
 
   const statusBadgeClass = (s: ModuleApprovalData["overallStatus"]) => {
     if (s === "Approved")    return "bg-green-100 text-green-700 border-green-200";
@@ -1117,7 +1093,7 @@ function ModuleApprovalPopup({ onClose }: { onClose: () => void }) {
 
           {/* Module tabs */}
           <div className="flex gap-1.5 mt-3 flex-wrap">
-            {MODULE_APPROVALS.map((m, i) => (
+            {modules.map((m, i) => (
               <button
                 key={m.module}
                 onClick={() => setSelected(i)}
@@ -1189,7 +1165,14 @@ function AppraisalSummaryCards() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const onRefresh = () => setTick((v) => v + 1);
+    let rafId: number | null = null;
+    const onRefresh = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        setTick((v) => v + 1);
+      });
+    };
     window.addEventListener("appraisal-updated", onRefresh);
     window.addEventListener("pa-auth-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
@@ -1197,6 +1180,7 @@ function AppraisalSummaryCards() {
     window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
     window.addEventListener("storage", onRefresh);
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("pa-db-hydrated", onRefresh);
@@ -1207,15 +1191,27 @@ function AppraisalSummaryCards() {
   }, []);
 
   const activeUser = getActiveUser();
-  const liveMods = getLiveUserModuleApprovals(true);
-  const emps = getLiveTransactionalEmployees();
-  const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase());
-  const baseScore = me?.totalScore ?? 0;
-  const currentScore = parseFloat(baseScore.toFixed(1));
-  const currentGrade = currentScore > 0 ? scoreToGrade(currentScore) : "—";
-  const modulesApproved = liveMods.filter(m => m.overallStatus === "Approved").length;
-  const modulesTotal = liveMods.length;
-  const s = { ...MY_APPRAISAL_SUMMARY, currentScore, currentGrade, modulesApproved, modulesTotal };
+  const { liveMods, s } = useMemo(() => {
+    const mods = getLiveUserModuleApprovals(true);
+    const me = getLiveTransactionalEmployeeById(activeUser.employeeId);
+    const baseScore = me?.totalScore ?? 0;
+    const currentScore = parseFloat(baseScore.toFixed(1));
+    const currentGrade = currentScore > 0 ? scoreToGrade(currentScore, activeUser.company) : "—";
+    const modulesApproved = mods.filter((m) => m.overallStatus === "Approved").length;
+    const modulesTotal = mods.length;
+    return {
+      liveMods: mods,
+      s: {
+        currentScore,
+        currentGrade,
+        modulesApproved,
+        modulesTotal,
+        lastUpdated: me?.approvalCompleteDate ?? "—",
+        yearEnd: "Dec 2026",
+        status: mods.length > 0 && mods.every((m) => m.overallStatus === "Approved") ? "Done" : "In Progress",
+      },
+    };
+  }, [tick, activeUser.employeeId, activeUser.company]);
   const pending = s.modulesTotal - s.modulesApproved;
 
   return (
@@ -1314,7 +1310,7 @@ function AppraisalSummaryCards() {
         </div>
       </div>
 
-      {showPopup && <ModuleApprovalPopup onClose={() => setShowPopup(false)} />}
+      {showPopup && <ModuleApprovalPopup modules={liveMods} onClose={() => setShowPopup(false)} />}
     </>
   );
 }
@@ -1339,21 +1335,23 @@ type DashTab = "approval" | "my";
 
 export function SupervisorDashboard() {
   const location = useLocation();
-  const { activeUser } = useAuthStore();
+  const { activeUser, allUsers } = useAuthStore();
   const { getRolePermissions } = useAccessManagement();
   const [liveApprovalCount, setLiveApprovalCount] = useState<number | null>(null);
-  const [, setMenuTick] = useState(0);
+  const [menuTick, setMenuTick] = useState(0);
   useEffect(() => {
     const bump = () => setMenuTick((t) => t + 1);
     window.addEventListener("appraisal-updated", bump);
     window.addEventListener("pa-db-hydrated", bump);
     window.addEventListener(SOY_EVENT, bump);
     window.addEventListener(KPI_TARGET_EDIT_EVENT, bump);
+    window.addEventListener(KPI_TRACKING_EDIT_EVENT, bump);
     return () => {
       window.removeEventListener("appraisal-updated", bump);
       window.removeEventListener("pa-db-hydrated", bump);
       window.removeEventListener(SOY_EVENT, bump);
       window.removeEventListener(KPI_TARGET_EDIT_EVENT, bump);
+      window.removeEventListener(KPI_TRACKING_EDIT_EVENT, bump);
     };
   }, []);
 
@@ -1391,13 +1389,13 @@ export function SupervisorDashboard() {
       ? "my"
       : activeTab;
 
-  const hasPendingApprovalDot = (() => {
-    if (liveApprovalCount !== null && effectiveTab === "approval") return liveApprovalCount > 0;
-    const allUsers = useAuthStore.length >= 0 ? getActiveUser() : activeUser;
-    void allUsers;
+  const hasPendingApprovalDot = useMemo(() => {
+    if (!canViewApproval) return false;
+    if (liveApprovalCount !== null) return liveApprovalCount > 0;
     const isVal = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
     const isDir = isDirectorRoleOrGrouping(activeUser);
-    if (getPendingTargetEditRequestsForViewer(activeUser).length > 0) return true;
+    if (getPendingTargetEditRequestsForViewer(activeUser, allUsers).length > 0) return true;
+    if (getPendingKpiTrackingEditForDashboard(activeUser, allUsers).length > 0) return true;
     if (isVal && loadPersistedState<Array<{ status?: string }>>("pa_open_lock_requests_v1", []).some((r) => r.status === "pending")) return true;
     for (const soyRec of Object.values(loadSoyApprovals())) {
       if (soyRec.status === "Pending" && resolveSoyRoleForUser(activeUser, soyRec.unitName, true)) return true;
@@ -1413,20 +1411,26 @@ export function SupervisorDashboard() {
         return true;
       }
     }
-    for (const wf of loadWorkflowRecords()) {
+    const checkerBypassIds = new Set(
+      allUsers
+        .filter((u) => u.role === "HR Unit" || Boolean(u.isHrUnitChecker))
+        .map((u) => normalizeEmployeeId(u.employeeId)),
+    );
+    const workflows = loadWorkflowRecords();
+    for (const wf of workflows) {
       const chk = wf.decisions.checker?.status ?? "";
       const a1 = wf.decisions.approver1?.status ?? "";
       const a2 = wf.decisions.approver2?.status ?? "";
       const val = wf.decisions.validator?.status ?? "";
       if (chk === "Revision" || a1 === "Revision" || a2 === "Revision" || val === "Revision") continue;
       const isFour = wf.module === "KPI" || wf.module === "SMART Goals" || wf.module === "RCA";
-      const chkDone = Boolean(shouldBypassCheckerForSubmission(wf.employeeId) || (chk && chk !== "Revision"));
+      const chkDone = Boolean(checkerBypassIds.has(normalizeEmployeeId(wf.employeeId)) || (chk && chk !== "Revision"));
       const a1Done = a1 === "Approved" || a1.startsWith("Assessed") || a1 === "Validated";
       const a2Done = a2 === "Approved" || a2.startsWith("Assessed") || a2 === "Validated";
       const valDone = Boolean(val === "Validated" || a2 === "Validated");
       if (isFour && valDone) continue;
       if (!isFour && a2Done) continue;
-      const stage = resolveWorkflowStageForTarget(activeUser, wf.employeeId, wf.module, { checkerDone: chkDone, a1Done, a2Done, validatorDone: valDone });
+      const stage = resolveWorkflowStageForTarget(activeUser, wf.employeeId, wf.module, { checkerDone: chkDone, a1Done, a2Done, validatorDone: valDone }, allUsers);
       if (!stage) continue;
       if (isFour) {
         if (!chkDone && stage === "checker") return true;
@@ -1438,8 +1442,23 @@ export function SupervisorDashboard() {
         if (a1Done && !a2Done && stage === "approver2") return true;
       }
     }
+    for (const prjRow of projectApprovalRows("approver1")) {
+      const normId = normalizeEmployeeId(prjRow.employeeId);
+      const wfRec = workflows.find((w) => w.year === "2026" && w.module === "Project" && w.phase === "measurement" && w.employeeId === normId);
+      const a1Done = Boolean(wfRec?.decisions.approver1 && (wfRec.decisions.approver1.status === "Approved" || wfRec.decisions.approver1.status.startsWith("Assessed")));
+      const a2Done = Boolean(wfRec?.decisions.approver2 && (wfRec.decisions.approver2.status === "Approved" || wfRec.decisions.approver2.status.startsWith("Assessed")));
+      const roleForPrj = resolveReviewerRoleForTarget(activeUser, prjRow.employeeId, a1Done, "Project");
+      if (roleForPrj === "approver1" && !a1Done) return true;
+      if (roleForPrj === "approver2" && a1Done && !a2Done) return true;
+    }
+    for (const fbRow of feedbackApprovalRows("approver1")) {
+      if (fbRow.status === "Pending" || fbRow.status === "Pending-Hasil Tindak Lanjut") {
+        const roleForFb = resolveReviewerRoleForTarget(activeUser, fbRow.employeeId, false, "Inter-Department Feedback");
+        if (roleForFb) return true;
+      }
+    }
     return false;
-  })();
+  }, [canViewApproval, liveApprovalCount, effectiveTab, activeUser, allUsers, menuTick]);
 
   return (
     <div className="w-full flex flex-col gap-6">
@@ -1460,7 +1479,10 @@ export function SupervisorDashboard() {
               <Icon className="w-4 h-4" />
               {label}
               {key === "approval" && hasPendingApprovalDot && (
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-300 ring-2 ring-amber-100 shrink-0" title="Ada task approval menunggu tindakan Anda" />
+                <span
+                  className="w-2.5 h-2.5 rounded-full bg-yellow-400 ring-2 ring-yellow-200 shadow-2xs shrink-0"
+                  title="Ada task approval menunggu tindakan Anda"
+                />
               )}
             </button>
           );

@@ -153,8 +153,15 @@ interface UnifiedRCADetailTableProps {
   title?: string;
   subtitle?: string;
   highlightedKey?: string | null;
+  highlightedMonth?: string | null;
   onOpenRcaSubmenu?: () => void;
   containerId?: string;
+}
+
+function parseRawMonthIndex(raw?: string | null): number {
+  if (!raw) return 99;
+  const token = String(raw).trim().toLowerCase().split(/[\s\-/]+/)[0] ?? "";
+  return MONTH_SORT_ORDER[token] ?? 99;
 }
 
 export function UnifiedRCADetailTable({
@@ -162,9 +169,11 @@ export function UnifiedRCADetailTable({
   title = "Root Cause Analysis (RCA) — Detail",
   subtitle,
   highlightedKey,
+  highlightedMonth,
   onOpenRcaSubmenu,
   containerId,
 }: UnifiedRCADetailTableProps) {
+  const highlightedMonthIdx = React.useMemo(() => parseRawMonthIndex(highlightedMonth), [highlightedMonth]);
   // Urutkan kronologis dari bulan paling awal ke bulan terbaru
   const sorted = React.useMemo(() => {
     return [...submissions].sort((a, b) => {
@@ -275,13 +284,27 @@ export function UnifiedRCADetailTable({
             {monthGroups.map((group, groupIdx) => {
               const palette = SOFT_MONTH_SEPARATOR_PALETTE[groupIdx % SOFT_MONTH_SEPARATOR_PALETTE.length];
               const groupClosed = group.items.filter(isStoredRcaSubmissionClosed).length;
+              const groupMonthIdx = group.items[0] ? resolveMonthIndex(group.items[0]) : 99;
+              const isMonthHighlighted = Boolean(
+                highlightedMonth &&
+                  ((highlightedMonthIdx < 99 && groupMonthIdx === highlightedMonthIdx) ||
+                    group.monthTitle.toLowerCase().includes(String(highlightedMonth).trim().toLowerCase())),
+              );
               return (
                 <React.Fragment key={group.monthKey}>
                   {/* Baris pemisah bulan dengan warna soft */}
-                  <tr className={`${palette.bannerBg} border-y ${palette.bannerBorder}`}>
-                    <td colSpan={headers.length} className={`px-4 py-2 font-bold text-xs ${palette.bannerText}`}>
+                  <tr
+                    data-rca-month-idx={groupMonthIdx < 99 ? String(groupMonthIdx) : undefined}
+                    data-rca-month-group={group.monthKey}
+                    className={
+                      isMonthHighlighted
+                        ? "bg-amber-200/90 border-y-2 border-amber-400 transition-colors"
+                        : `${palette.bannerBg} border-y ${palette.bannerBorder}`
+                    }
+                  >
+                    <td colSpan={headers.length} className={`px-4 py-2 font-bold text-xs ${isMonthHighlighted ? "text-amber-950" : palette.bannerText}`}>
                       <div className="flex items-center gap-2">
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${palette.pillBg} ${palette.pillText}`}>
+                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${isMonthHighlighted ? "bg-amber-400 text-amber-950 shadow-2xs" : `${palette.pillBg} ${palette.pillText}`}`}>
                           Periode {group.monthTitle}
                         </span>
                         <span className="text-[11px] font-medium opacity-80">
@@ -295,7 +318,8 @@ export function UnifiedRCADetailTable({
                     const currentNo = runningNo;
                     const subIsClosed = isStoredRcaSubmissionClosed(sub);
                     const isHighlighted = Boolean(
-                      highlightedKey && (sub.key === highlightedKey || sub.id === highlightedKey),
+                      isMonthHighlighted ||
+                        (highlightedKey && (sub.key === highlightedKey || sub.id === highlightedKey)),
                     );
                     const blocks = normalizeBlocks(sub);
                     const totalSubRows = blocks.reduce((acc, b) => acc + Math.max(1, b.actionPlans.length), 0);
@@ -317,10 +341,22 @@ export function UnifiedRCADetailTable({
 
                       return aps.map((ap, ai) => {
                         const apIsClosed = subIsClosed || ap?.status === "Selesai";
-                        const baseCellBg = subIsClosed ? "bg-emerald-50/75" : palette.cellTint;
-                        const blockCellBg = blockAllClosed ? "bg-emerald-50/75" : "bg-white";
-                        const apCellBg = apIsClosed ? "bg-emerald-50/85" : "bg-white";
-                        const highlightCls = isHighlighted ? "ring-2 ring-inset ring-amber-400" : "";
+                        const baseCellBg = isMonthHighlighted
+                          ? "bg-amber-100/75"
+                          : subIsClosed
+                          ? "bg-emerald-50/75"
+                          : palette.cellTint;
+                        const blockCellBg = isMonthHighlighted
+                          ? "bg-amber-50/90"
+                          : blockAllClosed
+                          ? "bg-emerald-50/75"
+                          : "bg-white";
+                        const apCellBg = isMonthHighlighted
+                          ? "bg-amber-50/90"
+                          : apIsClosed
+                          ? "bg-emerald-50/85"
+                          : "bg-white";
+                        const highlightCls = isHighlighted ? "bg-amber-50/90 ring-1 ring-inset ring-amber-300" : "";
                         const tdCommon = "border border-gray-200 align-top py-2 px-3 text-gray-700";
 
                         return (

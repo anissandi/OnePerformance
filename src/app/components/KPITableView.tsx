@@ -9,8 +9,10 @@ import {
 } from "../pages/employee/KPIPage";
 import type { MonthEntry } from "../pages/employee/KPIPage";
 import type { StoredRCASubmission } from "../pages/shared/rcaStore";
+import type { EditedKpiCellDiff } from "../pages/shared/appraisalWorkflowStore";
 import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 interface KPITableViewProps {
   kpiItems: KPIItem[];
@@ -18,6 +20,7 @@ interface KPITableViewProps {
   cells: Record<string, Record<string, string>>;
   rcaSubmissions?: StoredRCASubmission[];
   onPreviewRCA?: (sub: StoredRCASubmission) => void;
+  editedCellsDiff?: Record<string, EditedKpiCellDiff>;
 }
 
 // Helper to get percentage color
@@ -51,6 +54,7 @@ export function KPITableView({
   cells,
   rcaSubmissions = [],
   onPreviewRCA,
+  editedCellsDiff,
 }: KPITableViewProps) {
   const monthLabelById = new Map(months.map((m) => [m.id, m.label] as const));
 
@@ -133,6 +137,14 @@ export function KPITableView({
     if (ach === null) return sum;
     return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
   }, 0);
+  const computeSectionScore = (sec: string): number =>
+    kpiItems
+      .filter((k) => (k.section || "A") === sec)
+      .reduce((sum, k) => {
+        const ach = computeKPIAchievement(k, cells, months);
+        if (ach === null) return sum;
+        return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
+      }, 0);
   const colSpanBeforeTotal = 14 + (months.length > 0 ? months.length : 1);
   const W_NO = 50;
   const W_PERSP = 120;
@@ -183,13 +195,18 @@ export function KPITableView({
               ? `${sec}. ${first.sectionLabel}${first.sectionBobot ? ` — Bobot ${first.sectionBobot}` : ""}`
               : `${sec}. ${defTitle}`;
             const bg = secPalette[sIdx % secPalette.length];
+            const secScore = computeSectionScore(sec);
+            const hasSecScore = secKpis.some((k) => computeKPIAchievement(k, cells, months) !== null);
             return (
               <React.Fragment key={sec}>
                 <tr>
-                  <td colSpan={colSpanBeforeTotal + 2} className="p-0 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: bg, borderColor: bg }}>
+                  <td colSpan={colSpanBeforeTotal + 1} className="p-0 text-white text-xs font-bold uppercase tracking-widest border" style={{ background: bg, borderColor: bg }}>
                     <div className="py-2 px-4 inline-flex items-center whitespace-nowrap" style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}>
                       {hdrLabel}
                     </div>
+                  </td>
+                  <td className="py-2 px-2 text-center border text-white text-xs font-bold whitespace-nowrap" style={{ background: bg, borderColor: bg }}>
+                    {hasSecScore ? `${secScore.toFixed(2)}%` : "—"}
                   </td>
                 </tr>
                 {secKpis.map((kpi, kpiIdx) => {
@@ -276,6 +293,9 @@ export function KPITableView({
                   {months.length > 0 ? (
                     months.map((m) => {
                       const val = getCellValue(kpi, m.id, subIdx);
+                      const diffEntry = !isComputed && !isTargetRow
+                        ? editedCellsDiff?.[`${m.id}::${kpi.no}__${subIdx}`]
+                        : undefined;
                       const cellColorCls = isComputed ? getPctColor(val) : "";
                       const numVal = isComputed ? parseNum(val) : null;
                       const matchedRCA =
@@ -289,7 +309,15 @@ export function KPITableView({
 
                       return (
                         <td key={m.id} className={`border border-gray-200 text-center py-1.5 px-1.5 ${
-                          isComputed ? "bg-emerald-50/80" : isTargetRow ? "bg-sky-50/70" : sub.bold ? "bg-green-50/60" : "bg-green-50"
+                          diffEntry
+                            ? "bg-amber-100/90 ring-2 ring-inset ring-amber-400"
+                            : isComputed
+                            ? "bg-emerald-50/80"
+                            : isTargetRow
+                            ? "bg-sky-50/70"
+                            : sub.bold
+                            ? "bg-green-50/60"
+                            : "bg-green-50"
                         }`}>
                           {isComputed ? (
                             <div className="flex flex-col items-center gap-1">
@@ -317,6 +345,24 @@ export function KPITableView({
                             </div>
                           ) : isTargetRow ? (
                             <span className="font-semibold text-sky-700">{val}</span>
+                          ) : diffEntry ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="inline-flex flex-col items-center gap-0.5 cursor-help px-1">
+                                  <span className="font-extrabold text-[#1A284F] underline decoration-amber-500 decoration-2 underline-offset-2">
+                                    {val}
+                                  </span>
+                                  <span className="px-1.5 py-0 rounded-full bg-amber-300/80 text-amber-950 text-[8px] font-extrabold uppercase tracking-wider leading-tight">
+                                    Edited
+                                  </span>
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="bg-[#1A284F] text-white px-3 py-2 rounded-xl shadow-xl z-[80] text-[11px] space-y-0.5">
+                                <p className="font-bold text-amber-300">Perubahan Edit KPI Tracking</p>
+                                <p>Nilai sebelum di-edit: <strong className="text-rose-200">{diffEntry.before || "—"}</strong></p>
+                                <p>Nilai sesudah di-edit: <strong className="text-emerald-300">{val}</strong></p>
+                              </TooltipContent>
+                            </Tooltip>
                           ) : (
                             <span className={sub.bold ? "font-bold text-gray-800" : "text-gray-700"}>{val}</span>
                           )}

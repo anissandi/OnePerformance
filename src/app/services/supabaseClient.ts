@@ -749,6 +749,7 @@ const CRITICAL_AUTH_KV_KEYS = new Set([
 
 const EPHEMERAL_OR_LEGACY_LOCAL_KEYS = [
   "appraisal_row_aliases_v1",
+  "kpi_tracking_v1",
   "kpi_evidence_files",
   "sg_submitted_smart_goals",
   "sg_checkin_entries_v1",

@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { getLiveUserModuleApprovals } from "../shared/appraisalWorkflowStore";
-import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { getLiveTransactionalEmployeeById } from "../../data/mockEmployees";
 import { buildLiveCycleStepsFromActivation } from "../hr/ModuleActivation";
 import { getActiveUser } from "../../store/authStore";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
@@ -43,46 +43,6 @@ const CYCLE_LABEL_STYLE: Record<string, string> = {
   "On Progress": "text-[#1A284F] font-bold",
   "Not Started": "text-gray-400",
 };
-
-// ─── Appraisal Summary ────────────────────────────────────────────────────────
-
-const MODULE_APPROVALS: ModuleApprovalData[] = new Proxy([] as ModuleApprovalData[], {
-  get(_target, prop, receiver) {
-    const list = getLiveUserModuleApprovals(false);
-    const value = Reflect.get(list, prop, receiver);
-    return typeof value === "function" ? value.bind(list) : value;
-  },
-});
-
-const MY_APPRAISAL_SUMMARY = new Proxy(
-  {
-    currentScore: 0,
-    currentGrade: "—",
-    modulesApproved: 0,
-    modulesTotal: 6,
-    lastUpdated: "—",
-    yearEnd: "Dec 2026",
-    status: "In Progress" as const,
-  },
-  {
-    get(_target, prop: string) {
-      const mods = getLiveUserModuleApprovals(false);
-      const activeUser = getActiveUser();
-      const emps = getLiveTransactionalEmployees();
-      const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase()) ?? emps[0];
-      const summary = {
-        currentScore: me?.totalScore ?? 0,
-        currentGrade: me?.grade && me.grade !== "N/A" ? me.grade : "—",
-        modulesApproved: mods.filter((m) => m.overallStatus === "Approved").length,
-        modulesTotal: mods.length,
-        lastUpdated: me?.approvalCompleteDate ?? "—",
-        yearEnd: "Dec 2026",
-        status: (mods.every((m) => m.overallStatus === "Approved") ? "Done" : "In Progress") as "In Progress",
-      };
-      return summary[prop as keyof typeof summary];
-    },
-  },
-);
 
 // ─── Milestone helpers (derived from MODULE_APPROVALS) ────────────────────────
 
@@ -209,9 +169,10 @@ function CurrentCycleBanner() {
 
 // ─── ModuleApprovalPopup ──────────────────────────────────────────────────────
 
-function ModuleApprovalPopup({ onClose }: { onClose: () => void }) {
+function ModuleApprovalPopup({ modules, onClose }: { modules: ModuleApprovalData[]; onClose: () => void }) {
   const [selected, setSelected] = useState(0);
-  const mod = MODULE_APPROVALS[selected];
+  const mod = modules[selected] ?? modules[0];
+  if (!mod) return null;
 
   // When overallStatus is "Approved", treat every step as completed
   const effectiveSteps: ApprovalStep[] = mod.overallStatus === "Approved"
@@ -277,7 +238,7 @@ function ModuleApprovalPopup({ onClose }: { onClose: () => void }) {
 
           {/* Module tabs */}
           <div className="flex gap-1.5 mt-3 flex-wrap">
-            {MODULE_APPROVALS.map((m, i) => (
+            {modules.map((m, i) => (
               <button
                 key={m.module}
                 onClick={() => setSelected(i)}
@@ -351,7 +312,14 @@ function AppraisalSummaryCards() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const onRefresh = () => setTick((v) => v + 1);
+    let rafId: number | null = null;
+    const onRefresh = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        setTick((v) => v + 1);
+      });
+    };
     window.addEventListener("appraisal-updated", onRefresh);
     window.addEventListener("feedback-updated", onRefresh);
     window.addEventListener("pa-auth-updated", onRefresh);
@@ -360,6 +328,7 @@ function AppraisalSummaryCards() {
     window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
     window.addEventListener("storage", onRefresh);
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("feedback-updated", onRefresh);
       window.removeEventListener("pa-auth-updated", onRefresh);
@@ -371,15 +340,27 @@ function AppraisalSummaryCards() {
   }, []);
 
   const activeUser = getActiveUser();
-  const liveMods = getLiveUserModuleApprovals(false);
-  const emps = getLiveTransactionalEmployees();
-  const me = emps.find((e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase());
-  const baseScore = me?.totalScore ?? 0;
-  const currentScore = parseFloat(baseScore.toFixed(1));
-  const currentGrade = currentScore > 0 ? scoreToGrade(currentScore) : "—";
-  const modulesApproved = liveMods.filter(m => m.overallStatus === "Approved").length;
-  const modulesTotal = liveMods.length;
-  const s = { ...MY_APPRAISAL_SUMMARY, currentScore, currentGrade, modulesApproved, modulesTotal };
+  const { liveMods, s } = useMemo(() => {
+    const mods = getLiveUserModuleApprovals(false);
+    const me = getLiveTransactionalEmployeeById(activeUser.employeeId);
+    const baseScore = me?.totalScore ?? 0;
+    const currentScore = parseFloat(baseScore.toFixed(1));
+    const currentGrade = currentScore > 0 ? scoreToGrade(currentScore, activeUser.company) : "—";
+    const modulesApproved = mods.filter((m) => m.overallStatus === "Approved").length;
+    const modulesTotal = mods.length;
+    return {
+      liveMods: mods,
+      s: {
+        currentScore,
+        currentGrade,
+        modulesApproved,
+        modulesTotal,
+        lastUpdated: me?.approvalCompleteDate ?? "—",
+        yearEnd: "Dec 2026",
+        status: mods.length > 0 && mods.every((m) => m.overallStatus === "Approved") ? "Done" : "In Progress",
+      },
+    };
+  }, [tick, activeUser.employeeId, activeUser.company]);
   const pending = s.modulesTotal - s.modulesApproved;
 
   return (
@@ -480,7 +461,7 @@ function AppraisalSummaryCards() {
         </div>
       </div>
 
-      {showPopup && <ModuleApprovalPopup onClose={() => setShowPopup(false)} />}
+      {showPopup && <ModuleApprovalPopup modules={liveMods} onClose={() => setShowPopup(false)} />}
     </>
   );
 }
@@ -490,21 +471,30 @@ function AppraisalSummaryCards() {
 function MilestoneProgress() {
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const onRefresh = () => setTick((t) => t + 1);
+    let rafId: number | null = null;
+    const onRefresh = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        setTick((t) => t + 1);
+      });
+    };
     window.addEventListener("appraisal-updated", onRefresh);
     window.addEventListener("pa-auth-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
     window.addEventListener("storage", onRefresh);
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("pa-db-hydrated", onRefresh);
       window.removeEventListener("storage", onRefresh);
     };
   }, []);
-  const liveModules = getLiveUserModuleApprovals(false);
+  const activeUser = getActiveUser();
+  const liveModules = useMemo(() => getLiveUserModuleApprovals(false), [tick, activeUser.employeeId]);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
@@ -565,7 +555,7 @@ function MilestoneProgress() {
 
               {mod.module === "KPI (Tracking)" ? (
 
-                <KpiMonthlyApprovalBar employeeId={getActiveUser().employeeId} />
+                <KpiMonthlyApprovalBar employeeId={activeUser.employeeId} />
 
               ) : (
 

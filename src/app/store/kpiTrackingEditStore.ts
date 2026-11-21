@@ -8,9 +8,9 @@ import {
   shouldBypassCheckerForSubmission,
   type ManagedUser,
 } from "./authStore";
-import { loadPersistedState, refreshKvKeysFromBackend, savePersistedState } from "../services/supabaseClient";
+import { loadPersistedState, refreshKvKeysFromBackend, safeGetLocalRaw, savePersistedState } from "../services/supabaseClient";
 import { pushEmployeeNotification } from "./notificationStore";
-import { normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
+import { normalizeEmployeeId, type EditedKpiCellDiff } from "../pages/shared/appraisalWorkflowStore";
 import { formatTodayDDMMYYYY } from "../utils/dateFormat";
 import type { ApprovalRow } from "../components/ReviewDrawer";
 
@@ -23,6 +23,7 @@ export type KpiTrackingEditStage =
   | "pending_ap2"
   | "pending_validator"
   | "approved"
+  | "revision"
   | "rejected"
   | "completed"
   | "cancelled";
@@ -41,7 +42,7 @@ export interface KpiTrackingEditDecisionEntry {
   roleLabel: string;
   approverId: string;
   approverName: string;
-  decision: "Approved" | "Rejected";
+  decision: "Checked" | "Approved" | "Validated" | "Revision" | "Rejected";
   note?: string;
   decidedAt: string;
 }
@@ -64,6 +65,8 @@ export interface KpiTrackingEditRequest {
   bypassChecker: boolean;
   sameAp1Ap2: boolean;
   decisions: KpiTrackingEditDecisionEntry[];
+  previousCellsSnapshot?: Record<string, Record<string, string>>;
+  editedCellsDiff?: Record<string, EditedKpiCellDiff>;
   updatedAt: string;
 }
 
@@ -226,6 +229,8 @@ export function getStageDisplayLabel(stage: KpiTrackingEditStage): string {
       return "Pending HR ICF Validate";
     case "approved":
       return "Approved (Validated)";
+    case "revision":
+      return "Revision Requested";
     case "rejected":
       return "Rejected";
     case "completed":
@@ -309,7 +314,7 @@ export function submitKpiTrackingEditRequest(params: {
 
   const existing = loadKpiTrackingEditRequests().map((r) =>
     normalizeEmployeeId(r.employeeId) === normalizeEmployeeId(params.ownerUser.employeeId) &&
-    (r.stage.startsWith("pending_") || r.stage === "approved")
+    (r.stage.startsWith("pending_") || r.stage === "approved" || r.stage === "revision")
       ? { ...r, stage: "cancelled" as const, updatedAt: nowIso }
       : r,
   );
@@ -398,6 +403,13 @@ export function approveKpiTrackingEditRequest(
       ? "Approver 2"
       : "HR ICF Validator";
 
+  const stageDecisionWord: KpiTrackingEditDecisionEntry["decision"] =
+    stageRole === "checker"
+      ? "Checked"
+      : stageRole === "validator"
+      ? "Validated"
+      : "Approved";
+
   const nextDecisions: KpiTrackingEditDecisionEntry[] = [
     ...req.decisions,
     {
@@ -405,7 +417,7 @@ export function approveKpiTrackingEditRequest(
       roleLabel,
       approverId: actor.employeeId,
       approverName: actor.name,
-      decision: "Approved",
+      decision: stageDecisionWord,
       note: note?.trim() || undefined,
       decidedAt: todayStr,
     },
@@ -435,10 +447,27 @@ export function approveKpiTrackingEditRequest(
     nextStage = "approved";
   }
 
+  let previousCellsSnapshot = req.previousCellsSnapshot;
+  if (nextStage === "approved" && !previousCellsSnapshot) {
+    try {
+      const normEmp = normalizeEmployeeId(req.employeeId);
+      const rawSnap = safeGetLocalRaw(`kpi_tracking_v1_${normEmp}`);
+      if (rawSnap) {
+        const parsed = JSON.parse(rawSnap) as { cellsMap?: Record<string, Record<string, string>> };
+        if (parsed?.cellsMap && typeof parsed.cellsMap === "object") {
+          previousCellsSnapshot = JSON.parse(JSON.stringify(parsed.cellsMap));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const updated: KpiTrackingEditRequest = {
     ...req,
     stage: nextStage,
     decisions: nextDecisions,
+    previousCellsSnapshot,
     updatedAt: nowIso,
   };
   const nextList = [...list];
@@ -490,6 +519,70 @@ export function approveKpiTrackingEditRequest(
       });
     }
   }
+  return updated;
+}
+
+export function reviseKpiTrackingEditRequest(
+  requestId: string,
+  actor: ManagedUser = getActiveUser(),
+  note?: string,
+): KpiTrackingEditRequest | null {
+  const allUsers = loadManagedUsers();
+  const list = loadKpiTrackingEditRequests();
+  const idx = list.findIndex((r) => r.id === requestId);
+  if (idx < 0) return null;
+  const req = list[idx];
+  const stageRole = canViewerActOnTrackingEditStage(actor, req, allUsers);
+  if (!stageRole) return null;
+
+  const todayStr = formatTodayDDMMYYYY();
+  const nowIso = new Date().toISOString();
+  const roleLabel =
+    stageRole === "checker"
+      ? "HR Unit Checker"
+      : stageRole === "validator"
+      ? "HR ICF Validator"
+      : stageRole === "approver2"
+      ? "Approver 2"
+      : "Approver 1";
+
+  const updated: KpiTrackingEditRequest = {
+    ...req,
+    stage: "revision",
+    decisions: [
+      ...req.decisions,
+      {
+        stage: stageRole,
+        roleLabel,
+        approverId: actor.employeeId,
+        approverName: actor.name,
+        decision: "Revision",
+        note: note?.trim() || undefined,
+        decidedAt: todayStr,
+      },
+    ],
+    updatedAt: nowIso,
+  };
+  const nextList = [...list];
+  nextList[idx] = updated;
+  saveKpiTrackingEditRequests(nextList, {
+    action: "Update",
+    description: `${actor.name} (${roleLabel}) requested revision on KPI Tracking Edit Request for ${req.employeeName} (${req.employeeId})`,
+  });
+
+  pushEmployeeNotification({
+    employeeIds: [req.employeeId],
+    title: `Revisi Request Edit KPI Tracking (${roleLabel})`,
+    summary: `Pengajuan Request Edit KPI Tracking Anda untuk bulan ${req.monthLabels.join(", ")} dikembalikan untuk revisi oleh ${roleLabel} (${actor.name}).${note?.trim() ? ` Catatan Revisi: ${note.trim()}` : ""}`,
+    category: "Approval",
+    moduleName: "KPI",
+    approvalStatus: "Revision",
+    ctaLabel: "Buka KPI Tracking",
+    ctaRoute: "/measurement/kpi-tracking",
+    senderName: actor.name,
+    senderRole: roleLabel,
+  });
+
   return updated;
 }
 
@@ -577,7 +670,10 @@ export function cancelOwnKpiTrackingEditRequest(employeeId: string): void {
   }
 }
 
-export function completeKpiTrackingEditSession(employeeId: string): void {
+export function completeKpiTrackingEditSession(
+  employeeId: string,
+  editedCellsDiff?: Record<string, EditedKpiCellDiff>,
+): void {
   const norm = normalizeEmployeeId(employeeId);
   const nowIso = new Date().toISOString();
   const list = loadKpiTrackingEditRequests();
@@ -585,7 +681,12 @@ export function completeKpiTrackingEditSession(employeeId: string): void {
   const next = list.map((r) => {
     if (normalizeEmployeeId(r.employeeId) === norm && r.stage === "approved") {
       changed = true;
-      return { ...r, stage: "completed" as const, updatedAt: nowIso };
+      return {
+        ...r,
+        stage: "completed" as const,
+        editedCellsDiff: editedCellsDiff ?? r.editedCellsDiff,
+        updatedAt: nowIso,
+      };
     }
     return r;
   });
@@ -595,6 +696,20 @@ export function completeKpiTrackingEditSession(employeeId: string): void {
       description: `Employee ${employeeId} completed & re-submitted approved KPI Tracking Edit`,
     });
   }
+}
+
+export function getLatestEditedCellsDiffForEmployee(
+  employeeId: string,
+): Record<string, EditedKpiCellDiff> | undefined {
+  const norm = normalizeEmployeeId(employeeId);
+  const completed = loadKpiTrackingEditRequests().find(
+    (r) =>
+      (normalizeEmployeeId(r.employeeId) === norm || r.employeeId.toLowerCase() === employeeId.toLowerCase()) &&
+      r.stage === "completed" &&
+      r.editedCellsDiff &&
+      Object.keys(r.editedCellsDiff).length > 0,
+  );
+  return completed?.editedCellsDiff;
 }
 
 export function getKpiTrackingEditApprovalRowsForViewer(
@@ -628,6 +743,8 @@ export function getKpiTrackingEditApprovalRowsForViewer(
       }
       if (req.stage === "rejected") {
         rowStatus = "EditRequest-Rejected";
+      } else if (req.stage === "revision") {
+        rowStatus = "Revision";
       } else if (req.stage === "approved" || req.stage === "completed") {
         rowStatus = "EditRequest-AcceptedA2";
       } else if (req.stage === "pending_ap1") {

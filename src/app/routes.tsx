@@ -262,10 +262,6 @@ export const router = createBrowserRouter([
       { path: "approvals/delegation", Component: ApprovalsDelegationPage },
       { path: "approvals/measurement", Component: HRApprovals },
       { path: "approvals/measurement/:tab", Component: HRApprovals },
-      {
-        path: "approvals/measurement/inter-department-feedback",
-        Component: FeedbackApprovalsPage,
-      },
       { path: "approvals/setting", Component: HRApprovals },
       { path: "approvals/setting/:tab", Component: HRApprovals },
       {
@@ -446,10 +442,6 @@ export const router = createBrowserRouter([
       { path: "appraisals", Component: SupervisorApprovals },
       { path: "approvals/measurement", Component: SupervisorApprovals },
       { path: "approvals/measurement/:tab", Component: SupervisorApprovals },
-      {
-        path: "approvals/measurement/inter-department-feedback",
-        Component: FeedbackApprovalsPage,
-      },
       { path: "approvals/setting", Component: SupervisorApprovals },
       { path: "approvals/setting/:tab", Component: SupervisorApprovals },
       {
@@ -569,10 +561,6 @@ export const router = createBrowserRouter([
       { path: "approvals/delegation", Component: ApprovalsDelegationPage },
       { path: "approvals/measurement", Component: SupervisorApprovals },
       { path: "approvals/measurement/:tab", Component: SupervisorApprovals },
-      {
-        path: "approvals/measurement/inter-department-feedback",
-        Component: FeedbackApprovalsPage,
-      },
       { path: "approvals/setting", Component: SupervisorApprovals },
       { path: "approvals/setting/:tab", Component: SupervisorApprovals },
       {
@@ -683,10 +671,6 @@ export const router = createBrowserRouter([
       { path: "approvals/delegation", Component: ApprovalsDelegationPage },
       { path: "approvals/measurement", Component: BODHRApprovals },
       { path: "approvals/measurement/:tab", Component: BODHRApprovals },
-      {
-        path: "approvals/measurement/inter-department-feedback",
-        Component: () => <FeedbackApprovalsPage lockedUnits={getBodOrDirectorUnits()} />,
-      },
       { path: "approvals/setting", Component: BODHRApprovals },
       { path: "approvals/setting/:tab", Component: BODHRApprovals },
       {
