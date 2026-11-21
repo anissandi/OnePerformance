@@ -20,6 +20,7 @@ interface KPITableViewProps {
   cells: Record<string, Record<string, string>>;
   rcaSubmissions?: StoredRCASubmission[];
   onPreviewRCA?: (sub: StoredRCASubmission) => void;
+  onClickUnmatchedRCA?: () => void;
   editedCellsDiff?: Record<string, EditedKpiCellDiff>;
 }
 
@@ -54,6 +55,7 @@ export function KPITableView({
   cells,
   rcaSubmissions = [],
   onPreviewRCA,
+  onClickUnmatchedRCA,
   editedCellsDiff,
 }: KPITableViewProps) {
   const monthLabelById = new Map(months.map((m) => [m.id, m.label] as const));
@@ -335,6 +337,15 @@ export function KPITableView({
                                     title="Klik untuk melihat detail RCA"
                                   >
                                     <span>RCA · {isRcaClosed(matchedRCA) ? "Closed" : "Open"}</span>
+                                  </button>
+                                ) : onClickUnmatchedRCA ? (
+                                  <button
+                                    type="button"
+                                    onClick={onClickUnmatchedRCA}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200 transition-colors cursor-pointer"
+                                    title="Klik untuk membuka halaman RCA"
+                                  >
+                                    RCA
                                   </button>
                                 ) : (
                                   <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200">

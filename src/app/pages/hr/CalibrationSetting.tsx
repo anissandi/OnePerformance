@@ -2780,16 +2780,6 @@ export function CalibrationSetting() {
               Configure performance calibration settings by company unit
             </p>
           </div>
-          <div className="border-b border-gray-200">
-            <div className="flex gap-1">
-              <button
-                onClick={() => setSelectedUnit(null)}
-                className="px-6 py-3 text-sm font-medium border-b-2 border-[#1A284F] text-[#1A284F]"
-              >
-                Company Units
-              </button>
-            </div>
-          </div>
           <UnitDetail
             unit={liveUnit}
             onBack={() => setSelectedUnit(null)}
@@ -2834,14 +2824,6 @@ export function CalibrationSetting() {
           <p className="text-sm text-gray-500">
             Configure performance calibration settings by company unit
           </p>
-        </div>
-
-        <div className="border-b border-gray-200">
-          <div className="flex gap-1">
-            <button className="px-6 py-3 text-sm font-medium border-b-2 border-[#1A284F] text-[#1A284F]">
-              Company Units
-            </button>
-          </div>
         </div>
 
         <div className="flex flex-col gap-4">

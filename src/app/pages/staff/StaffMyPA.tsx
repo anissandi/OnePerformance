@@ -20,7 +20,6 @@ import {
 import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
 import { KPITableView } from "../../components/KPITableView";
-import { UnifiedRCADetailTable } from "../../components/UnifiedRCADetailTable";
 import { fetchEmployeeKpiSettingsLive, fetchEmployeeKpiTrackingLive } from "../../services/supabaseClient";
 import { SmartGoalsScoreHistory } from "../../components/SmartGoalsScoreHistory";
 import { InterDeptFeedbackAppraisalSummary } from "../../components/InterDeptFeedbackAppraisalSummary";
@@ -46,13 +45,13 @@ import { loadUnitScoreWeights, weightColumnFromGrouping } from "../shared/scorin
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
-type Tab = "KPI" | "SMART Goals" | "Appraisal Form" | "RCA" | "Project Outside Job Scope" | "Inter-Dept Feedback";
+type Tab = "KPI" | "RCA" | "SMART Goals" | "Appraisal Form" | "Project Outside Job Scope" | "Inter-Dept Feedback";
 
 const TABS: { id: Tab; icon: React.ElementType; color: string }[] = [
   { id: "KPI",                       icon: TrendingUp,   color: "text-blue-600"   },
+  { id: "RCA",                       icon: SearchCode,   color: "text-purple-600" },
   { id: "SMART Goals",               icon: Lightbulb,    color: "text-amber-600"  },
   { id: "Appraisal Form",            icon: ClipboardList,color: "text-green-600"  },
-  { id: "RCA",                       icon: SearchCode,   color: "text-purple-600" },
   { id: "Project Outside Job Scope", icon: FolderKanban, color: "text-teal-600"   },
   { id: "Inter-Dept Feedback",       icon: Users,        color: "text-indigo-600" },
 ];
@@ -93,7 +92,7 @@ function displayMonthLabel(label: string): string {
   return label.replace(/-\d{2}$/, "");
 }
 
-function KPITab() {
+function KPITab({ onOpenRcaTab }: { onOpenRcaTab: () => void }) {
   const { activeUser } = useAuthStore();
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -125,7 +124,6 @@ function KPITab() {
   const evidenceFiles = React.useMemo(() => loadEvidenceFiles(activeUser.employeeId), [activeUser.employeeId, tick]);
   const kpiComments = React.useMemo(() => loadKPICommentsForEmployee(activeUser.employeeId), [activeUser.employeeId, tick]);
   const rcaSubmissions = React.useMemo(() => loadRCASubmissions(activeUser.employeeId), [activeUser.employeeId, tick]);
-  const [highlightedRcaMonth, setHighlightedRcaMonth] = useState<string | null>(null);
   const wfKpiMeas = React.useMemo(() => {
     const normId = normalizeEmployeeId(activeUser.employeeId);
     return loadWorkflowRecords().find(
@@ -189,33 +187,14 @@ function KPITab() {
           Belum ada data KPI Tracking pada akun Anda. Silakan susun dan validasi KPI Setting lalu lengkapi KPI Tracking di menu Measurement.
         </div>
       ) : (
-        <>
-          <KPITableView
-            kpiItems={ownerKpiItems}
-            months={months}
-            cells={cellsMap}
-            rcaSubmissions={rcaSubmissions}
-            onPreviewRCA={(sub) => {
-              const m = sub.monthLabel || sub.periode || "";
-              setHighlightedRcaMonth(m);
-              window.setTimeout(() => {
-                document.getElementById("staff-mypa-rca-table")?.scrollIntoView({ behavior: "smooth", block: "center" });
-              }, 60);
-              window.setTimeout(() => {
-                setHighlightedRcaMonth((curr) => (curr === m ? null : curr));
-              }, 5000);
-            }}
-          />
-          {rcaSubmissions.length > 0 && (
-            <UnifiedRCADetailTable
-              containerId="staff-mypa-rca-table"
-              submissions={rcaSubmissions}
-              highlightedMonth={highlightedRcaMonth}
-              title="Root Cause Analysis (RCA) — Semua Bulan"
-              subtitle="Status RCA terkini yang terhubung langsung dengan tag RCA pada tabel KPI Tracking Anda."
-            />
-          )}
-        </>
+        <KPITableView
+          kpiItems={ownerKpiItems}
+          months={months}
+          cells={cellsMap}
+          rcaSubmissions={rcaSubmissions}
+          onPreviewRCA={() => onOpenRcaTab()}
+          onClickUnmatchedRCA={() => onOpenRcaTab()}
+        />
       )}
 
       {/* ── History Evidence ── */}
@@ -1585,10 +1564,10 @@ export function StaffMyPA() {
         ))}
       </div>
 
-      {activeTab === "KPI"                       && <KPITab key={revision} />}
+      {activeTab === "KPI"                       && <KPITab key={revision} onOpenRcaTab={() => setActiveTab("RCA")} />}
+      {activeTab === "RCA"                       && <RCATab key={revision} />}
       {activeTab === "SMART Goals"               && <SMARTGoalsTab key={revision} />}
       {activeTab === "Appraisal Form"            && <AppraisalFormTab key={revision} />}
-      {activeTab === "RCA"                       && <RCATab key={revision} />}
       {activeTab === "Project Outside Job Scope" && <ProjectOutsideTab key={revision} />}
       {activeTab === "Inter-Dept Feedback"       && <InterDeptFeedbackAppraisalSummary key={revision} />}
     </div>

@@ -5,7 +5,7 @@ interface Props {
   onExport: () => void;
   onImport?: (file: File) => void;
   label?: string;
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "lg";
 }
 
 export default function ExportImportButton({ onExport, onImport, label, size = "md" }: Props) {
@@ -32,13 +32,14 @@ export default function ExportImportButton({ onExport, onImport, label, size = "
   };
 
   const isSm = size === "sm";
+  const isLg = size === "lg";
 
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className={`flex items-center gap-1.5 font-semibold bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 transition-all shadow-sm rounded-lg ${
-          isSm ? "px-3.5 py-1.5 text-xs" : "px-4 py-2.5 text-sm"
+        className={`flex items-center gap-2 font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all shadow-sm ${
+          isSm ? "px-3.5 py-1.5 text-xs rounded-lg" : isLg ? "px-5 py-2.5 text-sm rounded-xl" : "px-4 py-2.5 text-sm rounded-lg"
         }`}
       >
         <Download className={isSm ? "w-3.5 h-3.5" : "w-4 h-4"} />

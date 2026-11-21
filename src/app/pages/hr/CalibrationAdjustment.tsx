@@ -1,9 +1,16 @@
-import { resolveGradeForScore } from "../shared/scoringWeightStore";
+import {
+  getModuleWeightFraction,
+  loadUnitScoreWeights,
+  resolveGradeForScore,
+  SCORE_WEIGHT_EVENT,
+  weightColumnFromGrouping,
+} from "../shared/scoringWeightStore";
 // @refresh reset
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { getPenilai1ScoreAsPercent, subscribeScores } from "../supervisor/managementInterviewScoreStore";
-import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye, AlertTriangle } from "lucide-react";
+import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye } from "lucide-react";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Dot } from "recharts";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
@@ -11,27 +18,25 @@ import { applyYearEndScorePolicy, isYearEndInactive, loadYearEndState } from "..
 import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import { getApproverNotesHistory, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
-import { loadMeasurementRCARecords } from "../employee/RCAPage";
+import { loadRCASubmissions, type StoredRCASubmission } from "../shared/rcaStore";
+import { UnifiedRCADetailTable, isStoredRcaSubmissionClosed } from "../../components/UnifiedRCADetailTable";
 import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
-import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
+import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveEffectiveUserGrouping, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
-import { applyImportedEmployeesDistribution, orgSlug } from "./CalibrationSetting";
+import {
+  applyImportedEmployeesDistribution,
+  apportionLargestRemainder,
+  computeUnitQuotaAllocation,
+  orgSlug,
+  type BagianProportion,
+  type CalibrationGrade,
+  type CompanyUnit,
+  type DepartemenenProportion,
+  type DivisionProportion,
+} from "./CalibrationSetting";
+import { getSoyApproval, loadSoyEmployeeSnapshot, SOY_EVENT } from "../../store/calibrationSoyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type CalibrationGrade = { id: string; grade: string; proporsi: string; };
-
-type DivisionProportion      = { id: string; divisi: string;                          hc: number; };
-type DepartemenenProportion  = { id: string; divisiId: string; departemen: string;    hc: number; };
-type BagianProportion        = { id: string; departemenenId: string; bagian: string;  hc: number; };
-
-type CompanyUnit = {
-  id: string; name: string; code: string; industry: string;
-  calibrationGrades: CalibrationGrade[];
-  divisionProportions: DivisionProportion[];
-  departemenenProportions: DepartemenenProportion[];
-  bagianProportions: BagianProportion[];
-};
 
 type PageMode = "edit" | "preview" | "submitted";
 
@@ -52,6 +57,8 @@ type EmpScores = {
 
 type Employee = {
   id: string; employeeId: string; name: string; nip: string; level: EmpLevel;
+  groupingLabel: string;
+  positionName: string;
   bagianId: string; departemenenId: string; divisiId: string;
   companyUnit?: string;
   divisionName?: string;
@@ -74,46 +81,6 @@ const makeDefaultCalibrationGrades = (): CalibrationGrade[] => [
   { id: "6", grade: "E",  proporsi: "5%"  },
 ];
 
-const DIV_DEFS = [
-  { id: "div1", divisi: "Staff Management"     },
-  { id: "div2", divisi: "Generals"             },
-  { id: "div3", divisi: "Finance & Accounting" },
-  { id: "div4", divisi: "Logistic / Materials" },
-  { id: "div5", divisi: "Quality Management"   },
-  { id: "div6", divisi: "Coconut Production"   },
-  { id: "div7", divisi: "Pineapple Production" },
-  { id: "div8", divisi: "Utility & Supports"   },
-];
-
-const DEPT_DEFS: [string, string, string][] = [
-  ["dep1","div1","Sumber Daya Manusia"],["dep2","div1","Umum & Administrasi"],
-  ["dep3","div2","Legal & Compliance"],["dep4","div2","Teknologi Informasi"],
-  ["dep5","div3","Keuangan"],["dep6","div3","Akuntansi"],["dep7","div3","Pajak & Audit"],
-  ["dep8","div4","Warehouse & Inventory"],["dep9","div4","Purchasing"],
-  ["dep10","div5","Quality Control"],["dep11","div5","Quality Assurance"],
-  ["dep12","div6","Produksi Kelapa A"],["dep13","div6","Produksi Kelapa B"],
-  ["dep14","div7","Produksi Nanas"],["dep15","div8","Maintenance"],["dep16","div8","Utilitas & Energi"],
-];
-
-const BAGIAN_DEFS: [string, string, string][] = [
-  ["bag1","dep1","Rekrutmen & Seleksi"],["bag2","dep1","Pengembangan SDM"],
-  ["bag3","dep2","Administrasi Umum"],["bag4","dep2","Kearsipan"],
-  ["bag5","dep3","Legal"],["bag6","dep3","Kepatuhan"],
-  ["bag7","dep4","Infrastruktur IT"],["bag8","dep4","Pengembangan Sistem"],
-  ["bag9","dep5","Treasury"],["bag10","dep5","Anggaran"],
-  ["bag11","dep6","Akuntansi Biaya"],["bag12","dep6","Akuntansi Umum"],
-  ["bag13","dep7","Pajak"],["bag14","dep7","Internal Audit"],
-  ["bag15","dep8","Warehouse"],["bag16","dep8","Inventory Control"],
-  ["bag17","dep9","Pengadaan Lokal"],["bag18","dep9","Pengadaan Import"],
-  ["bag19","dep10","Inspeksi QC"],["bag20","dep10","Laboratorium"],
-  ["bag21","dep11","Sistem Manajemen Mutu"],["bag22","dep11","Dokumentasi QA"],
-  ["bag23","dep12","Proses Kelapa A"],["bag24","dep12","Packing Kelapa A"],
-  ["bag25","dep13","Proses Kelapa B"],["bag26","dep13","Packing Kelapa B"],
-  ["bag27","dep14","Proses Nanas"],["bag28","dep14","Packing Nanas"],
-  ["bag29","dep15","Mechanical"],["bag30","dep15","Electrical"],
-  ["bag31","dep16","Utilitas"],["bag32","dep16","Energi & Environment"],
-];
-
 // ─── Employee level weights & helpers ─────────────────────────────────────────
 
 const LEVEL_WEIGHTS: Record<EmpLevel, Record<keyof EmpScores, number>> = {
@@ -124,11 +91,29 @@ const LEVEL_WEIGHTS: Record<EmpLevel, Record<keyof EmpScores, number>> = {
   "Kepala Divisi":     { kpi:.40, smartGoals:.10, appraisalForm:.10, managerialSkill:.20, managementInterview:.10, projectOutsideJobScope:.10 },
 };
 
-function calcFinalScore(level: EmpLevel, s: EmpScores): number {
-  const w = LEVEL_WEIGHTS[level];
-  return s.kpi*w.kpi + s.smartGoals*w.smartGoals + s.appraisalForm*w.appraisalForm
-    + (s.managerialSkill??0)*w.managerialSkill + (s.managementInterview??0)*w.managementInterview
-    + s.projectOutsideJobScope*w.projectOutsideJobScope;
+function resolveEmployeeWeights(emp: Pick<Employee, "level" | "groupingLabel" | "companyUnit">): Record<keyof EmpScores, number> {
+  const unitName = emp.companyUnit || "PT RSUP (Industry)";
+  const weightsMap = loadUnitScoreWeights(unitName);
+  const col = weightColumnFromGrouping(emp.groupingLabel, unitName);
+  const kpi = getModuleWeightFraction(weightsMap, "KPI", col, emp.groupingLabel, unitName);
+  const smartGoals = getModuleWeightFraction(weightsMap, "SMART Goals", col, emp.groupingLabel, unitName);
+  const appraisalForm = getModuleWeightFraction(weightsMap, "Appraisal Form", col, emp.groupingLabel, unitName);
+  const managerialSkill = getModuleWeightFraction(weightsMap, "Managerial Skill", col, emp.groupingLabel, unitName);
+  const managementInterview = getModuleWeightFraction(weightsMap, "Management Interview", col, emp.groupingLabel, unitName);
+  const projectOutsideJobScope = getModuleWeightFraction(weightsMap, "Project Outside Job Scope", col, emp.groupingLabel, unitName);
+  const sum = kpi + smartGoals + appraisalForm + managerialSkill + managementInterview + projectOutsideJobScope;
+  if (sum <= 0) return LEVEL_WEIGHTS[emp.level];
+  return { kpi, smartGoals, appraisalForm, managerialSkill, managementInterview, projectOutsideJobScope };
+}
+
+function calcEmployeeFinalScore(emp: Pick<Employee, "level" | "groupingLabel" | "companyUnit">, s: EmpScores): number {
+  const w = resolveEmployeeWeights(emp);
+  return s.kpi * w.kpi
+    + s.smartGoals * w.smartGoals
+    + s.appraisalForm * w.appraisalForm
+    + (s.managerialSkill ?? 0) * w.managerialSkill
+    + (s.managementInterview ?? 0) * w.managementInterview
+    + s.projectOutsideJobScope * w.projectOutsideJobScope;
 }
 
 const GRADE_HEX: Record<string, string> = { "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B" };
@@ -143,13 +128,19 @@ function buildLiveCalibrationEmployees(): Employee[] {
   const liveEmps = getLiveTransactionalEmployees();
   return users.map((u) => {
     const live = liveEmps.find((e) => e.id.toLowerCase() === u.employeeId.toLowerCase());
-    const divName = (u.division || "Umum").trim();
-    const deptName = (u.department || divName).trim();
-    const bagName = (u.bagian || deptName).trim();
-    const divisiId = `div_${orgSlug(divName)}`;
-    const deptId = `dep_${orgSlug(divName)}__${orgSlug(deptName)}`;
-    const bagianId = `bag_${orgSlug(divName)}__${orgSlug(deptName)}__${orgSlug(bagName)}`;
-    const grouping = u.groupings || "Operasional";
+    const orgDivKey = (u.division || "Umum").trim();
+    const orgDeptKey = (u.department || orgDivKey).trim();
+    const orgBagKey = (u.bagian || orgDeptKey).trim();
+    const divisiId = `div_${orgSlug(orgDivKey)}`;
+    const deptId = `dep_${orgSlug(orgDivKey)}__${orgSlug(orgDeptKey)}`;
+    const bagianId = `bag_${orgSlug(orgDivKey)}__${orgSlug(orgDeptKey)}__${orgSlug(orgBagKey)}`;
+
+    const actualDivName = (u.division || "").trim() || "—";
+    const actualDeptName = (u.department || "").trim() || "—";
+    const actualBagianName = (u.bagian || "").trim() || "—";
+    const actualPositionName = (u.position || "").trim() || "—";
+
+    const grouping = resolveEffectiveUserGrouping(u);
     const allowedModules = resolveUserAllowedModules(u);
     const level: EmpLevel =
       grouping === "Ka./Wa.Ka.Div ke atas"
@@ -169,13 +160,15 @@ function buildLiveCalibrationEmployees(): Employee[] {
       name: u.name,
       nip: u.regNo || u.employeeId,
       level,
+      groupingLabel: grouping,
+      positionName: actualPositionName,
       bagianId,
       departemenenId: deptId,
       divisiId,
       companyUnit: u.company,
-      divisionName: divName,
-      departmentName: deptName,
-      bagianName: bagName,
+      divisionName: actualDivName,
+      departmentName: actualDeptName,
+      bagianName: actualBagianName,
       base: {
         kpi: live?.kpi.score ?? 0,
         smartGoals: live?.smartGoals.score ?? 0,
@@ -303,38 +296,37 @@ function CollapsibleSection({ title, subtitle, defaultOpen = true, actions, chil
 
 function BellCurveChart({
   calibrationGrades,
-  divisionProportions,
+  settingCounts,
   actualCounts,
+  calibratedCounts,
+  hasCalibration,
 }: {
   calibrationGrades: CalibrationGrade[];
-  divisionProportions: DivisionProportion[];
+  settingCounts: number[];
   actualCounts?: number[];
+  calibratedCounts?: number[];
+  hasCalibration: boolean;
 }) {
-  const safeDivisions = divisionProportions ?? [];
   const gradeHeaders  = calibrationGrades.map(g => g.grade);
 
-  // Setting totals per grade
-  const settingTotals = calibrationGrades.map((_, idx) =>
-    safeDivisions.reduce((s, d) =>
-      s + (d.hc > 0 ? Math.round(d.hc * (parseFloat(calibrationGrades[idx]?.proporsi) || 0) / 100) : 0), 0)
-  );
-
-  // Actual totals per grade — dari data live (actualCounts); 0 bila belum tersedia
-  const actualTotals = actualCounts
-    ? actualCounts
-    : calibrationGrades.map((_, gi) =>
-        0
-      );
+  const settingTotals = calibrationGrades.map((_, idx) => settingCounts[idx] ?? 0);
+  const actualTotals = actualCounts ? actualCounts : calibrationGrades.map(() => 0);
+  const calTotals = hasCalibration && calibratedCounts
+    ? calibratedCounts
+    : calibrationGrades.map(() => 0);
 
   const totalSetting = settingTotals.reduce((a, b) => a + b, 0);
   const totalActual  = actualTotals.reduce((a, b) => a + b, 0);
+  const totalCal     = calTotals.reduce((a, b) => a + b, 0);
 
   const data = gradeHeaders.map((grade, i) => ({
     grade,
-    "Setting (%)": totalSetting > 0 ? parseFloat(((settingTotals[i] / totalSetting) * 100).toFixed(1)) : 0,
-    "Aktual (%)":  totalActual  > 0 ? parseFloat(((actualTotals[i]  / totalActual)  * 100).toFixed(1)) : 0,
-    settingHC: settingTotals[i],
-    actualHC:  actualTotals[i],
+    "Setting (SOY)":   totalSetting > 0 ? parseFloat(((settingTotals[i] / totalSetting) * 100).toFixed(1)) : 0,
+    "Aktual":          totalActual  > 0 ? parseFloat(((actualTotals[i]  / totalActual)  * 100).toFixed(1)) : 0,
+    "Kalibrasi (EOY)": hasCalibration && totalCal > 0 ? parseFloat(((calTotals[i] / totalCal) * 100).toFixed(1)) : 0,
+    settingHC:    settingTotals[i],
+    actualHC:     actualTotals[i],
+    calibratedHC: calTotals[i],
   }));
 
   const gradeColors: Record<string, string> = {
@@ -352,25 +344,37 @@ function BellCurveChart({
       return true;
     });
     return (
-      <div className="bg-white rounded-xl shadow-lg border border-gray-100 px-4 py-3 text-xs min-w-[180px]">
+      <div className="bg-white rounded-xl shadow-lg border border-gray-100 px-4 py-3 text-xs min-w-[215px]">
         <div className="flex items-center gap-2 mb-2">
           <span className="w-3 h-3 rounded-sm" style={{ background: color }} />
           <span className="font-bold text-gray-800">Grade {label}</span>
         </div>
-        {unique.map((p: any) => (
-          <div key={p.dataKey} className="flex justify-between gap-4 mt-1">
-            <span className="text-gray-500 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full inline-block" style={{ background: p.color ?? p.fill ?? p.stroke }} />
-              {p.name}
-            </span>
-            <span className="font-bold text-gray-800">
-              {p.value}%
-              <span className="text-gray-400 font-normal ml-1">
-                ({p.dataKey === "Setting (%)" ? p.payload.settingHC : p.payload.actualHC} orang)
+        {unique.map((p: any) => {
+          const hc =
+            p.dataKey === "Setting (SOY)"
+              ? p.payload.settingHC
+              : p.dataKey === "Aktual"
+              ? p.payload.actualHC
+              : p.payload.calibratedHC;
+          return (
+            <div key={p.dataKey} className="flex justify-between gap-4 mt-1">
+              <span className="text-gray-500 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full inline-block" style={{ background: p.color ?? p.fill ?? p.stroke }} />
+                {p.dataKey}
               </span>
-            </span>
-          </div>
-        ))}
+              <span className="font-bold text-gray-800">
+                {p.dataKey === "Kalibrasi (EOY)" && !hasCalibration ? (
+                  <span className="text-gray-400 font-normal">Belum dikalibrasi</span>
+                ) : (
+                  <>
+                    {p.value}%
+                    <span className="text-gray-400 font-normal ml-1">({hc} orang)</span>
+                  </>
+                )}
+              </span>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -391,28 +395,33 @@ function BellCurveChart({
     return <Dot cx={cx} cy={cy} r={5} fill="#0D9488" stroke="#fff" strokeWidth={2} />;
   };
 
+  const KalibrasiDot = (props: any) => {
+    const { cx, cy } = props;
+    if (!hasCalibration) return <Dot cx={cx} cy={cy} r={3.5} fill="#C4B5FD" stroke="#fff" strokeWidth={1.5} />;
+    return <Dot cx={cx} cy={cy} r={5} fill="#7C3AED" stroke="#fff" strokeWidth={2} />;
+  };
+
   const legendPayload = [
-    { value: "Setting (%)", type: "square" as const, color: "#1A284F" },
-    { value: "Aktual (%)",  type: "square" as const, color: "#0D9488" },
-    { value: "Kurva Setting", type: "line" as const, color: "#1A284F" },
-    { value: "Kurva Aktual",  type: "line" as const, color: "#0D9488" },
+    { value: "Setting (SOY)",   type: "square" as const, color: "#1A284F" },
+    { value: "Aktual",          type: "square" as const, color: "#0D9488" },
+    { value: "Kalibrasi (EOY)", type: "square" as const, color: "#7C3AED" },
   ];
 
   return (
     <CollapsibleSection
       title="Grade Distribution — Bell Curve"
-      subtitle="Setting (target awal tahun) vs Aktual (perolehan nilai akhir tahun)"
+      subtitle="Setting (SOY) vs Aktual vs Kalibrasi (EOY)"
     >
-      <div className="flex gap-6">
+      <div className="flex flex-col lg:flex-row gap-6">
         {/* Chart */}
         <div className="flex-1 min-w-0">
-          <ResponsiveContainer width="100%" height={320}>
+          <ResponsiveContainer width="100%" height={335}>
             <ComposedChart
               data={data}
               margin={{ top: 16, right: 24, left: -8, bottom: 0 }}
-              barSize={26}
+              barSize={20}
               barGap={4}
-              barCategoryGap="30%"
+              barCategoryGap="24%"
             >
               <CartesianGrid key="bc-grid" strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis key="bc-xaxis" dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#374151", fontWeight: 600 }} dy={6} />
@@ -425,31 +434,63 @@ function BellCurveChart({
                 formatter={(value) => <span className="text-xs text-gray-600 font-medium">{value}</span>}
               />
               {/* Bars */}
-              <Bar key="bc-bar-setting" dataKey="Setting (%)" name="Setting (%)" fill="#1A284F" fillOpacity={0.25} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-actual"  dataKey="Aktual (%)"  name="Aktual (%)"  fill="#0D9488" fillOpacity={0.25} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-setting" dataKey="Setting (SOY)"   name="Setting (SOY)"   fill="#1A284F" fillOpacity={0.22} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-actual"  dataKey="Aktual"          name="Aktual"          fill="#0D9488" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-cal"     dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#7C3AED" fillOpacity={0.26} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
               {/* Lines */}
-              <Line key="bc-line-setting" type="monotone" dataKey="Setting (%)" name="Kurva Setting" stroke="#1A284F" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />} activeDot={{ r: 6 }} isAnimationActive={false} legendType="plainline" />
-              <Line key="bc-line-actual"  type="monotone" dataKey="Aktual (%)"  name="Kurva Aktual"  stroke="#0D9488" strokeWidth={2.5} dot={<AktualDot />} activeDot={{ r: 6 }} isAnimationActive={false} legendType="plainline" />
+              <Line key="bc-line-setting" type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke="#1A284F" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}   activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
+              <Line key="bc-line-actual"  type="monotone" dataKey="Aktual"          name="Aktual"          stroke="#0D9488" strokeWidth={2.5}                       dot={<AktualDot />}    activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
+              <Line key="bc-line-cal"     type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? "#7C3AED" : "#C4B5FD"} strokeWidth={hasCalibration ? 2.5 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6 } : false} isAnimationActive={false} legendType="none" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Summary cards */}
-        <div className="w-48 shrink-0 flex flex-col gap-3 justify-center">
+        {/* Info Grade di samping Bell Curve — sinkron dengan Setting (SOY), Aktual & Kalibrasi (EOY) */}
+        <div className="w-full lg:w-64 shrink-0 flex flex-col gap-2 justify-center">
           {data.map(d => {
-            const diff = parseFloat((d["Aktual (%)"] - d["Setting (%)"]).toFixed(1));
+            const comparePct = hasCalibration ? d["Kalibrasi (EOY)"] : d["Aktual"];
+            const diffSoy = parseFloat((comparePct - d["Setting (SOY)"]).toFixed(1));
+            const diffCalVsAct = hasCalibration ? d.calibratedHC - d.actualHC : 0;
             const color = gradeColors[d.grade] ?? "#6B7280";
             return (
-              <div key={d.grade} className="flex items-center gap-2.5 bg-gray-50 rounded-xl px-3 py-2 border border-gray-100">
-                <span className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0"
+              <div key={d.grade} className="flex items-center gap-2.5 bg-slate-50/80 rounded-xl px-3 py-2 border border-slate-200/80">
+                <span className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-xs"
                   style={{ background: color }}>{d.grade}</span>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-500">Aktual vs Setting</p>
-                  <p className="text-xs font-bold text-gray-800">{d["Aktual (%)"]}% <span className="text-gray-400 font-normal">vs</span> {d["Setting (%)"]}%</p>
-                  <p className={`text-[10px] font-bold ${diff > 0 ? "text-emerald-600" : diff < 0 ? "text-red-500" : "text-gray-400"}`}>
-                    {diff > 0 ? `+${diff}%` : diff < 0 ? `${diff}%` : "sama"}
-                  </p>
+                <div className="flex-1 min-w-0">
+                  <div className="grid grid-cols-3 gap-1 text-[10px] leading-tight">
+                    <div>
+                      <span className="block text-[9px] font-semibold text-[#1A284F]/70">SOY</span>
+                      <span className="font-bold text-[#1A284F] tabular-nums">{d["Setting (SOY)"]}%</span>
+                      <span className="block text-[9px] text-gray-400 tabular-nums">({d.settingHC})</span>
+                    </div>
+                    <div>
+                      <span className="block text-[9px] font-semibold text-teal-700/80">Aktual</span>
+                      <span className="font-bold text-teal-700 tabular-nums">{d["Aktual"]}%</span>
+                      <span className="block text-[9px] text-gray-400 tabular-nums">({d.actualHC})</span>
+                    </div>
+                    <div>
+                      <span className="block text-[9px] font-semibold text-violet-700/80">Kalibrasi</span>
+                      {hasCalibration ? (
+                        <>
+                          <span className="font-bold text-violet-700 tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
+                          <span className="block text-[9px] text-gray-400 tabular-nums">
+                            ({d.calibratedHC}{diffCalVsAct !== 0 ? ` · ${diffCalVsAct > 0 ? `+${diffCalVsAct}` : diffCalVsAct}` : ""})
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-semibold text-gray-300 tabular-nums">0%</span>
+                          <span className="block text-[9px] text-gray-300">—</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
+                <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded tabular-nums ${
+                  diffSoy > 0 ? "bg-emerald-50 text-emerald-700" : diffSoy < 0 ? "bg-rose-50 text-rose-600" : "bg-gray-100 text-gray-500"
+                }`} title={hasCalibration ? "Selisih Kalibrasi (EOY) terhadap Setting (SOY)" : "Selisih Aktual terhadap Setting (SOY)"}>
+                  {diffSoy > 0 ? `+${diffSoy}%` : diffSoy < 0 ? `${diffSoy}%` : "0%"}
+                </span>
               </div>
             );
           })}
@@ -463,23 +504,18 @@ function BellCurveChart({
 
 function GradeDistributionTable({
   calibrationGrades,
-  divisionProportions,
+  settingCounts,
   actualCounts,
 }: {
   calibrationGrades: CalibrationGrade[];
-  divisionProportions: DivisionProportion[];
+  settingCounts: number[];
   actualCounts?: number[];
 }) {
-  const safeDivisions = divisionProportions ?? [];
-
-  const settingKaryawan = calibrationGrades.map((_, idx) =>
-    safeDivisions.reduce((s, d) =>
-      s + (d.hc > 0 ? Math.round(d.hc * (parseFloat(calibrationGrades[idx]?.proporsi) || 0) / 100) : 0), 0)
-  );
+  const settingKaryawan = calibrationGrades.map((_, idx) => settingCounts[idx] ?? 0);
 
   const actualPerGrade = actualCounts
     ? actualCounts
-    : calibrationGrades.map((_, gi) =>
+    : calibrationGrades.map(() =>
         0
       );
 
@@ -503,8 +539,8 @@ function GradeDistributionTable({
             <tr>
               <th rowSpan={2} className={`border border-gray-300 px-4 py-3 text-center font-semibold text-white ${SETTING_BG}`}>GRADE</th>
               <th rowSpan={2} className={`border border-gray-300 px-4 py-3 text-center font-semibold text-white ${SETTING_BG}`}>PROPORSI</th>
-              <th colSpan={1} className={`border border-gray-300 px-4 py-2 text-center font-semibold text-white ${SETTING_BG} text-xs tracking-wide`}>SETTING — Awal Tahun</th>
-              <th colSpan={1} className={`border border-gray-300 px-4 py-2 text-center font-semibold text-white ${ACTUAL_BG} text-xs tracking-wide`}>AKTUAL — Akhir Tahun</th>
+              <th colSpan={1} className={`border border-gray-300 px-4 py-2 text-center font-semibold text-white ${SETTING_BG} text-xs tracking-wide`}>SETTING (SOY)</th>
+              <th colSpan={1} className={`border border-gray-300 px-4 py-2 text-center font-semibold text-white ${ACTUAL_BG} text-xs tracking-wide`}>AKTUAL (EOY)</th>
             </tr>
             <tr>
               <th className={`border border-gray-300 px-4 py-2 text-center font-semibold text-white ${SETTING_BG} text-xs`}>KARYAWAN</th>
@@ -603,10 +639,10 @@ function AdjustmentProportionTable({
               )}
               <th rowSpan={2} className={`${thSetting} text-left min-w-[140px]`}>{colName}</th>
               <th colSpan={colSpanEach} className={`border border-gray-300 px-3 py-2 text-center font-bold text-white text-xs tracking-wide ${ACTUAL_BG}`}>
-                AKTUAL — Akhir Tahun
+                AKTUAL (EOY)
               </th>
               <th colSpan={colSpanEach} className={`border border-gray-300 px-3 py-2 text-center font-bold text-white text-xs tracking-wide ${SETTING_BG}`}>
-                SETTING — Awal Tahun
+                SETTING (SOY)
               </th>
             </tr>
             {/* Row 2 – sub-columns */}
@@ -805,21 +841,11 @@ function empApproverNotes(emp: Employee): Array<{ module: string; note: string; 
   return out;
 }
 
-type RCAEntry = { id: string; masalah: string; status: "Open" | "Closed"; periode: string; factors: string[] };
-
-function empRCAItems(emp: Employee): RCAEntry[] {
-  const normalizeId = (id: string) => id.replace(/^emp-mi-/, "").replace(/^EMP-?/, "E");
-  return loadMeasurementRCARecords().filter((row) => normalizeId(row.employeeId) === normalizeId(emp.employeeId)).map((row) => ({
-    id: row.id, status: row.status, periode: row.periode,
-    masalah: row.problems.map((problem) => problem.replace(/^\[Faktor (Internal|Eksternal)\]\s*/, "")).join("; ") || "—",
-    factors: Array.from(new Set(row.problems.flatMap((problem) => {
-      const match = problem.match(/^\[(Faktor (?:Internal|Eksternal))\]/);
-      return match ? [match[1]] : [];
-    }))),
-  }));
+function loadEmployeeActualRCASubmissions(employeeId: string): StoredRCASubmission[] {
+  return loadRCASubmissions(employeeId);
 }
 
-// ─── Appraisal Detail Card (modal) ───────────────────────────────────────────
+// ─── Appraisal Detail Drawer (slide-over) ─────────────────────────────────────
 
 function AppraisalDetailCard({
   emp,
@@ -840,26 +866,44 @@ function AppraisalDetailCard({
   const [selYear,  setSelYear]  = useState(currentYear);
   const [lightbox, setLightbox] = useState<EvidenceFile | null>(null);
   const [showRCA,  setShowRCA]  = useState(false);
+  const [rcaTick,  setRcaTick]  = useState(0);
+
+  useEffect(() => {
+    const onUpdate = () => setRcaTick((v) => v + 1);
+    window.addEventListener("pa-db-hydrated", onUpdate);
+    window.addEventListener("appraisal-updated", onUpdate);
+    window.addEventListener(SCORE_WEIGHT_EVENT, onUpdate);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onUpdate);
+      window.removeEventListener("appraisal-updated", onUpdate);
+      window.removeEventListener(SCORE_WEIGHT_EVENT, onUpdate);
+    };
+  }, []);
 
   const isCurrentYear = selYear === currentYear;
+  const empWeights = resolveEmployeeWeights(emp);
 
   // Use effectiveScores (includes live MI score from BOD assessment) for current score
-  const currentScore = isCurrentYear ? parseFloat(calcFinalScore(emp.level, effectiveScores).toFixed(2)) : 0;
+  const currentScore = isCurrentYear ? parseFloat(calcEmployeeFinalScore(emp, effectiveScores).toFixed(2)) : 0;
   const hasAdj       = isCurrentYear && parseFloat(finalScore.toFixed(2)) !== currentScore;
   const diff         = parseFloat((finalScore - currentScore).toFixed(2));
 
-  const currentGrade = gradeFromScore(currentScore);
-  const finalGrade   = gradeFromScore(finalScore);
+  const currentGrade = gradeFromScore(currentScore, emp.companyUnit);
+  const finalGrade   = gradeFromScore(finalScore, emp.companyUnit);
 
-  const divisiName  = DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "—";
-  const deptName    = DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "—";
-  const bagianName  = BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "—";
+  const divisiName   = emp.divisionName && emp.divisionName !== "—" ? emp.divisionName : "—";
+  const deptName     = emp.departmentName && emp.departmentName !== "—" ? emp.departmentName : "—";
+  const bagianName   = emp.bagianName && emp.bagianName !== "—" ? emp.bagianName : "—";
+  const posisiName   = emp.positionName && emp.positionName !== "—" ? emp.positionName : "—";
 
   // Supporting data (live / belum terintegrasi = null)
   const kedisiplinan       = empKedisiplinan(emp);
   const pelanggaran        = empPelanggaran(emp);
   const projectCount       = empProject(emp);
-  const rcaItems           = empRCAItems(emp);
+  const rcaSubmissions     = useMemo(
+    () => loadEmployeeActualRCASubmissions(emp.employeeId),
+    [emp.employeeId, rcaTick],
+  );
   const approverNotes      = empApproverNotes(emp);
 
   // Grade order for color logic (index = rank, higher = better)
@@ -872,23 +916,27 @@ function AppraisalDetailCard({
     const gradeColor  = fIdx < cIdx ? "#EF4444" : "#10B981";
     return { scoreColor, gradeColor };
   };
-  const rcaOpen      = rcaItems.filter(r => r.status === "Open").length;
-  const rcaClosed    = rcaItems.filter(r => r.status === "Closed").length;
+  const openRcaSubs   = rcaSubmissions.filter((sub) => !isStoredRcaSubmissionClosed(sub));
+  const closedRcaSubs = rcaSubmissions.filter((sub) => isStoredRcaSubmissionClosed(sub));
+  const rcaOpen       = openRcaSubs.length;
+  const rcaClosed     = closedRcaSubs.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white shadow-2xl w-full max-w-2xl h-full overflow-y-auto flex flex-col border-l border-gray-200">
 
         {/* Header */}
-        <div className="flex items-start justify-between px-6 pt-6 pb-4 border-b border-gray-100">
+        <div className="sticky top-0 z-10 bg-white flex items-start justify-between px-6 pt-5 pb-4 border-b border-gray-100">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-[#1A284F]/10 flex items-center justify-center shrink-0 text-lg font-black text-[#1A284F] select-none">
               {emp.name.charAt(0)}
             </div>
             <div>
               <h2 className="font-bold text-gray-900 text-base leading-tight">{emp.name}</h2>
-              <p className="text-xs text-gray-400 font-mono mt-0.5">{emp.employeeId}</p>
+              <p className="text-xs text-gray-500 font-mono mt-0.5">
+                {emp.employeeId}{emp.companyUnit ? ` · ${emp.companyUnit}` : ""}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -910,7 +958,7 @@ function AppraisalDetailCard({
 
           {/* Org info */}
           <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-            {[["Divisi", divisiName], ["Departemen", deptName], ["Bagian", bagianName], ["Posisi", emp.level]].map(([lbl, val]) => (
+            {[["Divisi", divisiName], ["Departemen", deptName], ["Bagian", bagianName], ["Posisi", posisiName]].map(([lbl, val]) => (
               <div key={lbl} className="bg-gray-50 rounded-xl px-3 py-2.5">
                 <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-0.5">{lbl}</p>
                 <p className="font-semibold text-gray-800 text-xs">{val}</p>
@@ -942,12 +990,12 @@ function AppraisalDetailCard({
                   {/* Score component breakdown */}
                   <div className="flex flex-col gap-1 pt-1 border-t border-gray-200">
                     {([
-                      { label: "KPI",                   score: effectiveScores.kpi,                    weight: LEVEL_WEIGHTS[emp.level].kpi, isYtd: emp.kpiIsYtd },
-                      { label: "Smart Goals",           score: effectiveScores.smartGoals,             weight: LEVEL_WEIGHTS[emp.level].smartGoals },
-                      { label: "Appraisal Form",        score: effectiveScores.appraisalForm,          weight: LEVEL_WEIGHTS[emp.level].appraisalForm },
-                      { label: "Managerial Skill",      score: effectiveScores.managerialSkill,        weight: LEVEL_WEIGHTS[emp.level].managerialSkill },
-                      { label: "Management Interview",  score: effectiveScores.managementInterview,    weight: LEVEL_WEIGHTS[emp.level].managementInterview, isMI: true },
-                      { label: "Project Outside",       score: effectiveScores.projectOutsideJobScope, weight: LEVEL_WEIGHTS[emp.level].projectOutsideJobScope },
+                      { label: "KPI",                   score: effectiveScores.kpi,                    weight: empWeights.kpi, isYtd: emp.kpiIsYtd },
+                      { label: "Smart Goals",           score: effectiveScores.smartGoals,             weight: empWeights.smartGoals },
+                      { label: "Appraisal Form",        score: effectiveScores.appraisalForm,          weight: empWeights.appraisalForm },
+                      { label: "Managerial Skill",      score: effectiveScores.managerialSkill,        weight: empWeights.managerialSkill },
+                      { label: "Management Interview",  score: effectiveScores.managementInterview,    weight: empWeights.managementInterview, isMI: true },
+                      { label: "Project Outside",       score: effectiveScores.projectOutsideJobScope, weight: empWeights.projectOutsideJobScope },
                     ] as { label: string; score: number | null; weight: number; isMI?: boolean; isYtd?: boolean }[])
                       .filter(r => r.weight > 0)
                       .map(r => (
@@ -1065,7 +1113,7 @@ function AppraisalDetailCard({
                   <div className="flex items-center justify-between">
                     <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">RCA (Root Cause Analysis)</p>
                     <button onClick={() => setShowRCA(true)}
-                      className="flex items-center gap-1 text-xs font-semibold text-[#1A284F] hover:underline underline-offset-2">
+                      className="flex items-center gap-1 text-xs font-semibold text-[#1A284F] hover:underline underline-offset-2 cursor-pointer">
                       <Eye className="w-3.5 h-3.5" /> View Details
                     </button>
                   </div>
@@ -1074,22 +1122,36 @@ function AppraisalDetailCard({
                       <p className="text-[10px] font-semibold text-amber-600 uppercase tracking-wide">RCA Open</p>
                       <p className="text-2xl font-black text-amber-600 tabular-nums">{rcaOpen}</p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        {["Faktor Eksternal", "Faktor Internal"].map((factor) => {
-                          const count = rcaItems.filter((item) => item.status === "Open" && item.factors.includes(factor)).length;
-                          return count > 0 ? <span key={factor} className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${factor === "Faktor Internal" ? "border-blue-200 bg-blue-50 text-blue-700" : "border-orange-200 bg-orange-50 text-orange-700"}`}>{factor}: {count}</span> : null;
-                        })}
-                        {!rcaItems.some((item) => item.status === "Open" && item.factors.length > 0) && <span className="text-[10px] text-gray-400">Belum ada data faktor RCA Open.</span>}
+                        {openRcaSubs.length > 0 ? (
+                          openRcaSubs.slice(0, 4).map((sub) => (
+                            <span key={sub.id || sub.key} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 max-w-full truncate">
+                              {sub.monthLabel || sub.periode}: {sub.kpiIndicator}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-gray-400">Tidak ada RCA berstatus Open.</span>
+                        )}
+                        {openRcaSubs.length > 4 && (
+                          <span className="text-[10px] font-semibold text-amber-700">+{openRcaSubs.length - 4} lainnya</span>
+                        )}
                       </div>
                     </div>
                     <div className="bg-white border border-emerald-200 rounded-xl px-4 py-3 flex flex-col gap-0.5">
                       <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wide">RCA Closed</p>
                       <p className="text-2xl font-black text-emerald-600 tabular-nums">{rcaClosed}</p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        {["Faktor Eksternal", "Faktor Internal"].map((factor) => {
-                          const count = rcaItems.filter((item) => item.status === "Closed" && item.factors.includes(factor)).length;
-                          return count > 0 ? <span key={factor} className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${factor === "Faktor Internal" ? "border-blue-200 bg-blue-50 text-blue-700" : "border-orange-200 bg-orange-50 text-orange-700"}`}>{factor}: {count}</span> : null;
-                        })}
-                        {!rcaItems.some((item) => item.status === "Closed" && item.factors.length > 0) && <span className="text-[10px] text-gray-400">Belum ada data faktor RCA Closed.</span>}
+                        {closedRcaSubs.length > 0 ? (
+                          closedRcaSubs.slice(0, 4).map((sub) => (
+                            <span key={sub.id || sub.key} className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 max-w-full truncate">
+                              {sub.monthLabel || sub.periode}: {sub.kpiIndicator}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-gray-400">Tidak ada RCA berstatus Closed.</span>
+                        )}
+                        {closedRcaSubs.length > 4 && (
+                          <span className="text-[10px] font-semibold text-emerald-700">+{closedRcaSubs.length - 4} lainnya</span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1104,45 +1166,28 @@ function AppraisalDetailCard({
       {showRCA && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
           onClick={e => { if (e.target === e.currentTarget) setShowRCA(false); }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0">
               <div>
-                <h3 className="font-bold text-gray-900 text-sm">Detail RCA</h3>
-                <p className="text-xs text-gray-400 mt-0.5">{emp.name} · {rcaOpen} Open · {rcaClosed} Closed</p>
+                <h3 className="font-bold text-gray-900 text-sm">Detail RCA — {emp.name} ({emp.employeeId})</h3>
+                <p className="text-xs text-gray-500 mt-0.5">{divisiName} · {deptName} · {bagianName} · {posisiName} — {rcaOpen} Open · {rcaClosed} Closed</p>
               </div>
               <button onClick={() => setShowRCA(false)} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
             <div className="overflow-y-auto p-5">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-[#1A284F] text-white">
-                    <th className="px-3 py-2 text-left font-semibold rounded-tl-lg w-8">#</th>
-                    <th className="px-3 py-2 text-left font-semibold">Masalah Utama</th>
-                    <th className="px-3 py-2 text-center font-semibold whitespace-nowrap">Periode</th>
-                    <th className="px-3 py-2 text-center font-semibold rounded-tr-lg">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rcaItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-3 py-8 text-center text-gray-400">Tidak ada RCA</td>
-                    </tr>
-                  ) : rcaItems.map((r, i) => (
-                    <tr key={r.id} className={`border-b border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-gray-50/50"}`}>
-                      <td className="px-3 py-2.5 text-gray-400">{i + 1}</td>
-                      <td className="px-3 py-2.5 text-gray-800 font-medium"><div className="mb-1 flex flex-wrap gap-1">{r.factors.map((factor) => <span key={factor} className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${factor === "Faktor Internal" ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"}`}>{factor}</span>)}</div>{r.masalah}</td>
-                      <td className="px-3 py-2.5 text-center text-gray-500 whitespace-nowrap">{r.periode}</td>
-                      <td className="px-3 py-2.5 text-center">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${r.status === "Open" ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
-                          {r.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {rcaSubmissions.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-10 px-4 text-center text-xs text-gray-400">
+                  Belum ada data RCA aktual untuk karyawan ini.
+                </div>
+              ) : (
+                <UnifiedRCADetailTable
+                  submissions={rcaSubmissions}
+                  title="Root Cause Analysis (RCA) Aktual Karyawan"
+                  subtitle="Rincian lengkap indikator KPI, masalah utama, analisis penyebab, rencana tindak lanjut, dan status penyelesaian."
+                />
+              )}
             </div>
           </div>
         </div>
@@ -1176,6 +1221,16 @@ function AppraisalDetailCard({
 
 function EmployeeAdjustmentSection({
   unitName,
+  calibrationGrades,
+  soyTotalHC,
+  soyGradeTargets,
+  soyDivMap,
+  soyDeptMap,
+  soyBagianMap,
+  soyDivMatrix,
+  soyDeptMatrix,
+  soyBagianMatrix,
+  miScores,
   editMode,
   adjustments,
   setAdjustments,
@@ -1183,12 +1238,20 @@ function EmployeeAdjustmentSection({
   onSave,
   onCancel,
   pageMode,
-  onPreview,
-  onBackToEdit,
   canSubmit,
   onSubmit,
 }: {
   unitName?: string;
+  calibrationGrades: CalibrationGrade[];
+  soyTotalHC: number;
+  soyGradeTargets: number[];
+  soyDivMap: Record<string, number>;
+  soyDeptMap: Record<string, number>;
+  soyBagianMap: Record<string, number>;
+  soyDivMatrix: Record<string, number[]>;
+  soyDeptMatrix: Record<string, number[]>;
+  soyBagianMatrix: Record<string, number[]>;
+  miScores: Record<string, number | null>;
   editMode: boolean;
   adjustments: Record<string, number>;
   setAdjustments: React.Dispatch<React.SetStateAction<Record<string, number>>>;
@@ -1196,8 +1259,6 @@ function EmployeeAdjustmentSection({
   onSave:      () => void;
   onCancel:    () => void;
   pageMode:    PageMode;
-  onPreview:   () => void;
-  onBackToEdit:() => void;
   canSubmit:   boolean;
   onSubmit:    () => void;
 }) {
@@ -1220,29 +1281,6 @@ function EmployeeAdjustmentSection({
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
   const supportingColumns = SUPPORTING_COLUMNS.filter((column) => visibleColumns[column.key]);
 
-  // Live Management Interview scores from BOD assessment (0–100 percentage)
-  const MI_EMP_MAP: Record<string, string> = {
-    "emp-mi-E002": "E002",
-    "emp-mi-E011": "E011",
-    "emp-mi-E013": "E013",
-    "emp-mi-E014": "E014",
-  };
-  const buildMIScores = useCallback(() => {
-    const result: Record<string, number | null> = {};
-    for (const emp of ALL_EMPLOYEES) {
-      const mapped = MI_EMP_MAP[emp.id] ?? emp.employeeId;
-      const pct = getPenilai1ScoreAsPercent(mapped, emp.name);
-      if (pct !== null) {
-        result[emp.id] = pct;
-      }
-    }
-    return result;
-  }, []);
-  const [miScores, setMIScores] = useState<Record<string, number | null>>(buildMIScores);
-  useEffect(() => {
-    return subscribeScores(() => setMIScores(buildMIScores()));
-  }, [buildMIScores]);
-
   const unitEmployees = useMemo(
     () => ALL_EMPLOYEES.filter((e) => !unitName || e.companyUnit === unitName),
     [unitName, adjustments],
@@ -1251,8 +1289,8 @@ function EmployeeAdjustmentSection({
   const dynamicDivDefs = useMemo(() => {
     const map = new Map<string, string>();
     unitEmployees.forEach((e) => {
-      const label = e.divisionName ?? DIV_DEFS.find((d) => d.id === e.divisiId)?.divisi ?? e.divisiId;
-      if (e.divisiId && label) map.set(e.divisiId, label);
+      const label = e.divisionName && e.divisionName !== "—" ? e.divisionName : "";
+      if (e.divisiId && label && !map.has(e.divisiId)) map.set(e.divisiId, label);
     });
     return Array.from(map.entries()).map(([id, divisi]) => ({ id, divisi }));
   }, [unitEmployees]);
@@ -1260,8 +1298,10 @@ function EmployeeAdjustmentSection({
   const dynamicDeptDefs = useMemo(() => {
     const map = new Map<string, [string, string, string]>();
     unitEmployees.forEach((e) => {
-      const label = e.departmentName ?? DEPT_DEFS.find(([id]) => id === e.departemenenId)?.[2] ?? e.departemenenId;
-      if (e.departemenenId && label) map.set(e.departemenenId, [e.departemenenId, e.divisiId, label]);
+      const label = e.departmentName && e.departmentName !== "—" ? e.departmentName : "";
+      if (e.departemenenId && label && !map.has(e.departemenenId)) {
+        map.set(e.departemenenId, [e.departemenenId, e.divisiId, label]);
+      }
     });
     return Array.from(map.values());
   }, [unitEmployees]);
@@ -1269,8 +1309,10 @@ function EmployeeAdjustmentSection({
   const dynamicBagianDefs = useMemo(() => {
     const map = new Map<string, [string, string, string]>();
     unitEmployees.forEach((e) => {
-      const label = e.bagianName ?? BAGIAN_DEFS.find(([id]) => id === e.bagianId)?.[2] ?? e.bagianId;
-      if (e.bagianId && label) map.set(e.bagianId, [e.bagianId, e.departemenenId, label]);
+      const label = e.bagianName && e.bagianName !== "—" ? e.bagianName : "";
+      if (e.bagianId && label && !map.has(e.bagianId)) {
+        map.set(e.bagianId, [e.bagianId, e.departemenenId, label]);
+      }
     });
     return Array.from(map.values());
   }, [unitEmployees]);
@@ -1280,12 +1322,33 @@ function EmployeeAdjustmentSection({
   );
 
   const bagianOptions = dynamicBagianDefs.filter(([, deptId]) => {
-    const dept = dynamicDeptDefs.find(([dId]) => dId === deptId);
-    if (!dept) return false;
-    if (selDivisi !== "__all__" && dept[1] !== selDivisi) return false;
+    if (selDivisi !== "__all__") {
+      const dept = dynamicDeptDefs.find(([dId]) => dId === deptId);
+      if (dept && dept[1] !== selDivisi) return false;
+    }
     if (selDept !== "__all__" && deptId !== selDept) return false;
     return true;
   });
+
+  const getEffectiveScores = (emp: Employee): EmpScores => {
+    if (emp.id in miScores && miScores[emp.id] !== null) {
+      return applyYearEndScorePolicy(emp.employeeId, { ...emp.base, managementInterview: miScores[emp.id] });
+    }
+    return applyYearEndScorePolicy(emp.employeeId, emp.base);
+  };
+  const getBase  = (emp: Employee) => parseFloat(calcEmployeeFinalScore(emp, getEffectiveScores(emp)).toFixed(2));
+  const getFinal = (emp: Employee) => adjustments[emp.id] ?? getBase(emp);
+
+  const posisiOptions = useMemo(() => {
+    const set = new Set<string>();
+    unitEmployees.forEach((e) => {
+      if (selDivisi !== "__all__" && e.divisiId !== selDivisi) return;
+      if (selDept !== "__all__" && e.departemenenId !== selDept) return;
+      if (selBagian !== "__all__" && e.bagianId !== selBagian) return;
+      if (e.positionName && e.positionName !== "—") set.add(e.positionName);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "id"));
+  }, [unitEmployees, selDivisi, selDept, selBagian]);
 
   const filtered = unitEmployees.filter(e => {
     if (isYearEndInactive(e.employeeId)) return false;
@@ -1294,23 +1357,14 @@ function EmployeeAdjustmentSection({
     if (selDivisi !== "__all__" && e.divisiId       !== selDivisi) return false;
     if (selDept   !== "__all__" && e.departemenenId !== selDept)   return false;
     if (selBagian !== "__all__" && e.bagianId       !== selBagian) return false;
-    if (selPosisi !== "__all__" && e.level          !== selPosisi) return false;
-    if (selGrade  !== "__all__" && gradeFromScore(calcFinalScore(e.level, applyYearEndScorePolicy(e.employeeId, e.base))).grade !== selGrade) return false;
+    if (selPosisi !== "__all__" && e.positionName   !== selPosisi) return false;
+    if (selGrade  !== "__all__" && gradeFromScore(getFinal(e), unitName || e.companyUnit).grade !== selGrade) return false;
     return true;
   });
 
-  const posisiOptions: EmpLevel[] = ["Kepala Bagian", "Pengawas", "Operasional", "Kepala Departemen", "Kepala Divisi"];
-
-  const adjustedCount = Object.keys(adjustments).filter(id => unitEmployees.find(e => e.id === id)).length;
-
-  const getEffectiveScores = (emp: Employee): EmpScores => {
-    if (emp.id in miScores && miScores[emp.id] !== null) {
-      return applyYearEndScorePolicy(emp.employeeId, { ...emp.base, managementInterview: miScores[emp.id] });
-    }
-    return applyYearEndScorePolicy(emp.employeeId, emp.base);
-  };
-  const getBase  = (emp: Employee) => parseFloat(calcFinalScore(emp.level, getEffectiveScores(emp)).toFixed(2));
-  const getFinal = (emp: Employee) => adjustments[emp.id] ?? getBase(emp);
+  const adjustedCount = unitEmployees.filter(
+    (e) => !isYearEndInactive(e.employeeId) && e.id in adjustments && Math.abs((adjustments[e.id] ?? getBase(e)) - getBase(e)) > 0.0001,
+  ).length;
 
   const setFinal = (emp: Employee, val: number) =>
     setAdjustments(prev => ({ ...prev, [emp.id]: parseFloat(val.toFixed(2)) }));
@@ -1332,7 +1386,7 @@ function EmployeeAdjustmentSection({
       else if (sortKey === "managerialSkill") { va = a.base.managerialSkill ?? -1;  vb = b.base.managerialSkill ?? -1; }
       else if (sortKey === "mgmtInterview")   { va = getEffectiveScores(a).managementInterview ?? -1; vb = getEffectiveScores(b).managementInterview ?? -1; }
       else if (sortKey === "nilaiAkhir")      { va = getFinal(a);                   vb = getFinal(b); }
-      else if (sortKey === "grade")           { va = GRADE_ORDER[gradeFromScore(getFinal(a)).grade] ?? 0; vb = GRADE_ORDER[gradeFromScore(getFinal(b)).grade] ?? 0; }
+      else if (sortKey === "grade")           { va = GRADE_ORDER[gradeFromScore(getFinal(a), unitName || a.companyUnit).grade] ?? 0; vb = GRADE_ORDER[gradeFromScore(getFinal(b), unitName || b.companyUnit).grade] ?? 0; }
       else {
         const column = SUPPORTING_COLUMNS.find((item) => item.key === sortKey);
         if (column) { va = column.value(a) ?? -1; vb = column.value(b) ?? -1; }
@@ -1353,30 +1407,86 @@ function EmployeeAdjustmentSection({
   const GRADE_COLORS: Record<string, string> = {
     "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B",
   };
+  const gradeKeys = useMemo(
+    () => (calibrationGrades.length > 0 ? calibrationGrades.map((g) => g.grade) : ["A+", "A", "B", "C", "D", "E"]),
+    [calibrationGrades],
+  );
+  const soyScopeStats = useMemo(() => {
+    const weights = calibrationGrades.map((g) => parseFloat(g.proporsi) || 0);
+    let hc = soyTotalHC;
+    let targets = soyGradeTargets;
+    if (selBagian !== "__all__") {
+      hc = soyBagianMap[selBagian] ?? 0;
+      targets = soyBagianMatrix[selBagian] ?? apportionLargestRemainder(hc, weights);
+    } else if (selDept !== "__all__") {
+      hc = soyDeptMap[selDept] ?? 0;
+      targets = soyDeptMatrix[selDept] ?? apportionLargestRemainder(hc, weights);
+    } else if (selDivisi !== "__all__") {
+      hc = soyDivMap[selDivisi] ?? 0;
+      targets = soyDivMatrix[selDivisi] ?? apportionLargestRemainder(hc, weights);
+    } else if (selPosisi !== "__all__" || selGrade !== "__all__" || search.trim() !== "") {
+      const snap = unitName ? loadSoyEmployeeSnapshot()[unitName] : undefined;
+      if (Array.isArray(snap) && snap.length > 0) {
+        const q = search.trim().toLowerCase();
+        const matched = snap.filter((u) => {
+          if (q && !u.name.toLowerCase().includes(q) && !u.employeeId.toLowerCase().replace(/-/g, "").includes(q.replace(/-/g, ""))) return false;
+          if (selPosisi !== "__all__" && ((u.position || "").trim() || "—") !== selPosisi) return false;
+          return true;
+        });
+        hc = matched.length;
+        targets = apportionLargestRemainder(hc, weights);
+      }
+    }
+    const byGrade: Record<string, number> = {};
+    gradeKeys.forEach((g, idx) => {
+      byGrade[g] = targets[idx] ?? 0;
+    });
+    return { hc, byGrade };
+  }, [
+    calibrationGrades,
+    soyTotalHC,
+    soyGradeTargets,
+    soyDivMap,
+    soyDeptMap,
+    soyBagianMap,
+    soyDivMatrix,
+    soyDeptMatrix,
+    soyBagianMatrix,
+    selDivisi,
+    selDept,
+    selBagian,
+    selPosisi,
+    selGrade,
+    search,
+    unitName,
+    gradeKeys,
+  ]);
+
   const gradeSummaryBefore = filtered.reduce<Record<string, number>>((acc, emp) => {
-    const { grade } = gradeFromScore(getBase(emp));
+    const { grade } = gradeFromScore(getBase(emp), unitName || emp.companyUnit);
     acc[grade] = (acc[grade] ?? 0) + 1;
     return acc;
   }, {});
   const gradeSummaryAfter = filtered.reduce<Record<string, number>>((acc, emp) => {
-    const { grade } = gradeFromScore(getFinal(emp));
+    const { grade } = gradeFromScore(getFinal(emp), unitName || emp.companyUnit);
     acc[grade] = (acc[grade] ?? 0) + 1;
     return acc;
   }, {});
 
   const handleExport = () => {
-    const headers = ["Nama","ID Karyawan","Level","Divisi","Departemen","Bagian","KPI","Project","Smart Goals","Appraisal Form","Managerial Skill","Mgmt Interview","Nilai Akhir","Grade"];
+    const headers = ["Nama","ID Karyawan","Posisi","Divisi","Departemen","Bagian","KPI","Project","Smart Goals","Appraisal Form","Managerial Skill","Mgmt Interview","Nilai Akhir","Grade"];
     const rows = sorted.map(emp => {
-      const divisiName = emp.divisionName ?? DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "";
-      const deptName   = emp.departmentName ?? DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "";
-      const bagianName = emp.bagianName ?? BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "";
+      const divisiName = emp.divisionName && emp.divisionName !== "—" ? emp.divisionName : "";
+      const deptName   = emp.departmentName && emp.departmentName !== "—" ? emp.departmentName : "";
+      const bagianName = emp.bagianName && emp.bagianName !== "—" ? emp.bagianName : "";
+      const posisiName = emp.positionName && emp.positionName !== "—" ? emp.positionName : "";
       const final      = getFinal(emp);
       return [
-        emp.name, emp.employeeId, emp.level, divisiName, deptName, bagianName,
+        emp.name, emp.employeeId, posisiName, divisiName, deptName, bagianName,
         emp.base.kpi, emp.base.projectOutsideJobScope,
         emp.base.smartGoals, emp.base.appraisalForm,
         emp.base.managerialSkill ?? "", getEffectiveScores(emp).managementInterview ?? "",
-        final.toFixed(2), gradeFromScore(final).grade,
+        final.toFixed(2), gradeFromScore(final, unitName || emp.companyUnit).grade,
       ];
     });
     exportXLSX("Calibration_Adjustment.xlsx", headers, rows);
@@ -1401,39 +1511,12 @@ function EmployeeAdjustmentSection({
     });
   };
 
-  const sectionActions = pageMode === "submitted" ? null : (
-    <>
-      <ExportImportButton onExport={handleExport} onImport={handleImport} size="sm" />
-      <span className="w-px h-5 bg-gray-200 mx-1" />
-      {/* Calibration actions */}
-      {editMode && (
-        <button onClick={onCancel}
-          className="px-3 py-1.5 border border-gray-200 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors">
-          Cancel
-        </button>
-      )}
-      <button onClick={editMode ? onSave : onStart}
-        className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#1A284F] text-white rounded-lg text-xs font-semibold hover:bg-[#131d3b] transition-colors shadow-sm">
-        {editMode ? <><Save className="w-3.5 h-3.5" />Save Changes</> : <><Edit2 className="w-3.5 h-3.5" />Start Adjusting</>}
-      </button>
-
-      {/* Separator */}
-      <span className="w-px h-5 bg-gray-200 mx-1" />
-
-      {/* Submit */}
-      <button disabled={!canSubmit} onClick={canSubmit ? onSubmit : undefined}
-        className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors shadow-sm ${canSubmit ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer" : "bg-gray-100 text-gray-400 cursor-not-allowed"}`}>
-        <Send className="w-3.5 h-3.5" />Submit
-      </button>
-    </>
-  );
+  const hcDelta = filtered.length - soyScopeStats.hc;
 
   return (
     <CollapsibleSection
       title="Employee Performance Calibration Adjustment"
-      subtitle="Kalibrasi Nilai Akhir per karyawan ±5% dari nilai akhir (contoh: 73.7% → ±3.69%)"
       defaultOpen={true}
-      actions={sectionActions}
     >
       {/* Filter bar */}
       <div className="flex flex-wrap items-end gap-3 mb-5 pb-5 border-b border-gray-100">
@@ -1486,54 +1569,111 @@ function EmployeeAdjustmentSection({
           </button>
         )}
         {adjustedCount > 0 && (
-          <button onClick={() => { setAdjustments({}); setComments({}); setEvidence({}); }}
+          <button onClick={() => {
+            const unitIds = new Set(unitEmployees.map((e) => e.id));
+            setAdjustments((prev) => {
+              const next = Object.fromEntries(Object.entries(prev).filter(([k]) => !unitIds.has(k)));
+              savePersistedState("pa_calibration_adj_scores_v1", next);
+              return next;
+            });
+            setComments((prev) => {
+              const next = Object.fromEntries(Object.entries(prev).filter(([k]) => !unitIds.has(k)));
+              savePersistedState("pa_calibration_adj_comments_v1", next);
+              return next;
+            });
+            setEvidence((prev) => {
+              const next = Object.fromEntries(Object.entries(prev).filter(([k]) => !unitIds.has(k)));
+              savePersistedState("pa_calibration_adj_evidence_v1", next);
+              return next;
+            });
+          }}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors self-end">
             <RotateCcw className="w-3.5 h-3.5" />Reset Semua ({adjustedCount})
           </button>
         )}
       </div>
 
-      {/* Summary cards — single row */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        {/* Total */}
-        <div className="bg-[#1A284F]/5 border border-[#1A284F]/10 rounded-xl px-4 py-3">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Total Karyawan</p>
-          <p className="text-2xl font-black text-[#1A284F] tabular-nums">{filtered.length}</p>
-          {adjustedCount > 0 && (
-            <p className="text-[10px] text-amber-600 font-semibold mt-0.5">{adjustedCount} disesuaikan</p>
-          )}
-        </div>
-        {/* Before */}
-        <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Distribusi Grade — Sebelum Kalibrasi</p>
-          <div className="flex items-center gap-2 flex-wrap">
-            {["A+","A","B","C","D","E"].map(g => {
-              const cnt = gradeSummaryBefore[g] ?? 0;
-              return (
-                <div key={g} className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold tabular-nums px-2 py-0.5 rounded-md text-white min-w-[28px] text-center"
-                    style={{ background: GRADE_COLORS[g] }}>{g}</span>
-                  <span className="text-sm font-bold tabular-nums text-gray-800">{cnt}</span>
-                </div>
-              );
-            })}
+      {/* 6 Summary cards — 1 baris proporsional dengan palet warna profesional */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[minmax(118px,0.8fr)_minmax(118px,0.8fr)_minmax(180px,1.55fr)_minmax(180px,1.55fr)_minmax(180px,1.55fr)_minmax(195px,1.65fr)] gap-2.5 mb-4 items-stretch">
+        {/* 1. Total Karyawan (SOY) */}
+        <div className="bg-gradient-to-br from-[#1A284F]/[0.08] via-slate-50 to-white border border-[#1A284F]/20 rounded-xl px-3.5 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide leading-snug">Total Karyawan (SOY)</p>
+          <div className="mt-1.5">
+            <p className="text-2xl font-black text-[#1A284F] tabular-nums leading-none">{soyScopeStats.hc}</p>
+            <p className="text-[10px] text-slate-500 font-medium mt-1">Target Awal Tahun</p>
           </div>
         </div>
-        {/* After */}
-        <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl px-4 py-3">
-          <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wide mb-2">Distribusi Grade — Setelah Kalibrasi</p>
-          <div className="flex items-center gap-2 flex-wrap">
-            {["A+","A","B","C","D","E"].map(g => {
+
+        {/* 2. Total Karyawan (EOY) */}
+        <div className="bg-gradient-to-br from-sky-50/90 via-cyan-50/40 to-white border border-sky-200 rounded-xl px-3.5 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-sky-800 uppercase tracking-wide leading-snug">Total Karyawan (EOY)</p>
+          <div className="mt-1.5">
+            <p className="text-2xl font-black text-sky-900 tabular-nums leading-none">{filtered.length}</p>
+            <p className="text-[10px] font-semibold mt-1 text-sky-700 tabular-nums">
+              {hcDelta === 0 ? "Sama dengan SOY" : `${hcDelta > 0 ? `+${hcDelta}` : hcDelta} vs SOY`}
+              {adjustedCount > 0 ? ` · ${adjustedCount} dikalibrasi` : ""}
+            </p>
+          </div>
+        </div>
+
+        {/* 3. Distribusi Grade — Setting (SOY) */}
+        <div className="bg-gradient-to-br from-indigo-50/85 via-blue-50/35 to-white border border-indigo-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-indigo-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Setting (SOY)">
+            Distribusi Grade — Setting (SOY)
+          </p>
+          <div className="grid grid-cols-6 gap-1">
+            {gradeKeys.map((g) => (
+              <div key={g} className="flex flex-col items-center bg-white/80 border border-indigo-100 rounded-lg py-1 px-0.5">
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
+                  {g}
+                </span>
+                <span className="text-xs font-extrabold text-indigo-950 tabular-nums mt-1">
+                  {soyScopeStats.byGrade[g] ?? 0}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 4. Distribusi Grade — Aktual */}
+        <div className="bg-gradient-to-br from-teal-50/85 via-emerald-50/30 to-white border border-teal-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-teal-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Aktual">
+            Distribusi Grade — Aktual
+          </p>
+          <div className="grid grid-cols-6 gap-1">
+            {gradeKeys.map((g) => (
+              <div key={g} className="flex flex-col items-center bg-white/80 border border-teal-100 rounded-lg py-1 px-0.5">
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
+                  {g}
+                </span>
+                <span className="text-xs font-extrabold text-teal-950 tabular-nums mt-1">
+                  {gradeSummaryBefore[g] ?? 0}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 5. Distribusi Grade — Kalibrasi (EOY) */}
+        <div className="bg-gradient-to-br from-violet-50/85 via-purple-50/30 to-white border border-violet-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-violet-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Kalibrasi (EOY)">
+            Distribusi Grade — Kalibrasi (EOY)
+          </p>
+          <div className="grid grid-cols-6 gap-1">
+            {gradeKeys.map((g) => {
               const cntBefore = gradeSummaryBefore[g] ?? 0;
               const cntAfter  = gradeSummaryAfter[g]  ?? 0;
               const diff      = cntAfter - cntBefore;
               return (
-                <div key={g} className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold tabular-nums px-2 py-0.5 rounded-md text-white min-w-[28px] text-center"
-                    style={{ background: GRADE_COLORS[g] }}>{g}</span>
-                  <span className="text-sm font-bold tabular-nums text-gray-800">{cntAfter}</span>
-                  {diff !== 0 && (
-                    <span className={`text-[10px] font-bold tabular-nums ${diff > 0 ? "text-emerald-600" : "text-red-500"}`}>
+                <div key={g} className="flex flex-col items-center bg-white/80 border border-violet-100 rounded-lg py-1 px-0.5">
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
+                    {g}
+                  </span>
+                  <span className="text-xs font-extrabold text-violet-950 tabular-nums mt-1">
+                    {adjustedCount > 0 ? cntAfter : 0}
+                  </span>
+                  {adjustedCount > 0 && diff !== 0 && (
+                    <span className={`text-[9px] font-bold tabular-nums leading-none mt-0.5 ${diff > 0 ? "text-emerald-600" : "text-rose-600"}`}>
                       {diff > 0 ? `+${diff}` : diff}
                     </span>
                   )}
@@ -1542,15 +1682,74 @@ function EmployeeAdjustmentSection({
             })}
           </div>
         </div>
+
+        {/* 6. Distribusi Grade - Summary */}
+        <div className="bg-gradient-to-br from-emerald-50/85 via-amber-50/30 to-white border border-emerald-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
+          <p className="text-[10px] font-bold text-emerald-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade - Summary">
+            Distribusi Grade - Summary
+          </p>
+          <div className="grid grid-cols-6 gap-1">
+            {gradeKeys.map((g) => {
+              const soyCnt   = soyScopeStats.byGrade[g] ?? 0;
+              const finalCnt = gradeSummaryAfter[g] ?? 0;
+              const variance = finalCnt - soyCnt;
+              return (
+                <div key={g} className="flex flex-col items-center bg-white/85 border border-emerald-100 rounded-lg py-1 px-0.5" title={`Grade ${g}: Final EOY ${finalCnt} vs Setting SOY ${soyCnt}`}>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
+                    {g}
+                  </span>
+                  <span className="text-[11px] font-extrabold text-slate-800 tabular-nums mt-1 leading-none">
+                    {finalCnt}/{soyCnt}
+                  </span>
+                  <span className={`text-[9px] font-bold tabular-nums leading-none mt-0.5 ${
+                    variance > 0 ? "text-amber-600" : variance < 0 ? "text-rose-600" : "text-emerald-600"
+                  }`}>
+                    {variance > 0 ? `+${variance}` : variance === 0 ? "0" : variance}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
-      {/* Read-only notice */}
-      {!editMode && (
-        <div className="flex items-center gap-2 mb-4 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-500">
-          <Lock className="w-4 h-4 shrink-0 text-gray-400" />
-          Tabel dalam mode <strong className="text-gray-700 mx-1">Read-Only</strong>. Klik
-          <span className="mx-1 px-2 py-0.5 bg-[#1A284F] text-white rounded text-xs font-medium">Start Adjusting</span>
-          untuk mengaktifkan penyesuaian.
+      {/* Action Buttons Bar (Start Adjusting; Submit; Download/Upload — ukuran lebih besar) */}
+      {pageMode !== "submitted" && (
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-4 py-3 bg-slate-50/80 border border-slate-200/80 rounded-xl">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={editMode ? onSave : onStart}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#1A284F] text-white rounded-xl text-sm font-semibold hover:bg-[#131d3b] transition-colors shadow-sm cursor-pointer"
+            >
+              {editMode ? <><Save className="w-4 h-4" />Save Changes</> : <><Edit2 className="w-4 h-4" />Start Adjusting</>}
+            </button>
+            {editMode && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-5 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={!canSubmit}
+              onClick={canSubmit ? onSubmit : undefined}
+              title={editMode ? "Klik Save Changes terlebih dahulu sebelum Submit" : undefined}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm ${
+                canSubmit
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                  : "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
+              }`}
+            >
+              <Send className="w-4 h-4" />Submit
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <ExportImportButton onExport={handleExport} onImport={handleImport} size="lg" />
+          </div>
         </div>
       )}
 
@@ -1686,8 +1885,8 @@ function EmployeeAdjustmentSection({
               const hasAdj    = !!adjustments[emp.id];
               const diff      = parseFloat((final - base).toFixed(2));
               const diffPct   = base > 0 ? parseFloat(((diff / base) * 100).toFixed(2)) : 0;
-              const bGrade    = gradeFromScore(base);
-              const fGrade    = gradeFromScore(final);
+              const bGrade    = gradeFromScore(base, unitName || emp.companyUnit);
+              const fGrade    = gradeFromScore(final, unitName || emp.companyUnit);
               const step      = freeEdit ? 1.0 : parseFloat((base * 0.01).toFixed(2));
               const minFinal  = freeEdit ? 0   : parseFloat((base * 0.95).toFixed(2));
               const maxFinal  = freeEdit ? 100 : parseFloat((base * 1.05).toFixed(2));
@@ -1699,16 +1898,10 @@ function EmployeeAdjustmentSection({
               const canDec    = empReadyForCal && (freeEdit ? final > 0   : final > minFinal + 0.001);
               const canInc    = empReadyForCal && (freeEdit ? final < 100 : final < maxFinal - 0.001);
 
-              const divisiName = emp.divisionName ?? DIV_DEFS.find(d => d.id === emp.divisiId)?.divisi ?? "—";
-              const deptName   = emp.departmentName ?? DEPT_DEFS.find(([id]) => id === emp.departemenenId)?.[2] ?? "—";
-              const bagianName = emp.bagianName ?? BAGIAN_DEFS.find(([id]) => id === emp.bagianId)?.[2] ?? "—";
-
-              const posColor =
-                emp.level === "Kepala Bagian"     ? "bg-purple-50 text-purple-700 border-purple-200" :
-                emp.level === "Pengawas"          ? "bg-blue-50 text-blue-700 border-blue-200" :
-                emp.level === "Kepala Departemen" ? "bg-orange-50 text-orange-700 border-orange-200" :
-                emp.level === "Kepala Divisi"     ? "bg-red-50 text-red-700 border-red-200" :
-                "bg-gray-100 text-gray-600 border-gray-200";
+              const divisiName = emp.divisionName || "—";
+              const deptName   = emp.departmentName || "—";
+              const bagianName = emp.bagianName || "—";
+              const posisiName = emp.positionName || "—";
 
               return (
                 <tr key={emp.id} className={`border-b border-gray-100 transition-colors ${hasAdj ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-gray-50/60"}`}>
@@ -1733,8 +1926,8 @@ function EmployeeAdjustmentSection({
                   <td className="border border-gray-100 px-3 py-2 text-xs text-gray-700">{deptName}</td>
                   <td className="border border-gray-100 px-3 py-2 text-xs text-gray-700">{bagianName}</td>
 
-                  <td className="border border-gray-100 px-3 py-2 text-center">
-                    <span className={`inline-block text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap border ${posColor}`}>{emp.level}</span>
+                  <td className="border border-gray-100 px-3 py-2 text-xs text-gray-700 whitespace-nowrap">
+                    {posisiName}
                   </td>
 
                   <td className="border border-gray-100 px-3 py-2 text-center bg-gray-50 text-xs font-semibold text-gray-600">
@@ -1942,11 +2135,13 @@ function EmployeeAdjustmentSection({
 // ─── Calibration Panel ────────────────────────────────────────────────────────
 
 function CalibrationPanel({
+  unit,
   unitName,
   calibrationGrades, divisionProportions, departemenenProportions, bagianProportions,
   editMode, setEditMode, saveVersion, setSaveVersion, setIsSaved, pageMode,
-  onPreview, onBackToEdit, canSubmit, onSubmit,
+  canSubmit, onSubmit,
 }: {
+  unit: CompanyUnit;
   unitName?: string;
   calibrationGrades: CalibrationGrade[];
   divisionProportions: DivisionProportion[];
@@ -1958,36 +2153,61 @@ function CalibrationPanel({
   setSaveVersion: React.Dispatch<React.SetStateAction<number>>;
   setIsSaved: (v: boolean) => void;
   pageMode: PageMode;
-  onPreview: () => void;
-  onBackToEdit: () => void;
   canSubmit: boolean;
   onSubmit: () => void;
 }) {
   const [liveAdjustments, setLiveAdjustments] = useState<Record<string, number>>(() =>
     loadPersistedState("pa_calibration_adj_scores_v1", {})
   );
-  const [savedAdjustments, setSavedAdjustments] = useState<Record<string, number>>(() =>
-    loadPersistedState("pa_calibration_adj_scores_v1", {})
-  );
   const [activeTab, setActiveTab] = useRouteTab<"distribusi" | "proporsi">(["distribusi", "proporsi"], "distribusi");
+  const [soyTick, setSoyTick] = useState(0);
+
+  // Live Management Interview scores from BOD assessment (0–100 percentage)
+  const MI_EMP_MAP: Record<string, string> = {
+    "emp-mi-E002": "E002",
+    "emp-mi-E011": "E011",
+    "emp-mi-E013": "E013",
+    "emp-mi-E014": "E014",
+  };
+  const buildMIScores = useCallback(() => {
+    const result: Record<string, number | null> = {};
+    for (const emp of ALL_EMPLOYEES) {
+      const mapped = MI_EMP_MAP[emp.id] ?? emp.employeeId;
+      const pct = getPenilai1ScoreAsPercent(mapped, emp.name);
+      if (pct !== null) {
+        result[emp.id] = pct;
+      }
+    }
+    return result;
+  }, []);
+  const [miScores, setMIScores] = useState<Record<string, number | null>>(buildMIScores);
+  useEffect(() => {
+    return subscribeScores(() => setMIScores(buildMIScores()));
+  }, [buildMIScores]);
 
   useEffect(() => {
     const onHydrated = () => {
       const s = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
       setLiveAdjustments(s);
-      setSavedAdjustments(s);
+      setSoyTick((v) => v + 1);
     };
+    const onSoyUpdated = () => setSoyTick((v) => v + 1);
     window.addEventListener("pa-db-hydrated", onHydrated);
-    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
+    window.addEventListener(SOY_EVENT, onSoyUpdated);
+    window.addEventListener(SCORE_WEIGHT_EVENT, onSoyUpdated);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onHydrated);
+      window.removeEventListener(SOY_EVENT, onSoyUpdated);
+      window.removeEventListener(SCORE_WEIGHT_EVENT, onSoyUpdated);
+    };
   }, []);
 
   useEffect(() => {
     if (saveVersion > 0) {
-      setSavedAdjustments(liveAdjustments);
       savePersistedState("pa_calibration_adj_scores_v1", liveAdjustments, {
         kind: "calibration-adjustment",
         adjustmentKey: `adj-2026-${Date.now()}`,
-        unitName: "PT RSUP (Industry)",
+        unitName: unitName ?? unit.name,
         employeeId: "ALL",
         period: "2026",
         status: "Saved",
@@ -2003,15 +2223,69 @@ function CalibrationPanel({
   }, [saveVersion]);
 
   const handleStart  = () => setEditMode(true);
-  const handleCancel = () => setEditMode(false);
+  const handleCancel = () => {
+    setLiveAdjustments(loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {}));
+    setEditMode(false);
+  };
   const handleSave   = () => { setEditMode(false); setIsSaved(true); setSaveVersion(v => v + 1); };
 
-  const safeDivisions = divisionProportions ?? [];
-  const safeDepts     = departemenenProportions ?? [];
-  const safeBagian    = bagianProportions ?? [];
+  // Sumber SOY akurat: utamakan snapshot SOY yang telah disubmit/disetujui, fallback ke beginningHC / setting unit
+  const soySource = useMemo(() => {
+    const soyRec = getSoyApproval(unit.id);
+    if (soyRec?.snapshot) {
+      return {
+        grades: soyRec.snapshot.calibrationGrades ?? calibrationGrades,
+        divisions: soyRec.snapshot.divisionProportions ?? divisionProportions ?? [],
+        depts: soyRec.snapshot.departemenenProportions ?? departemenenProportions ?? [],
+        bagians: soyRec.snapshot.bagianProportions ?? bagianProportions ?? [],
+      };
+    }
+    if (unit.beginningHC) {
+      return {
+        grades: unit.beginningGrades ?? calibrationGrades,
+        divisions: (divisionProportions ?? []).map((d) => ({
+          ...d,
+          hc: unit.beginningHC?.[d.id] ?? d.hc,
+          customQuotas: unit.beginningCustomQuotas?.[d.id] ?? d.customQuotas,
+        })),
+        depts: (departemenenProportions ?? []).map((dep) => ({
+          ...dep,
+          hc: unit.beginningHC?.[dep.id] ?? dep.hc,
+          customQuotas: unit.beginningCustomQuotas?.[dep.id] ?? dep.customQuotas,
+        })),
+        bagians: (bagianProportions ?? []).map((bag) => ({
+          ...bag,
+          hc: unit.beginningHC?.[bag.id] ?? bag.hc,
+          customQuotas: unit.beginningCustomQuotas?.[bag.id] ?? bag.customQuotas,
+        })),
+      };
+    }
+    return {
+      grades: calibrationGrades,
+      divisions: divisionProportions ?? [],
+      depts: departemenenProportions ?? [],
+      bagians: bagianProportions ?? [],
+    };
+  }, [unit, calibrationGrades, divisionProportions, departemenenProportions, bagianProportions, soyTick]);
+
+  const soyAlloc = useMemo(
+    () =>
+      computeUnitQuotaAllocation({
+        calibrationGrades: soySource.grades,
+        divisionProportions: soySource.divisions,
+        departemenenProportions: soySource.depts,
+        bagianProportions: soySource.bagians,
+      }),
+    [soySource],
+  );
+
+  const safeDivisions = soySource.divisions;
+  const safeDepts     = soySource.depts;
+  const safeBagian    = soySource.bagians;
+  const effectiveGrades = soySource.grades;
 
   const totalDivHC = safeDivisions.reduce((s, d) => s + d.hc, 0);
-  const gradeHeaders = calibrationGrades.map(g => g.grade);
+  const gradeHeaders = effectiveGrades.map(g => g.grade);
 
   // Setting share maps
   const divShareMap: Record<string, number> = {};
@@ -2032,21 +2306,35 @@ function CalibrationPanel({
   // Actual data computed from employee scores (uses savedAdjustments after Save Changes)
   const gradeIdx = Object.fromEntries(gradeHeaders.map((g, i) => [g, i]));
 
-  const actualComputed = useMemo(() => {
+  const { actualBaseCounts, calibratedCounts, hasCalibration } = useMemo(() => {
     const nGrades = gradeHeaders.length;
-    const globalCounts = Array<number>(nGrades).fill(0);
+    const baseGlobal = Array<number>(nGrades).fill(0);
+    const calGlobal  = Array<number>(nGrades).fill(0);
     const divCounts:    Record<string, number[]> = {};
     const deptCounts:   Record<string, number[]> = {};
     const bagianCounts: Record<string, number[]> = {};
+    let adjustedCount = 0;
 
-    const effectiveAdj = pageMode === "preview" ? liveAdjustments : savedAdjustments;
     ALL_EMPLOYEES.filter(emp => !unitName || emp.companyUnit === unitName).forEach(emp => {
       if (isYearEndInactive(emp.employeeId)) return;
-      const finalScore = effectiveAdj[emp.id] ?? calcFinalScore(emp.level, applyYearEndScorePolicy(emp.employeeId, emp.base));
+      const effScores =
+        emp.id in miScores && miScores[emp.id] !== null
+          ? applyYearEndScorePolicy(emp.employeeId, { ...emp.base, managementInterview: miScores[emp.id] })
+          : applyYearEndScorePolicy(emp.employeeId, emp.base);
+      const baseScore = parseFloat(calcEmployeeFinalScore(emp, effScores).toFixed(2));
+      const finalScore = liveAdjustments[emp.id] ?? baseScore;
+      if (emp.id in liveAdjustments && Math.abs(finalScore - baseScore) > 0.0001) {
+        adjustedCount++;
+      }
+
+      const { grade: baseGrade } = gradeFromScore(baseScore, unitName || emp.companyUnit);
+      const baseGi = gradeIdx[baseGrade] ?? -1;
+      if (baseGi >= 0) baseGlobal[baseGi]++;
+
       const { grade } = gradeFromScore(finalScore, unitName || emp.companyUnit);
       const gi = gradeIdx[grade] ?? -1;
       if (gi < 0) return;
-      globalCounts[gi]++;
+      calGlobal[gi]++;
       if (!divCounts[emp.divisiId])          divCounts[emp.divisiId]          = Array(nGrades).fill(0);
       if (!deptCounts[emp.departemenenId])   deptCounts[emp.departemenenId]   = Array(nGrades).fill(0);
       if (!bagianCounts[emp.bagianId])       bagianCounts[emp.bagianId]       = Array(nGrades).fill(0);
@@ -2055,15 +2343,19 @@ function CalibrationPanel({
       bagianCounts[emp.bagianId][gi]++;
     });
 
-    return { globalCounts, divCounts, deptCounts, bagianCounts };
-  }, [pageMode === "preview" ? liveAdjustments : savedAdjustments, gradeHeaders.join(","), pageMode]);
+    return {
+      actualBaseCounts: baseGlobal,
+      calibratedCounts: { globalCounts: calGlobal, divCounts, deptCounts, bagianCounts },
+      hasCalibration: adjustedCount > 0,
+    };
+  }, [liveAdjustments, miScores, gradeHeaders.join(","), unitName, soyTick]);
 
   // Actual HC per org unit (sum of grade counts)
   const divActualData = safeDivisions.map(d => ({
     id: d.id,
     divisiId: d.id,
-    hc: (actualComputed.divCounts[d.id] ?? []).reduce((a, b) => a + b, 0),
-    grades: actualComputed.divCounts[d.id] ?? Array(gradeHeaders.length).fill(0),
+    hc: (calibratedCounts.divCounts[d.id] ?? []).reduce((a, b) => a + b, 0),
+    grades: calibratedCounts.divCounts[d.id] ?? Array(gradeHeaders.length).fill(0),
   }));
   const totalActualDivHC = divActualData.reduce((s, d) => s + d.hc, 0);
   const divActualShareMap: Record<string, number> = {};
@@ -2072,8 +2364,8 @@ function CalibrationPanel({
   const deptActualData = safeDepts.map(dept => ({
     id: dept.id,
     divisiId: dept.divisiId,
-    hc: (actualComputed.deptCounts[dept.id] ?? []).reduce((a, b) => a + b, 0),
-    grades: actualComputed.deptCounts[dept.id] ?? Array(gradeHeaders.length).fill(0),
+    hc: (calibratedCounts.deptCounts[dept.id] ?? []).reduce((a, b) => a + b, 0),
+    grades: calibratedCounts.deptCounts[dept.id] ?? Array(gradeHeaders.length).fill(0),
   }));
   const deptActualShareMap: Record<string, number> = {};
   deptActualData.forEach(dept => {
@@ -2084,8 +2376,8 @@ function CalibrationPanel({
   const bagianActualData = safeBagian.map(b => ({
     id: b.id,
     departemenenId: b.departemenenId,
-    hc: (actualComputed.bagianCounts[b.id] ?? []).reduce((a, b2) => a + b2, 0),
-    grades: actualComputed.bagianCounts[b.id] ?? Array(gradeHeaders.length).fill(0),
+    hc: (calibratedCounts.bagianCounts[b.id] ?? []).reduce((a, b2) => a + b2, 0),
+    grades: calibratedCounts.bagianCounts[b.id] ?? Array(gradeHeaders.length).fill(0),
   }));
   const bagianActualShareMap: Record<string, number> = {};
   bagianActualData.forEach(b => {
@@ -2094,6 +2386,9 @@ function CalibrationPanel({
   });
 
   const fmtShare = (v: number) => v > 0 ? `${v.toFixed(1)}%` : "";
+  const soyDivHCMap = useMemo(() => Object.fromEntries(safeDivisions.map((d) => [d.id, d.hc])), [safeDivisions]);
+  const soyDeptHCMap = useMemo(() => Object.fromEntries(safeDepts.map((d) => [d.id, d.hc])), [safeDepts]);
+  const soyBagianHCMap = useMemo(() => Object.fromEntries(safeBagian.map((b) => [b.id, b.hc])), [safeBagian]);
 
   const tabDefs: { key: "distribusi" | "proporsi"; label: string }[] = [
     { key: "distribusi", label: "Grade Distribution & Calibration" },
@@ -2126,26 +2421,42 @@ function CalibrationPanel({
           {activeTab === "distribusi" ? (
             <>
               {/* Legend */}
-              <div className="flex items-center gap-6 bg-gray-50 border border-gray-100 rounded-xl px-5 py-3">
+              <div className="flex flex-wrap items-center gap-6 bg-gray-50 border border-gray-100 rounded-xl px-5 py-3">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Legend:</p>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-teal-600 inline-block" />
-                  <span className="text-xs text-gray-600 font-medium">AKTUAL — Data perolehan nilai appraisal akhir tahun</span>
+                  <span className="w-4 h-3 rounded-sm bg-[#1A284F] inline-block" />
+                  <span className="text-xs text-gray-700 font-semibold">Setting (SOY)</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-[#1A284F] inline-block" />
-                  <span className="text-xs text-gray-600 font-medium">SETTING — Konfigurasi target awal tahun</span>
+                  <span className="w-4 h-3 rounded-sm bg-teal-600 inline-block" />
+                  <span className="text-xs text-gray-700 font-semibold">Aktual</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-4 h-3 rounded-sm bg-violet-600 inline-block" />
+                  <span className="text-xs text-gray-700 font-semibold">Kalibrasi (EOY)</span>
                 </div>
               </div>
 
               <BellCurveChart
-                calibrationGrades={calibrationGrades}
-                divisionProportions={divisionProportions}
-                actualCounts={actualComputed.globalCounts}
+                calibrationGrades={effectiveGrades}
+                settingCounts={soyAlloc.unitGradeTargets}
+                actualCounts={actualBaseCounts}
+                calibratedCounts={calibratedCounts.globalCounts}
+                hasCalibration={hasCalibration}
               />
 
               <EmployeeAdjustmentSection
                 unitName={unitName}
+                calibrationGrades={effectiveGrades}
+                soyTotalHC={soyAlloc.totalHC}
+                soyGradeTargets={soyAlloc.unitGradeTargets}
+                soyDivMap={soyDivHCMap}
+                soyDeptMap={soyDeptHCMap}
+                soyBagianMap={soyBagianHCMap}
+                soyDivMatrix={soyAlloc.divMatrix}
+                soyDeptMatrix={soyAlloc.deptMatrix}
+                soyBagianMatrix={soyAlloc.bagianMatrix}
+                miScores={miScores}
                 editMode={editMode}
                 adjustments={liveAdjustments}
                 setAdjustments={setLiveAdjustments}
@@ -2153,8 +2464,6 @@ function CalibrationPanel({
                 onSave={handleSave}
                 onCancel={handleCancel}
                 pageMode={pageMode}
-                onPreview={onPreview}
-                onBackToEdit={onBackToEdit}
                 canSubmit={canSubmit}
                 onSubmit={onSubmit}
               />
@@ -2162,9 +2471,9 @@ function CalibrationPanel({
           ) : (
             <>
               <GradeDistributionTable
-                calibrationGrades={calibrationGrades}
-                divisionProportions={divisionProportions}
-                actualCounts={actualComputed.globalCounts}
+                calibrationGrades={effectiveGrades}
+                settingCounts={soyAlloc.unitGradeTargets}
+                actualCounts={calibratedCounts.globalCounts}
               />
               <AdjustmentProportionTable
                 title="Proportion per Division"
@@ -2174,7 +2483,7 @@ function CalibrationPanel({
                   return {
                     id: d.id, label: d.divisi,
                     settingHC: d.hc, settingShareKuota: fmtShare(divShareMap[d.id] ?? 0),
-                    settingCalcs: gradeCalcs(d.hc, calibrationGrades),
+                    settingCalcs: soyAlloc.divMatrix[d.id] ?? gradeCalcs(d.hc, effectiveGrades),
                     actualHC: actual.hc, actualShareKuota: fmtShare(divActualShareMap[d.id] ?? 0),
                     actualCalcs: actual.grades,
                   };
@@ -2190,7 +2499,7 @@ function CalibrationPanel({
                   return {
                     id: dept.id, label: dept.departemen, parentLabel: parentDiv?.divisi,
                     settingHC: dept.hc, settingShareKuota: fmtShare(deptShareMap[dept.id] ?? 0),
-                    settingCalcs: gradeCalcs(dept.hc, calibrationGrades),
+                    settingCalcs: soyAlloc.deptMatrix[dept.id] ?? gradeCalcs(dept.hc, effectiveGrades),
                     actualHC: actual.hc, actualShareKuota: fmtShare(deptActualShareMap[dept.id] ?? 0),
                     actualCalcs: actual.grades,
                   };
@@ -2208,7 +2517,7 @@ function CalibrationPanel({
                   return {
                     id: b.id, label: b.bagian, parentLabel: parentDept?.departemen,
                     settingHC: b.hc, settingShareKuota: fmtShare(bagianShareMap[b.id] ?? 0),
-                    settingCalcs: gradeCalcs(b.hc, calibrationGrades),
+                    settingCalcs: soyAlloc.bagianMatrix[b.id] ?? gradeCalcs(b.hc, effectiveGrades),
                     actualHC: actual.hc, actualShareKuota: fmtShare(bagianActualShareMap[b.id] ?? 0),
                     actualCalcs: actual.grades,
                   };
@@ -2227,11 +2536,10 @@ function CalibrationPanel({
 
 // ─── Unit Detail ──────────────────────────────────────────────────────────────
 
-function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBack }: {
+function UnitDetail({ unit, onBack, pageMode, onShowConfirm, hideBack }: {
   unit: CompanyUnit;
   onBack: () => void;
   pageMode: PageMode;
-  setPageMode: (m: PageMode) => void;
   onShowConfirm: () => void;
   hideBack?: boolean;
 }) {
@@ -2251,18 +2559,11 @@ function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBa
     };
   }, []);
 
-  const unvalidatedUnitEmployees = useMemo(() => {
-    const ye = loadYearEndState();
-    return ALL_EMPLOYEES.filter((e) => {
-      if (e.companyUnit !== unit.name) return false;
-      const norm = normalizeEmployeeId(e.employeeId);
-      if (ye.inactive.some((id) => normalizeEmployeeId(id) === norm)) return false;
-      if (ye.ignored.some((id) => normalizeEmployeeId(id) === norm)) return false;
-      return !e.isCalibrationReady;
-    });
+  const activeUnitEmployeeCount = useMemo(() => {
+    return ALL_EMPLOYEES.filter((e) => e.companyUnit === unit.name && !isYearEndInactive(e.employeeId)).length;
   }, [unit.name, saveVersion, revision, yeTick]);
 
-  const canSubmit = (isSaved || pageMode === "preview") && unvalidatedUnitEmployees.length === 0;
+  const canSubmit = pageMode !== "submitted" && !editMode && (isSaved || pageMode === "preview" || activeUnitEmployeeCount > 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -2300,16 +2601,8 @@ function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBa
         </div>
       )}
 
-      {pageMode !== "submitted" && unvalidatedUnitEmployees.length > 0 && (
-        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3.5">
-          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-900 leading-relaxed">
-            Terdapat <strong>{unvalidatedUnitEmployees.length} karyawan</strong> pada unit <strong>{unit.name}</strong> yang nilainya masih berstatus <strong>YTD / Belum Validated penuh</strong> (misalnya bulan KPI Tracking belum genap 12 bulan atau modul wajib belum divalidasi HR ICF). Nilai berjalan (YTD) sudah ditampilkan, namun perlu berstatus <strong>Validated</strong> penuh untuk dapat diproses dan disubmit di Calibration Adjustment.
-          </p>
-        </div>
-      )}
-
       <CalibrationPanel
+        unit={unit}
         unitName={unit.name}
         calibrationGrades={unit.calibrationGrades}
         divisionProportions={unit.divisionProportions}
@@ -2321,8 +2614,6 @@ function UnitDetail({ unit, onBack, pageMode, setPageMode, onShowConfirm, hideBa
         setSaveVersion={setSaveVersion}
         setIsSaved={setIsSaved}
         pageMode={pageMode}
-        onPreview={() => setPageMode("preview")}
-        onBackToEdit={() => setPageMode("edit")}
         canSubmit={canSubmit}
         onSubmit={onShowConfirm}
       />
@@ -2353,6 +2644,9 @@ function loadFromSetting(): { units: CompanyUnit[]; submittedAt: string | null }
         divisionProportions:      synced.divisionProportions.length > 0 ? synced.divisionProportions : (src.divisionProportions ?? []),
         departemenenProportions:  synced.departemenenProportions.length > 0 ? synced.departemenenProportions : (src.departemenenProportions ?? []),
         bagianProportions:        synced.bagianProportions.length > 0 ? synced.bagianProportions : (src.bagianProportions ?? []),
+        beginningHC:              src.beginningHC,
+        beginningGrades:          src.beginningGrades,
+        beginningCustomQuotas:    src.beginningCustomQuotas,
       };
     });
     return { units, submittedAt };
@@ -2366,17 +2660,61 @@ function loadFromSetting(): { units: CompanyUnit[]; submittedAt: string | null }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+const SELECTED_UNIT_SESSION_KEY = "pa_cal_adj_selected_unit_id";
+
 export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   useAppraisalRevision();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { lockedUnits: authLockedUnits } = useAuthStore();
   const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
   const [{ units: allCompanyUnits, submittedAt }, setLoadedSetting] = useState(loadFromSetting);
   const companyUnits = effectiveLockedUnits ? allCompanyUnits.filter(u => effectiveLockedUnits.includes(u.name)) : allCompanyUnits;
-  const [selectedUnit, setSelectedUnit] = useState<CompanyUnit | null>(null);
+  const isSubTabUrl = /\/calibration\/adjustment\/(distribusi|proporsi)\/?$/i.test(location.pathname);
+  const [selectedUnit, setSelectedUnit] = useState<CompanyUnit | null>(() => {
+    if (!isSubTabUrl) return null;
+    try {
+      const savedId = sessionStorage.getItem(SELECTED_UNIT_SESSION_KEY);
+      const found = savedId ? companyUnits.find((u) => u.id === savedId) : undefined;
+      return found ?? companyUnits[0] ?? null;
+    } catch {
+      return companyUnits[0] ?? null;
+    }
+  });
   const [pageMode, setPageMode]         = useState<PageMode>(() =>
     loadPersistedState<PageMode>("pa_calibration_adj_mode_v1", "edit")
   );
   const [showConfirm, setShowConfirm]   = useState(false);
+
+  const baseAdjustmentPath = useMemo(
+    () => location.pathname.replace(/\/(distribusi|proporsi)\/?$/i, ""),
+    [location.pathname],
+  );
+
+  const selectUnit = (unit: CompanyUnit) => {
+    try {
+      sessionStorage.setItem(SELECTED_UNIT_SESSION_KEY, unit.id);
+    } catch {
+      // ignore
+    }
+    setPageMode("edit");
+    setSelectedUnit(unit);
+    if (!isSubTabUrl) {
+      navigate(`${baseAdjustmentPath}/distribusi`);
+    }
+  };
+
+  const clearSelectedUnit = () => {
+    try {
+      sessionStorage.removeItem(SELECTED_UNIT_SESSION_KEY);
+    } catch {
+      // ignore
+    }
+    setSelectedUnit(null);
+    if (isSubTabUrl) {
+      navigate(baseAdjustmentPath);
+    }
+  };
 
   useEffect(() => {
     const onHydrated = () => {
@@ -2386,10 +2724,6 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
     window.addEventListener("pa-db-hydrated", onHydrated);
     return () => window.removeEventListener("pa-db-hydrated", onHydrated);
   }, []);
-
-  const formattedDate = submittedAt
-    ? (() => { const d = new Date(submittedAt); return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; })()
-    : null;
 
   const handleSubmitConfirm = () => {
     setShowConfirm(false);
@@ -2409,19 +2743,8 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
         description: `Submitted Calibration Adjustment for ${selectedUnit?.name ?? "Company Unit"} to BOD Approval`,
       },
     });
-    setSelectedUnit(null);
+    clearSelectedUnit();
   };
-
-  const TabBar = ({ onTabClick }: { onTabClick?: () => void }) => (
-    <div className="border-b border-gray-200">
-      <div className="flex gap-1">
-        <button onClick={onTabClick}
-          className="px-6 py-3 text-sm font-medium border-b-2 border-[#1A284F] text-[#1A284F]">
-          Company Units
-        </button>
-      </div>
-    </div>
-  );
 
   if (selectedUnit) {
     const liveUnit = companyUnits.find(u => u.id === selectedUnit.id) ?? selectedUnit;
@@ -2433,21 +2756,10 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
             <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Adjustment</h2>
             <p className="text-sm text-gray-500">Compare setting targets with actual appraisal results and adjust per company unit</p>
           </div>
-          <TabBar onTabClick={() => setSelectedUnit(null)} />
-          {submittedAt && (
-            <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-5 py-3">
-              <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-              <p className="text-sm text-blue-800 font-medium">
-                Setting data loaded from <strong>Calibration Setting</strong> submission on {formattedDate}.
-                Actual data reflects end-of-year performance appraisal results.
-              </p>
-            </div>
-          )}
           <UnitDetail
             unit={liveUnit}
-            onBack={() => setSelectedUnit(null)}
+            onBack={clearSelectedUnit}
             pageMode={pageMode}
-            setPageMode={setPageMode}
             onShowConfirm={() => setShowConfirm(true)}
             hideBack={false}
           />
@@ -2464,7 +2776,6 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
           <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Adjustment</h2>
           <p className="text-sm text-gray-500">Compare setting targets with actual appraisal results and adjust per company unit</p>
         </div>
-        <TabBar />
 
         {pageMode === "submitted" && (
           <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
@@ -2486,7 +2797,7 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
               const gradients = ["from-blue-600 to-blue-800","from-emerald-600 to-emerald-800","from-violet-600 to-violet-800","from-amber-500 to-orange-700","from-sky-500 to-cyan-700","from-rose-500 to-red-700","from-teal-500 to-teal-700","from-indigo-500 to-indigo-700"];
               const gradient = gradients[idx % gradients.length];
               return (
-                <button key={unit.id} onClick={() => { setPageMode("edit"); setSelectedUnit(unit); }}
+                <button key={unit.id} onClick={() => selectUnit(unit)}
                   className="group text-left rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5">
                   <div className={`bg-gradient-to-br ${gradient} px-5 py-4`}>
                     <Building2 className="w-5 h-5 text-white/80 mb-2" />
