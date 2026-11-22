@@ -447,6 +447,36 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true });
       }
 
+      if (kind === "bod-personal-kpi-clear") {
+        const rawIds = Array.isArray(body.employeeIds) ? body.employeeIds : [];
+        const cleanIds = Array.from(new Set(rawIds.map((x) => String(x || "").trim()).filter(Boolean)));
+        for (const empId of cleanIds) {
+          const empEnc = encodeURIComponent(empId);
+          await pgRest(cfg, `pa_kpi_settings?employee_id=eq.${empEnc}&tab=eq.personal`, { method: "DELETE" });
+          await pgRest(cfg, `pa_workflow_documents?employee_id=eq.${empEnc}&module=eq.KPI&phase=eq.setting`, { method: "DELETE" });
+        }
+        if (body.nextByEmp && typeof body.nextByEmp === "object") {
+          await pgRest(cfg, "pa_kv_state?on_conflict=state_key", {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({ state_key: "pa_kpi_setting_by_emp_v2", state_value: body.nextByEmp, updated_at: now }),
+          });
+        }
+        if (Array.isArray(body.nextWorkflows)) {
+          await pgRest(cfg, "pa_kv_state?on_conflict=state_key", {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({ state_key: "appraisal_workflow_v1", state_value: body.nextWorkflows, updated_at: now }),
+          });
+        }
+        await pgRest(cfg, "pa_kv_state?on_conflict=state_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ state_key: "pa_bod_personal_kpi_cleared_v1", state_value: true, updated_at: now }),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       if (kind === "evidence-upsert" && body.evidence) {
         const ev = body.evidence;
         let finalUrl = String(ev.url ?? ev.public_url ?? "");

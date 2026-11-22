@@ -16,6 +16,7 @@ import {
   isDirectorRoleOrGrouping,
   loadManagedUsers,
   resolveEffectiveUserGrouping,
+  resolveUserAuthorityLevel,
   useAuthStore,
   usesDemoSampleData,
   type ManagedUser,
@@ -23,6 +24,7 @@ import {
 import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
 import {
   deleteUploadedEvidenceById,
+  fetchBusinessKpiLive,
   fetchEmployeeKpiSettingsLive,
   fetchKpiAttachmentsForEmployee,
   mergeKvMapRecord,
@@ -55,6 +57,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/
 
 const MONTHS_LIST = ["Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26","Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const KPI_CYCLE_YEAR = "2026";
 
 // ─── Color Indicator constants ────────────────────────────────────────────────
 
@@ -1103,6 +1106,13 @@ function evaluateKpiSettingSubmitStatus(
     const msg = `Total Bobot seluruh KPI saat ini ${formatPctNum(totalItemBobot)}% — wajib tepat 100% sebelum Submit KPI.`;
     bobotReasons.push(msg);
     reasons.push(msg);
+  }
+
+  const emptyTargetRows = items.filter((i) => !String(i.target2026 ?? "").trim());
+  if (emptyTargetRows.length > 0) {
+    reasons.push(
+      `Target ${KPI_CYCLE_YEAR} belum dilengkapi pada KPI No. ${emptyTargetRows.map((r) => r.no || "—").join(", ")}.`,
+    );
   }
 
   if (options?.requireAttachment && (options.attachmentCount ?? 0) === 0) {
@@ -2291,23 +2301,45 @@ function BaselineColorField({ value, onChange }: { value: string; onChange: (v: 
   );
 }
 
-function Target2026Field({ value, colorMode, ratioMode, monthlyTargets, softOrangeHighlight = false }: {
+function Target2026Field({
+  value,
+  colorMode,
+  ratioMode,
+  monthlyTargets,
+  softOrangeHighlight = false,
+  softYellowHighlight = false,
+  softYellowSourceLabel,
+}: {
   value: string; colorMode: boolean; ratioMode?: boolean;
   monthlyTargets?: Record<string, string>;
   softOrangeHighlight?: boolean;
+  softYellowHighlight?: boolean;
+  softYellowSourceLabel?: string;
 }) {
   const meta = colorMode ? MONTHLY_FLAG_OPTIONS.find((o) => o.value === value) : null;
   const orangeWrapCls = softOrangeHighlight
     ? "border-2 border-orange-300 bg-orange-50/50 ring-2 ring-orange-100"
     : "";
+  const yellowWrapCls = softYellowHighlight
+    ? "border-2 border-yellow-300 bg-yellow-50/80 ring-2 ring-yellow-100/90"
+    : "";
+  const activeHighlightWrap = softYellowHighlight ? yellowWrapCls : softOrangeHighlight ? orangeWrapCls : "";
+  const targetYearLabel = `Target ${KPI_CYCLE_YEAR}`;
 
   if (ratioMode) {
     const hasValue = !!value;
     const { totalP, totalN } = monthlyTargets ? computeRatioSumDisplay(monthlyTargets) : { totalP: 0, totalN: 0 };
     return (
-      <div className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all ${softOrangeHighlight ? orangeWrapCls : ""}`}>
-        <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Target 2026</label>
-        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-xl border ${softOrangeHighlight ? "border-orange-300 bg-white" : "border-purple-200 bg-purple-50/40"}`}>
+      <div className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all ${activeHighlightWrap}`}>
+        <div className="flex items-center justify-between gap-2">
+          <label className={`text-[11px] font-bold uppercase tracking-wide ${softYellowHighlight ? "text-amber-800" : "text-gray-500"}`}>{targetYearLabel}</label>
+          {softYellowHighlight && !hasValue && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-100 text-amber-800 border border-yellow-300">
+              Belum diisi · Wajib dilengkapi
+            </span>
+          )}
+        </div>
+        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-xl border ${softYellowHighlight ? (hasValue ? "border-yellow-300 bg-white" : "border-yellow-300 bg-yellow-50/70") : softOrangeHighlight ? "border-orange-300 bg-white" : "border-purple-200 bg-purple-50/40"}`}>
           <span className="text-xl font-black text-purple-700 tracking-tight">
             {hasValue ? value : "—:—"}
           </span>
@@ -2318,7 +2350,13 @@ function Target2026Field({ value, colorMode, ratioMode, monthlyTargets, softOran
           )}
           <span className="ml-auto text-[10px] text-purple-400 font-medium">auto</span>
         </div>
-        {softOrangeHighlight && (
+        {softYellowHighlight && (
+          <p className="text-[11px] font-medium text-amber-800 bg-yellow-100/75 border border-yellow-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 mt-0.5">
+            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            {targetYearLabel} dikosongkan dari {softYellowSourceLabel || "KPI Business"} — silakan lengkapi Monthly Target agar {targetYearLabel} terisi otomatis.
+          </p>
+        )}
+        {!softYellowHighlight && softOrangeHighlight && (
           <p className="text-[11px] font-medium text-orange-700 flex items-center gap-1.5 mt-0.5">
             <AlertCircle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
             Pastikan sudah sesuai dengan tracking bulanan &amp; target setahun Anda
@@ -2329,17 +2367,24 @@ function Target2026Field({ value, colorMode, ratioMode, monthlyTargets, softOran
   }
 
   return (
-    <div className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${softOrangeHighlight ? orangeWrapCls : `border ${FIELD_TONE_STYLES.amber.wrap}`}`}>
-      <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
-        <span>Target 2026</span>
-      </label>
+    <div className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${activeHighlightWrap || `border ${FIELD_TONE_STYLES.amber.wrap}`}`}>
+      <div className="flex items-center justify-between gap-2">
+        <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${softYellowHighlight ? "text-amber-800" : FIELD_TONE_STYLES.amber.label}`}>
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${softYellowHighlight ? "bg-yellow-500" : FIELD_TONE_STYLES.amber.dot}`} />
+          <span>{targetYearLabel}</span>
+        </label>
+        {softYellowHighlight && !value.trim() && (
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-100 text-amber-800 border border-yellow-300">
+            Belum diisi · Wajib dilengkapi
+          </span>
+        )}
+      </div>
       {colorMode ? (
         <div
           className="flex items-center gap-2.5 px-4 py-2.5 rounded-lg border text-sm font-bold"
           style={{
-            background: meta ? meta.bg : "#f9fafb",
-            borderColor: softOrangeHighlight ? "#fdba74" : (meta ? meta.border : "#e5e7eb"),
+            background: meta ? meta.bg : softYellowHighlight ? "#fefce8" : "#f9fafb",
+            borderColor: softYellowHighlight ? "#fde047" : softOrangeHighlight ? "#fdba74" : (meta ? meta.border : "#e5e7eb"),
             color: meta ? meta.color : "#9ca3af",
           }}
         >
@@ -2359,14 +2404,26 @@ function Target2026Field({ value, colorMode, ratioMode, monthlyTargets, softOran
             value={value}
             readOnly
             className={`text-sm rounded-lg px-3 py-2 outline-none w-full text-[#1A284F] font-bold cursor-default ${
-              softOrangeHighlight ? "border-2 border-orange-300 bg-white" : "border border-gray-200 bg-gray-50"
+              softYellowHighlight
+                ? value.trim()
+                  ? "border-2 border-yellow-300 bg-white"
+                  : "border-2 border-yellow-300 bg-yellow-50/75"
+                : softOrangeHighlight
+                ? "border-2 border-orange-300 bg-white"
+                : "border border-gray-200 bg-gray-50"
             }`}
             placeholder="Auto-computed from Monthly Target"
           />
           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 font-medium pointer-events-none">auto</span>
         </div>
       )}
-      {softOrangeHighlight && (
+      {softYellowHighlight && (
+        <p className="text-[11px] font-medium text-amber-800 bg-yellow-100/75 border border-yellow-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 mt-0.5">
+          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          {targetYearLabel} dikosongkan dari {softYellowSourceLabel || "KPI Business"} — silakan lengkapi Monthly Target agar {targetYearLabel} terisi otomatis.
+        </p>
+      )}
+      {!softYellowHighlight && softOrangeHighlight && (
         <p className="text-[11px] font-medium text-orange-700 flex items-center gap-1.5 mt-0.5">
           <AlertCircle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
           Pastikan sudah sesuai dengan tracking bulanan &amp; target setahun Anda
@@ -2383,6 +2440,8 @@ function MonthlyTargetTable({
   ratioMode,
   onChange,
   softOrangeHighlight = false,
+  softYellowHighlight = false,
+  softYellowSourceLabel,
 }: {
   monthlyTargets: Record<string, string>;
   formula: string;
@@ -2390,6 +2449,8 @@ function MonthlyTargetTable({
   ratioMode?: boolean;
   onChange: (mt: Record<string, string>, computed2026: string) => void;
   softOrangeHighlight?: boolean;
+  softYellowHighlight?: boolean;
+  softYellowSourceLabel?: string;
 }) {
   const handleChange = (key: string, val: string) => {
     // Auto-fill all months when Jan is changed (ratio or color mode)
@@ -2408,15 +2469,23 @@ function MonthlyTargetTable({
     ? "Pilih Jan → auto isi semua bulan"
     : colorMode
     ? "Pilih Jan → auto isi semua bulan"
-    : formula === "Jumlah"      ? "Target 2026 = Sum (Jan–Dec)"
-    : formula === "Rata-Rata"   ? "Target 2026 = Average (Jan–Dec)"
-    : formula === "Nilai Akhir" ? "Target 2026 = December value"
+    : formula === "Jumlah"      ? `Target ${KPI_CYCLE_YEAR} = Sum (Jan–Dec)`
+    : formula === "Rata-Rata"   ? `Target ${KPI_CYCLE_YEAR} = Average (Jan–Dec)`
+    : formula === "Nilai Akhir" ? `Target ${KPI_CYCLE_YEAR} = December value`
     : "";
+  const hasAnyEmptyMonth = MONTHS_LIST.some((k) => !(monthlyTargets[k] ?? "").trim());
 
   return (
-    <div className={`flex flex-col gap-1.5 ${softOrangeHighlight ? "rounded-xl border-2 border-orange-300 bg-orange-50/50 ring-2 ring-orange-100 p-3.5" : ""}`}>
-      <div className="flex items-center justify-between">
-        <label className={`text-[11px] font-bold uppercase tracking-wide ${softOrangeHighlight ? "text-orange-800" : "text-gray-500"}`}>Monthly Target</label>
+    <div className={`flex flex-col gap-1.5 ${softYellowHighlight ? "rounded-xl border-2 border-yellow-300 bg-yellow-50/80 ring-2 ring-yellow-100/90 p-3.5" : softOrangeHighlight ? "rounded-xl border-2 border-orange-300 bg-orange-50/50 ring-2 ring-orange-100 p-3.5" : ""}`}>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <label className={`text-[11px] font-bold uppercase tracking-wide ${softYellowHighlight ? "text-amber-800" : softOrangeHighlight ? "text-orange-800" : "text-gray-500"}`}>Monthly Target</label>
+          {softYellowHighlight && hasAnyEmptyMonth && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-100 text-amber-800 border border-yellow-300">
+              Belum diisi · Wajib dilengkapi
+            </span>
+          )}
+        </div>
         {ruleHint && (
           <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
             ratioMode ? "text-purple-700 bg-purple-50 border-purple-200"
@@ -2427,7 +2496,7 @@ function MonthlyTargetTable({
           </span>
         )}
       </div>
-      <div className={`overflow-x-auto rounded-xl ${softOrangeHighlight ? "border-2 border-orange-300 bg-white" : "border border-gray-200"}`}>
+      <div className={`overflow-x-auto rounded-xl ${softYellowHighlight ? "border-2 border-yellow-300 bg-white" : softOrangeHighlight ? "border-2 border-orange-300 bg-white" : "border border-gray-200"}`}>
         <table className="border-collapse w-full text-xs" style={{ minWidth: 680 }}>
           <thead>
             <tr className="bg-[#1A284F]/5">
@@ -2447,12 +2516,12 @@ function MonthlyTargetTable({
                   const selected = monthlyTargets[key] ?? "";
                   const isLocked = i > 0 && !!monthlyTargets[MONTHS_LIST[0]];
                   return (
-                    <td key={key} className={`border border-gray-200 p-1 ${isLocked ? "bg-purple-50/10" : "bg-purple-50/20"}`}>
+                    <td key={key} className={`border border-gray-200 p-1 ${softYellowHighlight && !selected ? "bg-yellow-50/80" : isLocked ? "bg-purple-50/10" : "bg-purple-50/20"}`}>
                       <select
                         value={selected}
                         onChange={(e) => handleChange(key, e.target.value)}
                         disabled={isLocked}
-                        className={`w-full text-[10px] font-semibold border border-purple-200 rounded-md px-0.5 py-1.5 outline-none cursor-pointer text-purple-700 bg-white focus:border-purple-400 ${isLocked ? "opacity-70 cursor-not-allowed" : ""}`}
+                        className={`w-full text-[10px] font-semibold border rounded-md px-0.5 py-1.5 outline-none cursor-pointer text-purple-700 focus:border-purple-400 ${softYellowHighlight && !selected ? "border-yellow-300 bg-yellow-50/70" : "border-purple-200 bg-white"} ${isLocked ? "opacity-70 cursor-not-allowed" : ""}`}
                       >
                         <option value="">—</option>
                         {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -2465,13 +2534,13 @@ function MonthlyTargetTable({
                   const flagMeta = MONTHLY_FLAG_OPTIONS.find((o) => o.value === selected);
                   const isLocked = i > 0 && !!monthlyTargets[MONTHS_LIST[0]];
                   return (
-                    <td key={key} className="border border-gray-200 p-1" style={{ background: flagMeta ? flagMeta.bg : "white" }}>
+                    <td key={key} className="border border-gray-200 p-1" style={{ background: flagMeta ? flagMeta.bg : softYellowHighlight ? "#fefce8" : "white" }}>
                       <select
                         value={selected}
                         onChange={(e) => handleChange(key, e.target.value)}
                         disabled={isLocked}
                         className={`w-full text-[10px] font-semibold border rounded-md px-0.5 py-1.5 outline-none cursor-pointer ${isLocked ? "opacity-70 cursor-not-allowed" : ""}`}
-                        style={{ borderColor: flagMeta ? flagMeta.border : "#e5e7eb", color: flagMeta ? flagMeta.color : "#6b7280", background: "transparent" }}
+                        style={{ borderColor: flagMeta ? flagMeta.border : softYellowHighlight ? "#fde047" : "#e5e7eb", color: flagMeta ? flagMeta.color : "#6b7280", background: "transparent" }}
                       >
                         <option value="">—</option>
                         {MONTHLY_FLAG_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -2480,14 +2549,16 @@ function MonthlyTargetTable({
                     </td>
                   );
                 }
+                const cellVal = monthlyTargets[key] ?? "";
+                const isCellEmptyYellow = softYellowHighlight && !cellVal.trim();
                 return (
-                  <td key={key} className={`border border-gray-200 p-1 ${i === 11 ? "bg-amber-50/40" : "bg-white"}`}>
+                  <td key={key} className={`border border-gray-200 p-1 ${isCellEmptyYellow ? "bg-yellow-50/85" : i === 11 ? "bg-amber-50/40" : "bg-white"}`}>
                     <input
                       type="number"
-                      value={monthlyTargets[key] ?? ""}
+                      value={cellVal}
                       onChange={(e) => handleChange(key, e.target.value)}
                       placeholder="—"
-                      className={`w-full text-xs text-center border rounded-md px-1 py-1.5 outline-none focus:border-[#1A284F] ${i === 11 ? "border-amber-200 bg-amber-50/60" : "border-gray-200"}`}
+                      className={`w-full text-xs text-center border rounded-md px-1 py-1.5 outline-none focus:border-[#1A284F] ${isCellEmptyYellow ? "border-yellow-300 bg-yellow-50/75" : i === 11 ? "border-amber-200 bg-amber-50/60" : "border-gray-200 bg-white"}`}
                     />
                   </td>
                 );
@@ -2499,7 +2570,13 @@ function MonthlyTargetTable({
       {!colorMode && !ratioMode && formula === "Nilai Akhir" && (
         <p className="text-[10px] text-amber-700 font-medium">December (highlighted) is used as the final target value.</p>
       )}
-      {softOrangeHighlight && (
+      {softYellowHighlight && (
+        <p className="text-[11px] font-medium text-amber-800 bg-yellow-100/75 border border-yellow-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 mt-0.5">
+          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          Monthly Target dikosongkan dari {softYellowSourceLabel || "KPI Business"} — silakan isi target bulanan sesuai rencana pencapaian Anda.
+        </p>
+      )}
+      {!softYellowHighlight && softOrangeHighlight && (
         <p className="text-[11px] font-medium text-orange-700 flex items-center gap-1.5 mt-0.5">
           <AlertCircle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
           Pastikan sudah sesuai dengan tracking bulanan &amp; target setahun Anda
@@ -2914,6 +2991,377 @@ function LihatKpiAtasanModal({
   );
 }
 
+function adaptBusinessKpiToPersonalItem(src: KPISetting): KPISetting {
+  const rawSatuan = String(src.satuan ?? "").trim();
+  const sep = rawSatuan.indexOf("/");
+  const rawUnit = sep >= 0 ? rawSatuan.slice(0, sep).trim() : rawSatuan;
+  const rawPeriode = sep >= 0 ? rawSatuan.slice(sep + 1).trim() : "";
+  const rawTrack = String(src.trackingPeriod ?? "").trim();
+  let normPeriode = "Bulan";
+  if (/^bulan(an)?$/i.test(rawPeriode)) normPeriode = "Bulan";
+  else if (/^triwulan$/i.test(rawPeriode)) normPeriode = "Triwulan";
+  else if (/^semester(an)?$/i.test(rawPeriode)) normPeriode = "Semester";
+  else if (/^tahun(an)?$/i.test(rawPeriode)) normPeriode = "Tahun";
+  else if (/^tahun(an)?$/i.test(rawTrack)) normPeriode = "Tahun";
+  else if (/^triwulan$/i.test(rawTrack)) normPeriode = "Triwulan";
+  else if (/^semester(an)?$/i.test(rawTrack)) normPeriode = "Semester";
+  else if (rawPeriode && !/^kategori$/i.test(rawPeriode)) normPeriode = rawPeriode;
+  const adaptedSatuan = rawUnit ? `${rawUnit}/${normPeriode}` : `%/Bulan`;
+
+  const rawFormula = String(src.formula ?? "").trim();
+  const adaptedFormula = /^rata[- ]?rata$/i.test(rawFormula)
+    ? "Rata-Rata"
+    : /^nilai akhir$/i.test(rawFormula)
+    ? "Nilai Akhir"
+    : /^jumlah$/i.test(rawFormula)
+    ? "Jumlah"
+    : rawFormula || "Jumlah";
+
+  const resolvedMode: IndicatorMode = src.indicatorMode ?? (src.colorIndicator ? "color" : "numeric");
+  let adaptedBaseline = String(src.baseline2025 ?? "").trim();
+  if (resolvedMode === "color") {
+    if (/^biru$/i.test(adaptedBaseline)) adaptedBaseline = "Blue";
+    else if (/^merah$/i.test(adaptedBaseline)) adaptedBaseline = "Red";
+    else if (/^hitam$/i.test(adaptedBaseline)) adaptedBaseline = "Black";
+  }
+
+  return {
+    ...src,
+    satuan: adaptedSatuan,
+    formula: adaptedFormula,
+    baseline2025: adaptedBaseline,
+    target2026: "",
+    monthlyTargets: {},
+    colorIndicator: resolvedMode === "color",
+    indicatorMode: resolvedMode,
+    trackingPeriod: derivePeriodeTrackingFromSatuan(adaptedSatuan, src.trackingPeriod),
+    scope: "",
+    coo: "",
+    gmVgmIndustry: "",
+    gmVgmPerkebunan: "",
+    gmAsd: "",
+    gmRstm: "",
+    gmGhs: "",
+    cascading: "",
+    cascadingMap: undefined,
+  };
+}
+
+function LihatKpiBusinessSourceModal({
+  ownerUser,
+  sourceKind,
+  targetSectionCode,
+  targetSectionLabel,
+  remainingSectionBobot,
+  onSelectKpi,
+  onClose,
+}: {
+  ownerUser: ManagedUser;
+  sourceKind: "group" | "unit";
+  targetSectionCode: string;
+  targetSectionLabel: string;
+  remainingSectionBobot: number;
+  onSelectKpi: (item: KPISetting) => void;
+  onClose: () => void;
+}) {
+  const [remoteTick, setRemoteTick] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const groupName = getGroupNameForUnit(ownerUser.company);
+  const scopeKey = sourceKind === "group" ? `corporate-${groupName}` : `unit-${ownerUser.company}`;
+  const modalTitle = sourceKind === "group" ? "Lihat KPI (Group)" : "Lihat KPI (Unit)";
+  const scopeDisplayLabel =
+    sourceKind === "group"
+      ? `KPI (Group) · ${groupName}`
+      : `KPI (Unit) · ${ownerUser.company}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBusinessKpiLive<KPISetting>(scopeKey)
+      .then((remote) => {
+        if (!cancelled && remote.length > 0) {
+          setRemoteTick((t) => t + 1);
+        }
+      })
+      .catch(() => {});
+    const onHydrated = () => {
+      if (!cancelled) setRemoteTick((t) => t + 1);
+    };
+    window.addEventListener("pa-db-hydrated", onHydrated);
+    window.addEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, onHydrated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pa-db-hydrated", onHydrated);
+      window.removeEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, onHydrated);
+    };
+  }, [scopeKey]);
+
+  void remoteTick;
+  const fmt = loadMasterKpiFormats<KPISetting>({
+    group: CORPORATE_KPI,
+    unit: CORPORATE_KPI,
+    personal: PERSONAL_KPI,
+  });
+  const rawItems =
+    sourceKind === "group"
+      ? readStoredBusinessKpiItems(scopeKey) ?? fmt.group
+      : readStoredBusinessKpiItems(scopeKey) ?? (usesDemoSampleData(ownerUser) ? fmt.unit : []);
+  const adaptedItems = React.useMemo(
+    () =>
+      rawItems.map((raw) => ({
+        rawTarget: raw.target2026,
+        adapted: adaptBusinessKpiToPersonalItem(raw),
+      })),
+    [rawItems],
+  );
+  const businessSt = readStoredBusinessKpiStatus(scopeKey);
+  const statusBadgeLabel = businessSt.approved
+    ? "Validated"
+    : businessSt.submitted
+    ? "Pending Approval"
+    : "Draft / Format Dasar";
+
+  const selectedPair = adaptedItems.find((p) => p.adapted.id === selectedId) ?? null;
+  const selectedItem = selectedPair?.adapted ?? null;
+  const sections = Array.from(new Set(adaptedItems.map((p) => p.adapted.section || "A"))).sort();
+  const sectionBannerPalette = ["#1565C0", "#1976D2", "#1E88E5", "#2196F3", "#00838F", "#6A1B9A"];
+  const colSpanCount = 15;
+
+  const selectedBobotNum = selectedItem ? parsePctNum(selectedItem.bobot) : 0;
+  const bobotMismatch =
+    selectedItem !== null && Math.abs(selectedBobotNum - remainingSectionBobot) > 1e-6;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 sm:p-5">
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-[96vw] max-w-[96vw] h-[90vh] max-h-[90vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h3 className="font-bold text-[#1A284F] text-lg">{modalTitle}</h3>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                {scopeDisplayLabel}
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                  businessSt.approved
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : businessSt.submitted
+                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                    : "bg-slate-50 text-slate-600 border-slate-200"
+                }`}
+              >
+                {statusBadgeLabel}
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Pilih maksimal 1 baris {sourceKind === "group" ? "KPI (Group)" : "KPI (Unit)"} (telah disesuaikan ke format Sub Section KPI Personal) lalu klik Add. Monthly Target &amp; Target {KPI_CYCLE_YEAR} akan dikosongkan untuk Anda isi.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500"
+            title="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {adaptedItems.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-16 text-center px-6">
+              <p className="text-sm font-bold text-gray-600">
+                Belum ada data pada {scopeDisplayLabel}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                Silakan buat atau isi terlebih dahulu {sourceKind === "group" ? "KPI (Group)" : `KPI (Unit) ${ownerUser.company}`}.
+              </p>
+            </div>
+          ) : (
+            <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
+              <table className="border-collapse text-xs w-full" style={{ minWidth: 1850 }}>
+                <thead>
+                  <tr className="bg-[#1A284F] text-white">
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 0, zIndex: 26, background: "#1A284F", minWidth: 54, maxWidth: 54 }}>Pilih</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold" style={{ position: "sticky", left: 54, zIndex: 25, background: "#1A284F", minWidth: 52, maxWidth: 52 }}>No</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 106, zIndex: 25, background: "#1A284F", minWidth: 125, maxWidth: 125 }}>Perspektif</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold" style={{ position: "sticky", left: 231, zIndex: 25, background: "#1A284F", minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.28)" }}>KPI</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[130px]">Satuan</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[110px]">Formula Pencapaian</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-2 text-center font-semibold w-20">Bobot</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[240px]">Definisi / Deskripsi</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[155px]">Source</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Baseline 2025</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[130px]">Target {KPI_CYCLE_YEAR} (Sumber)</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[96px]">Polaritas</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[240px]">Detail Formula Pencapaian</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-left font-semibold min-w-[170px]">Keterangan</th>
+                    <th className="border border-[#1A284F]/30 py-3 px-3 text-center font-semibold min-w-[120px]">Periode Tracking</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sections.map((sec, sIdx) => {
+                    const secPairs = adaptedItems.filter((p) => (p.adapted.section || "A") === sec);
+                    const first = secPairs[0]?.adapted;
+                    const secLabel = resolveKpiSectionLabel(first);
+                    const secBobotVal =
+                      first?.sectionBobot ||
+                      (CORP_SECTION_META as Record<string, { bobot?: string }>)[sec]?.bobot ||
+                      `${formatPctNum(secPairs.reduce((s, r) => s + parsePctNum(r.adapted.bobot), 0))}%`;
+                    const bannerBg =
+                      (CORP_SECTION_META as Record<string, { bg?: string }>)[sec]?.bg ||
+                      sectionBannerPalette[sIdx % sectionBannerPalette.length];
+                    return (
+                      <React.Fragment key={sec}>
+                        <tr className="select-none">
+                          <td
+                            colSpan={colSpanCount}
+                            className="p-0 text-white text-xs font-bold uppercase tracking-widest border"
+                            style={{ background: bannerBg, borderColor: bannerBg }}
+                          >
+                            <div
+                              className="py-2.5 px-4 inline-flex items-center gap-2 whitespace-nowrap"
+                              style={{ position: "sticky", left: 0, zIndex: 15, background: bannerBg }}
+                            >
+                              <span>{sec}. {secLabel}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold tracking-normal">
+                                Bobot {secBobotVal}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                        {secPairs.map(({ adapted: it, rawTarget }, idx) => {
+                          const checked = selectedId === it.id;
+                          const stickyBg = checked ? "#f0f9ff" : idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+                          return (
+                            <tr
+                              key={it.id}
+                              onClick={() => setSelectedId(checked ? null : it.id)}
+                              className={`cursor-pointer border-t border-gray-200 transition-colors ${
+                                checked ? "bg-sky-50 ring-1 ring-inset ring-sky-300" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-slate-50/60 hover:bg-gray-50"
+                              }`}
+                            >
+                              <td
+                                className="border border-gray-200 py-2.5 px-2 text-center"
+                                style={{ position: "sticky", left: 0, zIndex: 13, background: stickyBg, minWidth: 54, maxWidth: 54 }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => setSelectedId(checked ? null : it.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="w-4 h-4 accent-[#1A284F] cursor-pointer"
+                                />
+                              </td>
+                              <td
+                                className="border border-gray-200 py-2.5 px-2 text-center font-semibold text-gray-600"
+                                style={{ position: "sticky", left: 54, zIndex: 12, background: stickyBg, minWidth: 52, maxWidth: 52 }}
+                              >
+                                {it.no}
+                              </td>
+                              <td
+                                className="border border-gray-200 py-2.5 px-3 font-semibold text-gray-700"
+                                style={{ position: "sticky", left: 106, zIndex: 12, background: stickyBg, minWidth: 125, maxWidth: 125 }}
+                              >
+                                <span className={PERSP_COLOR[it.perspektif] ?? "text-gray-700"}>{it.perspektif}</span>
+                              </td>
+                              <td
+                                className="border border-gray-200 py-2.5 px-3 font-medium text-gray-800 whitespace-pre-line"
+                                style={{ position: "sticky", left: 231, zIndex: 12, background: stickyBg, minWidth: 250, maxWidth: 250, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}
+                              >
+                                {it.kpi}
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.satuan}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-600">{it.formula}</td>
+                              <td className="border border-gray-200 py-2.5 px-2 text-center">
+                                <span className="px-2 py-0.5 rounded-full bg-[#1A284F] text-white text-[10px] font-bold">{it.bobot}</span>
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600 leading-relaxed">{it.definisi || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600">{it.source || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-700">
+                                {it.colorIndicator ? <ColorValueBadge value={it.baseline2025} isBaseline /> : (it.baseline2025 || "—")}
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center bg-yellow-50/70">
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <span className="text-[11px] font-semibold text-gray-600">{rawTarget || "—"}</span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-yellow-100 text-amber-800 border border-yellow-300 whitespace-nowrap">
+                                    Kosong saat Add
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${it.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : it.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
+                                  {it.polaritas}
+                                </span>
+                              </td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line leading-relaxed">{it.detailFormula || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-gray-600 whitespace-pre-line leading-relaxed">{it.keterangan || "—"}</td>
+                              <td className="border border-gray-200 py-2.5 px-3 text-center text-gray-600">
+                                {it.trackingPeriod}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </DualScrollTableContainer>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2.5 px-6 py-4 border-t border-gray-100 bg-gray-50/40 shrink-0">
+          {selectedItem && bobotMismatch && (
+            <div className="flex items-start gap-2 px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+              <span>
+                Bobot {sourceKind === "group" ? "KPI (Group)" : "KPI (Unit)"} (<strong>{selectedItem.bobot}</strong>) tidak sesuai dengan sisa bobot pada{" "}
+                <strong>Section {targetSectionCode} — {targetSectionLabel}</strong> Anda saat ini (sisa bobot:{" "}
+                <strong>{formatPctNum(remainingSectionBobot)}%</strong>).{" "}
+                <strong>Sisa bobot perlu disesuaikan setelah KPI ditambahkan ke form.</strong>
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs text-gray-500">
+              {selectedItem ? (
+                <>Terpilih: <strong className="text-[#1A284F]">{selectedItem.kpi}</strong> (Bobot {selectedItem.bobot} · Monthly Target &amp; Target {KPI_CYCLE_YEAR} akan dikosongkan)</>
+              ) : (
+                "Pilih 1 baris KPI (hanya baris KPI yang dapat dipilih, Section tidak memiliki checkbox)."
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+              >
+                Close
+              </button>
+              {selectedItem && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectKpi(selectedItem);
+                    onClose();
+                  }}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b]"
+                >
+                  <Plus className="w-4 h-4" /> Add
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AddKPIModal({
   existingItems,
   onAdd,
@@ -2932,15 +3380,30 @@ export function AddKPIModal({
   ownerUser?: ManagedUser;
 }) {
   const [showLihatAtasan, setShowLihatAtasan] = useState(false);
+  const [showLihatBusinessSource, setShowLihatBusinessSource] = useState<"group" | "unit" | null>(null);
   const [atasanBobotWarning, setAtasanBobotWarning] = useState<string | null>(null);
   const [fromAtasanKpi, setFromAtasanKpi] = useState(false);
+  const [fromBusinessKpiSource, setFromBusinessKpiSource] = useState<"KPI (Group)" | "KPI (Unit)" | null>(null);
   const [atasanBobotNeedsAdjust, setAtasanBobotNeedsAdjust] = useState(false);
   const [addTipOpen, setAddTipOpen] = useState(false);
   const activeActor = getActiveUser();
+  const targetOwner = ownerUser ?? activeActor;
+  const targetOwnerAuthLevel = resolveUserAuthorityLevel(targetOwner);
+  const canLihatKpiGroup =
+    !forDivision &&
+    (targetOwner.role === "BOD" || isDirectorRoleOrGrouping(targetOwner));
+  const canLihatKpiUnit =
+    !forDivision &&
+    !canLihatKpiGroup &&
+    (targetOwner.role === "GM" ||
+      targetOwner.role === "vGM" ||
+      targetOwnerAuthLevel === "gm_unit" ||
+      targetOwnerAuthLevel === "vgm_unit");
   const canLihatKpiAtasan =
     !forDivision &&
-    LIHAT_KPI_ATASAN_ROLES.has((ownerUser ?? activeActor).role) &&
-    Boolean(ownerUser ?? activeActor);
+    !canLihatKpiGroup &&
+    LIHAT_KPI_ATASAN_ROLES.has(targetOwner.role) &&
+    Boolean(targetOwner);
   const master = useMasterKpi();
   const dynamicPersonalSections = (master.personalSection?.length ? master.personalSection : PERSONAL_SECTION_OPTIONS.map((p) => ({
     value: p.value,
@@ -3128,7 +3591,7 @@ export function AddKPIModal({
     if (!form.definisi.trim()) miss.push("Definisi / Deskripsi");
     if (!form.source.trim()) miss.push("Source");
     if (!form.baseline2025.trim()) miss.push("Baseline 2025");
-    if (!form.target2026.trim()) miss.push("Target 2026 (isi Target Bulanan)");
+    if (!fromBusinessKpiSource && !form.target2026.trim()) miss.push(`Target ${KPI_CYCLE_YEAR} (isi Target Bulanan)`);
     if (!form.detailFormula.trim()) miss.push("Detail Formula Pencapaian");
     return miss;
   })();
@@ -3254,11 +3717,31 @@ export function AddKPIModal({
               {t.label}
             </button>
           ))}
+          {canLihatKpiGroup && tab === "subsection" && (
+            <button
+              type="button"
+              onClick={() => setShowLihatBusinessSource("group")}
+              className="ml-2 mb-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Lihat KPI (Group)
+            </button>
+          )}
+          {canLihatKpiUnit && tab === "subsection" && (
+            <button
+              type="button"
+              onClick={() => setShowLihatBusinessSource("unit")}
+              className="ml-2 mb-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Lihat KPI (Unit)
+            </button>
+          )}
           {canLihatKpiAtasan && tab === "subsection" && (
             <button
               type="button"
               onClick={() => setShowLihatAtasan(true)}
-              className="ml-2 mb-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors"
+              className={`${canLihatKpiUnit ? "ml-1" : "ml-2"} mb-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors`}
             >
               <Layers className="w-3.5 h-3.5" />
               Lihat KPI Atasan
@@ -3506,7 +3989,7 @@ export function AddKPIModal({
               <div className="grid grid-cols-2 gap-4">
                 {(() => {
                   const bobotExceedsRemaining = parsePctNum(form.bobot) > subRemainingInSection + 1e-6;
-                  const showSoftRedBobot = bobotExceedsRemaining || (fromAtasanKpi && atasanBobotNeedsAdjust);
+                  const showSoftRedBobot = bobotExceedsRemaining || ((fromAtasanKpi || Boolean(fromBusinessKpiSource)) && atasanBobotNeedsAdjust);
                   return (
                     <div
                       className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${
@@ -3558,7 +4041,7 @@ export function AddKPIModal({
                         <p className="text-[11px] font-medium text-rose-700 leading-snug mt-0.5">
                           {bobotExceedsRemaining
                             ? `Bobot (${form.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Sesuaikan bobot agar tidak melebihi sisa kuota.`
-                            : `Bobot KPI Atasan (${form.bobot}) belum sama dengan sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan.`}
+                            : `Bobot ${fromBusinessKpiSource || "KPI Atasan"} (${form.bobot}) belum sama dengan sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan.`}
                         </p>
                       )}
                     </div>
@@ -3595,6 +4078,8 @@ export function AddKPIModal({
                 colorMode={colorMode}
                 ratioMode={ratioMode}
                 softOrangeHighlight={fromAtasanKpi}
+                softYellowHighlight={Boolean(fromBusinessKpiSource)}
+                softYellowSourceLabel={fromBusinessKpiSource ?? undefined}
                 onChange={(mt, computed) => setForm((p) => ({ ...p, monthlyTargets: mt, target2026: computed }))}
               />
 
@@ -3604,6 +4089,8 @@ export function AddKPIModal({
                 ratioMode={ratioMode}
                 monthlyTargets={form.monthlyTargets}
                 softOrangeHighlight={fromAtasanKpi}
+                softYellowHighlight={Boolean(fromBusinessKpiSource)}
+                softYellowSourceLabel={fromBusinessKpiSource ?? undefined}
               />
 
               <Field label="Detail Formula Pencapaian"><textarea rows={4} value={form.detailFormula} onChange={(e) => set("detailFormula", e.target.value)} className={inputCls + " resize-none"} /></Field>
@@ -3647,7 +4134,7 @@ export function AddKPIModal({
       {bobotError && <BobotExceededModal violation={bobotError} onClose={() => setBobotError(null)} />}
       {showLihatAtasan && (
         <LihatKpiAtasanModal
-          ownerUser={ownerUser ?? activeActor}
+          ownerUser={targetOwner}
           targetSectionCode={form.section}
           targetSectionLabel={form.sectionLabel || `Section ${form.section}`}
           remainingSectionBobot={subRemainingInSection}
@@ -3655,6 +4142,7 @@ export function AddKPIModal({
             const pickedBobotNum = parsePctNum(picked.bobot);
             const exceeds = pickedBobotNum > subRemainingInSection + 1e-6;
             const mismatch = Math.abs(pickedBobotNum - subRemainingInSection) > 1e-6;
+            setFromBusinessKpiSource(null);
             setFromAtasanKpi(true);
             setAtasanBobotNeedsAdjust(mismatch);
             if (exceeds) {
@@ -3731,6 +4219,66 @@ export function AddKPIModal({
             }));
           }}
           onClose={() => setShowLihatAtasan(false)}
+        />
+      )}
+      {showLihatBusinessSource && (
+        <LihatKpiBusinessSourceModal
+          ownerUser={targetOwner}
+          sourceKind={showLihatBusinessSource}
+          targetSectionCode={form.section}
+          targetSectionLabel={form.sectionLabel || `Section ${form.section}`}
+          remainingSectionBobot={subRemainingInSection}
+          onSelectKpi={(picked) => {
+            const srcLabel = showLihatBusinessSource === "group" ? "KPI (Group)" : "KPI (Unit)";
+            const pickedBobotNum = parsePctNum(picked.bobot);
+            const validPickedBobot = pickedBobotNum > 0 ? picked.bobot : "";
+            const exceeds = pickedBobotNum > 0 && pickedBobotNum > subRemainingInSection + 1e-6;
+            const mismatch = pickedBobotNum > 0 && Math.abs(pickedBobotNum - subRemainingInSection) > 1e-6;
+            setFromAtasanKpi(false);
+            setFromBusinessKpiSource(srcLabel);
+            setAtasanBobotNeedsAdjust(mismatch);
+            if (exceeds) {
+              setAtasanBobotWarning(
+                `Bobot ${srcLabel} (${picked.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Sisa bobot wajib disesuaikan pada field Bobot bertanda merah muda sebelum menyimpan.`,
+              );
+            } else if (mismatch) {
+              setAtasanBobotWarning(
+                `Bobot ${srcLabel} (${picked.bobot}) belum menutup seluruh sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan setelah KPI ditambahkan.`,
+              );
+            } else {
+              setAtasanBobotWarning(null);
+            }
+            const resolvedMode: IndicatorMode =
+              picked.indicatorMode ?? (picked.colorIndicator ? "color" : "numeric");
+            const nextSeqNo = existingItems.some((x) => normalizeKpiNoKey(x.no) === normalizeKpiNoKey(picked.no))
+              ? String(existingItems.length + 1)
+              : picked.no || String(existingItems.length + 1);
+            setForm((p) => ({
+              ...p,
+              no: p.no.trim() || nextSeqNo,
+              perspektif: picked.perspektif || p.perspektif,
+              kpi: picked.kpi || p.kpi,
+              satuan: picked.satuan || p.satuan,
+              formula: picked.formula || p.formula,
+              bobot: validPickedBobot || p.bobot,
+              definisi: picked.definisi || "",
+              source: picked.source || "",
+              baseline2025: picked.baseline2025 || "",
+              target2026: "",
+              polaritas: picked.polaritas || "Maximize",
+              detailFormula: picked.detailFormula || "",
+              keterangan: picked.keterangan || "",
+              monthlyTargets: {},
+              colorIndicator: resolvedMode === "color",
+              indicatorMode: resolvedMode,
+              ratioPositiveLabel: picked.ratioPositiveLabel,
+              ratioNegativeLabel: picked.ratioNegativeLabel,
+              cascading: "",
+              copiedFromId: picked.id,
+              trackingPeriod: derivePeriodeTrackingFromSatuan(picked.satuan || p.satuan, picked.trackingPeriod || p.trackingPeriod),
+            }));
+          }}
+          onClose={() => setShowLihatBusinessSource(null)}
         />
       )}
     </div>
@@ -4680,9 +5228,16 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             formula={formula}
             colorMode={colorMode}
             ratioMode={ratioMode}
+            softYellowHighlight={!String(target2026 ?? "").trim()}
             onChange={(mt, computed) => { setMonthlyTargets(mt); setTarget2026(computed); }}
           />
-          <Target2026Field value={target2026} colorMode={colorMode} ratioMode={ratioMode} monthlyTargets={monthlyTargets} />
+          <Target2026Field
+            value={target2026}
+            colorMode={colorMode}
+            ratioMode={ratioMode}
+            monthlyTargets={monthlyTargets}
+            softYellowHighlight={!String(target2026 ?? "").trim()}
+          />
         </div>
         <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
           <button onClick={onClose} className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
@@ -5292,15 +5847,28 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
               : item.colorIndicator ? <ColorValueBadge value={item.baseline2025} isBaseline /> : item.baseline2025}
           </td>
           {/* Target 2026 */}
-          <td className="border border-gray-200 py-3 px-2 text-xs font-bold text-[#1A284F] text-center" style={{ minWidth: 96 }}>
+          <td
+            className={`border py-3 px-2 text-xs font-bold text-[#1A284F] text-center ${
+              !String((isEditing ? row.target2026 : item.target2026) ?? "").trim()
+                ? "border-yellow-300 bg-yellow-50/85"
+                : "border-gray-200"
+            }`}
+            style={{ minWidth: 96 }}
+          >
             {isEditing
               ? <button
                   onClick={() => setTargetEditItem({ ...row })}
-                  className="w-full flex items-center justify-between gap-1 px-2 py-1.5 rounded border border-[#1A284F]/30 bg-[#1A284F]/5 hover:bg-[#1A284F]/10 transition-colors"
+                  className={`w-full flex items-center justify-between gap-1 px-2 py-1.5 rounded border transition-colors ${
+                    !String(row.target2026 ?? "").trim()
+                      ? "border-yellow-400 bg-yellow-100/80 hover:bg-yellow-100 text-amber-900"
+                      : "border-[#1A284F]/30 bg-[#1A284F]/5 hover:bg-[#1A284F]/10"
+                  }`}
                 >
-                  <span className="text-[11px] font-bold text-[#1A284F] truncate">{row.target2026 || "— Set"}</span>
+                  <span className="text-[11px] font-bold truncate">{row.target2026 || "— Isi Target"}</span>
                   <Edit3 className="w-3 h-3 text-[#1A284F] shrink-0" />
                 </button>
+              : !String(item.target2026 ?? "").trim()
+              ? <span className="inline-flex items-center px-2 py-0.5 rounded bg-yellow-100 text-amber-800 border border-yellow-300 text-[10px] font-bold">Belum diisi</span>
               : item.colorIndicator ? <ColorValueBadge value={item.target2026} /> : item.target2026}
           </td>
           {/* Polaritas */}
@@ -7178,6 +7746,12 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     if (isCorporate) {
       return readStoredBusinessKpiItems(effectiveScopeKey) ?? initialItems;
     }
+    if (
+      (effectiveOwner.role === "BOD" || isDirectorRoleOrGrouping(effectiveOwner)) &&
+      safeGetLocalRaw("pa_bod_personal_kpi_cleared_v1") !== "true"
+    ) {
+      return [];
+    }
     return readStoredPersonalKpiItems(effectiveOwner.employeeId) ?? initialItems;
   });
 
@@ -7396,6 +7970,46 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   const [targetEditReason, setTargetEditReason]         = useState(initTe.reason);
 
   useEffect(() => {
+    if (
+      !isCorporate &&
+      (effectiveOwner.role === "BOD" || isDirectorRoleOrGrouping(effectiveOwner)) &&
+      safeGetLocalRaw("pa_bod_personal_kpi_cleared_v1") !== "true"
+    ) {
+      const normId = normalizeEmployeeId(effectiveOwner.employeeId);
+      let nextByEmp: Record<string, unknown> = {};
+      try {
+        nextByEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
+        delete nextByEmp[normId];
+        delete nextByEmp[effectiveOwner.employeeId];
+        safeSetLocalJson("pa_kpi_setting_by_emp_v2", nextByEmp);
+      } catch {
+        nextByEmp = {};
+      }
+      let nextWorkflows: Array<Record<string, unknown>> = [];
+      try {
+        const wfArr: Array<Record<string, unknown>> = JSON.parse(safeGetLocalRaw("appraisal_workflow_v1") ?? "[]") ?? [];
+        nextWorkflows = wfArr.filter((rec) => {
+          const mod = String(rec?.module ?? "");
+          const ph = String(rec?.phase ?? "");
+          const eid = String(rec?.employeeId ?? "").trim().toLowerCase();
+          return !(mod === "KPI" && ph === "setting" && (eid === normId.toLowerCase() || eid === effectiveOwner.employeeId.trim().toLowerCase()));
+        });
+        safeSetLocalJson("appraisal_workflow_v1", nextWorkflows);
+      } catch {
+        nextWorkflows = [];
+      }
+      safeSetLocalJson("pa_bod_personal_kpi_cleared_v1", true);
+      setItems_([]);
+      setSubmitted(false);
+      setKpiApproved(false);
+      setWfRecState(undefined);
+      void syncToSupabase({
+        kind: "bod-personal-kpi-clear",
+        employeeIds: [effectiveOwner.employeeId, normId],
+        nextByEmp,
+        nextWorkflows,
+      });
+    }
     const init = readPersonalWorkflowState();
     setItems_(init.storedItems ?? initialItems);
     setKpiAttachments(readAttachmentsForCurrentScope());
@@ -8857,7 +9471,6 @@ function StandardKPISettingContent({ personalOnly: personalOnlyProp = false }: {
           useValidateTerms={false}
           hideCascading={personalOnly || isDirectorMode || isGmMode}
           onTabStatusChange={setPersonalTabStatus}
-          copySource={isDirectorMode ? copySources.group : isGmMode ? copySources.unit : undefined}
         />
       )}
     </div>
@@ -9053,10 +9666,6 @@ function DelegatedKPISettingTabsView({
           copySource={(() => {
             const src = buildKpiCopySources(current.owner);
             if (current.kind === "unit") return src.group;
-            if (current.kind === "personal") {
-              if (isDirectorRoleOrGrouping(current.owner)) return src.group;
-              if (current.owner.role === "GM") return src.unit;
-            }
             return undefined;
           })()}
           sectionCascadeMap={sectionCascadeByTab[current.id] ?? {}}

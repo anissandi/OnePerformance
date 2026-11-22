@@ -381,6 +381,10 @@ export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers())
       return true;
     }
   }
+  const grpTier = getGroupAuthorityLevel(resolveEffectiveUserGrouping(user));
+  if (grpTier === "director_group" || grpTier === "gm_unit" || grpTier === "division" || grpTier === "department" || grpTier === "bagian") {
+    return true;
+  }
   const reg = (user.regNo ?? "").trim().toLowerCase();
   const emp = user.employeeId.trim().toLowerCase();
   if (!reg && !emp) return false;
@@ -479,27 +483,43 @@ export function resolveEffectiveUserGrouping(user: ManagedUser): UserGrouping {
 export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthorityLevel {
   if (isAdminOrHrIcfRole(user.role)) return "admin";
   if (user.role === "BOD") return "bod";
-  if (user.role === "Director" || user.role === "DirectorNonOpr") return "director_group";
-  if (user.role === "GM") return "gm_unit";
-  if (user.role === "vGM" || user.role === "Coordinator") return "vgm_unit";
-  if (user.role === "HR Unit") return "hr_unit";
-  if (user.role === "Division") return "division";
-  if (user.role === "Departement") return "department";
 
   // Penentuan level kewenangan berjenjang murni dari Effective Grouping (bebas dari perbedaan nama posisi seperti 'Mandor' vs 'Kepala Bagian')
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
   const configuredTier = getGroupAuthorityLevel(effectiveGrouping);
+
+  let roleLevel: HierarchyAuthorityLevel = "operational";
+  if (user.role === "Director" || user.role === "DirectorNonOpr") roleLevel = "director_group";
+  else if (user.role === "GM") roleLevel = "gm_unit";
+  else if (user.role === "vGM" || user.role === "Coordinator") roleLevel = "vgm_unit";
+  else if (user.role === "HR Unit") roleLevel = "hr_unit";
+  else if (user.role === "Division") roleLevel = "division";
+  else if (user.role === "Departement") roleLevel = "department";
+
+  let groupLevel: HierarchyAuthorityLevel = "operational";
   if (configuredTier === "director_group" || effectiveGrouping === "Direktur / Director") {
-    return "director_group";
+    groupLevel = "director_group";
+  } else if (configuredTier === "gm_unit") {
+    groupLevel = user.role === "vGM" || user.role === "Coordinator" ? "vgm_unit" : "gm_unit";
+  } else if (
+    configuredTier === "division" ||
+    configuredTier === "department" ||
+    configuredTier === "bagian" ||
+    configuredTier === "seksi" ||
+    configuredTier === "operational"
+  ) {
+    groupLevel = configuredTier;
+  } else if (effectiveGrouping === "Ka./Wa.Ka.Div ke atas") {
+    groupLevel = "division";
+  } else if (effectiveGrouping === "Ka./Wa.Ka.Dept") {
+    groupLevel = "department";
+  } else if (effectiveGrouping === "Ka./Wa.Ka.Bagian") {
+    groupLevel = "bagian";
+  } else if (effectiveGrouping === "Ka./Wa.Ka.Seksi") {
+    groupLevel = "seksi";
   }
-  if (configuredTier === "division" || configuredTier === "department" || configuredTier === "bagian" || configuredTier === "seksi" || configuredTier === "operational") {
-    return configuredTier;
-  }
-  if (effectiveGrouping === "Ka./Wa.Ka.Div ke atas") return "division";
-  if (effectiveGrouping === "Ka./Wa.Ka.Dept") return "department";
-  if (effectiveGrouping === "Ka./Wa.Ka.Bagian") return "bagian";
-  if (effectiveGrouping === "Ka./Wa.Ka.Seksi") return "seksi";
-  return "operational";
+
+  return HIERARCHY_RANK[groupLevel] > HIERARCHY_RANK[roleLevel] ? groupLevel : roleLevel;
 }
 
 /**
@@ -697,10 +717,14 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     if (isMyApprover(target)) return false;
     // 1. Jika user adalah Approver (AP1 / AP2) dari karyawan tsb, otomatis terlihat tanpa batasan filter Unit/Divisi/Departemen/Bagian/Jabatan/Role
     if (transitiveSubIds.has(target.employeeId.toLowerCase())) return true;
-    if (target.role === user.role) return false;
 
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];
+    if (target.role === user.role && targetRank >= myRank) return false;
+    if ((level === "gm_unit" || level === "vgm_unit") && targetRank >= myRank && (targetLevel === "gm_unit" || targetLevel === "vgm_unit")) {
+      // Peer pada level GM/vGM yang sama tidak saling menjadi bawahan (kecuali rantai AP1/AP2 di atas)
+      if (targetRank === myRank) return false;
+    }
     if (targetRank > myRank) return false;
 
     // 2. Jika Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian) di-setup di /settings/user-management:
@@ -995,7 +1019,12 @@ export function getScopedFilterOptionsForUser(
     mergedMap.set(u.employeeId.toLowerCase(), u);
   }
   const mergedSubs = Array.from(mergedMap.values());
-  const pool = mergedSubs.length > 0 ? mergedSubs : [user];
+  const pool =
+    level === "gm_unit" || level === "vgm_unit" || level === "director_group"
+      ? [user, ...mergedSubs]
+      : mergedSubs.length > 0
+      ? mergedSubs
+      : [user];
 
   const uniq = (arr: (string | undefined)[]) =>
     Array.from(new Set(arr.map((v) => (v ?? "").trim()).filter(Boolean))).sort();
@@ -1010,8 +1039,8 @@ export function getScopedFilterOptionsForUser(
     admin: "Administrator / HR ICF (Semua Unit Usaha)",
     bod: "Board of Directors (Semua Unit Group)",
     director_group: `Level Direktur Group (${groupName} — ${groupUnitsCount} Unit Usaha, GM, Divisi, Dept, Bagian & All Posisi)`,
-    gm_unit: `Level GM Unit Usaha (${user.company})`,
-    vgm_unit: `Level ${user.role === "Coordinator" ? "Coordinator" : "vGM"} (${user.company})`,
+    gm_unit: `Level GM/vGM (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
+    vgm_unit: `Level ${user.role === "Coordinator" ? "Coordinator" : "GM/vGM"} (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
     hr_unit: checkerLabel,
     division: `Level Divisi (${user.division} — ${user.company})`,
     department: `Level Departemen (${user.department} · ${user.division})`,

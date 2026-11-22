@@ -23,6 +23,7 @@ import {
 import {
   BarChart,
   Bar,
+  ComposedChart,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -1297,10 +1298,13 @@ function ScoreGradeDistributionDashboard({
           </p>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart
+              <ComposedChart
                 key={`bell-${module}`}
                 data={bellData}
                 margin={{ top: 8, right: 12, left: -20, bottom: 0 }}
+                barSize={16}
+                barGap={3}
+                barCategoryGap="26%"
               >
                 <CartesianGrid key="grid" strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
                 <XAxis
@@ -1335,6 +1339,28 @@ function ScoreGradeDistributionDashboard({
                     );
                   }}
                 />
+                <Bar
+                  key="bell-bar-target"
+                  dataKey="areaTarget"
+                  name="Setting"
+                  fill="#6366F1"
+                  fillOpacity={0.22}
+                  radius={[4, 4, 0, 0]}
+                  isAnimationActive={true}
+                  animationDuration={820}
+                  animationEasing="ease-out"
+                />
+                <Bar
+                  key="bell-bar-actual"
+                  dataKey="areaActual"
+                  name="Actual"
+                  fill="#06B6D4"
+                  fillOpacity={0.28}
+                  radius={[4, 4, 0, 0]}
+                  isAnimationActive={true}
+                  animationDuration={900}
+                  animationEasing="ease-out"
+                />
                 <Area
                   key="area-target"
                   type="monotone"
@@ -1343,7 +1369,7 @@ function ScoreGradeDistributionDashboard({
                   stroke="#6366F1"
                   strokeWidth={2}
                   strokeDasharray="5 3"
-                  fill="#6366F1" fillOpacity={0.12}
+                  fill="#6366F1" fillOpacity={0.08}
                   dot={false}
                   activeDot={{ r: 4, fill: "#6366F1" }}
                   isAnimationActive={true}
@@ -1357,14 +1383,14 @@ function ScoreGradeDistributionDashboard({
                   name="Actual"
                   stroke="#06B6D4"
                   strokeWidth={2.5}
-                  fill="#06B6D4" fillOpacity={0.28}
+                  fill="#06B6D4" fillOpacity={0.14}
                   dot={{ r: 4, fill: "#06B6D4", strokeWidth: 0 }}
                   activeDot={{ r: 5, fill: "#06B6D4" }}
                   isAnimationActive={true}
                   animationDuration={950}
                   animationEasing="ease-out"
                 />
-              </AreaChart>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
           <div className="flex items-center gap-5 mt-3 text-xs text-gray-500">

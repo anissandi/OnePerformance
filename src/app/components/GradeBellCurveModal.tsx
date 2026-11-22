@@ -85,6 +85,8 @@ export function GradeBellCurveModal({
     calibration: Number((r.calibration ?? 0).toFixed(1)),
     calibrationCount: r.calibrationCount ?? 0,
   }));
+  const hasSoy = data.some((d) => d.target > 0 || d.targetCount > 0);
+  const hasEoy = data.some((d) => d.targetEoy > 0 || d.targetEoyCount > 0);
   const fmtPct = (v: unknown) => `${v}%`;
   const renderBellTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload?: (typeof data)[number] }> }) => {
     if (!active || !payload?.length || !payload[0]?.payload) return null;
@@ -197,7 +199,12 @@ export function GradeBellCurveModal({
             </div>
             <div className="h-[280px] w-full rounded-xl border border-gray-100 bg-white p-3">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={data} margin={{ top: 12, right: 18, left: -10, bottom: 0 }} barSize={30}>
+                <ComposedChart
+                  data={data}
+                  margin={{ top: 12, right: 18, left: -10, bottom: 0 }}
+                  barSize={mode === "compare" ? 16 : 30}
+                  barGap={3}
+                >
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                   <XAxis dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#334155", fontWeight: 700 }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={fmtPct} />
@@ -210,10 +217,18 @@ export function GradeBellCurveModal({
                     </>
                   ) : (
                     <>
-                      {data.some((d) => d.target > 0 || d.targetCount > 0) && (
+                      {hasSoy && (
+                        <Bar dataKey="target" name="Setting (SOY)" fill="#06B6D4" fillOpacity={0.24} radius={[4, 4, 0, 0]} animationDuration={680} legendType="none" />
+                      )}
+                      {hasEoy && (
+                        <Bar dataKey="targetEoy" name="Setting (EOY)" fill="#F59E0B" fillOpacity={0.25} radius={[4, 4, 0, 0]} animationDuration={720} legendType="none" />
+                      )}
+                      <Bar dataKey="actual" name="Aktual (%)" fill="#0D9488" fillOpacity={0.24} radius={[4, 4, 0, 0]} animationDuration={780} legendType="none" />
+                      <Bar dataKey="calibration" name="Calibration (%)" fill="#4F46E5" fillOpacity={0.26} radius={[4, 4, 0, 0]} animationDuration={840} legendType="none" />
+                      {hasSoy && (
                         <Line type="monotone" dataKey="target" name="Setting (SOY)" stroke="#06B6D4" strokeDasharray="5 4" strokeWidth={2.2} dot={{ r: 3.5, fill: "#06B6D4", stroke: "#fff", strokeWidth: 1.5 }} animationDuration={700} />
                       )}
-                      {data.some((d) => d.targetEoy > 0 || d.targetEoyCount > 0) && (
+                      {hasEoy && (
                         <Line type="monotone" dataKey="targetEoy" name="Setting (EOY)" stroke="#F59E0B" strokeDasharray="5 4" strokeWidth={2.3} dot={{ r: 3.5, fill: "#F59E0B", stroke: "#fff", strokeWidth: 1.5 }} animationDuration={780} />
                       )}
                       <Line type="monotone" dataKey="actual" name="Aktual (%)" stroke="#0D9488" strokeWidth={2.5} dot={{ r: 4, fill: "#0D9488", stroke: "#fff", strokeWidth: 2 }} animationDuration={850} />
@@ -227,15 +242,21 @@ export function GradeBellCurveModal({
 
           {mode === "compare" && (
             <div>
-              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Actual vs Calibration Proportion (%)</p>
+              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Setting vs Actual vs Calibration Proportion (%)</p>
               <div className="h-[240px] w-full rounded-xl border border-gray-100 bg-white p-3">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={data} margin={{ top: 12, right: 18, left: -10, bottom: 0 }} barGap={4}>
+                  <BarChart data={data} margin={{ top: 12, right: 18, left: -10, bottom: 0 }} barSize={16} barGap={3}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                     <XAxis dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#334155", fontWeight: 700 }} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={fmtPct} />
                     <Tooltip content={renderBellTooltip as never} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {hasSoy && (
+                      <Bar dataKey="target" name="Setting (SOY)" fill="#06B6D4" fillOpacity={0.8} radius={[5, 5, 0, 0]} animationDuration={680} />
+                    )}
+                    {hasEoy && (
+                      <Bar dataKey="targetEoy" name="Setting (EOY)" fill="#F59E0B" fillOpacity={0.85} radius={[5, 5, 0, 0]} animationDuration={720} />
+                    )}
                     <Bar dataKey="actual" name="Actual (%)" fill="#0D9488" fillOpacity={0.85} radius={[6, 6, 0, 0]} animationDuration={750} />
                     <Bar dataKey="calibration" name="Calibration (%)" fill="#6366F1" radius={[6, 6, 0, 0]} animationDuration={950} />
                   </BarChart>

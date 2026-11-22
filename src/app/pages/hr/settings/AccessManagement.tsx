@@ -135,7 +135,7 @@ export type BuiltinGroup =
   | "Ka./Wa.Ka.Div ke atas"
   | "Direktur / Director";
 export type GroupName = BuiltinGroup | string;
-export type GroupAuthorityTier = "operational" | "seksi" | "bagian" | "department" | "division" | "director_group";
+export type GroupAuthorityTier = "operational" | "seksi" | "bagian" | "department" | "division" | "gm_unit" | "director_group";
 export type AccessAppraisalModule =
   | "KPI (Setting/Measurement)"
   | "SMART Goals (Setting/Measurement)"
@@ -250,6 +250,7 @@ const AUTHORITY_TIER_LABELS: Record<GroupAuthorityTier, string> = {
   bagian: "Level Bagian (Melihat semua posisi di dalam Bagiannya)",
   department: "Level Departemen (Melihat semua posisi & bagian di dalam Departemennya)",
   division: "Level Divisi ke atas (Melihat semua posisi, bagian & departemen di dalam Divisinya)",
+  gm_unit: "Level GM/vGM (Melihat semua data sesuai Unit Usaha, Divisi, Departemen, Bagian & All Posisi di Unit Usahanya)",
   director_group: "Level Direktur Group (Melihat semua Unit Usaha dalam Group [RSUP / Sambu Group], GM, Divisi, Departemen, Bagian & All Posisi)",
 };
 

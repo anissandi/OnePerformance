@@ -530,6 +530,31 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       },
       "doc_key",
     );
+  } else if (kind === "bod-personal-kpi-clear") {
+    const rawIds = Array.isArray(payload.employeeIds) ? (payload.employeeIds as unknown[]) : [];
+    const cleanIds = Array.from(new Set(rawIds.map((x) => String(x ?? "").trim()).filter(Boolean)));
+    for (const empId of cleanIds) {
+      const empEnc = encodeURIComponent(empId);
+      try {
+        await fetch(`${SUPABASE_REST_BASE}/pa_kpi_settings?employee_id=eq.${empEnc}&tab=eq.personal`, {
+          method: "DELETE",
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        });
+        await fetch(`${SUPABASE_REST_BASE}/pa_workflow_documents?employee_id=eq.${empEnc}&module=eq.KPI&phase=eq.setting`, {
+          method: "DELETE",
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        });
+      } catch {
+        // ignore offline
+      }
+    }
+    if (payload.nextByEmp && typeof payload.nextByEmp === "object") {
+      await restUpsert("pa_kv_state", { state_key: "pa_kpi_setting_by_emp_v2", state_value: payload.nextByEmp, updated_at: now }, "state_key");
+    }
+    if (Array.isArray(payload.nextWorkflows)) {
+      await restUpsert("pa_kv_state", { state_key: "appraisal_workflow_v1", state_value: payload.nextWorkflows, updated_at: now }, "state_key");
+    }
+    ok = await restUpsert("pa_kv_state", { state_key: "pa_bod_personal_kpi_cleared_v1", state_value: true, updated_at: now }, "state_key");
   } else if (kind === "kpi-tracking" && payload.docKey) {
     ok = await restUpsert(
       "pa_kpi_trackings",
@@ -1013,6 +1038,7 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
       kind === "workflow-delete" ||
       kind === "interview-schedule" ||
       kind === "mi-clear-all" ||
+      kind === "bod-personal-kpi-clear" ||
       kind === "evidence-delete" ||
       kind === "year-end-verification" ||
       (kind === "kv-state" && CRITICAL_AUTH_KV_KEYS.has(String(payload.stateKey ?? "")));
@@ -1556,6 +1582,32 @@ export async function fetchEmployeeKpiSettingsLive<T = Record<string, unknown>>(
     }
   }
   return [];
+  } catch {
+    return [];
+  }
+}
+
+/** Mengambil baris KPI Business (Group / Unit) langsung dari tabel `pa_kpi_business` bila cache lokal belum terisi. */
+export async function fetchBusinessKpiLive<T = Record<string, unknown>>(scopeKey: string): Promise<T[]> {
+  try {
+    const cleanKey = String(scopeKey ?? "").trim();
+    if (!cleanKey) return [];
+    const rows = await restSelect<Record<string, unknown>>("pa_kpi_business", "select=*&order=updated_at.desc");
+    const altKey = cleanKey === "unit-PT RSUP ASD" ? "unit-ASD" : "";
+    for (const row of rows) {
+      const rId = String(row.id ?? "").trim();
+      if ((rId === cleanKey || (altKey && rId === altKey)) && Array.isArray(row.items) && row.items.length > 0) {
+        try {
+          const byScope = JSON.parse(safeGetLocalRaw("pa_kpi_business_by_scope_v1") ?? "{}") ?? {};
+          byScope[cleanKey] = row.items;
+          safeSetLocalJson("pa_kpi_business_by_scope_v1", byScope);
+        } catch {
+          // ignore
+        }
+        return row.items as T[];
+      }
+    }
+    return [];
   } catch {
     return [];
   }
@@ -3069,6 +3121,74 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         byEmp[normId] = items;
       }
       safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
+    }
+
+    // 18b. One-time cleanup: hapus isi KPI Personal (Section & Sub Section) pada /bod/setting/kpi/personal
+    const bodPersonalCleared =
+      seenBackendKvKeys.has("pa_bod_personal_kpi_cleared_v1") ||
+      safeGetLocalRaw("pa_bod_personal_kpi_cleared_v1") === "true";
+    if (!bodPersonalCleared) {
+      let managedList: Array<Record<string, unknown>> = [];
+      try {
+        managedList = JSON.parse(safeGetLocalRaw("pa_managed_users_v1") ?? "[]") ?? [];
+      } catch {
+        managedList = [];
+      }
+      const bodEmpSet = new Set<string>();
+      const bodNormSet = new Set<string>();
+      for (const u of managedList) {
+        const roleStr = String(u.role ?? "").trim();
+        const grpStr = String(u.groupings ?? "").trim().toLowerCase();
+        const isBodOrDir =
+          roleStr === "BOD" ||
+          roleStr === "Director" ||
+          roleStr === "DirectorNonOpr" ||
+          grpStr === "direktur / director" ||
+          grpStr === "direktur" ||
+          grpStr === "director";
+        if (!isBodOrDir) continue;
+        const rawId = String(u.employeeId ?? "").trim();
+        if (!rawId) continue;
+        bodEmpSet.add(rawId);
+        const numMatch = rawId.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawId.toUpperCase();
+        bodEmpSet.add(normId);
+        bodNormSet.add(normId.toLowerCase());
+        bodNormSet.add(rawId.toLowerCase());
+      }
+      let nextByEmp: Record<string, unknown> = {};
+      try {
+        nextByEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
+      } catch {
+        nextByEmp = {};
+      }
+      for (const k of Object.keys(nextByEmp)) {
+        if (bodNormSet.has(k.trim().toLowerCase())) {
+          delete nextByEmp[k];
+        }
+      }
+      safeSetLocalJson("pa_kpi_setting_by_emp_v2", nextByEmp);
+
+      let nextWorkflows: Array<Record<string, unknown>> = [];
+      try {
+        const wfArr: Array<Record<string, unknown>> = JSON.parse(safeGetLocalRaw("appraisal_workflow_v1") ?? "[]") ?? [];
+        nextWorkflows = wfArr.filter((rec) => {
+          const mod = String(rec?.module ?? "");
+          const ph = String(rec?.phase ?? "");
+          const eid = String(rec?.employeeId ?? "").trim().toLowerCase();
+          return !(mod === "KPI" && ph === "setting" && bodNormSet.has(eid));
+        });
+        safeSetLocalJson("appraisal_workflow_v1", nextWorkflows);
+      } catch {
+        nextWorkflows = [];
+      }
+      safeSetLocalJson("pa_bod_personal_kpi_cleared_v1", true);
+      void syncToSupabase({
+        kind: "bod-personal-kpi-clear",
+        employeeIds: Array.from(bodEmpSet),
+        nextByEmp,
+        nextWorkflows,
+      });
     }
 
     // 19. Hydrate KPI Business (Group / Unit) from dedicated backend table pa_kpi_business

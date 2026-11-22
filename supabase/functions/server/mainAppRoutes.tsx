@@ -577,6 +577,20 @@ mainAppRoutes.post("/sync", async (c) => {
         try { await client.from("pa_kv_state").delete().eq("state_key", rk); } catch { /* ignore */ }
       }
       await writeBackendKv(client, "pa_mi_cleared_2026_v1", true, now);
+    } else if (kind === "bod-personal-kpi-clear") {
+      const rawIds = Array.isArray(body.employeeIds) ? (body.employeeIds as unknown[]) : [];
+      const cleanIds = Array.from(new Set(rawIds.map((x) => String(x ?? "").trim()).filter(Boolean)));
+      for (const empId of cleanIds) {
+        await client.from("pa_kpi_settings").delete().eq("employee_id", empId).eq("tab", "personal");
+        await client.from("pa_workflow_documents").delete().eq("employee_id", empId).eq("module", "KPI").eq("phase", "setting");
+      }
+      if (body.nextByEmp && typeof body.nextByEmp === "object") {
+        await writeBackendKv(client, "pa_kpi_setting_by_emp_v2", body.nextByEmp, now);
+      }
+      if (Array.isArray(body.nextWorkflows)) {
+        await writeBackendKv(client, "appraisal_workflow_v1", body.nextWorkflows, now);
+      }
+      await writeBackendKv(client, "pa_bod_personal_kpi_cleared_v1", true, now);
     } else if (kind === "evidence-delete" && body.evidenceId) {
       await client.from("pa_evidence_files").delete().eq("id", String(body.evidenceId));
     } else if (kind === "kv-state" && body.stateKey) {

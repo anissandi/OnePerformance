@@ -473,7 +473,7 @@ function BellCurveChart({
 
   const legendPayload = [
     { value: "Setting (SOY)",   type: "square" as const, color: "#06B6D4" },
-    { value: "Setting (EOY)",   type: "line"   as const, color: "#F59E0B" },
+    { value: "Setting (EOY)",   type: "square" as const, color: "#F59E0B" },
     { value: "Aktual",          type: "square" as const, color: "#0D9488" },
     { value: "Kalibrasi (EOY)", type: "square" as const, color: "#1A284F" },
   ];
@@ -490,9 +490,9 @@ function BellCurveChart({
             <ComposedChart
               data={data}
               margin={{ top: 16, right: 24, left: -8, bottom: 0 }}
-              barSize={20}
-              barGap={4}
-              barCategoryGap="24%"
+              barSize={16}
+              barGap={3}
+              barCategoryGap="22%"
             >
               <CartesianGrid key="bc-grid" strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis key="bc-xaxis" dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#374151", fontWeight: 600 }} dy={6} />
@@ -505,9 +505,10 @@ function BellCurveChart({
                 formatter={(value) => <span className="text-xs text-gray-600 font-medium">{value}</span>}
               />
               {/* Bars */}
-              <Bar key="bc-bar-setting" dataKey="Setting (SOY)"   name="Setting (SOY)"   fill="#06B6D4" fillOpacity={0.26} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-actual"  dataKey="Aktual"          name="Aktual"          fill="#0D9488" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-cal"     dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#1A284F" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-setting"     dataKey="Setting (SOY)"   name="Setting (SOY)"   fill="#06B6D4" fillOpacity={0.26} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-setting-eoy" dataKey="Setting (EOY)"   name="Setting (EOY)"   fill="#F59E0B" fillOpacity={0.25} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-actual"      dataKey="Aktual"          name="Aktual"          fill="#0D9488" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              <Bar key="bc-bar-cal"         dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#1A284F" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
               {/* Lines */}
               <Line key="bc-line-setting" type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke="#06B6D4" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}   activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
               <Line key="bc-line-setting-eoy" type="monotone" dataKey="Setting (EOY)" name="Setting (EOY)" stroke="#F59E0B" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingEoyDot />} activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
