@@ -5,6 +5,7 @@ import { X, CheckCircle2, XCircle, LockOpen, Lock, ChevronDown, Search, Clock, A
 import { loadPersistedState, savePersistedState } from "../../../services/supabaseClient";
 import { pushEmployeeNotification } from "../../../store/notificationStore";
 import { loadManagedUsers } from "../../../store/authStore";
+import { AnalyticsStatCard } from "../../../components/AnalyticsStatCard";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -820,25 +821,31 @@ export function OpenLockPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm px-5 py-4">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Total Request</p>
-          <p className="text-3xl font-black text-[#1A284F] tabular-nums">{requests.length}</p>
-        </div>
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4">
-          <div className="flex items-center gap-2 mb-1">
-            <Clock className="w-3.5 h-3.5 text-amber-600" />
-            <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Menunggu Approval</p>
-          </div>
-          <p className="text-3xl font-black text-amber-700 tabular-nums">{pendingRows.length}</p>
-        </div>
-        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4">
-          <div className="flex items-center gap-2 mb-1">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            <p className="text-[10px] font-semibold text-emerald-700 uppercase tracking-wide">Disetujui</p>
-          </div>
-          <p className="text-3xl font-black text-emerald-700 tabular-nums">{historyRows.filter(r => r.status === "approved").length}</p>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <AnalyticsStatCard
+          index={0}
+          tone="navy"
+          title="Total Request"
+          value={requests.length}
+          subtitle="Seluruh pengajuan Open Lock"
+          icon={<LockOpen className="w-4 h-4" />}
+        />
+        <AnalyticsStatCard
+          index={1}
+          tone="terracotta"
+          title="Menunggu Approval"
+          value={pendingRows.length}
+          subtitle="Perlu ditinjau Admin HR"
+          icon={<Clock className="w-4 h-4" />}
+        />
+        <AnalyticsStatCard
+          index={2}
+          tone="emerald"
+          title="Disetujui"
+          value={historyRows.filter((r) => r.status === "approved").length}
+          subtitle="Akses modul dibuka sementara"
+          icon={<CheckCircle2 className="w-4 h-4" />}
+        />
       </div>
 
       {/* Admin-only banner */}

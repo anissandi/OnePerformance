@@ -540,7 +540,7 @@ const DEFAULT_ADMIN: RolePermissions = {
   appraisal_managerial:  N,
   appraisal_feedback:    N,
   appraisal_interview:   N,
-  approvals_calibration: N,
+  approvals_calibration: VA,
   calibration_team_performance: N,
   pa_setting_project:    N,
   pa_setting_interview:  N,
@@ -1128,7 +1128,6 @@ export const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
   "Director":      applyNewMenuDefaults("Director", DEFAULT_DIRECTOR),
   "DirectorNonOpr": applyNewMenuDefaults("DirectorNonOpr", {
     ...DEFAULT_DIRECTOR,
-    approvals_calibration_setting: N,
   }),
   "GM":            applyNewMenuDefaults("GM", DEFAULT_GM),
   "vGM":           applyNewMenuDefaults("vGM", DEFAULT_GM),
@@ -1676,6 +1675,24 @@ export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
     // Form Feedback tersedia untuk semua role (termasuk role custom) kecuali dimatikan eksplisit
     if (!savedRole?.feedback) result[role].feedback = result[role].feedback?.view ? result[role].feedback : { ...V };
     if (!savedRole?.feedback_form) result[role].feedback_form = result[role].feedback_form?.view ? result[role].feedback_form : { ...VCE };
+    // Approval Calibration (Setting SOY & Adjustment EOY) khusus untuk Director, DirectorNonOpr, BOD, Administrator, HR ICF
+    const isCalApprovalAllowedRole =
+      role === "Director" ||
+      role === "DirectorNonOpr" ||
+      role === "BOD" ||
+      role === "Administrator" ||
+      role === "HR ICF" ||
+      role === "HR Admin";
+    if (!isCalApprovalAllowedRole) {
+      result[role].approvals_calibration = { ...N };
+      result[role].approvals_calibration_soy = { ...N };
+      result[role].approvals_calibration_eoy = { ...N };
+    } else {
+      if (!result[role].approvals?.view) result[role].approvals = { ...VA };
+      if (!result[role].approvals_calibration?.view) result[role].approvals_calibration = { ...VA };
+      if (!result[role].approvals_calibration_soy?.view) result[role].approvals_calibration_soy = { ...VA };
+      if (!result[role].approvals_calibration_eoy?.view) result[role].approvals_calibration_eoy = { ...VA };
+    }
   }
   return result;
 }

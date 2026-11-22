@@ -97,10 +97,10 @@ const INITIAL_MENUS: MenuItem[] = [
       { id: "approvals_mgmt_interview", label: "Management Interview",                path: "/approvals/management-interview",                  icon: "MessageSquare", isVisible: true, order: 5, roles: ["BOD", "Director"] as Role[] },
       { id: "approvals_delegation",     label: "Delegation",                          path: "/approvals/delegation",                            icon: "UserCheck",     isVisible: true, order: 6, roles: ["Administrator", "HR ICF", "BOD", "Director", "GM"] as Role[] },
       {
-        id: "approvals_calibration", label: "Calibration", path: "", icon: "BarChart2", isVisible: true, order: 7, roles: ["BOD", "Director", "GM", "Administrator", "HR ICF"] as Role[],
+        id: "approvals_calibration", label: "Calibration", path: "", icon: "BarChart2", isVisible: true, order: 7, roles: ["BOD", "Director", "DirectorNonOpr", "Administrator", "HR ICF"] as Role[],
         children: [
-          { id: "approvals_calibration_soy", label: "Setting (SOY)",    path: "/approvals/calibration/setting",    icon: "Settings",  isVisible: true, order: 1, roles: ["BOD", "Director", "GM", "Administrator", "HR ICF"] as Role[] },
-          { id: "approvals_calibration_eoy", label: "Adjustment (EOY)", path: "/approvals/calibration/adjustment", icon: "RefreshCw", isVisible: true, order: 2, roles: ["BOD", "Director", "GM", "Administrator", "HR ICF"] as Role[] },
+          { id: "approvals_calibration_soy", label: "Setting (SOY)",    path: "/approvals/calibration/setting",    icon: "Settings",  isVisible: true, order: 1, roles: ["BOD", "Director", "DirectorNonOpr", "Administrator", "HR ICF"] as Role[] },
+          { id: "approvals_calibration_eoy", label: "Adjustment (EOY)", path: "/approvals/calibration/adjustment", icon: "RefreshCw", isVisible: true, order: 2, roles: ["BOD", "Director", "DirectorNonOpr", "Administrator", "HR ICF"] as Role[] },
         ],
       },
       { id: "approvals_open_lock",      label: "Open Lock",                           path: "/settings/open-lock",                              icon: "LockOpen",      isVisible: true, order: 8, roles: HR_ADMIN },

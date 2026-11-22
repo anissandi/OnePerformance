@@ -33,6 +33,7 @@ import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadUnitScoreWeights, SCORE_WEIGHT_EVENT, weightColumnFromGrouping } from "./scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
 import { getApproverNotesHistory, getRecordDecisionLog, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
 import { loadAllAppraisalApprovers } from "./appraisalFormStore";
 import { loadApprovalDecisions } from "./smartGoalsStore";
 import { loadAllMSApprovers } from "./msStore";
@@ -1194,20 +1195,29 @@ export function ViewProfile() {
           {/* Result summary cards */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-4">Appraisal Result Summary</p>
-            <div className="grid grid-cols-3 gap-3">
-              {activeModules.map(m => (
-                <div key={m.id} className={`rounded-xl border p-4 ${m.bg} ${m.border}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-1.5">
-                      <m.icon className={`w-3.5 h-3.5 ${m.color}`} />
-                      <span className={`text-[11px] font-bold ${m.color}`}>{m.module}</span>
-                    </div>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${gradeColor(m.grade)}`}>{m.grade}</span>
-                  </div>
-                  <p className="text-2xl font-bold text-gray-900">{m.score}</p>
-                  <p className="text-[10px] text-gray-500 mt-1">Weight {m.weight}% · Weighted {m.weightedScore.toFixed(1)}</p>
-                </div>
-              ))}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {activeModules.map((m, idx) => {
+                const tones: AnalyticsCardTone[] = ["navy", "terracotta", "emerald", "plum", "teal", "slate", "rose"];
+                const tone = tones[idx % tones.length];
+                return (
+                  <AnalyticsStatCard
+                    key={m.id}
+                    index={idx}
+                    tone={tone}
+                    title={m.module}
+                    value={
+                      <span className="inline-flex items-center gap-2">
+                        <span>{m.score}</span>
+                        <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${gradeColor(m.grade)}`}>
+                          {m.grade}
+                        </span>
+                      </span>
+                    }
+                    subtitle={`Weight ${m.weight}% · Weighted ${m.weightedScore.toFixed(1)}`}
+                    icon={<m.icon className="w-4 h-4" />}
+                  />
+                );
+              })}
             </div>
           </div>
 

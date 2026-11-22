@@ -11,7 +11,7 @@ import {
   User, Building2, Calendar, Layers, Send, Paperclip, Download, Eye, MessageSquare, ChevronRight,
   FileText, ChevronDown, ChevronUp, Target,
 } from "lucide-react";
-import { FORMS, type FormItem } from "../pages/employee/AppraisalForm";
+import { FORMS, loadMasterAppraisalForms, type FormItem } from "../pages/employee/AppraisalForm";
 import { KPI_ITEMS, loadKPITracking, resolveEmployeeTrackingKpiItems, type KPIItem, type MonthEntry } from "../pages/employee/KPIPage";
 import { SAMPLE_GOALS, ROWS } from "../pages/employee/SMARTGoals";
 import { loadCheckInEntries, loadSubmittedGoals, type StoredSmartGoalEvidenceFile } from "../pages/shared/smartGoalsStore";
@@ -800,7 +800,7 @@ function SG_GoalCard({
         {totalAPs > 0 && (
           <div className="flex items-center gap-2">
             <div className="w-20 h-1.5 bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-green-400 rounded-full" style={{ width: `${pct}%` }} /></div>
-            <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} Attainable</span>
+            <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} Execution Plan | Attainable</span>
           </div>
         )}
         {collapsed ? <ChevronDown className="w-4 h-4 text-white/60 shrink-0" /> : <ChevronUp className="w-4 h-4 text-white/60 shrink-0" />}
@@ -848,14 +848,14 @@ function SG_GoalCard({
           </div>
           {goal.actionPlans.length > 0 && (
             <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Attainable</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Execution Plan | Attainable</p>
               <div className="overflow-x-auto rounded-xl border border-gray-200">
                 <table className="w-full text-xs border-collapse" style={{ minWidth: `${180 + goal.actionPlans.length * 160}px` }}>
                   <thead>
                     <tr>
-                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-28 border-r border-white/20">Attainable</th>
+                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-40 border-r border-white/20">Execution Plan | Attainable</th>
                       {goal.actionPlans.map((ap, idx) => (
-                        <th key={ap.id} className={`bg-[#1A284F] text-white text-center px-3 py-2 text-[10px] font-bold uppercase tracking-wide ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}>Attainable {idx + 1}</th>
+                        <th key={ap.id} className={`bg-[#1A284F] text-white text-center px-3 py-2 text-[10px] font-bold uppercase tracking-wide ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}>Execution Plan | Attainable {idx + 1}</th>
                       ))}
                     </tr>
                   </thead>
@@ -1692,7 +1692,7 @@ function EditableScore({ value, selected, color, onSelect }: { value: number; se
 // ─── Appraisal Form Review ─────────────────────────────────────────────────────
 
 function AppraisalFormReview({
-  row, reviewerRole, assessorRatings, onRate, submitted,
+  row, reviewerRole, assessorRatings, onRate, submitted, readOnlyView = false, assessmentSubmitted = false,
   indicatorItem, setIndicatorItem, activeForm, setActiveForm,
 }: {
   row: ApprovalRow;
@@ -1700,59 +1700,119 @@ function AppraisalFormReview({
   assessorRatings: Record<string, number>;
   onRate: (key: string, val: number) => void;
   submitted: boolean;
+  readOnlyView?: boolean;
+  assessmentSubmitted?: boolean;
   indicatorItem: FormItem | MSItem | null;
   setIndicatorItem: (item: FormItem | MSItem | null) => void;
   activeForm: "A" | "B" | "C";
   setActiveForm: (f: "A" | "B" | "C") => void;
 }) {
+  const formsList = loadMasterAppraisalForms();
+  const readRating = (map: Record<string, number>, fId: string, itemNo: number): number | undefined =>
+    map[`${fId}-${itemNo}`] ?? map[`${fId}__${itemNo}`];
+
   const self = loadAppraisalSelf(row.employeeId);
   const selfRatings = self ? Object.fromEntries(self.forms.flatMap((entry) => Object.entries(entry.ratings).map(([key, value]) => [key.replace("__", "-"), value]))) : {};
   const alias = workflowAlias(row.no);
   const record = alias && loadWorkflowRecords().find((item) => item.key === alias.key);
   const firstRatings = loadAssessment(row.no, "approver1")?.ratings ?? record?.assessments.approver1?.ratings ?? {};
-  const form = FORMS.find((f) => f.id === activeForm)!;
+  const secondRatings = loadAssessment(row.no, "approver2")?.ratings ?? record?.assessments.approver2?.ratings ?? {};
+  const managedUsers = loadManagedUsers();
+  const targetOwner = managedUsers.find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(row.employeeId) ||
+      u.employeeId.trim().toLowerCase() === row.employeeId.trim().toLowerCase(),
+  );
+  const isSameAp1Ap2 = (() => {
+    if (!targetOwner) return false;
+    const r1 = String(targetOwner.regNoAp1 ?? "").trim().toLowerCase();
+    const r2 = String(targetOwner.regNoAp2 ?? "").trim().toLowerCase();
+    if (!r1 || !r2) return false;
+    if (r1 === r2) return true;
+    const matchUser = (ref: string) =>
+      managedUsers.find(
+        (u) =>
+          String(u.regNo ?? "").trim().toLowerCase() === ref ||
+          u.employeeId.trim().toLowerCase() === ref ||
+          u.name.trim().toLowerCase() === ref,
+      );
+    const u1 = matchUser(r1);
+    const u2 = matchUser(r2);
+    return Boolean(u1 && u2 && u1.employeeId.toLowerCase() === u2.employeeId.toLowerCase());
+  })();
+  const form = formsList.find((f) => f.id === activeForm) ?? formsList[0] ?? FORMS[0];
   const showApp1 = reviewerRole === "approver2";
   const assessorColor = reviewerRole === "approver1" ? "indigo" : "teal";
   const assessorLabel = reviewerRole === "approver1" ? "Evaluasi Approver 1" : "Evaluasi Approver 2";
 
-  const selfRated     = form.items.filter((i) => selfRatings[`${form.id}-${i.no}`] != null).length;
-  const app1Rated     = form.items.filter((i) => firstRatings[`${form.id}-${i.no}`] != null).length;
-  const assessorRated = form.items.filter((i) => assessorRatings[`${form.id}-${i.no}`] != null).length;
+  const selfRated     = form.items.filter((i) => readRating(selfRatings, form.id, i.no) != null).length;
+  const app1Rated     = form.items.filter((i) => readRating(firstRatings, form.id, i.no) != null).length;
+  const assessorRated = form.items.filter((i) => readRating(assessorRatings, form.id, i.no) != null).length;
 
-  const currentFormIndex = FORMS.findIndex((f) => f.id === activeForm);
-  const nextForm = FORMS[currentFormIndex + 1] ?? null;
-  const currentFormComplete = form.items.every((item) => assessorRatings[`${form.id}-${item.no}`] != null);
+  const currentFormIndex = formsList.findIndex((f) => f.id === activeForm);
+  const nextForm = formsList[currentFormIndex + 1] ?? null;
+  const currentFormComplete = form.items.every((item) => readRating(assessorRatings, form.id, item.no) != null);
+  const formCDef = formsList.find((f) => f.id === "C") ?? FORMS.find((f) => f.id === "C");
+  const hasFormCRatings = (map: Record<string, number>) =>
+    Boolean(
+      formCDef &&
+        formCDef.items.length > 0 &&
+        formCDef.items.every((item) => readRating(map, "C", item.no) != null),
+    );
+  const isFormCFulfilled = hasFormCRatings(assessorRatings);
+  const hasCompletedSavedFormC =
+    readOnlyView &&
+    (hasFormCRatings(assessorRatings) || hasFormCRatings(firstRatings) || hasFormCRatings(secondRatings));
+  const shouldShowSummary = isFormCFulfilled || assessmentSubmitted || hasCompletedSavedFormC;
 
   const selfTotal     = selfRated > 0
-    ? (form.items.reduce((s, i) => s + (selfRatings[`${form.id}-${i.no}`] ?? 0), 0) / selfRated).toFixed(2)
+    ? (form.items.reduce((s, i) => s + (readRating(selfRatings, form.id, i.no) ?? 0), 0) / selfRated).toFixed(2)
     : "—";
   const app1Total     = app1Rated > 0
-    ? (form.items.reduce((s, i) => s + (firstRatings[`${form.id}-${i.no}`] ?? 0), 0) / app1Rated).toFixed(2)
+    ? (form.items.reduce((s, i) => s + (readRating(firstRatings, form.id, i.no) ?? 0), 0) / app1Rated).toFixed(2)
     : "—";
   const assessorTotal = assessorRated > 0
-    ? (form.items.reduce((s, i) => s + (assessorRatings[`${form.id}-${i.no}`] ?? 0), 0) / assessorRated).toFixed(2)
+    ? (form.items.reduce((s, i) => s + (readRating(assessorRatings, form.id, i.no) ?? 0), 0) / assessorRated).toFixed(2)
     : "—";
 
-  // ── Average Summary (shown only on Form C) ───────────────────────────────────
-  const formSummary = FORMS.map((f) => {
-    const sRated  = f.items.filter((i) => selfRatings[`${f.id}-${i.no}`] != null).length;
-    const a1Rated = f.items.filter((i) => firstRatings[`${f.id}-${i.no}`] != null).length;
-    const asRated = f.items.filter((i) => assessorRatings[`${f.id}-${i.no}`] != null).length;
+  // ── Average Summary (muncul ketika Form C sudah fulfill) ─────────────────────
+  const formSummary = formsList.map((f) => {
+    const sRated  = f.items.filter((i) => readRating(selfRatings, f.id, i.no) != null).length;
+    const a1Rated = f.items.filter((i) => readRating(firstRatings, f.id, i.no) != null).length;
+    const a2Rated = f.items.filter((i) => readRating(secondRatings, f.id, i.no) != null).length;
+    const asRated = f.items.filter((i) => readRating(assessorRatings, f.id, i.no) != null).length;
 
     const selfAvg = sRated > 0
-      ? f.items.reduce((s, i) => s + (selfRatings[`${f.id}-${i.no}`] ?? 0), 0) / sRated
+      ? f.items.reduce((s, i) => s + (readRating(selfRatings, f.id, i.no) ?? 0), 0) / sRated
       : null;
-    const app1Avg = a1Rated > 0
-      ? f.items.reduce((s, i) => s + (firstRatings[`${f.id}-${i.no}`] ?? 0), 0) / a1Rated
+    const storedApp1Avg = a1Rated > 0
+      ? f.items.reduce((s, i) => s + (readRating(firstRatings, f.id, i.no) ?? 0), 0) / a1Rated
+      : null;
+    const storedApp2Avg = a2Rated > 0
+      ? f.items.reduce((s, i) => s + (readRating(secondRatings, f.id, i.no) ?? 0), 0) / a2Rated
       : null;
     const assessorAvg = asRated > 0
-      ? f.items.reduce((s, i) => s + (assessorRatings[`${f.id}-${i.no}`] ?? 0), 0) / asRated
+      ? f.items.reduce((s, i) => s + (readRating(assessorRatings, f.id, i.no) ?? 0), 0) / asRated
       : null;
 
-    const vals = [selfAvg, showApp1 ? app1Avg : null, assessorAvg].filter((v): v is number => v != null);
+    const evalAp1Avg =
+      reviewerRole === "approver1"
+        ? assessorAvg
+        : storedApp1Avg ?? (isSameAp1Ap2 ? assessorAvg : null);
+    // Jika AP1 == AP2, nilai Evaluasi Approver 2 otomatis sama persis dengan Evaluasi Approver 1.
+    // Jika AP1 != AP2 dan masih di tahap Approver 1 (belum dinilai Approver 2), tampilkan 0 pada kolom Evaluasi Approver 2.
+    const evalAp2Avg =
+      reviewerRole === "approver2"
+        ? assessorAvg
+        : isSameAp1Ap2
+          ? evalAp1Avg
+          : storedApp2Avg;
+    const evalAp2Display = evalAp2Avg ?? 0;
+
+    const vals = [selfAvg, evalAp1Avg, evalAp2Avg].filter((v): v is number => v != null);
     const combinedAvg = vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
 
-    return { form: f, selfAvg, app1Avg, assessorAvg, combinedAvg };
+    return { form: f, selfAvg, evalAp1Avg, evalAp2Avg, evalAp2Display, combinedAvg };
   });
 
   // Grand average across all three forms (simple mean of form averages)
@@ -1761,12 +1821,12 @@ function AppraisalFormReview({
     return valid.length > 0 ? valid.reduce((s, r) => s + r.selfAvg!, 0) / valid.length : null;
   })();
   const grandApp1 = (() => {
-    const valid = formSummary.filter((r) => r.app1Avg != null);
-    return valid.length > 0 ? valid.reduce((s, r) => s + r.app1Avg!, 0) / valid.length : null;
+    const valid = formSummary.filter((r) => r.evalAp1Avg != null);
+    return valid.length > 0 ? valid.reduce((s, r) => s + r.evalAp1Avg!, 0) / valid.length : null;
   })();
-  const grandAssessor = (() => {
-    const valid = formSummary.filter((r) => r.assessorAvg != null);
-    return valid.length > 0 ? valid.reduce((s, r) => s + r.assessorAvg!, 0) / valid.length : null;
+  const grandApp2 = (() => {
+    const valid = formSummary.filter((r) => r.evalAp2Avg != null);
+    return valid.length > 0 ? valid.reduce((s, r) => s + r.evalAp2Avg!, 0) / valid.length : 0;
   })();
   const grandCombined = (() => {
     const valid = formSummary.filter((r) => r.combinedAvg != null);
@@ -1796,15 +1856,30 @@ function AppraisalFormReview({
 
       {/* Form tabs */}
       <div className="flex border-b border-gray-200">
-        {FORMS.map((f) => (
-          <button key={f.id} onClick={() => setActiveForm(f.id as "A" | "B" | "C")}
-            className={`flex-1 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
-              activeForm === f.id ? "border-[#1A284F] text-[#1A284F]" : "border-transparent text-gray-400 hover:text-gray-600"
-            }`}
-          >
-            {f.tab} <span className="text-gray-400 font-normal">({f.percentage}%)</span>
-          </button>
-        ))}
+        {formsList.map((f) => {
+          const fRatedCount = f.items.filter((it) => readRating(assessorRatings, f.id, it.no) != null).length;
+          const fDone = f.items.length > 0 && fRatedCount === f.items.length;
+          return (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setActiveForm(f.id as "A" | "B" | "C")}
+              className={`flex-1 py-2.5 text-sm font-semibold border-b-2 transition-colors inline-flex items-center justify-center gap-1.5 ${
+                activeForm === f.id ? "border-[#1A284F] text-[#1A284F]" : "border-transparent text-gray-400 hover:text-gray-600"
+              }`}
+            >
+              <span>{f.tab}</span>
+              <span className="text-gray-400 font-normal">({f.percentage}%)</span>
+              {fDone ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              ) : !submitted && fRatedCount > 0 ? (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600">
+                  {fRatedCount}/{f.items.length}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
 
       <div className="flex items-center justify-between bg-[#1A284F] text-white px-5 py-3 rounded-lg">
@@ -1844,9 +1919,7 @@ function AppraisalFormReview({
             </thead>
             <tbody className="divide-y divide-gray-100">
               {form.items.map((item) => {
-                const selfVal     = selfRatings[`${form.id}-${item.no}`] ?? null;
-                const app1Val     = firstRatings[`${form.id}-${item.no}`] ?? null;
-                const assessorVal = assessorRatings[`${form.id}-${item.no}`] ?? null;
+                const assessorVal = readRating(assessorRatings, form.id, item.no) ?? null;
                 return (
                   <tr key={item.no} className="hover:bg-gray-50/50">
                     <td className="py-3 px-4 text-gray-400 text-center border-r border-gray-100 align-middle">{item.no}</td>
@@ -1895,8 +1968,19 @@ function AppraisalFormReview({
         </div>
       </div>
 
-      {/* Average Summary — only on Form C */}
-      {activeForm === "C" && (
+      {!submitted && activeForm === "C" && !isFormCFulfilled && (
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 text-xs text-indigo-800 flex items-center justify-between gap-3">
+          <span>
+            Lengkapi seluruh penilaian kompetensi pada <strong>Form C</strong> ({assessorRated}/{form.items.length}) untuk menampilkan <strong>Appraisal Form Summary</strong>.
+          </span>
+          <span className="font-bold tabular-nums text-indigo-700 shrink-0">
+            {assessorRated}/{form.items.length} dinilai
+          </span>
+        </div>
+      )}
+
+      {/* Appraisal Form Summary — muncul otomatis begitu Form C sudah fulfill */}
+      {shouldShowSummary && (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="bg-[#1A284F] px-5 py-3 flex items-center justify-between">
             <span className="text-sm font-bold text-white">Appraisal Form Summary</span>
@@ -1909,15 +1993,15 @@ function AppraisalFormReview({
                   <th className="py-3 px-5 text-left border-r border-gray-200 w-40">Form</th>
                   <th className="py-3 px-5 text-center border-r border-gray-200">Bobot</th>
                   <th className="py-3 px-5 text-center border-r border-gray-200">Evaluasi Pribadi Karyawan</th>
-                  {showApp1 && <th className="py-3 px-5 text-center border-r border-gray-200 text-blue-600">Evaluasi Approver 1</th>}
-                  <th className={`py-3 px-5 text-center border-r border-gray-200 ${assessorColor === "indigo" ? "text-indigo-600" : "text-teal-600"}`}>{assessorLabel}</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200 text-indigo-600">Evaluasi Approver 1</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200 text-teal-600">Evaluasi Approver 2</th>
                   <th className="py-3 px-5 text-center border-r border-gray-200 text-amber-700 bg-amber-50/60">Aktual</th>
                   <th className="py-3 px-5 text-center border-r border-gray-200 text-purple-700 bg-purple-50/60">Konversi Nilai</th>
                   <th className="py-3 px-5 text-center text-green-700 bg-green-50/60">Skor Final</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {formSummary.map(({ form: f, selfAvg, app1Avg, assessorAvg, combinedAvg }) => (
+                {formSummary.map(({ form: f, selfAvg, evalAp1Avg, evalAp2Avg, evalAp2Display, combinedAvg }) => (
                   <tr key={f.id} className="hover:bg-gray-50/40">
                     <td className="py-3 px-5 font-semibold text-gray-800 border-r border-gray-100">
                       <span className="inline-flex items-center gap-2">
@@ -1929,13 +2013,11 @@ function AppraisalFormReview({
                     <td className="py-3 px-5 text-center text-[#1A284F] font-bold border-r border-gray-100">
                       {selfAvg != null ? selfAvg.toFixed(2) : <span className="text-gray-300">—</span>}
                     </td>
-                    {showApp1 && (
-                      <td className="py-3 px-5 text-center text-blue-600 font-bold border-r border-gray-100">
-                        {app1Avg != null ? app1Avg.toFixed(2) : <span className="text-gray-300">—</span>}
-                      </td>
-                    )}
-                    <td className={`py-3 px-5 text-center font-bold border-r border-gray-100 ${assessorColor === "indigo" ? "text-indigo-600 bg-indigo-50/20" : "text-teal-600 bg-teal-50/20"}`}>
-                      {assessorAvg != null ? assessorAvg.toFixed(2) : <span className="text-gray-300">—</span>}
+                    <td className={`py-3 px-5 text-center text-indigo-600 font-bold border-r border-gray-100 ${reviewerRole === "approver1" ? "bg-indigo-50/20" : ""}`}>
+                      {evalAp1Avg != null ? evalAp1Avg.toFixed(2) : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className={`py-3 px-5 text-center text-teal-600 font-bold border-r border-gray-100 ${reviewerRole === "approver2" || isSameAp1Ap2 ? "bg-teal-50/20" : ""}`}>
+                      {evalAp2Avg != null ? evalAp2Avg.toFixed(2) : String(evalAp2Display)}
                     </td>
                     <td className="py-3 px-5 text-center font-bold border-r border-gray-200 text-amber-700 bg-amber-50/40">
                       {combinedAvg != null ? combinedAvg.toFixed(2) : <span className="text-gray-300">—</span>}
@@ -1958,16 +2040,14 @@ function AppraisalFormReview({
                       {grandSelf != null ? grandSelf.toFixed(2) : "—"}
                     </span>
                   </td>
-                  {showApp1 && (
-                    <td className="py-3.5 px-5 text-center border-r border-gray-100">
-                      <span className="inline-block px-3 py-1 rounded-lg bg-blue-600 text-white text-sm font-black">
-                        {grandApp1 != null ? grandApp1.toFixed(2) : "—"}
-                      </span>
-                    </td>
-                  )}
                   <td className="py-3.5 px-5 text-center border-r border-gray-100">
-                    <span className={`inline-block px-3 py-1 rounded-lg text-white text-sm font-black ${assessorColor === "indigo" ? "bg-indigo-600" : "bg-teal-600"}`}>
-                      {grandAssessor != null ? grandAssessor.toFixed(2) : "—"}
+                    <span className="inline-block px-3 py-1 rounded-lg bg-indigo-600 text-white text-sm font-black">
+                      {grandApp1 != null ? grandApp1.toFixed(2) : "—"}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-5 text-center border-r border-gray-100">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-teal-600 text-white text-sm font-black">
+                      {formSummary.some((r) => r.evalAp2Avg != null) ? grandApp2.toFixed(2) : "0"}
                     </span>
                   </td>
                   <td className="py-3.5 px-5 text-center border-r border-gray-200 bg-amber-50/60">
@@ -2221,7 +2301,10 @@ export function ReviewDrawer(props: Props) {
 
 function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevision, onAssessed, readOnly }: Props) {
   const { t } = useLanguage();
-  const isFullyAssessed = row.status === "Assessed-Approver 2";
+  const masterAppraisalForms = loadMasterAppraisalForms();
+  const isFullyAssessed =
+    row.status === "Assessed-Approver 2" ||
+    (row.type === "Appraisal Form" && row.status === "Approved");
   const activeUser = getActiveUser();
   const allUsers = loadManagedUsers();
   const normEmpId = normalizeEmployeeId(row.employeeId);
@@ -2279,6 +2362,10 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
   const [step, setStep]                     = useState<"review" | "revision">("review");
   const [revisionNote, setRevisionNote]     = useState("");
   const [assessorRatings, setAssessorRatings] = useState<Record<string, number>>(() => {
+    // Saat membuka pengajuan berstatus Pending untuk dinilai, mulai dari kosong agar cache lama tidak langsung memenuhi Form C
+    if (!readOnly && row.status === "Pending") {
+      return {};
+    }
     // Always try stored assessment first (covers History views for both A1 and A2)
     const stored = loadAssessment(row.no, reviewerRole);
     if (stored && Object.keys(stored.ratings).length > 0) return stored.ratings;
@@ -2355,15 +2442,15 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
     }
     // Appraisal Form: all three forms (A, B, C) must be fully assessed
     return (
-      FORMS.every((f) =>
-      f.items.every((item) => assessorRatings[`${f.id}-${item.no}`] != null)
+      masterAppraisalForms.every((f) =>
+        f.items.every((item) => (assessorRatings[`${f.id}-${item.no}`] ?? assessorRatings[`${f.id}__${item.no}`]) != null)
       ) && isApproverCommentFilled
     );
   })();
 
   // Per-form completion for hint text
-  const formCompletion = FORMS.reduce<Record<string, boolean>>((acc, f) => {
-    acc[f.id] = f.items.every((item) => assessorRatings[`${f.id}-${item.no}`] != null);
+  const formCompletion = masterAppraisalForms.reduce<Record<string, boolean>>((acc, f) => {
+    acc[f.id] = f.items.every((item) => (assessorRatings[`${f.id}-${item.no}`] ?? assessorRatings[`${f.id}__${item.no}`]) != null);
     return acc;
   }, {});
 
@@ -2372,8 +2459,8 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
     if (!hasAssessment || isCheckerStage || isValidatorStage) return [] as string[];
     const reasons: string[] = [];
     if (row.type === "Appraisal Form") {
-      for (const f of FORMS) {
-        const missingCount = f.items.filter((item) => assessorRatings[`${f.id}-${item.no}`] == null).length;
+      for (const f of masterAppraisalForms) {
+        const missingCount = f.items.filter((item) => (assessorRatings[`${f.id}-${item.no}`] ?? assessorRatings[`${f.id}__${item.no}`]) == null).length;
         if (missingCount > 0) {
           reasons.push(`${f.tab}: ${missingCount} item evaluasi belum dinilai`);
         }
@@ -2422,7 +2509,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
       />
     );
     if (row.type === "Project")          return <ProjectReview employeeId={row.employeeId} />;
-    if (row.type === "Appraisal Form")   return <AppraisalFormReview {...sharedProps} />;
+    if (row.type === "Appraisal Form")   return <AppraisalFormReview {...sharedProps} readOnlyView={effectiveReadOnly} assessmentSubmitted={assessmentSubmitted} />;
     if (row.type === "Managerial Skill") return <ManagerialSkillReview {...sharedProps} />;
     if (row.type === "RCA")              return <RCAReviewPreview employeeId={row.employeeId} />;
     return (
@@ -2641,7 +2728,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                     : row.type === "Appraisal Form"
                     ? <>
                         Complete all scores in{" "}
-                        {FORMS.filter((f) => !formCompletion[f.id]).map((f) => (
+                        {masterAppraisalForms.filter((f) => !formCompletion[f.id]).map((f) => (
                           <span key={f.id} className="font-semibold text-gray-600">{f.tab}</span>
                         )).reduce<React.ReactNode[]>((acc, el, i) => i === 0 ? [el] : [...acc, ", ", el], [])}
                         {" "}to enable Submit.

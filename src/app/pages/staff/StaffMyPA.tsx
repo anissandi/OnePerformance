@@ -20,6 +20,7 @@ import {
 import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
 import { KPITableView } from "../../components/KPITableView";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
 import { fetchEmployeeKpiSettingsLive, fetchEmployeeKpiTrackingLive } from "../../services/supabaseClient";
 import { SmartGoalsScoreHistory } from "../../components/SmartGoalsScoreHistory";
 import { InterDeptFeedbackAppraisalSummary } from "../../components/InterDeptFeedbackAppraisalSummary";
@@ -1400,11 +1401,17 @@ function ScoreSummaryBanner({ year }: { year: string }) {
   const liveAfScore  = liveMe && liveMe.formA.score > 0 ? liveMe.formA.score : null;
   const livePrjScore = liveMe && liveMe.project.score > 0 ? liveMe.project.score : null;
 
-  const allCards = [
-    { label: "KPI",            score: isCurrent ? liveKpiScore : (hist?.kpi       ?? null), weight: getWeightNum("KPI", 50),                       icon: <TrendingUp className="w-5 h-5" />,   color: "text-blue-700",  bg: "bg-blue-50",  border: "border-blue-200"  },
-    { label: "SMART Goals",    score: isCurrent ? liveSgScore  : (hist?.smart     ?? null), weight: getWeightNum("SMART Goals", 20),               icon: <Lightbulb className="w-5 h-5" />,     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200" },
-    { label: "Appraisal Form", score: isCurrent ? liveAfScore  : (hist?.appraisal ?? null), weight: getWeightNum("Appraisal Form", 15),            icon: <ClipboardList className="w-5 h-5" />, color: "text-green-700", bg: "bg-green-50", border: "border-green-200" },
-    { label: "Project Outside",score: isCurrent ? livePrjScore : (hist?.project   ?? null), weight: getWeightNum("Project Outside Job Scope", 15), icon: <FolderKanban className="w-5 h-5" />,  color: "text-teal-700",  bg: "bg-teal-50",  border: "border-teal-200"  },
+  const allCards: Array<{
+    label: string;
+    score: number | null;
+    weight: number;
+    icon: React.ReactNode;
+    tone: AnalyticsCardTone;
+  }> = [
+    { label: "KPI",             score: isCurrent ? liveKpiScore : (hist?.kpi       ?? null), weight: getWeightNum("KPI", 50),                       icon: <TrendingUp className="w-4 h-4" />,    tone: "navy"       },
+    { label: "SMART Goals",     score: isCurrent ? liveSgScore  : (hist?.smart     ?? null), weight: getWeightNum("SMART Goals", 20),               icon: <Lightbulb className="w-4 h-4" />,     tone: "terracotta" },
+    { label: "Appraisal Form",  score: isCurrent ? liveAfScore  : (hist?.appraisal ?? null), weight: getWeightNum("Appraisal Form", 15),            icon: <ClipboardList className="w-4 h-4" />, tone: "emerald"    },
+    { label: "Project Outside", score: isCurrent ? livePrjScore : (hist?.project   ?? null), weight: getWeightNum("Project Outside Job Scope", 15), icon: <FolderKanban className="w-4 h-4" />,  tone: "teal"       },
   ];
   const cards = allCards.filter((c) => {
     if (c.label === "KPI") return allowedModules.includes("KPI (Setting/Measurement)");
@@ -1427,12 +1434,15 @@ function ScoreSummaryBanner({ year }: { year: string }) {
   const grade = overallScore !== null ? getGrade(overallScore) : null;
 
   return (
-    <div className={`rounded-2xl border shadow-sm overflow-hidden ${isCurrent ? "border-amber-200 bg-gradient-to-br from-amber-50 to-white" : "border-green-200 bg-gradient-to-br from-green-50 to-white"}`}>
-      <div className={`flex items-center justify-between px-6 py-3 ${isCurrent ? "bg-amber-500" : "bg-green-600"}`}>
-        <div className="flex items-center gap-2">
-          {isCurrent ? <Activity className="w-4 h-4 text-white" /> : <Lock className="w-4 h-4 text-white" />}
+    <div className="rounded-2xl border border-[#DCE3F2] bg-gradient-to-br from-[#F7F9FE] via-white to-[#F3F6FC] shadow-sm overflow-hidden">
+      <div className={`flex items-center justify-between px-6 py-3.5 bg-gradient-to-r ${isCurrent ? "from-[#1A284F] via-[#223566] to-[#2B427A]" : "from-[#1A284F] via-[#1E3F5C] to-[#1F5E5B]"}`}>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {isCurrent ? <Activity className="w-4 h-4 text-sky-300" /> : <Lock className="w-4 h-4 text-emerald-300" />}
           <span className="text-white font-bold text-sm tracking-wide uppercase">{scoreLabel}</span>
-          <span className="text-white/70 text-xs">— Performance Year {year}</span>
+          <span className="text-white/75 text-xs">— Performance Year {year}</span>
+          <span className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full border ${isCurrent ? "bg-amber-400/15 text-amber-200 border-amber-300/30" : "bg-emerald-400/15 text-emerald-200 border-emerald-300/30"}`}>
+            {isCurrent ? (isPartial ? "In Progress" : "Evaluated") : "Finalized"}
+          </span>
         </div>
         {overallScore !== null && grade ? (
           <div className="flex items-center gap-3">
@@ -1447,37 +1457,23 @@ function ScoreSummaryBanner({ year }: { year: string }) {
         ) : (
           <div className="flex items-center gap-2">
             <span className="text-white/80 text-xs font-medium">Overall Score</span>
-            <span className="bg-white/20 text-white font-bold text-sm px-3 py-0.5 rounded-full">Belum ada data</span>
+            <span className="bg-white/15 border border-white/20 text-white font-semibold text-xs px-3 py-1 rounded-full">Belum ada data</span>
           </div>
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-4">
-        {cards.map((card) => (
-          <div key={card.label} className={`rounded-xl border ${card.border} ${card.bg} px-4 py-4 flex flex-col gap-2`}>
-            <div className={`flex items-center gap-2 ${card.color}`}>
-              {card.icon}
-              <span className="text-xs font-bold uppercase tracking-wide">{card.label}</span>
-            </div>
-            <div className="flex items-end justify-between">
-              {card.score !== null
-                ? <span className={`text-2xl font-bold ${isCurrent ? "text-amber-600" : "text-green-700"}`}>{card.score}%</span>
-                : <span className="text-2xl font-bold text-gray-300">—</span>}
-              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isCurrent ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}`}>
-                Bobot {card.weight}%
-              </span>
-            </div>
-            <div className="mt-1">
-              <div className="w-full bg-white/60 rounded-full h-1.5 overflow-hidden">
-                {card.score !== null
-                  ? <div className={`h-1.5 rounded-full transition-all duration-700 ${isCurrent ? "bg-amber-400" : "bg-green-500"}`} style={{ width: `${card.score}%` }} />
-                  : <div className="h-1.5 rounded-full bg-gray-200 w-full" />}
-              </div>
-              <p className={`text-[10px] mt-1 font-medium ${card.score === null ? "text-gray-400 italic" : card.color}`}>
-                {card.score === null ? (isCurrent ? "Belum dievaluasi" : "No data") : scoreLabel}
-              </p>
-            </div>
-          </div>
+      <div className="grid grid-cols-1 gap-3.5 p-5 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map((card, idx) => (
+          <AnalyticsStatCard
+            key={card.label}
+            index={idx}
+            compact
+            tone={card.tone}
+            title={card.label}
+            value={card.score !== null ? `${card.score}%` : <span className="text-gray-300">—</span>}
+            subtitle={`Bobot ${card.weight}% · ${card.score === null ? (isCurrent ? "Belum dievaluasi" : "No data") : scoreLabel}`}
+            icon={card.icon}
+          />
         ))}
       </div>
 

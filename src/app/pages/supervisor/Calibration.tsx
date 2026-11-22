@@ -1,7 +1,8 @@
 import { resolveGradeForScore } from "../shared/scoringWeightStore";
 import { useState, useMemo, useEffect } from "react";
-import { AlertTriangle, Eye, X, FileText, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { AlertTriangle, Eye, X, FileText, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, Users, TrendingUp, Award, Sparkles } from "lucide-react";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { AnalyticsStatCard } from "../../components/AnalyticsStatCard";
 import { loadPersistedState } from "../../services/supabaseClient";
 import { getActiveUser, getStrictSubordinateUsers } from "../../store/authStore";
 import { getApproverNotesHistory, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
@@ -565,6 +566,13 @@ export function SupervisorCalibration() {
 
   const currentCounts  = (g: string) => teamMembers.filter(m => m.currentGrade  === g).length;
   const proposedCounts = (g: string) => teamMembers.filter(m => m.proposedGrade === g).length;
+  const avgCurrentScore = displayed.length > 0
+    ? (displayed.reduce((s, m) => s + m.currentScore, 0) / displayed.length).toFixed(1)
+    : "0.0";
+  const avgProposedScore = displayed.length > 0
+    ? (displayed.reduce((s, m) => s + m.proposedScore, 0) / displayed.length).toFixed(1)
+    : "0.0";
+  const upgradedCount = displayed.filter((m) => m.status === "Upgraded").length;
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -572,6 +580,42 @@ export function SupervisorCalibration() {
         <div>
           <h1 className="text-3xl font-bold text-[#1A284F]">Team Performance Calibration</h1>
           <p className="mt-1 text-sm text-gray-500">Performance Year 2026 · Pending HR Review</p>
+        </div>
+
+        {/* ── Summary Stat Cards ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <AnalyticsStatCard
+            index={0}
+            tone="navy"
+            title="Total Anggota Tim"
+            value={displayed.length}
+            subtitle={`Dari ${teamMembers.length} bawahan dalam wewenang`}
+            icon={<Users className="w-4 h-4" />}
+          />
+          <AnalyticsStatCard
+            index={1}
+            tone="teal"
+            title="Rata-Rata Current Score"
+            value={`${avgCurrentScore}%`}
+            subtitle="Skor aktual sebelum kalibrasi"
+            icon={<TrendingUp className="w-4 h-4" />}
+          />
+          <AnalyticsStatCard
+            index={2}
+            tone="plum"
+            title="Rata-Rata Proposed Score"
+            value={`${avgProposedScore}%`}
+            subtitle="Skor usulan setelah kalibrasi"
+            icon={<Award className="w-4 h-4" />}
+          />
+          <AnalyticsStatCard
+            index={3}
+            tone="emerald"
+            title="Upgraded"
+            value={upgradedCount}
+            subtitle={`${displayed.length - upgradedCount} anggota tanpa perubahan`}
+            icon={<Sparkles className="w-4 h-4" />}
+          />
         </div>
 
         {/* ── Filters ── */}

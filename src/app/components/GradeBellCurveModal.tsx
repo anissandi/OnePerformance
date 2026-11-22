@@ -74,10 +74,65 @@ export function GradeBellCurveModal({
     ...r,
     color: r.color ?? BELL_GRADE_COLORS[r.grade] ?? "#1A284F",
     target: Number((r.target ?? 0).toFixed(1)),
+    targetCount: r.targetCount ?? 0,
     actual: Number((r.actual ?? 0).toFixed(1)),
+    actualCount: r.actualCount ?? 0,
     calibration: Number((r.calibration ?? 0).toFixed(1)),
+    calibrationCount: r.calibrationCount ?? 0,
   }));
   const fmtPct = (v: unknown) => `${v}%`;
+  const renderBellTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload?: (typeof data)[number] }> }) => {
+    if (!active || !payload?.length || !payload[0]?.payload) return null;
+    const d = payload[0].payload;
+    return (
+      <div className="min-w-[210px] rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs shadow-lg">
+        <div className="mb-1.5 flex items-center gap-2 border-b border-slate-100 pb-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ backgroundColor: d.color }} />
+          <span className="font-bold text-slate-900">Grade {d.grade}</span>
+        </div>
+        {mode === "single" ? (
+          <div className="flex items-center justify-between gap-4 text-slate-600">
+            <span>Setting (SOY):</span>
+            <span className="font-bold text-[#1A284F] tabular-nums">
+              {d.target}% ({d.targetCount} HC)
+            </span>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {(d.target > 0 || d.targetCount > 0) && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="flex items-center gap-1.5 text-slate-500">
+                  <span className="h-2 w-2 rounded-full bg-slate-400" />
+                  Setting (SOY)
+                </span>
+                <span className="font-semibold text-slate-800 tabular-nums">
+                  {d.target}% ({d.targetCount} HC)
+                </span>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-4">
+              <span className="flex items-center gap-1.5 text-amber-700">
+                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                Aktual (EOY)
+              </span>
+              <span className="font-bold text-amber-700 tabular-nums">
+                {d.actual}% ({d.actualCount} HC)
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <span className="flex items-center gap-1.5 text-indigo-700">
+                <span className="h-2 w-2 rounded-full bg-indigo-600" />
+                Calibration (Proposed)
+              </span>
+              <span className="font-bold text-indigo-700 tabular-nums">
+                {d.calibration}% ({d.calibrationCount} HC)
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4" onClick={onClose}>
@@ -130,7 +185,7 @@ export function GradeBellCurveModal({
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                   <XAxis dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#334155", fontWeight: 700 }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={fmtPct} />
-                  <Tooltip formatter={(v: number, name: string) => [`${v}%`, name]} />
+                  <Tooltip content={renderBellTooltip as never} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {mode === "single" ? (
                     <>
@@ -160,7 +215,7 @@ export function GradeBellCurveModal({
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                     <XAxis dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#334155", fontWeight: 700 }} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={fmtPct} />
-                    <Tooltip formatter={(v: number, name: string) => [`${v}%`, name]} />
+                    <Tooltip content={renderBellTooltip as never} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <Bar dataKey="actual" name="Actual (%)" fill="#FBBF24" radius={[6, 6, 0, 0]} animationDuration={750} />
                     <Bar dataKey="calibration" name="Calibration (%)" fill="#6366F1" radius={[6, 6, 0, 0]} animationDuration={950} />
@@ -184,16 +239,21 @@ export function GradeBellCurveModal({
                 </span>
                 {mode === "single" ? (
                   <>
-                    <p className="mt-1 text-sm font-bold text-gray-900">{d.targetCount ?? 0}</p>
+                    <p className="mt-1 text-sm font-bold text-gray-900">{d.targetCount} HC</p>
                     <p className="text-[10px] text-gray-500">{d.target}%</p>
                   </>
                 ) : (
                   <div className="mt-1 space-y-0.5 text-[10px]">
+                    {(d.target > 0 || d.targetCount > 0) && (
+                      <p className="text-slate-600">
+                        Setting: <strong>{d.targetCount}</strong> ({d.target}%)
+                      </p>
+                    )}
                     <p className="text-amber-700">
-                      Aktual: <strong>{d.actualCount ?? 0}</strong> ({d.actual}%)
+                      Aktual: <strong>{d.actualCount}</strong> ({d.actual}%)
                     </p>
                     <p className="text-indigo-700">
-                      Calib: <strong>{d.calibrationCount ?? 0}</strong> ({d.calibration}%)
+                      Proposed: <strong>{d.calibrationCount}</strong> ({d.calibration}%)
                     </p>
                   </div>
                 )}

@@ -93,14 +93,14 @@ export function SmartGoalsProgressCard({ variant: _variant = "light", ...rest }:
           </div>
         </div>
 
-        {/* Card 2: Attainable (Soft Emerald-Teal Theme, tanpa Open/Closed) */}
+        {/* Card 2: Execution Plan | Attainable (Soft Emerald-Teal Theme, tanpa Open/Closed) */}
         <div className="rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-[#E7F7F0] via-[#F4FCF8] to-white p-4 shadow-2xs flex flex-col justify-between gap-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <span className="w-6 h-6 rounded-lg bg-emerald-100 border border-emerald-200/80 flex items-center justify-center">
                 <TrendingUp className="w-3.5 h-3.5 text-emerald-700" />
               </span>
-              <span className="text-[11px] font-bold uppercase tracking-widest text-emerald-900">Attainable</span>
+              <span className="text-[11px] font-bold uppercase tracking-widest text-emerald-900">Execution Plan | Attainable</span>
             </div>
             <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
               {p.apPct}%
@@ -108,7 +108,7 @@ export function SmartGoalsProgressCard({ variant: _variant = "light", ...rest }:
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-3xl font-extrabold text-[#1A284F] leading-none">{p.totalAPs}</span>
-            <span className="text-xs font-medium text-slate-500">Total Attainable</span>
+            <span className="text-xs font-medium text-slate-500">Total Execution Plan | Attainable</span>
           </div>
           <div className="flex flex-col gap-1">
             <div className="w-full h-1.5 rounded-full bg-emerald-100 overflow-hidden">
@@ -140,7 +140,7 @@ export function SmartGoalsProgressCard({ variant: _variant = "light", ...rest }:
           </div>
         </div>
 
-        {/* Card 4: Breakdown Status · Attainable (Soft Amber-Sand Theme, 2 baris / grid-cols-2) */}
+        {/* Card 4: Breakdown Status · Execution Plan | Attainable (Soft Amber-Sand Theme, 2 baris / grid-cols-2) */}
         <div className="rounded-2xl border border-amber-200/80 bg-gradient-to-br from-[#FFF5E7] via-[#FFFBF5] to-white p-4 shadow-2xs flex flex-col justify-between gap-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
@@ -150,7 +150,7 @@ export function SmartGoalsProgressCard({ variant: _variant = "light", ...rest }:
               <span className="text-[10px] font-bold uppercase tracking-widest text-amber-950">Breakdown Status</span>
             </div>
             <span className="px-2 py-0.5 rounded-full bg-amber-100/80 text-amber-800 text-[10px] font-bold uppercase tracking-wide">
-              Attainable
+              Execution Plan | Attainable
             </span>
           </div>
           <div className="grid grid-cols-2 gap-2">

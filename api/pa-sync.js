@@ -126,10 +126,25 @@ function toPaUserRow(u, now, mode = "full") {
     : Array.isArray(u.managed_units)
       ? u.managed_units
       : [];
+  const rawCalRoleMap =
+    u.calibrationRoleByUnit && typeof u.calibrationRoleByUnit === "object"
+      ? u.calibrationRoleByUnit
+      : u.calibration_role_by_unit && typeof u.calibration_role_by_unit === "object"
+        ? u.calibration_role_by_unit
+        : {};
+  const normCalRoleMap = {};
+  for (const [k, v] of Object.entries(rawCalRoleMap)) {
+    const val = String(v ?? "").trim();
+    if (val === "approver" || val === "mengetahui" || val === "readonly" || val === "") {
+      normCalRoleMap[canonicalizeUnitName(k)] = val;
+    }
+  }
   return {
     ...extended,
     checker_units: Array.from(new Set(rawCheckerUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
     managed_units: Array.from(new Set(rawManagedUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
+    calibration_role_by_unit: normCalRoleMap,
+    director_calibration_role: String(u.directorCalibrationRole ?? u.director_calibration_role ?? ""),
   };
 }
 

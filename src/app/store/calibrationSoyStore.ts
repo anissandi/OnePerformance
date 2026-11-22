@@ -65,9 +65,27 @@ export function getSoyApproval(unitId: string): SoyApprovalRecord | undefined {
   return loadSoyApprovals()[unitId];
 }
 
+export function formatActorWithPosition(rawBy?: string): string {
+  const text = String(rawBy ?? "").trim();
+  if (!text) return "—";
+  const users = loadManagedUsers();
+  const m = text.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  const namePart = (m ? m[1] : text).trim();
+  const found = users.find(
+    (u) =>
+      u.name.trim().toLowerCase() === namePart.toLowerCase() ||
+      u.employeeId.trim().toLowerCase() === namePart.toLowerCase(),
+  );
+  if (found && found.position?.trim()) {
+    return `${found.name} (${found.position.trim()})`;
+  }
+  return text;
+}
+
 function actorLabel(): string {
   const u = getActiveUser();
-  return u?.name ? `${u.name}${u.role ? ` (${u.role})` : ""}` : "System";
+  const pos = u?.position?.trim();
+  return u?.name ? `${u.name}${pos ? ` (${pos})` : ""}` : "System";
 }
 
 function save(map: Record<string, SoyApprovalRecord>) {
@@ -98,14 +116,14 @@ export function loadSoyEmployeeSnapshot(): Record<string, ManagedUser[]> {
 export function resolveSoyRoleForUser(user: ManagedUser, unitName: string, includeGlobalAdmins = false): "approve" | "view" | null {
   const explicit = user.calibrationRoleByUnit?.[unitName];
   if (explicit === "approver") return "approve";
-  if (explicit === "mengetahui") return "view";
+  if (explicit === "mengetahui" || explicit === "readonly") return "view";
   if (isAdminOrHrIcfRole(user.role)) return includeGlobalAdmins ? "approve" : null;
   if (isDirectorRoleOrGrouping(user) && !getGroupCompaniesForUnit(user.company, user.managedUnits).includes(unitName)) {
     return null;
   }
   const r = getCalibrationRoleForUnit(user, unitName);
   if (r === "approver") return "approve";
-  if (r === "mengetahui") return "view";
+  if (r === "mengetahui" || r === "readonly") return "view";
   return null;
 }
 
@@ -191,6 +209,43 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
     history: [...rec.history, { status, by, at: now, note: note.trim() }],
   };
   save(map);
+
+  // Ketika HC Awal Tahun (SOY) telah Approved, kunci baseline SOY di calibration_hc_settings_2026
+  // agar perubahan apa pun pada HC Akhir Tahun (EOY) tidak pernah mengubah HC di tab HC Awal Tahun (SOY).
+  if (status === "Approved" && rec.snapshot) {
+    try {
+      const rawUnits = localStorage.getItem("calibration_hc_settings_2026");
+      if (rawUnits) {
+        const parsedUnits = JSON.parse(rawUnits) as Array<Record<string, unknown>>;
+        if (Array.isArray(parsedUnits)) {
+          const snap = rec.snapshot;
+          const lockedBeginningHC: Record<string, number> = {};
+          const lockedCustomQuotas: Record<string, Record<string, number>> = {};
+          for (const row of [
+            ...(snap.divisionProportions ?? []),
+            ...(snap.departemenenProportions ?? []),
+            ...(snap.bagianProportions ?? []),
+          ]) {
+            lockedBeginningHC[row.id] = row.hc;
+            if (row.customQuotas) lockedCustomQuotas[row.id] = { ...row.customQuotas };
+          }
+          const updatedUnits = parsedUnits.map((u) =>
+            String(u.id) === String(unitId) || canonicalizeCompanyUnitName(String(u.name ?? "")) === rec.unitName
+              ? {
+                  ...u,
+                  beginningGrades: snap.calibrationGrades.map((g) => ({ ...g })),
+                  beginningHC: lockedBeginningHC,
+                  beginningCustomQuotas: lockedCustomQuotas,
+                }
+              : u,
+          );
+          savePersistedState("calibration_hc_settings_2026", updatedUnits);
+        }
+      }
+    } catch {
+      // ignore local parse issues
+    }
+  }
 }
 
 /** Reset status pengajuan HC Awal Tahun (SOY) agar unit dapat diedit dan di-submit ulang. */

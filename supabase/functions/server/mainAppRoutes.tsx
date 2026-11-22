@@ -180,12 +180,28 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
     managed_units: Array.isArray(u.managedUnits)
       ? Array.from(new Set((u.managedUnits as unknown[]).map((x) => canonicalizeUnitName(x)).filter(Boolean)))
       : [],
+    calibration_role_by_unit:
+      u.calibrationRoleByUnit && typeof u.calibrationRoleByUnit === "object"
+        ? Object.fromEntries(
+            Object.entries(u.calibrationRoleByUnit as Record<string, unknown>).map(([k, v]) => [
+              canonicalizeUnitName(k),
+              String(v ?? ""),
+            ]),
+          )
+        : {},
+    director_calibration_role: String(u.directorCalibrationRole ?? ""),
     updated_at: now,
   };
   if (!fullRow.employee_id) return;
   const { error } = await client.from("pa_users").upsert(fullRow);
   if (error) {
-    const { checker_units: _cu, managed_units: _mu, ...legacyRow } = fullRow;
+    const {
+      checker_units: _cu,
+      managed_units: _mu,
+      calibration_role_by_unit: _cr,
+      director_calibration_role: _dr,
+      ...legacyRow
+    } = fullRow;
     const { error: legacyErr } = await client.from("pa_users").upsert(legacyRow);
     if (!legacyErr) return;
     await client.from("pa_users").upsert({

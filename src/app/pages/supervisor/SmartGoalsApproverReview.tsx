@@ -340,7 +340,7 @@ function GoalReviewCard({
               <div className="w-20 h-1.5 bg-white/20 rounded-full overflow-hidden">
                 <div className="h-full bg-green-400 rounded-full" style={{ width: `${pct}%` }} />
               </div>
-              <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} Attainable</span>
+              <span className="text-[10px] text-white/60 font-semibold">{selesaiCount}/{totalAPs} Execution Plan | Attainable</span>
             </div>
           )}
           {collapsed
@@ -398,15 +398,15 @@ function GoalReviewCard({
           {/* Action Plans — horizontal status table */}
           {goal.actionPlans.length > 0 && (
             <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Attainable</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#1A284F]">Status Execution Plan | Attainable</p>
               <div className="overflow-x-auto rounded-xl border border-gray-200">
                 <table className="w-full text-xs border-collapse" style={{ minWidth: `${180 + goal.actionPlans.length * 160}px` }}>
                   <thead>
                     <tr>
-                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-24 align-middle border-r border-white/20">Attainable</th>
+                      <th className="bg-[#1A284F] text-white text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wide w-40 align-middle border-r border-white/20">Execution Plan | Attainable</th>
                       {goal.actionPlans.map((ap, idx) => (
                         <th key={ap.id} className={`bg-[#1A284F] text-white text-center px-3 py-2 text-[10px] font-bold uppercase tracking-wide ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}>
-                          Attainable {idx + 1}
+                          Execution Plan | Attainable {idx + 1}
                         </th>
                       ))}
                     </tr>

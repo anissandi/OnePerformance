@@ -46,6 +46,23 @@ export type AppraisalModuleName =
   | "Inter-Departement Feedback"
   | "Management Interview";
 
+export type CalibrationUnitRole = "approver" | "mengetahui" | "readonly" | "";
+
+export const CALIBRATION_APPROVAL_ALLOWED_ROLES = [
+  "Director",
+  "DirectorNonOpr",
+  "BOD",
+  "Administrator",
+  "HR ICF",
+] as const;
+
+/** Hanya role Director, DirectorNonOpr, BOD, Administrator, dan HR ICF yang memiliki akses halaman /approvals/calibration/* */
+export function canRoleAccessCalibrationApproval(role?: string | null): boolean {
+  const r = String(role ?? "").trim();
+  if (r === "HR Admin") return true;
+  return (CALIBRATION_APPROVAL_ALLOWED_ROLES as readonly string[]).includes(r);
+}
+
 export interface ManagedUser {
   id: string;
   no?: string;
@@ -71,10 +88,10 @@ export interface ManagedUser {
   isHrIcfValidator?: boolean;
   /** Daftar Company Unit yang diizinkan untuk fungsi Checker HR Unit (Lintas Unit Usaha) */
   checkerUnits?: string[];
-  /** Peran khusus Role Director pada Calibration Approval: "approver" (Approve/Revision) atau "mengetahui" (Acknowledge) */
-  directorCalibrationRole?: "approver" | "mengetahui" | "";
-  /** Mapping Peran Approval Calibration per Company Unit ("approver" | "mengetahui" | "") */
-  calibrationRoleByUnit?: Record<string, "approver" | "mengetahui" | "">;
+  /** Peran khusus pada Calibration Approval: "approver" | "mengetahui" | "readonly" | "" */
+  directorCalibrationRole?: CalibrationUnitRole;
+  /** Mapping Peran Approval Calibration per Company Unit ("approver" | "mengetahui" | "readonly" | "") */
+  calibrationRoleByUnit?: Record<string, CalibrationUnitRole>;
   /** Cakupan tambahan jika pejabat membawahi >1 Unit / Divisi / Departemen / Bagian */
   managedUnits?: string[];
   managedDivisions?: string[];
@@ -157,9 +174,11 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     : user.checkerUnits;
   let calibrationRoleByUnit = user.calibrationRoleByUnit;
   if (calibrationRoleByUnit && typeof calibrationRoleByUnit === "object") {
-    const nextCal: Record<string, "approver" | "mengetahui" | ""> = {};
+    const nextCal: Record<string, CalibrationUnitRole> = {};
     for (const [k, v] of Object.entries(calibrationRoleByUnit)) {
-      nextCal[canonicalizeCompanyUnitName(k)] = v;
+      if (v === "approver" || v === "mengetahui" || v === "readonly" || v === "") {
+        nextCal[canonicalizeCompanyUnitName(k)] = v;
+      }
     }
     calibrationRoleByUnit = nextCal;
   }
@@ -239,7 +258,7 @@ export function getGroupCompaniesForUnit(company: string, extraUnits?: string[])
 
 export function isDirectorRoleOrGrouping(user?: { role?: string; groupings?: string; position?: string } | null): boolean {
   if (!user) return false;
-  if (user.role === "Director") return true;
+  if (user.role === "Director" || user.role === "DirectorNonOpr") return true;
   const g = (user.groupings ?? "").trim().toLowerCase();
   if (g === "direktur / director" || g === "director" || g === "direktur") return true;
   if (g) {
@@ -252,7 +271,7 @@ export function isDirectorRoleOrGrouping(user?: { role?: string; groupings?: str
 export function isExcludedFromAppraisalCalibration(user?: { role?: string; groupings?: string; position?: string; company?: string } | null): boolean {
   if (!user) return false;
   if (user.role && getRoleMetadata(user.role).excludeFromCalibrationHC) return true;
-  if (user.role === "Director" || user.role === "BOD") return true;
+  if (user.role === "Director" || user.role === "DirectorNonOpr" || user.role === "BOD") return true;
   if (isDirectorRoleOrGrouping(user)) return true;
   // Jika Groupings karyawan di-setup tidak memiliki modul appraisal sama sekali (uncheck semua modul),
   // maka tidak masuk dalam penilaian kinerja, monitoring, summary, maupun kalibrasi.
@@ -601,7 +620,7 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     user.calibrationRoleByUnit &&
     typeof user.calibrationRoleByUnit === "object"
       ? Object.entries(user.calibrationRoleByUnit)
-          .filter(([, v]) => v === "approver" || v === "mengetahui")
+          .filter(([, v]) => v === "approver" || v === "mengetahui" || v === "readonly")
           .map(([k]) => k)
       : [];
   const checkedUnits = (user.managedUnits ?? []).map(normOrgName).filter(Boolean);
@@ -1799,21 +1818,29 @@ export function useAuthStore() {
 export function getCalibrationRoleForUnit(
   user: ManagedUser | null | undefined,
   unitName: string,
-): "approver" | "mengetahui" | "" {
+): CalibrationUnitRole {
   if (!user) return "";
+  const canonUnit = canonicalizeCompanyUnitName(unitName);
   if (user.calibrationRoleByUnit && typeof user.calibrationRoleByUnit === "object") {
-    const hasAnyKey = Object.keys(user.calibrationRoleByUnit).length > 0;
-    if (hasAnyKey) {
-      return user.calibrationRoleByUnit[unitName] ?? "";
+    const values = Object.values(user.calibrationRoleByUnit);
+    const hasConfiguredRole = values.some((v) => v === "approver" || v === "mengetahui" || v === "readonly");
+    if (hasConfiguredRole) {
+      return user.calibrationRoleByUnit[canonUnit] ?? user.calibrationRoleByUnit[unitName] ?? "";
+    }
+    if (Object.keys(user.calibrationRoleByUnit).length > 0 && !isAdminOrHrIcfRole(user.role)) {
+      return "";
     }
   }
   if (user.directorCalibrationRole === "") return "";
-  if (user.role === "BOD" || isAdminOrHrIcfRole(user.role)) {
+  if (isAdminOrHrIcfRole(user.role)) {
+    return user.directorCalibrationRole || "readonly";
+  }
+  if (user.role === "BOD") {
     return user.directorCalibrationRole || "approver";
   }
   if (isDirectorRoleOrGrouping(user)) {
     const groupUnits = getGroupCompaniesForUnit(user.company, user.managedUnits);
-    if (groupUnits.includes(unitName)) {
+    if (groupUnits.includes(canonUnit) || groupUnits.includes(unitName)) {
       return user.directorCalibrationRole || "approver";
     }
     return "";
@@ -1828,14 +1855,22 @@ export function getCalibrationInvolvedUnits(
   if (!user) return [];
   if (user.calibrationRoleByUnit && typeof user.calibrationRoleByUnit === "object") {
     const keys = Object.keys(user.calibrationRoleByUnit);
-    if (keys.length > 0) {
+    const hasConfiguredRole = Object.values(user.calibrationRoleByUnit).some(
+      (v) => v === "approver" || v === "mengetahui" || v === "readonly",
+    );
+    if (hasConfiguredRole) {
       return allUnitNames.filter((u) => {
-        const r = user.calibrationRoleByUnit?.[u];
-        return r === "approver" || r === "mengetahui";
+        const canon = canonicalizeCompanyUnitName(u);
+        const r = user.calibrationRoleByUnit?.[canon] ?? user.calibrationRoleByUnit?.[u];
+        return r === "approver" || r === "mengetahui" || r === "readonly";
       });
+    }
+    if (keys.length > 0 && !isAdminOrHrIcfRole(user.role)) {
+      return [];
     }
   }
   if (user.directorCalibrationRole === "") return [];
+  if (isAdminOrHrIcfRole(user.role)) return allUnitNames;
   const roleUnits = getRoleAllowedCompanyUnits(user.role);
   if (roleUnits.length > 0) {
     return Array.from(new Set([...roleUnits, ...(user.managedUnits ?? [])].filter(Boolean)));
@@ -1843,5 +1878,6 @@ export function getCalibrationInvolvedUnits(
   if (isDirectorRoleOrGrouping(user)) {
     return getGroupCompaniesForUnit(user.company, user.managedUnits);
   }
-  return allUnitNames;
+  if (user.role === "BOD") return allUnitNames;
+  return [];
 }

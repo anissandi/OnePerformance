@@ -2359,6 +2359,13 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
           : Array.isArray(dbU?.managed_units)
             ? Array.from(new Set((dbU.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
             : undefined,
+        calibrationRoleByUnit:
+          kvU.calibrationRoleByUnit && typeof kvU.calibrationRoleByUnit === "object"
+            ? (kvU.calibrationRoleByUnit as Record<string, string>)
+            : dbU?.calibration_role_by_unit && typeof dbU.calibration_role_by_unit === "object"
+              ? (dbU.calibration_role_by_unit as Record<string, string>)
+              : undefined,
+        directorCalibrationRole: String(kvU.directorCalibrationRole ?? dbU?.director_calibration_role ?? ""),
       };
     });
     const seenIds = new Set(mergedFromKv.map((u) => u.employeeId.toLowerCase()));
@@ -2394,6 +2401,11 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
             managedUnits: Array.isArray(u.managed_units)
               ? Array.from(new Set((u.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
               : undefined,
+            calibrationRoleByUnit:
+              u.calibration_role_by_unit && typeof u.calibration_role_by_unit === "object"
+                ? (u.calibration_role_by_unit as Record<string, string>)
+                : undefined,
+            directorCalibrationRole: String(u.director_calibration_role ?? ""),
           }));
     const synced = [...mergedFromKv, ...extraDbUsers].filter(
       (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
@@ -2434,6 +2446,11 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     managedUnits: Array.isArray(u.managed_units)
       ? Array.from(new Set((u.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
       : undefined,
+    calibrationRoleByUnit:
+      u.calibration_role_by_unit && typeof u.calibration_role_by_unit === "object"
+        ? (u.calibration_role_by_unit as Record<string, string>)
+        : undefined,
+    directorCalibrationRole: String(u.director_calibration_role ?? ""),
   })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
   safeSetLocalJson("pa_managed_users_v1", mapped);
   return mapped;

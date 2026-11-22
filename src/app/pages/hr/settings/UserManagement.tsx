@@ -313,15 +313,17 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
     return { divisions, departments, bagians };
   }, [form.company, form.managedUnits, form.managedDivisions, form.managedDepartments]);
 
-  const calRoleMap: Record<string, "approver" | "mengetahui" | ""> = form.calibrationRoleByUnit ?? {};
+  type CalRoleOption = "approver" | "mengetahui" | "readonly" | "";
+  const calRoleMap: Record<string, CalRoleOption> = form.calibrationRoleByUnit ?? {};
 
-  const setUnitCalRole = (unitName: string, val: "approver" | "mengetahui" | "") => {
+  const setUnitCalRole = (unitName: string, val: CalRoleOption) => {
     setForm((p) => {
-      const nextMap: Record<string, "approver" | "mengetahui" | ""> = {
+      const nextMap: Record<string, CalRoleOption> = {
         ...(p.calibrationRoleByUnit ?? {}),
         [unitName]: val,
       };
-      const firstNonEmpty = Object.values(nextMap).find((v) => v === "approver" || v === "mengetahui") ?? "";
+      const firstNonEmpty =
+        Object.values(nextMap).find((v) => v === "approver" || v === "mengetahui" || v === "readonly") ?? "";
       return {
         ...p,
         calibrationRoleByUnit: nextMap,
@@ -330,15 +332,16 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
     });
   };
 
-  const setGroupCalRole = (units: readonly string[], val: "approver" | "mengetahui" | "") => {
+  const setGroupCalRole = (units: readonly string[], val: CalRoleOption) => {
     setForm((p) => {
-      const nextMap: Record<string, "approver" | "mengetahui" | ""> = {
+      const nextMap: Record<string, CalRoleOption> = {
         ...(p.calibrationRoleByUnit ?? {}),
       };
       for (const u of units) {
         nextMap[u] = val;
       }
-      const firstNonEmpty = Object.values(nextMap).find((v) => v === "approver" || v === "mengetahui") ?? "";
+      const firstNonEmpty =
+        Object.values(nextMap).find((v) => v === "approver" || v === "mengetahui" || v === "readonly") ?? "";
       return {
         ...p,
         calibrationRoleByUnit: nextMap,
@@ -520,13 +523,14 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                         <select
                           value={groupDropdownVal}
                           onChange={(e) =>
-                            setGroupCalRole(grp.units, e.target.value as "approver" | "mengetahui" | "")
+                            setGroupCalRole(grp.units, e.target.value as CalRoleOption)
                           }
                           className="border border-indigo-200 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-50/50 text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
                         >
                           <option value="">— Tidak Terlibat (Kosong) —</option>
                           <option value="approver">Approver</option>
                           <option value="mengetahui">Mengetahui</option>
+                          <option value="readonly">Read Only</option>
                         </select>
                       </div>
                       {/* Unit rows with inline dropdown */}
@@ -541,19 +545,22 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                               <select
                                 value={unitVal}
                                 onChange={(e) =>
-                                  setUnitCalRole(unit, e.target.value as "approver" | "mengetahui" | "")
+                                  setUnitCalRole(unit, e.target.value as CalRoleOption)
                                 }
                                 className={`border rounded-lg px-2 py-1 text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0 ${
                                   unitVal === "approver"
                                     ? "border-emerald-200 bg-emerald-50 text-emerald-800 font-semibold"
                                     : unitVal === "mengetahui"
                                     ? "border-sky-200 bg-sky-50 text-sky-800 font-semibold"
+                                    : unitVal === "readonly"
+                                    ? "border-violet-200 bg-violet-50 text-violet-800 font-semibold"
                                     : "border-gray-200 bg-white text-gray-400"
                                 }`}
                               >
                                 <option value="">— Kosong —</option>
                                 <option value="approver">Approver</option>
                                 <option value="mengetahui">Mengetahui</option>
+                                <option value="readonly">Read Only</option>
                               </select>
                             </div>
                           );

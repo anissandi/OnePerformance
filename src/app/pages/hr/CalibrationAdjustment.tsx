@@ -4,11 +4,12 @@ import {
   SCORE_WEIGHT_EVENT,
 } from "../shared/scoringWeightStore";
 // @refresh reset
-import { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { getPenilai1ScoreAsPercent, subscribeScores } from "../supervisor/managementInterviewScoreStore";
-import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye, Check } from "lucide-react";
+import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye, Check, Users, Target, Activity, Award } from "lucide-react";
+import { ANALYTICS_CARD_TONES, AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Dot } from "recharts";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
@@ -694,25 +695,25 @@ function AdjustmentProportionTable({
                 <th rowSpan={2} className={`${thSetting} text-left`}>{parentHeader}</th>
               )}
               <th rowSpan={2} className={`${thSetting} text-left min-w-[140px]`}>{colName}</th>
-              <th colSpan={colSpanEach} className={`border border-gray-300 px-3 py-2 text-center font-bold text-white text-xs tracking-wide ${ACTUAL_BG}`}>
-                AKTUAL (EOY)
-              </th>
               <th colSpan={colSpanEach} className={`border border-gray-300 px-3 py-2 text-center font-bold text-white text-xs tracking-wide ${SETTING_BG}`}>
                 SETTING (SOY)
+              </th>
+              <th colSpan={colSpanEach} className={`border border-gray-300 px-3 py-2 text-center font-bold text-white text-xs tracking-wide ${ACTUAL_BG}`}>
+                AKTUAL (EOY)
               </th>
             </tr>
             {/* Row 2 – sub-columns */}
             <tr>
-              {/* Actual sub-cols */}
-              <th className={thActual}>HC</th>
-              <th className={`${thActual} whitespace-nowrap`}>Share Kuota</th>
-              {gradeHeaders.map(g => <th key={`actual-h-${g}`} className={thActual}>{g}</th>)}
-              <th className={thActual}>JUMLAH</th>
               {/* Setting sub-cols */}
               <th className={thSetting}>HC</th>
               <th className={`${thSetting} whitespace-nowrap`}>Share Kuota</th>
               {gradeHeaders.map(g => <th key={`setting-h-${g}`} className={thSetting}>{g}</th>)}
               <th className={thSetting}>JUMLAH</th>
+              {/* Actual sub-cols */}
+              <th className={thActual}>HC</th>
+              <th className={`${thActual} whitespace-nowrap`}>Share Kuota</th>
+              {gradeHeaders.map(g => <th key={`actual-h-${g}`} className={thActual}>{g}</th>)}
+              <th className={thActual}>JUMLAH</th>
             </tr>
           </thead>
           <tbody>
@@ -725,21 +726,6 @@ function AdjustmentProportionTable({
                     <td className="border border-gray-300 px-3 py-2 text-center text-xs text-gray-500 whitespace-nowrap">{row.parentLabel ?? "—"}</td>
                   )}
                   <td className="border border-gray-300 px-3 py-2.5 text-gray-900 font-medium">{row.label}</td>
-                  {/* Actual data cells */}
-                  <td className={`border border-gray-300 px-3 py-2.5 text-center font-semibold text-teal-800 ${ACTUAL_CELL}`}>
-                    {row.actualHC > 0 ? row.actualHC.toLocaleString() : "—"}
-                  </td>
-                  <td className={`border border-gray-300 px-3 py-2.5 text-center text-teal-700 ${ACTUAL_CELL}`}>
-                    {row.actualShareKuota || "—"}
-                  </td>
-                  {row.actualCalcs.map((v, i) => (
-                    <td key={`a-${i}`} className={`border border-gray-300 px-3 py-2.5 text-center text-teal-800 ${ACTUAL_CELL}`}>
-                      {v > 0 ? v : "—"}
-                    </td>
-                  ))}
-                  <td className={`border border-gray-300 px-3 py-2.5 text-center font-semibold text-teal-800 ${ACTUAL_CELL}`}>
-                    {aTotal > 0 ? aTotal.toLocaleString() : "—"}
-                  </td>
                   {/* Setting data cells */}
                   <td className="border border-gray-300 px-3 py-2.5 text-center text-gray-700 bg-gray-50">
                     {row.settingHC > 0 ? row.settingHC.toLocaleString() : "—"}
@@ -755,6 +741,21 @@ function AdjustmentProportionTable({
                   <td className="border border-gray-300 px-3 py-2.5 text-center font-medium text-gray-800 bg-gray-50">
                     {sTotal > 0 ? sTotal.toLocaleString() : "—"}
                   </td>
+                  {/* Actual data cells */}
+                  <td className={`border border-gray-300 px-3 py-2.5 text-center font-semibold text-teal-800 ${ACTUAL_CELL}`}>
+                    {row.actualHC > 0 ? row.actualHC.toLocaleString() : "—"}
+                  </td>
+                  <td className={`border border-gray-300 px-3 py-2.5 text-center text-teal-700 ${ACTUAL_CELL}`}>
+                    {row.actualShareKuota || "—"}
+                  </td>
+                  {row.actualCalcs.map((v, i) => (
+                    <td key={`a-${i}`} className={`border border-gray-300 px-3 py-2.5 text-center text-teal-800 ${ACTUAL_CELL}`}>
+                      {v > 0 ? v : "—"}
+                    </td>
+                  ))}
+                  <td className={`border border-gray-300 px-3 py-2.5 text-center font-semibold text-teal-800 ${ACTUAL_CELL}`}>
+                    {aTotal > 0 ? aTotal.toLocaleString() : "—"}
+                  </td>
                 </tr>
               );
             })}
@@ -762,13 +763,6 @@ function AdjustmentProportionTable({
             <tr className="font-semibold">
               {showParent && <td className={`border border-gray-300 px-3 py-3 text-center text-white ${SETTING_BG}`}>—</td>}
               <td className={`border border-gray-300 px-3 py-3 text-center text-white ${SETTING_BG}`}>JUMLAH</td>
-              {/* Actual footer */}
-              <td className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>{totalActualHC > 0 ? totalActualHC.toLocaleString() : "—"}</td>
-              <td className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>100%</td>
-              {actualGradeTotals.map((t, i) => (
-                <td key={`af-${i}`} className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>{t > 0 ? t.toLocaleString() : "—"}</td>
-              ))}
-              <td className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>{actualGrandTotal > 0 ? actualGrandTotal.toLocaleString() : "—"}</td>
               {/* Setting footer */}
               <td className={`border border-gray-300 px-3 py-3 text-center text-white ${SETTING_BG}`}>{totalSettingHC > 0 ? totalSettingHC.toLocaleString() : "—"}</td>
               <td className={`border border-gray-300 px-3 py-3 text-center text-white ${SETTING_BG}`}>100%</td>
@@ -776,6 +770,13 @@ function AdjustmentProportionTable({
                 <td key={`sf-${i}`} className={`border border-gray-300 px-3 py-3 text-center text-white ${SETTING_BG}`}>{t > 0 ? t.toLocaleString() : "—"}</td>
               ))}
               <td className={`border border-gray-300 px-3 py-3 text-center text-white ${SETTING_BG}`}>{settingGrandTotal > 0 ? settingGrandTotal.toLocaleString() : "—"}</td>
+              {/* Actual footer */}
+              <td className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>{totalActualHC > 0 ? totalActualHC.toLocaleString() : "—"}</td>
+              <td className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>100%</td>
+              {actualGradeTotals.map((t, i) => (
+                <td key={`af-${i}`} className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>{t > 0 ? t.toLocaleString() : "—"}</td>
+              ))}
+              <td className={`border border-gray-300 px-3 py-3 text-center text-white ${ACTUAL_BG}`}>{actualGrandTotal > 0 ? actualGrandTotal.toLocaleString() : "—"}</td>
             </tr>
           </tbody>
         </table>
@@ -786,6 +787,73 @@ function AdjustmentProportionTable({
 
 // ─── Score Adjuster cell ──────────────────────────────────────────────────────
 
+
+// ─── Lag-free Note Textarea (local draft + debounced Supabase persistence) ───
+
+const CalibrationNoteInput = React.memo(function CalibrationNoteInput({
+  empId,
+  value,
+  onCommit,
+}: {
+  empId: string;
+  value: string;
+  onCommit: (empId: string, nextVal: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const latestRef = useRef(value);
+  const dirtyRef = useRef(false);
+  const timerRef = useRef<number | null>(null);
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+
+  useEffect(() => {
+    if (!dirtyRef.current && value !== latestRef.current) {
+      latestRef.current = value;
+      setDraft(value);
+    }
+  }, [value]);
+
+  const flush = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (dirtyRef.current) {
+      dirtyRef.current = false;
+      onCommitRef.current(empId, latestRef.current);
+    }
+  }, [empId]);
+
+  useEffect(() => {
+    return () => {
+      flush();
+    };
+  }, [flush]);
+
+  return (
+    <textarea
+      rows={2}
+      placeholder="Tambahkan note kalibrasi..."
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        latestRef.current = next;
+        dirtyRef.current = true;
+        setDraft(next);
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => {
+          timerRef.current = null;
+          if (dirtyRef.current) {
+            dirtyRef.current = false;
+            onCommitRef.current(empId, latestRef.current);
+          }
+        }, 420);
+      }}
+      onBlur={flush}
+      className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-[#1A284F]/30 placeholder-slate-400 text-slate-700"
+    />
+  );
+});
 
 // ─── Catatan Kalibrasi sub-panel ─────────────────────────────────────────────
 
@@ -1501,6 +1569,15 @@ function EmployeeAdjustmentSection({
     });
   };
 
+  const commitNoteForEmp = useCallback((empId: string, nextVal: string) => {
+    setComments((prev) => {
+      if ((prev[empId] ?? "") === nextVal) return prev;
+      const next = { ...prev, [empId]: nextVal };
+      savePersistedState("pa_calibration_adj_comments_v1", next);
+      return next;
+    });
+  }, []);
+
   const thBase = "border border-gray-600 px-2 py-2.5 text-center text-xs font-semibold text-white whitespace-nowrap";
 
   // Grade summary over filtered employees
@@ -1693,95 +1770,109 @@ function EmployeeAdjustmentSection({
         )}
       </div>
 
-      {/* 5 Summary cards — 1 baris proporsional dengan palet warna profesional */}
+      {/* 5 Summary cards — 1 baris proporsional dengan format Analytics Dashboard */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[minmax(135px,0.9fr)_minmax(135px,0.9fr)_minmax(215px,1.7fr)_minmax(215px,1.7fr)_minmax(215px,1.7fr)] gap-3 mb-4 items-stretch">
         {/* 1. Total Karyawan (SOY) */}
-        <div className="bg-gradient-to-br from-[#1A284F]/[0.08] via-slate-50 to-white border border-[#1A284F]/20 rounded-xl px-3.5 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide leading-snug">Total Karyawan (SOY)</p>
-          <div className="mt-1.5">
-            <p className="text-2xl font-black text-[#1A284F] tabular-nums leading-none">{soyScopeStats.hc}</p>
-            <p className="text-[10px] text-slate-600 font-semibold mt-1">Setting (SOY)</p>
-          </div>
-        </div>
+        <AnalyticsStatCard
+          index={0}
+          compact
+          tone="navy"
+          title="Total Karyawan (SOY)"
+          value={soyScopeStats.hc}
+          subtitle="Setting (SOY)"
+          icon={<Users className="w-4 h-4" />}
+        />
 
         {/* 2. Total Karyawan (EOY) */}
-        <div className="bg-gradient-to-br from-sky-50/90 via-cyan-50/40 to-white border border-sky-200 rounded-xl px-3.5 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-sky-800 uppercase tracking-wide leading-snug">Total Karyawan (EOY)</p>
-          <div className="mt-1.5">
-            <p className="text-2xl font-black text-sky-900 tabular-nums leading-none">{filtered.length}</p>
-            <p className="text-[10px] font-semibold mt-1 text-sky-700 tabular-nums">
-              {hcDelta === 0 ? "Sama dengan SOY" : `${hcDelta > 0 ? `+${hcDelta}` : hcDelta} vs SOY`}
-              {adjustedCount > 0 ? ` · ${adjustedCount} dikalibrasi` : ""}
-            </p>
-          </div>
-        </div>
+        <AnalyticsStatCard
+          index={1}
+          compact
+          tone="teal"
+          title="Total Karyawan (EOY)"
+          value={filtered.length}
+          subtitle={`${hcDelta === 0 ? "Sama dengan SOY" : `${hcDelta > 0 ? `+${hcDelta}` : hcDelta} vs SOY`}${adjustedCount > 0 ? ` · ${adjustedCount} dikalibrasi` : ""}`}
+          icon={<CheckCircle2 className="w-4 h-4" />}
+        />
 
-        {/* 3. Distribusi Grade — Setting (SOY) */}
-        <div className="bg-gradient-to-br from-cyan-50/90 via-slate-50/50 to-white border border-cyan-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-cyan-900 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Setting (SOY)">
-            Distribusi Grade — Setting (SOY)
-          </p>
-          <div className="grid grid-cols-6 gap-1">
-            {gradeKeys.map((g) => (
-              <div key={g} className="flex flex-col items-center bg-white/85 border border-cyan-100 rounded-lg py-1 px-0.5">
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
-                  {g}
-                </span>
-                <span className="text-xs font-extrabold text-cyan-950 tabular-nums mt-1">
-                  {soyScopeStats.byGrade[g] ?? 0}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 4. Distribusi Grade — Aktual */}
-        <div className="bg-gradient-to-br from-teal-50/85 via-emerald-50/30 to-white border border-teal-200 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-teal-800 uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Aktual">
-            Distribusi Grade — Aktual
-          </p>
-          <div className="grid grid-cols-6 gap-1">
-            {gradeKeys.map((g) => (
-              <div key={g} className="flex flex-col items-center bg-white/80 border border-teal-100 rounded-lg py-1 px-0.5">
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
-                  {g}
-                </span>
-                <span className="text-xs font-extrabold text-teal-950 tabular-nums mt-1">
-                  {gradeSummaryBefore[g] ?? 0}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 5. Distribusi Grade — Kalibrasi (EOY) */}
-        <div className="bg-gradient-to-br from-[#1A284F]/[0.09] via-slate-50/70 to-white border border-[#1A284F]/25 rounded-xl px-3 py-3 flex flex-col justify-between shadow-2xs">
-          <p className="text-[10px] font-bold text-[#1A284F] uppercase tracking-wide mb-2 truncate" title="Distribusi Grade — Kalibrasi (EOY)">
-            Distribusi Grade — Kalibrasi (EOY)
-          </p>
-          <div className="grid grid-cols-6 gap-1">
-            {gradeKeys.map((g) => {
-              const cntBefore = gradeSummaryBefore[g] ?? 0;
-              const cntAfter  = gradeSummaryAfter[g]  ?? 0;
-              const diff      = cntAfter - cntBefore;
-              return (
-                <div key={g} className="flex flex-col items-center bg-white/90 border border-slate-200 rounded-lg py-1 px-0.5">
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none" style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}>
-                    {g}
-                  </span>
-                  <span className="text-xs font-extrabold text-[#1A284F] tabular-nums mt-1">
-                    {adjustedCount > 0 ? cntAfter : 0}
-                  </span>
-                  {adjustedCount > 0 && diff !== 0 && (
-                    <span className={`text-[9px] font-bold tabular-nums leading-none mt-0.5 ${diff > 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                      {diff > 0 ? `+${diff}` : diff}
-                    </span>
-                  )}
+        {/* 3, 4, 5. Distribusi Grade — Setting (SOY), Aktual, Kalibrasi (EOY) */}
+        {([
+          {
+            key: "soy",
+            title: "Distribusi Grade — Setting (SOY)",
+            tone: "teal" as AnalyticsCardTone,
+            icon: <Target className="w-4 h-4" />,
+            getCount: (g: string) => soyScopeStats.byGrade[g] ?? 0,
+            getDiff: (_g: string) => 0,
+            showDiff: false,
+          },
+          {
+            key: "aktual",
+            title: "Distribusi Grade — Aktual",
+            tone: "emerald" as AnalyticsCardTone,
+            icon: <Activity className="w-4 h-4" />,
+            getCount: (g: string) => gradeSummaryBefore[g] ?? 0,
+            getDiff: (_g: string) => 0,
+            showDiff: false,
+          },
+          {
+            key: "kalibrasi",
+            title: "Distribusi Grade — Kalibrasi (EOY)",
+            tone: "plum" as AnalyticsCardTone,
+            icon: <Award className="w-4 h-4" />,
+            getCount: (g: string) => (adjustedCount > 0 ? gradeSummaryAfter[g] ?? 0 : 0),
+            getDiff: (g: string) => (gradeSummaryAfter[g] ?? 0) - (gradeSummaryBefore[g] ?? 0),
+            showDiff: adjustedCount > 0,
+          },
+        ]).map((card, cIdx) => {
+          const spec = ANALYTICS_CARD_TONES[card.tone];
+          return (
+            <div
+              key={card.key}
+              style={{ animationDelay: `${(cIdx + 2) * 50}ms` }}
+              className={`group relative overflow-hidden bg-gradient-to-br ${spec.gradient} border ${spec.border} rounded-2xl p-3.5 min-h-[116px] flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion`}
+            >
+              <div
+                className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+                style={{ backgroundColor: `${spec.accentHex}0D` }}
+              />
+              <div className="flex items-start justify-between gap-2 relative z-10 mb-2">
+                <p className="text-[11px] font-medium text-gray-500 leading-snug line-clamp-2" title={card.title}>
+                  {card.title}
+                </p>
+                <div
+                  className="w-8 h-8 rounded-lg text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+                  style={{ backgroundColor: spec.accentHex }}
+                >
+                  {card.icon}
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              </div>
+              <div className="grid grid-cols-6 gap-1 relative z-10">
+                {gradeKeys.map((g) => {
+                  const cnt = card.getCount(g);
+                  const diff = card.getDiff(g);
+                  return (
+                    <div key={g} className="flex flex-col items-center bg-white/85 border border-white/90 rounded-lg py-1 px-0.5 shadow-2xs">
+                      <span
+                        className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white leading-none"
+                        style={{ background: GRADE_COLORS[g] ?? "#6B7280" }}
+                      >
+                        {g}
+                      </span>
+                      <span className="text-xs font-extrabold text-[#111827] tabular-nums mt-1">
+                        {cnt}
+                      </span>
+                      {card.showDiff && diff !== 0 && (
+                        <span className={`text-[9px] font-bold tabular-nums leading-none mt-0.5 ${diff > 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                          {diff > 0 ? `+${diff}` : diff}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Action Buttons Bar (Start Adjusting; Submit; Download/Upload — ukuran lebih besar) */}
@@ -2228,19 +2319,10 @@ function EmployeeAdjustmentSection({
                         </div>
 
                         {(openNotes[emp.id] ?? (hasAdj || Boolean(comments[emp.id]))) && (
-                          <textarea
-                            rows={2}
-                            placeholder="Tambahkan note kalibrasi..."
+                          <CalibrationNoteInput
+                            empId={emp.id}
                             value={comments[emp.id] ?? ""}
-                            onChange={e => {
-                              const val = e.target.value;
-                              setComments(prev => {
-                                const next = { ...prev, [emp.id]: val };
-                                savePersistedState("pa_calibration_adj_comments_v1", next);
-                                return next;
-                              });
-                            }}
-                            className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-[#1A284F]/30 placeholder-slate-400 text-slate-700"
+                            onCommit={commitNoteForEmp}
                           />
                         )}
 

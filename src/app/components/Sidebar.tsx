@@ -37,7 +37,11 @@ import {
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import { getDelegatedModuleFlagsForUser } from "../store/delegationStore";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
-import { canUserAccessApprovalsDelegation, useAuthStore } from "../store/authStore";
+import {
+  canRoleAccessCalibrationApproval,
+  canUserAccessApprovalsDelegation,
+  useAuthStore,
+} from "../store/authStore";
 import { useAccessManagement } from "../pages/hr/settings/AccessManagement";
 import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../pages/hr/settings/MenuManagement";
 
@@ -334,6 +338,17 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
   const canViewApprovalsDelegation =
     isMenuVisibleInMenuManagement("approvals_delegation") &&
     canUserAccessApprovalsDelegation(activeUser, Boolean(rolePerms.approvals_delegation?.view));
+  const canViewCalibrationApproval = canRoleAccessCalibrationApproval(activeUser.role);
+  const canViewCalSoy =
+    canViewCalibrationApproval &&
+    isMenuVisibleInMenuManagement("approvals_calibration") &&
+    isMenuVisibleInMenuManagement("approvals_calibration_soy") &&
+    Boolean(rolePerms.approvals_calibration_soy?.view ?? true);
+  const canViewCalEoy =
+    canViewCalibrationApproval &&
+    isMenuVisibleInMenuManagement("approvals_calibration") &&
+    isMenuVisibleInMenuManagement("approvals_calibration_eoy") &&
+    Boolean(rolePerms.approvals_calibration_eoy?.view ?? true);
 
   const buildSettingLink = (p = "/hr"): NavTopLink | null => {
     const masterChildren: NavSubChild[] = [
@@ -437,10 +452,10 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/hr/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
         ...(canViewApprovalsDelegation ? [{ to: "/hr/approvals/delegation", label: "Delegation", icon: UserCheck }] : []),
-        ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
+        ...(canViewCalibrationApproval && (canViewCalSoy || canViewCalEoy)
           ? [{ label: "Calibration", icon: Target, children: [
-              ...(canView("approvals_calibration_soy") ? [{ to: "/hr/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
-              ...(canView("approvals_calibration_eoy") ? [{ to: "/hr/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
+              ...(canViewCalSoy ? [{ to: "/hr/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
+              ...(canViewCalEoy ? [{ to: "/hr/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
             ] }]
           : []),
         ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
@@ -552,10 +567,10 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
         ...(canViewApprovalsDelegation ? [{ to: "/bod/approvals/delegation", label: "Delegation", icon: UserCheck }] : []),
-        ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
+        ...(canViewCalibrationApproval && (canViewCalSoy || canViewCalEoy)
           ? [{ label: "Calibration", icon: Target, children: [
-              ...(canView("approvals_calibration_soy") ? [{ to: "/bod/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
-              ...(canView("approvals_calibration_eoy") ? [{ to: "/bod/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
+              ...(canViewCalSoy ? [{ to: "/bod/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
+              ...(canViewCalEoy ? [{ to: "/bod/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
             ] }]
           : []),
         ...(canView("approvals_open_lock") ? [{ to: "/bod/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
@@ -697,10 +712,10 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         : []),
       ...(canView("approvals_mgmt_interview") ? [{ to: `${prefix}/approvals/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
       ...(canViewApprovalsDelegation ? [{ to: `${prefix}/approvals/delegation`, label: "Delegation", icon: UserCheck }] : []),
-      ...(canView("approvals_calibration") && (canView("approvals_calibration_soy") || canView("approvals_calibration_eoy"))
+      ...(canViewCalibrationApproval && (canViewCalSoy || canViewCalEoy)
           ? [{ label: "Calibration", icon: Target, children: [
-              ...(canView("approvals_calibration_soy") ? [{ to: `${prefix}/approvals/calibration/setting`, label: "Setting (SOY)", icon: Settings }] : []),
-              ...(canView("approvals_calibration_eoy") ? [{ to: `${prefix}/approvals/calibration/adjustment`, label: "Adjustment (EOY)", icon: RefreshCw }] : []),
+              ...(canViewCalSoy ? [{ to: `${prefix}/approvals/calibration/setting`, label: "Setting (SOY)", icon: Settings }] : []),
+              ...(canViewCalEoy ? [{ to: `${prefix}/approvals/calibration/adjustment`, label: "Adjustment (EOY)", icon: RefreshCw }] : []),
             ] }]
           : []),
       ...(canView("approvals_open_lock") ? [{ to: `${prefix}/settings/open-lock`, label: "Open Lock", icon: LockOpen }] : []),

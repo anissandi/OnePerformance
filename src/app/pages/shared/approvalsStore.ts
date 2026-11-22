@@ -50,9 +50,23 @@ export function saveAssessment(
       const activeUser = getActiveUser();
       const users = loadManagedUsers();
       const owner = users.find((u) => normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(alias.employeeId));
+      const refNorm = (v?: string) => String(v ?? "").trim().toLowerCase();
+      const sameAp1Ap2 = Boolean(
+        owner && refNorm(owner.regNoAp1) && refNorm(owner.regNoAp1) === refNorm(owner.regNoAp2),
+      );
       const approverName =
         resolveActingApproverLabel(activeUser, owner, alias.module, alias.phase, approverRole, users) ||
         (level === 1 ? "Approver 1" : "Approver 2");
+      if (approverRole === "approver1" && sameAp1Ap2) {
+        const filteredBoth = existing.filter((a) => a.rowNo !== rowNo);
+        const mirroredList = [
+          ...filteredBoth,
+          { rowNo, approverRole: "approver1" as const, type, ratings, comments, assessedDate },
+          { rowNo, approverRole: "approver2" as const, type, ratings, comments, assessedDate },
+        ];
+        savePersistedState(ASSESSMENT_KEY, mirroredList);
+        saveWorkflowAssessment(rowNo, "approver2", ratings, comments, assessedDate);
+      }
       if (type === "Managerial Skill") {
         const values = Object.fromEntries(Object.entries(ratings).map(([key, value]) => [Number(key.replace("ms-", "")), value]));
         saveMSApproverEntry(
@@ -67,6 +81,20 @@ export function saveAssessment(
           },
           alias.employeeId,
         );
+        if (approverRole === "approver1" && sameAp1Ap2) {
+          saveMSApproverEntry(
+            {
+              approverName,
+              approverRole: "approver2",
+              approverLevel: 2,
+              ratings: values,
+              totalScore: Object.values(values).reduce((sum, value) => sum + value, 0),
+              comment: comments["0"] ?? "",
+              reviewedDate: assessedDate,
+            },
+            alias.employeeId,
+          );
+        }
       }
       if (type === "Appraisal Form") {
         const forms = (["A", "B", "C"] as const).map((formId) => {
@@ -84,6 +112,19 @@ export function saveAssessment(
           },
           alias.employeeId,
         );
+        if (approverRole === "approver1" && sameAp1Ap2) {
+          saveAppraisalApprover(
+            {
+              approverName,
+              approverRole: "approver2",
+              approverLevel: 2,
+              forms,
+              overallComment: comments["0"] ?? "",
+              reviewedDate: assessedDate,
+            },
+            alias.employeeId,
+          );
+        }
       }
     }
   } catch { /* ignore */ }

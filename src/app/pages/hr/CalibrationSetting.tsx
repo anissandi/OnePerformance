@@ -5,8 +5,9 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { toast } from "sonner";
 import {
   Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send,
-  CheckCircle2, Clock, X, RefreshCw, Users, Archive, RotateCcw, Sparkles, AlertTriangle,
+  CheckCircle2, Clock, X, RefreshCw, Users, Archive, RotateCcw, Sparkles, AlertTriangle, TrendingUp, Percent,
 } from "lucide-react";
+import { ANALYTICS_CARD_TONES, AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, Dot,
@@ -1475,28 +1476,50 @@ function headcountPercentageChange(beginning: number, ending: number): string {
 
 function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
   const [level, setLevel] = useState("division");
+  const soyApproval = getSoyApproval(unit.id);
+  const lockedSoySnap = soyApproval?.status === "Approved" && soyApproval.snapshot ? soyApproval.snapshot : null;
   const baseline = unit.beginningHC;
-  const initialGrades = unit.beginningGrades ?? unit.calibrationGrades;
-  const initialHC = (item: { id: string; hc: number }) =>
-    baseline ? baseline[item.id] ?? 0 : item.hc;
+  const initialGrades = lockedSoySnap?.calibrationGrades ?? unit.beginningGrades ?? unit.calibrationGrades;
+
+  // Susun daftar organisasi SOY yang terkunci vs EOY terkini agar perbandingan selalu akurat
+  const soyDivs: DivisionProportion[] = lockedSoySnap
+    ? lockedSoySnap.divisionProportions
+    : unit.divisionProportions.map((d) => ({
+        ...d,
+        hc: baseline ? baseline[d.id] ?? 0 : d.hc,
+        customQuotas: baseline ? unit.beginningCustomQuotas?.[d.id] : d.customQuotas,
+      }));
+  const soyDepts: DepartemenenProportion[] = lockedSoySnap
+    ? lockedSoySnap.departemenenProportions
+    : unit.departemenenProportions.map((dep) => ({
+        ...dep,
+        hc: baseline ? baseline[dep.id] ?? 0 : dep.hc,
+        customQuotas: baseline ? unit.beginningCustomQuotas?.[dep.id] : dep.customQuotas,
+      }));
+  const soyBags: BagianProportion[] = lockedSoySnap
+    ? lockedSoySnap.bagianProportions
+    : unit.bagianProportions.map((b) => ({
+        ...b,
+        hc: baseline ? baseline[b.id] ?? 0 : b.hc,
+        customQuotas: baseline ? unit.beginningCustomQuotas?.[b.id] : b.customQuotas,
+      }));
+
+  const soyHcById = new Map<string, number>();
+  for (const r of [...soyDivs, ...soyDepts, ...soyBags]) {
+    soyHcById.set(r.id, r.hc);
+  }
+  const eoyHcById = new Map<string, number>();
+  for (const r of [...unit.divisionProportions, ...unit.departemenenProportions, ...unit.bagianProportions]) {
+    eoyHcById.set(r.id, r.hc);
+  }
+
+  const initialHC = (item: { id: string; hc: number }) => soyHcById.get(item.id) ?? 0;
 
   const soyAlloc = computeUnitQuotaAllocation({
     calibrationGrades: initialGrades,
-    divisionProportions: unit.divisionProportions.map((d) => ({
-      ...d,
-      hc: initialHC(d),
-      customQuotas: baseline ? unit.beginningCustomQuotas?.[d.id] : d.customQuotas,
-    })),
-    departemenenProportions: unit.departemenenProportions.map((dep) => ({
-      ...dep,
-      hc: initialHC(dep),
-      customQuotas: baseline ? unit.beginningCustomQuotas?.[dep.id] : dep.customQuotas,
-    })),
-    bagianProportions: unit.bagianProportions.map((b) => ({
-      ...b,
-      hc: initialHC(b),
-      customQuotas: baseline ? unit.beginningCustomQuotas?.[b.id] : b.customQuotas,
-    })),
+    divisionProportions: soyDivs,
+    departemenenProportions: soyDepts,
+    bagianProportions: soyBags,
   });
 
   const eoyAlloc = computeUnitQuotaAllocation({
@@ -1507,27 +1530,47 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
   });
 
   const soyGradeCounts = initialGrades.map((_, gi) =>
-    unit.divisionProportions.reduce((s, d) => s + (soyAlloc.divMatrix[d.id]?.[gi] ?? 0), 0),
+    soyDivs.reduce((s, d) => s + (soyAlloc.divMatrix[d.id]?.[gi] ?? 0), 0),
   );
   const eoyGradeCounts = unit.calibrationGrades.map((_, gi) =>
     unit.divisionProportions.reduce((s, d) => s + (eoyAlloc.divMatrix[d.id]?.[gi] ?? 0), 0),
   );
 
+  // Gabungkan organisasi yang ada di SOY maupun EOY
+  const unionDivs = (() => {
+    const map = new Map<string, { id: string; divisi: string; hc: number }>();
+    for (const d of soyDivs) map.set(d.id, { id: d.id, divisi: d.divisi, hc: eoyHcById.get(d.id) ?? 0 });
+    for (const d of unit.divisionProportions) map.set(d.id, { id: d.id, divisi: d.divisi, hc: d.hc });
+    return Array.from(map.values());
+  })();
+  const unionDepts = (() => {
+    const map = new Map<string, { id: string; divisiId: string; departemen: string; hc: number }>();
+    for (const d of soyDepts) map.set(d.id, { id: d.id, divisiId: d.divisiId, departemen: d.departemen, hc: eoyHcById.get(d.id) ?? 0 });
+    for (const d of unit.departemenenProportions) map.set(d.id, { id: d.id, divisiId: d.divisiId, departemen: d.departemen, hc: d.hc });
+    return Array.from(map.values());
+  })();
+  const unionBags = (() => {
+    const map = new Map<string, { id: string; departemenenId: string; bagian: string; hc: number }>();
+    for (const b of soyBags) map.set(b.id, { id: b.id, departemenenId: b.departemenenId, bagian: b.bagian, hc: eoyHcById.get(b.id) ?? 0 });
+    for (const b of unit.bagianProportions) map.set(b.id, { id: b.id, departemenenId: b.departemenenId, bagian: b.bagian, hc: b.hc });
+    return Array.from(map.values());
+  })();
+
   function shares(initial: boolean) {
-    const getHC = (item: { id: string; hc: number }) => (initial ? initialHC(item) : item.hc);
-    const total = unit.divisionProportions.reduce((sum, item) => sum + getHC(item), 0);
+    const getHC = (item: { id: string; hc: number }) => (initial ? soyHcById.get(item.id) ?? 0 : eoyHcById.get(item.id) ?? 0);
+    const total = unionDivs.reduce((sum, item) => sum + getHC(item), 0);
     const result: Record<string, number> = {};
-    unit.divisionProportions.forEach((item) => {
+    unionDivs.forEach((item) => {
       result[item.id] = total ? (getHC(item) / total) * 100 : 0;
     });
-    unit.departemenenProportions.forEach((item) => {
-      const siblings = unit.departemenenProportions
+    unionDepts.forEach((item) => {
+      const siblings = unionDepts
         .filter((entry) => entry.divisiId === item.divisiId)
         .reduce((sum, entry) => sum + getHC(entry), 0);
       result[item.id] = siblings ? (getHC(item) / siblings) * (result[item.divisiId] ?? 0) : 0;
     });
-    unit.bagianProportions.forEach((item) => {
-      const siblings = unit.bagianProportions
+    unionBags.forEach((item) => {
+      const siblings = unionBags
         .filter((entry) => entry.departemenenId === item.departemenenId)
         .reduce((sum, entry) => sum + getHC(entry), 0);
       result[item.id] = siblings ? (getHC(item) / siblings) * (result[item.departemenenId] ?? 0) : 0;
@@ -1539,10 +1582,10 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
   const afterShares = shares(false);
   const rows =
     level === "division"
-      ? unit.divisionProportions.map((item) => ({ ...item, label: item.divisi }))
+      ? unionDivs.map((item) => ({ ...item, label: item.divisi }))
       : level === "department"
-      ? unit.departemenenProportions.map((item) => ({ ...item, label: item.departemen }))
-      : unit.bagianProportions.map((item) => ({ ...item, label: item.bagian }));
+      ? unionDepts.map((item) => ({ ...item, label: item.departemen }))
+      : unionBags.map((item) => ({ ...item, label: item.bagian }));
 
   const deltaColor = (value: number) =>
     value > 0 ? "text-green-700" : value < 0 ? "text-red-700" : "text-gray-500";
@@ -1589,7 +1632,7 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
         grades={unit.calibrationGrades}
         soyCounts={soyGradeCounts}
         eoyCounts={eoyGradeCounts}
-        hasConfirmedEoy={Boolean(baseline)}
+        hasConfirmedEoy={Boolean(unit.yearEndStatus === "submitted" || baseline)}
       />
 
       <section className="overflow-hidden rounded-xl border border-gray-200">
@@ -1741,40 +1784,60 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
 }
 
 function HeadcountSummary({ unit }: { unit: CompanyUnit }) {
+  const soyApproval = getSoyApproval(unit.id);
+  const lockedSoySnap = soyApproval?.status === "Approved" && soyApproval.snapshot ? soyApproval.snapshot : null;
   const baseline = unit.beginningHC;
-  const initialTotal = unit.divisionProportions.reduce(
-    (total, item) => total + (baseline?.[item.id] ?? item.hc),
-    0,
-  );
+  const initialTotal = lockedSoySnap
+    ? lockedSoySnap.divisionProportions.reduce((total, item) => total + item.hc, 0)
+    : unit.divisionProportions.reduce((total, item) => total + (baseline?.[item.id] ?? item.hc), 0);
   const finalTotal = unit.divisionProportions.reduce((total, item) => total + item.hc, 0);
   const difference = finalTotal - initialTotal;
-  const differenceColor =
-    difference > 0 ? "text-green-700" : difference < 0 ? "text-red-700" : "text-gray-500";
-  const cards = [
-    { label: "HC Awal Tahun (SOY)", value: initialTotal },
-    { label: "HC Akhir Tahun (EOY)", value: baseline ? finalTotal : `${finalTotal} (Proyeksi)` },
+  const hasConfirmedEoy = Boolean(unit.yearEndStatus === "submitted" || baseline);
+  const cards: Array<{ label: string; value: React.ReactNode; sub: string; tone: AnalyticsCardTone; icon: React.ReactNode }> = [
+    {
+      label: "HC Awal Tahun (SOY)",
+      value: initialTotal,
+      sub: lockedSoySnap ? "Terkunci (Approved SOY)" : "Baseline Awal Tahun",
+      tone: "navy",
+      icon: <Users className="w-4 h-4" />,
+    },
+    {
+      label: "HC Akhir Tahun (EOY)",
+      value: finalTotal,
+      sub: hasConfirmedEoy ? "Data EOY terkonfirmasi" : "Proyeksi HC aktif saat ini",
+      tone: "teal",
+      icon: <CheckCircle2 className="w-4 h-4" />,
+    },
     {
       label: "Selisih HC",
       value: (difference > 0 ? "+" : "") + difference,
-      color: differenceColor,
+      sub: "Perbandingan EOY vs SOY",
+      tone: difference > 0 ? "emerald" : difference < 0 ? "rose" : "slate",
+      icon: <TrendingUp className="w-4 h-4" />,
     },
     {
       label: "% Perubahan",
       value: headcountPercentageChange(initialTotal, finalTotal),
-      color: differenceColor,
+      sub: "Rasio perubahan headcount",
+      tone: "plum",
+      icon: <Percent className="w-4 h-4" />,
     },
   ];
   return (
     <section className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
       <div className="space-y-5 p-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {cards.map((card) => (
-            <div key={card.label} className="rounded-xl border bg-gray-50 p-4">
-              <p className="text-xs font-medium text-gray-500">{card.label}</p>
-              <p className={"mt-2 text-xl font-bold " + (card.color ?? "text-[#1A284F]")}>
-                {card.value}
-              </p>
-            </div>
+          {cards.map((card, idx) => (
+            <AnalyticsStatCard
+              key={card.label}
+              index={idx}
+              compact
+              tone={card.tone}
+              title={card.label}
+              value={card.value}
+              subtitle={card.sub}
+              icon={card.icon}
+            />
           ))}
         </div>
         <CalibrationSummaryComparison unit={unit} />
@@ -1792,6 +1855,8 @@ function YearEndCalibrationSettings({
   unit: CompanyUnit;
   onUpdate: (unit: CompanyUnit) => void;
 }) {
+  const soyApproval = getSoyApproval(unit.id);
+  const lockedSoySnap = soyApproval?.status === "Approved" && soyApproval.snapshot ? soyApproval.snapshot : null;
   const makeDraft = (): CompanyUnit =>
     JSON.parse(
       JSON.stringify({
@@ -1809,12 +1874,25 @@ function YearEndCalibrationSettings({
     setDraft(makeDraft());
   }, [unit.id]);
 
-  const baselineTotal = unit.divisionProportions.reduce(
-    (total, item) => total + (unit.beginningHC?.[item.id] ?? item.hc),
-    0,
-  );
+  const baselineTotal = lockedSoySnap
+    ? lockedSoySnap.divisionProportions.reduce((total, item) => total + item.hc, 0)
+    : unit.divisionProportions.reduce(
+        (total, item) => total + (unit.beginningHC?.[item.id] ?? item.hc),
+        0,
+      );
 
   function buildBaselineCustomQuotasSnapshot(): Record<string, Record<string, number>> {
+    if (lockedSoySnap) {
+      const snap: Record<string, Record<string, number>> = {};
+      for (const item of [
+        ...lockedSoySnap.divisionProportions,
+        ...lockedSoySnap.departemenenProportions,
+        ...lockedSoySnap.bagianProportions,
+      ]) {
+        if (item.customQuotas) snap[item.id] = { ...item.customQuotas };
+      }
+      return snap;
+    }
     if (unit.beginningCustomQuotas) return unit.beginningCustomQuotas;
     const snap: Record<string, Record<string, number>> = {};
     for (const item of [
@@ -1838,12 +1916,23 @@ function YearEndCalibrationSettings({
       toast.error("HC wajib berupa bilangan bulat minimal 0.");
       return false;
     }
+    const lockedHcFromSoy = lockedSoySnap
+      ? Object.fromEntries(
+          [
+            ...lockedSoySnap.divisionProportions,
+            ...lockedSoySnap.departemenenProportions,
+            ...lockedSoySnap.bagianProportions,
+          ].map((item) => [item.id, item.hc]),
+        )
+      : null;
     onUpdate({
       ...source,
       beginningGrades:
+        lockedSoySnap?.calibrationGrades?.map((g) => ({ ...g })) ??
         unit.beginningGrades ??
         (unit.beginningHC ? undefined : unit.calibrationGrades.map((grade) => ({ ...grade }))),
       beginningHC:
+        lockedHcFromSoy ??
         unit.beginningHC ??
         Object.fromEntries(
           [
@@ -1894,7 +1983,7 @@ function YearEndCalibrationSettings({
     return true;
   }
 
-  if (!unit.beginningHC && baselineTotal === 0) {
+  if (!lockedSoySnap && !unit.beginningHC && baselineTotal === 0) {
     return (
       <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         Lengkapi dan simpan HC Awal Tahun (SOY) terlebih dahulu sebelum mengatur HC Akhir Tahun (EOY).
@@ -1979,7 +2068,8 @@ function UnitDetail({
   }, [unit, editMode]);
 
   const activeUnit = editMode ? workingUnit : unit;
-  const isEditable = pageMode === "edit" && editMode && !activeUnit.beginningHC;
+  const isSoyApprovedLocked = Boolean(!embedded && soyApproval?.status === "Approved" && soyApproval.snapshot);
+  const isEditable = pageMode === "edit" && editMode && !activeUnit.beginningHC && !isSoyApprovedLocked;
   const canSubmit = isSaved || pageMode === "preview";
 
   const updWorking = (patch: Partial<CompanyUnit>) => {
@@ -2202,30 +2292,39 @@ function UnitDetail({
     }
   };
 
-  const displayCalibrationGrades = activeUnit.beginningHC
+  const lockedSnap = isSoyApprovedLocked ? soyApproval!.snapshot : null;
+  const displayCalibrationGrades = lockedSnap
+    ? lockedSnap.calibrationGrades
+    : activeUnit.beginningHC
     ? activeUnit.beginningGrades ?? activeUnit.calibrationGrades
     : activeUnit.calibrationGrades;
-  const displayDivisions = activeUnit.divisionProportions.map((item) => ({
-    ...item,
-    hc: activeUnit.beginningHC?.[item.id] ?? item.hc,
-    customQuotas: activeUnit.beginningHC
-      ? activeUnit.beginningCustomQuotas?.[item.id]
-      : item.customQuotas,
-  }));
-  const displayDepts = activeUnit.departemenenProportions.map((item) => ({
-    ...item,
-    hc: activeUnit.beginningHC?.[item.id] ?? item.hc,
-    customQuotas: activeUnit.beginningHC
-      ? activeUnit.beginningCustomQuotas?.[item.id]
-      : item.customQuotas,
-  }));
-  const displayBagian = activeUnit.bagianProportions.map((item) => ({
-    ...item,
-    hc: activeUnit.beginningHC?.[item.id] ?? item.hc,
-    customQuotas: activeUnit.beginningHC
-      ? activeUnit.beginningCustomQuotas?.[item.id]
-      : item.customQuotas,
-  }));
+  const displayDivisions = lockedSnap
+    ? lockedSnap.divisionProportions
+    : activeUnit.divisionProportions.map((item) => ({
+        ...item,
+        hc: activeUnit.beginningHC?.[item.id] ?? item.hc,
+        customQuotas: activeUnit.beginningHC
+          ? activeUnit.beginningCustomQuotas?.[item.id]
+          : item.customQuotas,
+      }));
+  const displayDepts = lockedSnap
+    ? lockedSnap.departemenenProportions
+    : activeUnit.departemenenProportions.map((item) => ({
+        ...item,
+        hc: activeUnit.beginningHC?.[item.id] ?? item.hc,
+        customQuotas: activeUnit.beginningHC
+          ? activeUnit.beginningCustomQuotas?.[item.id]
+          : item.customQuotas,
+      }));
+  const displayBagian = lockedSnap
+    ? lockedSnap.bagianProportions
+    : activeUnit.bagianProportions.map((item) => ({
+        ...item,
+        hc: activeUnit.beginningHC?.[item.id] ?? item.hc,
+        customQuotas: activeUnit.beginningHC
+          ? activeUnit.beginningCustomQuotas?.[item.id]
+          : item.customQuotas,
+      }));
 
   return (
     <div className="flex flex-col gap-6">
@@ -2321,7 +2420,7 @@ function UnitDetail({
                 Reset Status HC Awal Tahun (SOY)
               </button>
             )}
-            {!unit.beginningHC && pageMode === "edit" && (
+            {!isSoyApprovedLocked && !unit.beginningHC && pageMode === "edit" && (
               <>
                 <button
                   type="button"
@@ -2402,7 +2501,7 @@ function UnitDetail({
                 )}
               </>
             )}
-            {!unit.beginningHC && pageMode === "preview" && (
+            {!isSoyApprovedLocked && !unit.beginningHC && pageMode === "preview" && (
               <>
                 <button
                   type="button"
@@ -2430,7 +2529,7 @@ function UnitDetail({
 
           {!embedded && (
             <p className="text-sm font-medium text-gray-500">
-              {unit.beginningHC
+              {isSoyApprovedLocked || unit.beginningHC
                 ? "HC Awal Tahun (SOY) — baseline tersimpan dan read-only; perubahan HC akhir tidak menimpa data ini."
                 : "Setting HC Awal Tahun (SOY) — klik Edit Settings untuk menyesuaikan proporsi grade maupun kuota per Divisi, Departemen, dan Bagian."}
             </p>
@@ -2832,46 +2931,60 @@ export function CalibrationSetting() {
               ? "Select a company unit to configure its Calibration settings."
               : "Select a company unit to review its Calibration settings."}
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {(authLockedUnits && authLockedUnits.length > 0
               ? companyUnits.filter((u) => authLockedUnits.includes(u.name))
               : companyUnits
             ).map((unit, idx) => {
-              const gradients = [
-                "from-blue-600 to-blue-800",
-                "from-emerald-600 to-emerald-800",
-                "from-violet-600 to-violet-800",
-                "from-amber-500 to-orange-700",
-                "from-sky-500 to-cyan-700",
-                "from-rose-500 to-red-700",
-                "from-teal-500 to-teal-700",
-                "from-indigo-500 to-indigo-700",
-              ];
-              const gradient = gradients[idx % gradients.length];
+              const unitTones: AnalyticsCardTone[] = ["navy", "emerald", "plum", "terracotta", "teal", "rose", "slate", "navy"];
+              const spec = ANALYTICS_CARD_TONES[unitTones[idx % unitTones.length]];
+              const soyRec = getSoyApproval(unit.id);
+              const unitHc =
+                soyRec?.status === "Approved" && soyRec.snapshot
+                  ? soyRec.snapshot.divisionProportions.reduce((s, d) => s + d.hc, 0)
+                  : unit.divisionProportions.reduce((s, d) => s + d.hc, 0);
               return (
                 <button
                   key={unit.id}
                   onClick={() => setSelectedUnit(unit)}
-                  className="group text-left rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5"
+                  style={{ animationDelay: `${Math.min(idx, 8) * 50}ms` }}
+                  className={`group relative overflow-hidden text-left bg-gradient-to-br ${spec.gradient} border ${spec.border} rounded-2xl p-4 min-h-[132px] flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion cursor-pointer`}
                 >
-                  <div className={`bg-gradient-to-br ${gradient} px-5 py-4`}>
-                    <Building2 className="w-5 h-5 text-white/80 mb-2" />
-                    <p className="text-white font-semibold text-sm leading-tight">{unit.name}</p>
-                  </div>
-                  <div className="bg-white px-5 py-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-medium text-gray-700 truncate max-w-[120px]">
-                        {unit.industry}
+                  <div
+                    className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+                    style={{ backgroundColor: `${spec.accentHex}0D` }}
+                  />
+                  <div className="flex items-start justify-between gap-2 relative z-10">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-gray-500 truncate">
+                        {unit.code}{unit.industry ? ` · ${unit.industry}` : ""}
                       </p>
-                      <span className="inline-block mt-0.5 font-mono text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">
-                        {unit.code}
-                      </span>
-                      <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
-                        <Users className="w-2.5 h-2.5" />
-                        HC: {unit.divisionProportions.reduce((s, d) => s + d.hc, 0)}
-                      </span>
+                      <p className="text-base font-extrabold text-[#111827] leading-snug mt-1">{unit.name}</p>
                     </div>
-                    <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors shrink-0" />
+                    <div
+                      className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+                      style={{ backgroundColor: spec.accentHex }}
+                    >
+                      <Building2 className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 mt-4 relative z-10">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1A284F] tabular-nums">
+                        <Users className="w-3 h-3" /> HC: {unitHc}
+                      </span>
+                      {soyRec?.status === "Approved" && (
+                        <span className="text-[10px] font-semibold text-emerald-700 bg-white/80 border border-emerald-200 px-2 py-0.5 rounded-full">
+                          SOY Locked
+                        </span>
+                      )}
+                      {soyRec?.status === "Pending" && (
+                        <span className="text-[10px] font-semibold text-amber-700 bg-white/80 border border-amber-200 px-2 py-0.5 rounded-full">
+                          SOY Pending
+                        </span>
+                      )}
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-[#1A284F] group-hover:translate-x-0.5 transition-all shrink-0" />
                   </div>
                 </button>
               );

@@ -284,22 +284,22 @@ function ActionPlansSection({
 
   return (
     <div className="border-t border-gray-100 pt-4 flex flex-col gap-4">
-      <p className="text-[11px] font-bold uppercase tracking-widest text-[#1A284F]">Status Attainable</p>
+      <p className="text-[11px] font-bold uppercase tracking-widest text-[#1A284F]">Status Execution Plan | Attainable</p>
 
       {/* Horizontal table */}
       <div className="overflow-x-auto rounded-xl border border-gray-200">
         <table className="w-full text-xs border-collapse" style={{ minWidth: `${180 + goal.actionPlans.length * 160}px` }}>
           <thead>
             <tr>
-              <th className="bg-[#1A284F] text-white text-left px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide w-28 align-middle border-r border-white/20">
-                Attainable
+              <th className="bg-[#1A284F] text-white text-left px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide w-40 align-middle border-r border-white/20">
+                Execution Plan | Attainable
               </th>
               {goal.actionPlans.map((ap, idx) => (
                 <th
                   key={ap.id}
                   className={`bg-[#1A284F] text-white text-center px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide align-middle ${idx < goal.actionPlans.length - 1 ? "border-r border-white/20" : ""}`}
                 >
-                  Attainable {idx + 1}
+                  Execution Plan | Attainable {idx + 1}
                 </th>
               ))}
             </tr>
@@ -486,7 +486,7 @@ function ActionPlansSection({
                   {/* ── Batal ── */}
                   {status === "Batal" && (
                     <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wide text-red-500">Alasan Attainable Batal</label>
+                      <label className="text-[10px] font-bold uppercase tracking-wide text-red-500">Alasan Execution Plan | Attainable Batal</label>
                       {editable ? (
                         <textarea rows={2} value={extra.alasanBatal}
                           onChange={(e) => setExtra(ap.id, { alasanBatal: e.target.value })}
@@ -1200,7 +1200,7 @@ function SmartGoalsCheckInWorkspace({
       goal.actionPlans.forEach((ap, apIdx) => {
         const st: LocalStatus = entry?.actionPlanStatuses?.[ap.id] ?? "-";
         const extra = entry?.actionPlanExtras?.[ap.id] ?? getDefaultExtra();
-        const apName = `${goal.label} — Attainable ${apIdx + 1}`;
+        const apName = `${goal.label} — Execution Plan | Attainable ${apIdx + 1}`;
         if (st === "-") {
           missing.push(`${apName}: Status belum dipilih`);
         } else if (st === "Belum dilaksanakan" && !extra.kendala.trim()) {
@@ -1215,7 +1215,7 @@ function SmartGoalsCheckInWorkspace({
         } else if (st === "Selesai" && extra.evidence.length === 0) {
           missing.push(`${apName}: Bukti/Evidence wajib diupload`);
         } else if (st === "Batal" && !extra.alasanBatal.trim()) {
-          missing.push(`${apName}: Alasan Attainable Batal wajib diisi`);
+          missing.push(`${apName}: Alasan Execution Plan | Attainable Batal wajib diisi`);
         }
       });
 

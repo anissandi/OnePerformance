@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Building2, CheckCircle2, Clock, RotateCcw, Settings, X } from "lucide-react";
+import { Building2, CheckCircle2, Clock, Eye, RotateCcw, Settings, ShieldAlert, Target, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   decideSoyApproval,
+  formatActorWithPosition,
   loadSoyApprovals,
   SOY_EVENT,
   type SoyApprovalRecord,
@@ -10,6 +11,7 @@ import {
 } from "../../store/calibrationSoyStore";
 import { computeUnitQuotaAllocation } from "../hr/CalibrationSetting";
 import {
+  canRoleAccessCalibrationApproval,
   getActiveUser,
   getCalibrationInvolvedUnits,
   getCalibrationRoleForUnit,
@@ -20,6 +22,7 @@ import {
 } from "../../store/authStore";
 import { hasRolePermission } from "../hr/settings/AccessManagement";
 import { BellCurveTagButton, GradeBellCurveModal } from "../../components/GradeBellCurveModal";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
 
 const STATUS_TONE: Record<SoyStatus, string> = {
   Pending: "bg-amber-50 text-amber-700 border-amber-200",
@@ -187,8 +190,9 @@ export function CalibrationSettingApproval() {
 
   const canApprove = (rec: SoyApprovalRecord) => {
     const unitRole = getCalibrationRoleForUnit(activeUser, rec.unitName);
-    if (unitRole === "mengetahui") return false;
+    if (unitRole === "mengetahui" || unitRole === "readonly") return false;
     if (unitRole === "approver") return true;
+    if (isAdminOrHrIcfRole(activeUser.role)) return false;
     return isDirector || hasRolePermission(activeUser.role || "Employee", "approvals_calibration_soy", "approve");
   };
 
@@ -223,6 +227,19 @@ export function CalibrationSettingApproval() {
     return UNIT_PILL_PALETTES[idx % UNIT_PILL_PALETTES.length];
   };
   const unitTotalTargets = (snapAlloc?.unitGradeTargets ?? []).reduce((a, b) => a + b, 0);
+  const gradeCardTones: AnalyticsCardTone[] = ["plum", "navy", "emerald", "terracotta", "rose", "slate"];
+
+  if (!canRoleAccessCalibrationApproval(activeUser.role)) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center">
+        <ShieldAlert className="mx-auto mb-2 h-8 w-8 text-amber-600" />
+        <p className="text-sm font-bold text-amber-900">Akses Halaman Terbatas</p>
+        <p className="mt-1 text-xs text-amber-800">
+          Halaman Calibration Approval — Setting (SOY) hanya dapat diakses oleh role Director, DirectorNonOpr, BOD, Administrator, dan HR ICF.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex w-full flex-col gap-5">
@@ -240,59 +257,62 @@ export function CalibrationSettingApproval() {
         </div>
       ) : (
         <div className="flex w-full flex-col gap-4">
-          {/* Unit usaha (pill kecil berwarna lembut) + tag Disubmit oleh — satu baris di atas tabel */}
+          {/* Unit usaha (pill kecil berwarna lembut) + Grade Distribution (Bell Curve) di samping nama unit usaha */}
           <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
             {list.map((r) => {
               const active = selected?.unitId === r.unitId;
               return (
-                <button
-                  key={r.unitId}
-                  type="button"
-                  onClick={() => setSelectedId(r.unitId)}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${unitPalette(r.unitId)} ${
-                    active ? "ring-2 ring-[#1A284F]/30 shadow-sm" : "opacity-75 hover:opacity-100"
-                  }`}
-                >
-                  <Building2 className="h-3 w-3" />
-                  {r.unitName}
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${r.status === "Approved" ? "bg-emerald-500" : r.status === "Revision" ? "bg-orange-500" : "bg-amber-400"}`}
-                    title={r.status}
-                  />
-                </button>
+                <React.Fragment key={r.unitId}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(r.unitId)}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${unitPalette(r.unitId)} ${
+                      active ? "ring-2 ring-[#1A284F]/30 shadow-sm" : "opacity-75 hover:opacity-100"
+                    }`}
+                  >
+                    <Building2 className="h-3 w-3" />
+                    {r.unitName}
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${r.status === "Approved" ? "bg-emerald-500" : r.status === "Revision" ? "bg-orange-500" : "bg-amber-400"}`}
+                      title={r.status}
+                    />
+                  </button>
+                  {active && (
+                    <BellCurveTagButton onClick={() => setBellOpen(true)} label="Grade Distribution (Bell Curve)" />
+                  )}
+                </React.Fragment>
               );
             })}
             {selected && (
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600">
-                  <Clock className="h-3 w-3" /> Disubmit oleh <strong className="font-semibold text-slate-800">{selected.submittedBy}</strong> · {fmt(selected.submittedAt)}
+                  <Clock className="h-3 w-3" /> Disubmit oleh <strong className="font-semibold text-slate-800">{formatActorWithPosition(selected.submittedBy)}</strong> · {fmt(selected.submittedAt)}
                 </span>
                 <span className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
                   HC Awal Tahun: {totalHC}
                 </span>
                 <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${STATUS_TONE[selected.status]}`}>{selected.status}</span>
-                <BellCurveTagButton onClick={() => setBellOpen(true)} label="Grade Distribution (Bell Curve)" />
               </div>
             )}
           </div>
 
           {selected && snap && (
             <div className="flex w-full flex-col gap-4">
-              {/* Ringkasan kartu grade berwarna */}
-              <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+              {/* Ringkasan kartu grade format Analytics Dashboard */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                 {snap.calibrationGrades.map((g, gi) => {
                   const kuota = snapAlloc?.unitGradeTargets[gi] ?? 0;
-                  const c = gradeTone(g.grade);
                   return (
-                    <div key={g.id} className="relative overflow-hidden rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
-                      <div className="absolute inset-x-0 top-0 h-1" style={{ background: c }} />
-                      <div className="flex items-center justify-between">
-                        <GradeHead grade={g.grade} />
-                        <span className="text-[11px] font-semibold text-gray-400">{g.proporsi}</span>
-                      </div>
-                      <p className="mt-2 text-2xl font-black tabular-nums" style={{ color: c }}>{kuota}</p>
-                      <p className="text-[10px] text-gray-400">kuota karyawan</p>
-                    </div>
+                    <AnalyticsStatCard
+                      key={g.id}
+                      index={gi}
+                      compact
+                      tone={gradeCardTones[gi % gradeCardTones.length]}
+                      title={`Grade ${g.grade} (${g.proporsi})`}
+                      value={kuota}
+                      subtitle="Kuota karyawan (SOY)"
+                      icon={<span className="text-xs font-black">{g.grade}</span>}
+                    />
                   );
                 })}
               </div>
@@ -386,7 +406,7 @@ export function CalibrationSettingApproval() {
                   {[...selected.history].reverse().map((h, i) => (
                     <li key={i} className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-gray-700">{h.status}</span>
-                      <span className="text-gray-500">{h.by}</span>
+                      <span className="text-gray-600 font-medium">{formatActorWithPosition(h.by)}</span>
                       <span className="text-gray-400">{fmt(h.at)}</span>
                       {h.note && <span className="w-full text-gray-600">“{h.note}”</span>}
                     </li>
@@ -406,7 +426,10 @@ export function CalibrationSettingApproval() {
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-gray-50 px-5 py-3 text-xs text-gray-500">
-                    <Clock className="h-4 w-4" /> Anda memiliki akses lihat (mengetahui) untuk unit ini.
+                    <Eye className="h-4 w-4" />
+                    {getCalibrationRoleForUnit(activeUser, selected.unitName) === "readonly"
+                      ? "Anda memiliki akses Read Only untuk unit ini."
+                      : "Anda memiliki akses lihat (Mengetahui) untuk unit ini."}
                   </div>
                 )
               )}
