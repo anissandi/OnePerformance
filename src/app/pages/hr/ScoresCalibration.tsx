@@ -15,6 +15,7 @@ import {
 } from "../shared/scoringWeightStore";
 import { loadAccessGroups } from "./settings/AccessManagement";
 import { loadManagedUsers, resolveEffectiveUserGrouping } from "../../store/authStore";
+import { ANALYTICS_CARD_TONES, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -915,23 +916,46 @@ export function ScoresCalibration() {
       <TabBar />
       <div className="flex flex-col gap-4">
         <p className="text-sm text-gray-500">Select a company unit to configure its Score and Calibration settings independently.</p>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {companyUnits.map((unit, idx) => {
-            const gradients = ["from-blue-600 to-blue-800","from-emerald-600 to-emerald-800","from-violet-600 to-violet-800","from-amber-500 to-orange-700","from-sky-500 to-cyan-700","from-rose-500 to-red-700","from-teal-500 to-teal-700","from-indigo-500 to-indigo-700"];
-            const gradient = gradients[idx % gradients.length];
+            const unitTones: AnalyticsCardTone[] = ["navy", "emerald", "plum", "terracotta", "teal", "rose", "slate", "navy"];
+            const spec = ANALYTICS_CARD_TONES[unitTones[idx % unitTones.length]];
+            const groupingCount = BUILTIN_WEIGHT_COLUMNS.length + unit.customColumns.length;
             return (
-              <button key={unit.id} onClick={() => setSelectedUnit(unit)}
-                className="group text-left rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5">
-                <div className={`bg-gradient-to-br ${gradient} px-5 py-4`}>
-                  <Building2 className="w-5 h-5 text-white/80 mb-2" />
-                  <p className="text-white font-semibold text-sm leading-tight">{unit.name}</p>
-                </div>
-                <div className="bg-white px-5 py-3 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium text-gray-700 truncate max-w-[120px]">{unit.industry}</p>
-                    <span className="inline-block mt-0.5 font-mono text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{unit.code}</span>
+              <button
+                key={unit.id}
+                onClick={() => setSelectedUnit(unit)}
+                style={{ animationDelay: `${Math.min(idx, 8) * 50}ms` }}
+                className={`group relative overflow-hidden text-left bg-gradient-to-br ${spec.gradient} border ${spec.border} rounded-2xl p-4 min-h-[132px] flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion cursor-pointer`}
+              >
+                <div
+                  className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+                  style={{ backgroundColor: `${spec.accentHex}0D` }}
+                />
+                <div className="flex items-start justify-between gap-2 relative z-10">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-gray-500 truncate">
+                      {unit.code}{unit.industry ? ` · ${unit.industry}` : ""}
+                    </p>
+                    <p className="text-base font-extrabold text-[#111827] leading-snug mt-1">{unit.name}</p>
                   </div>
-                  <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors shrink-0" />
+                  <div
+                    className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+                    style={{ backgroundColor: spec.accentHex }}
+                  >
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2 mt-4 relative z-10">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] font-bold text-[#1A284F] tabular-nums">
+                      {unit.scores.length} Grade Ranges
+                    </span>
+                    <span className="text-[10px] font-semibold text-indigo-700 bg-white/85 border border-indigo-200 px-2 py-0.5 rounded-full">
+                      {groupingCount} Groupings
+                    </span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-[#1A284F] group-hover:translate-x-0.5 transition-all shrink-0" />
                 </div>
               </button>
             );

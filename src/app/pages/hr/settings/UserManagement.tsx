@@ -2042,16 +2042,11 @@ export function UserManagementPage() {
     setSelectedIds(new Set());
   }, [selectedCompany]);
 
-  if (!selectedCompany) {
-    return (
-      <CompanyUnitPicker
-        users={users}
-        onSelect={setSelectedCompany}
-      />
-    );
-  }
+  const companyUsers = useMemo(
+    () => (selectedCompany ? users.filter((u) => u.company === selectedCompany) : []),
+    [users, selectedCompany],
+  );
 
-  const companyUsers = users.filter(u => u.company === selectedCompany);
   // Peta duplikat ID Karyawan (ketika Reg No berbeda, baik dalam satu unit maupun lintas unit)
   const duplicateEmployeeIdPeersByUserId = useMemo(() => {
     const byEmpId = new Map<string, User[]>();
@@ -2070,6 +2065,16 @@ export function UserManagementPage() {
     }
     return out;
   }, [users, companyUsers]);
+
+  if (!selectedCompany) {
+    return (
+      <CompanyUnitPicker
+        users={users}
+        onSelect={setSelectedCompany}
+      />
+    );
+  }
+
   const divisiOpts = Array.from(new Set(companyUsers.map(u => (u.division || "").trim()).filter(Boolean))).sort();
   const deptOpts = Array.from(
     new Set(

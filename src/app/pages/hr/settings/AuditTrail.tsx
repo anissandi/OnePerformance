@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { DatePickerID } from "../../../components/DatePickerID";
-import { Search, RefreshCw, ChevronDown, Eye, X, Download, Filter } from "lucide-react";
+import { Search, RefreshCw, ChevronDown, Eye, X, Download, Filter, FileText, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { fetchServerAuditLogs, hydrateAllStoresFromSupabase, loadLocalAuditLogs, type StoredAuditLogEntry } from "../../../services/supabaseClient";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 
 type ActionType = "Login" | "Logout" | "Create" | "Update" | "Delete" | "Approve" | "Reject" | "Export";
 
@@ -296,17 +297,23 @@ export function AuditTrailPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        {[
-          { label: "Total Logs", value: allLogs.length,     color: "bg-[#1A284F] text-white" },
-          { label: "Successful", value: successCount,         color: "bg-emerald-600 text-white" },
-          { label: "Failed",     value: failedCount,          color: "bg-red-500 text-white" },
-          { label: "Today",      value: allLogs.filter(l => l.timestamp.startsWith(todayStr) || l.timestamp.startsWith("2026-07-15")).length, color: "bg-blue-600 text-white" },
-        ].map(s => (
-          <div key={s.label} className={`rounded-xl px-5 py-4 ${s.color} shadow-sm`}>
-            <p className="text-2xl font-bold">{s.value}</p>
-            <p className="text-xs opacity-80 mt-0.5">{s.label}</p>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {([
+          { label: "Total Logs", value: allLogs.length, sub: "Seluruh aktivitas tercatat", tone: "navy" as AnalyticsCardTone, icon: <FileText className="w-4 h-4" /> },
+          { label: "Successful", value: successCount, sub: "Aktivitas berhasil diproses", tone: "emerald" as AnalyticsCardTone, icon: <CheckCircle2 className="w-4 h-4" /> },
+          { label: "Failed", value: failedCount, sub: "Aktivitas gagal / ditolak", tone: "rose" as AnalyticsCardTone, icon: <XCircle className="w-4 h-4" /> },
+          { label: "Today", value: allLogs.filter(l => l.timestamp.startsWith(todayStr)).length, sub: `Aktivitas tanggal ${todayStr}`, tone: "teal" as AnalyticsCardTone, icon: <Clock className="w-4 h-4" /> },
+        ]).map((s, idx) => (
+          <AnalyticsStatCard
+            key={s.label}
+            index={idx}
+            compact
+            tone={s.tone}
+            title={s.label}
+            value={s.value}
+            subtitle={s.sub}
+            icon={s.icon}
+          />
         ))}
       </div>
 
