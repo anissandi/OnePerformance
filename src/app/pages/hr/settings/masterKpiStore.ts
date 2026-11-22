@@ -104,7 +104,7 @@ const DEFAULTS: MasterKpiStore = {
   satuan:        ["%", "Temuan", "Hari", "Kasus", "Rp Juta", "Rp Miliar", "Jumlah"],
   period:        ["Hari", "Bulan", "Semester", "Triwulan", "Quarter", "Tahun"],
   formula:       ["Jumlah", "Rata-Rata", "Nilai Akhir"],
-  trackingPeriod: ["Bulanan", "Semester", "Triwulan", "Quarter", "Tahunan"],
+  trackingPeriod: ["Bulan", "Triwulan", "Semester", "Quarter", "Tahun"],
   bobot: [
     "0%", "1%", "2%", "3%", "4%",
     "5%", "10%", "15%", "20%", "25%",
@@ -126,6 +126,28 @@ const DEFAULTS: MasterKpiStore = {
     { value: "VGM PSKE",      description: "VGM PSKE"      },
   ],
 };
+
+function normalizeMasterTrackingPeriods(list?: string[]): string[] {
+  const canonMap = (raw: string): string => {
+    const t = String(raw ?? "").trim();
+    if (/^bulan(an)?$/i.test(t)) return "Bulan";
+    if (/^triwulan(an)?$/i.test(t)) return "Triwulan";
+    if (/^semester(an)?$/i.test(t)) return "Semester";
+    if (/^quarter(ly)?$/i.test(t)) return "Quarter";
+    if (/^tahun(an)?$/i.test(t)) return "Tahun";
+    return t;
+  };
+  const base: string[] = [...DEFAULTS.trackingPeriod];
+  if (Array.isArray(list)) {
+    for (const item of list) {
+      const norm = canonMap(item);
+      if (norm && !base.some((b) => b.toLowerCase() === norm.toLowerCase())) {
+        base.push(norm);
+      }
+    }
+  }
+  return base;
+}
 
 export function loadMasterKpi(): MasterKpiStore {
   try {
@@ -156,10 +178,7 @@ export function loadMasterKpi(): MasterKpiStore {
         satuan: Array.isArray(parsed.satuan) && parsed.satuan.length > 0 ? parsed.satuan : DEFAULTS.satuan,
         period: Array.isArray(parsed.period) && parsed.period.length > 0 ? parsed.period : DEFAULTS.period,
         formula: Array.isArray(parsed.formula) && parsed.formula.length > 0 ? parsed.formula : DEFAULTS.formula,
-        trackingPeriod:
-          Array.isArray(parsed.trackingPeriod) && parsed.trackingPeriod.length > 0
-            ? parsed.trackingPeriod
-            : DEFAULTS.trackingPeriod,
+        trackingPeriod: normalizeMasterTrackingPeriods(parsed.trackingPeriod),
         bobot: Array.isArray(parsed.bobot) && parsed.bobot.length > 0 ? parsed.bobot : DEFAULTS.bobot,
         polaritas:
           Array.isArray(parsed.polaritas) && parsed.polaritas.length > 0

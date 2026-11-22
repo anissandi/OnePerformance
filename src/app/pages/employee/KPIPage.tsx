@@ -3,6 +3,15 @@ import React, { useState, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { DatePickerID } from "../../components/DatePickerID";
 import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
+import {
+  formatComputedKpiNumber,
+  getActiveMonthIndicesForPeriod,
+  isMonthBlockedForKpi,
+  isPeriodicTrackingType,
+  normalizeTrackingPeriod,
+  parseFlexibleKpiNumber,
+  sanitizeKpiNumericInput,
+} from "../../utils/kpiNumberAndPeriod";
 import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info, RotateCcw } from "lucide-react";
 import { loadAllKPIComments, loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
@@ -149,6 +158,7 @@ export interface KPIItem {
   sectionLabel?: string;
   sectionBobot?: string;
   trackingPeriod?: string;
+  periodicTargetBlock?: boolean;
   subRows: SubRow[];
   /** Per-month target for simple KPIs (mapped to "Target" sub-row) */
   monthlyTargets?: Record<string, string>;
@@ -272,10 +282,7 @@ export interface MonthEntry {
 const ck = (no: string, subIdx: number): CellKey => `${no}__${subIdx}`;
 
 function parseNum(s: string): number | null {
-  if (!s || s === "—") return null;
-  const clean = s.replace(/,/g, "").replace(/%$/, "").trim();
-  const n = parseFloat(clean);
-  return isNaN(n) ? null : n;
+  return parseFlexibleKpiNumber(s);
 }
 
 function formatPct(n: number): string {
@@ -497,6 +504,7 @@ export function computeTotal2026(
   months: MonthEntry[]
 ): string {
   const sub = kpi.subRows[subIdx];
+  const activeMonths = months.filter((m) => !isMonthBlockedForKpi(kpi, m.label));
 
   if (sub.compute) {
     // For computed rows, aggregate the source actual/target across months then recompute
@@ -504,7 +512,7 @@ export function computeTotal2026(
 
     if (spec.type === "ratio") {
       // Only consider months that have a target configured
-      const monthData = months
+      const monthData = activeMonths
         .map((m) => {
           const rawTarget = (allCells[m.id]?.[ck(kpi.no, spec.targetIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label);
           const isRangeStabilize =
@@ -558,7 +566,7 @@ export function computeTotal2026(
         const srcSub = kpi.subRows[i];
         if (!srcSub.compute || srcSub.compute.type !== "ratio") return false;
         const rs = srcSub.compute;
-        return months.some((m) => {
+        return activeMonths.some((m) => {
           const target = parseNum(allCells[m.id]?.[ck(kpi.no, rs.targetIdx)] ?? "");
           if (target === null) return false; // month not configured → skip
           return parseNum(allCells[m.id]?.[ck(kpi.no, rs.actualIdx)] ?? "") === null;
@@ -567,18 +575,18 @@ export function computeTotal2026(
       if (anyMissingActual) return "0%";
 
       const vals = spec.sourceIdxs
-        .map((i) => parseNum(computeTotal2026(kpi, i, allCells, months)))
+        .map((i) => parseNum(computeTotal2026(kpi, i, allCells, activeMonths)))
         .filter((v): v is number => v !== null);
       if (!vals.length) return "—";
       return formatPct(vals.reduce((a, b) => a + b, 0) / vals.length);
     }
 
     if (spec.type === "ref") {
-      return computeTotal2026(kpi, spec.sourceIdx, allCells, months);
+      return computeTotal2026(kpi, spec.sourceIdx, allCells, activeMonths);
     }
 
     if (spec.type === "ratio_score") {
-      const scores = months
+      const scores = activeMonths
         .map((m): number | null => {
           const negRaw = allCells[m.id]?.[ck(kpi.no, spec.negIdx)] ?? "";
           if (!negRaw) return null;
@@ -593,7 +601,7 @@ export function computeTotal2026(
     }
 
     if (spec.type === "color_band") {
-      const scores = months
+      const scores = activeMonths
         .map((m): number | null => {
           const actBand = (allCells[m.id]?.[ck(kpi.no, spec.actualIdx)] ?? "").trim();
           const tgtBand = ((allCells[m.id]?.[ck(kpi.no, spec.targetIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)).trim();
@@ -614,7 +622,7 @@ export function computeTotal2026(
   // Color-band & Ratio-mask editable/target rows: tampilkan nilai terakhir / mask
   const isTargetRow = sub.label.toLowerCase().startsWith("target");
   if (kpi.colorIndicator || kpi.indicatorMode === "color") {
-    const rawStrs = months
+    const rawStrs = activeMonths
       .map((m) =>
         isTargetRow
           ? ((allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)).trim()
@@ -624,37 +632,42 @@ export function computeTotal2026(
     return rawStrs.length > 0 ? rawStrs[rawStrs.length - 1] : "—";
   }
   if (kpi.indicatorMode === "ratio" && isTargetRow) {
-    const rawStrs = months
+    const rawStrs = activeMonths
       .map((m) => ((allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)).trim())
       .filter(Boolean);
     return rawStrs.length > 0 ? rawStrs[rawStrs.length - 1] : (kpi.target2026 || "—");
   }
 
   // Editable rows: aggregate raw values
-  const rawVals = months.map((m) => {
+  const rawSamples: string[] = [];
+  const rawVals = activeMonths.map((m) => {
     const raw = isTargetRow
       ? (allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label)
       : (allCells[m.id]?.[ck(kpi.no, subIdx)] ?? "");
+    if (String(raw ?? "").trim()) rawSamples.push(String(raw).trim());
     return parseNum(raw);
   });
 
-  if (!isTargetRow && months.length > 0 && rawVals.some((v) => v === null)) {
-    // Actual row: any month has no data → total = 0
+  if (!isTargetRow && activeMonths.length > 0 && rawVals.some((v) => v === null)) {
+    // Actual row: any active month has no data → total = 0
     return "0";
   }
 
   const vals = rawVals.filter((v): v is number => v !== null);
   if (!vals.length) return "—";
 
+  const fmtSamples = kpi.target2026 ? [...rawSamples, kpi.target2026] : rawSamples;
   if (kpi.formula === "Jumlah") {
-    return vals.reduce((a, b) => a + b, 0).toFixed(2).replace(/\.?0+$/, "");
+    return formatComputedKpiNumber(vals.reduce((a, b) => a + b, 0), fmtSamples);
   }
   if (kpi.formula === "Nilai Akhir") {
     // Nilai Akhir → nilai bulan terakhir yang terisi
-    return vals[vals.length - 1].toFixed(2).replace(/\.?0+$/, "");
+    return rawSamples.length > 0
+      ? rawSamples[rawSamples.length - 1]
+      : formatComputedKpiNumber(vals[vals.length - 1], fmtSamples);
   }
   // Rata-Rata → average
-  return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2).replace(/\.?0+$/, "");
+  return formatComputedKpiNumber(vals.reduce((a, b) => a + b, 0) / vals.length, fmtSamples);
 }
 
 // Compute achievement % for a KPI based on its final % Pencapaian sub-row.
@@ -815,17 +828,7 @@ export function ownerHasKpiTransactions(employeeId: string): boolean {
 }
 
 function deriveTrackingPeriodeLabel(satuan?: string, trackingPeriod?: string): string {
-  const s = String(satuan ?? "");
-  const idx = s.indexOf("/");
-  if (idx >= 0) {
-    const raw = s.slice(idx + 1).trim();
-    if (raw) {
-      if (/^bulan$/i.test(raw)) return "Bulan";
-      if (/^tahun$/i.test(raw)) return "Tahun";
-      return raw;
-    }
-  }
-  return trackingPeriod || "Bulan";
+  return normalizeTrackingPeriod(trackingPeriod, satuan);
 }
 
 export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, unknown>>): KPIItem[] {
@@ -848,7 +851,8 @@ export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, u
       section: String(r.section ?? "A").toUpperCase() || "A",
       sectionLabel: r.sectionLabel ? String(r.sectionLabel) : undefined,
       sectionBobot: r.sectionBobot ? String(r.sectionBobot) : undefined,
-      trackingPeriod: deriveTrackingPeriodeLabel(String(r.satuan ?? ""), r.trackingPeriod ? String(r.trackingPeriod) : undefined),
+      trackingPeriod: normalizeTrackingPeriod(r.trackingPeriod ? String(r.trackingPeriod) : undefined, String(r.satuan ?? "")),
+      periodicTargetBlock: typeof r.periodicTargetBlock === "boolean" ? r.periodicTargetBlock : undefined,
       perspektif: String(r.perspektif ?? "Proses"),
       kpi: String(r.kpi ?? ""),
       satuan: String(r.satuan ?? "%"),
@@ -935,7 +939,8 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
   for (const m of months) {
     if (!FULL_YEAR_KPI_MONTHS.includes(m.label as typeof FULL_YEAR_KPI_MONTHS[number])) continue;
     const monthCells = cellsMap[m.id] ?? m.cells ?? {};
-    const hasActualValue = empKpiList.some((kpi) =>
+    const activeKpisInMonth = empKpiList.filter((kpi) => !isMonthBlockedForKpi(kpi, m.label));
+    const hasActualValue = activeKpisInMonth.some((kpi) =>
       kpi.subRows.some((sub, si) => {
         if (sub.compute) return false;
         if (sub.label.toLowerCase().startsWith("target")) return false;
@@ -943,7 +948,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
         return val.length > 0 && val !== "—";
       }),
     );
-    if (hasActualValue) {
+    if (hasActualValue || (empKpiList.length > 0 && activeKpisInMonth.length === 0)) {
       filledMonthLabels.add(m.label);
     }
   }
@@ -1248,6 +1253,9 @@ const W_KPI = 270;
 // ─── Pre-fill helper ──────────────────────────────────────────────────────────
 
 export function resolveKpiMonthTarget(kpi: KPIItem, monthLabel: string): string {
+  if (isMonthBlockedForKpi(kpi, monthLabel)) {
+    return "";
+  }
   const mt = kpi.monthlyTargets;
   if (mt && typeof mt === "object") {
     if (mt[monthLabel] !== undefined && String(mt[monthLabel]).trim() !== "") {
@@ -1282,7 +1290,11 @@ export function resolveKpiMonthTarget(kpi: KPIItem, monthLabel: string): string 
     }
     const parsed = parseNum(rawTarget);
     if (parsed !== null && kpi.formula === "Jumlah") {
-      return String(Math.round((parsed / 12) * 100) / 100);
+      const divisor =
+        isPeriodicTrackingType(kpi.trackingPeriod) && kpi.periodicTargetBlock
+          ? Math.max(1, getActiveMonthIndicesForPeriod(kpi.trackingPeriod).length)
+          : 12;
+      return formatComputedKpiNumber(parsed / divisor, [rawTarget]);
     }
     return rawTarget;
   }
@@ -1407,6 +1419,7 @@ function AddMonthModal({
   const getMissingFields = () => {
     const missing: { kpiNo: string; subIdx: number }[] = [];
     kpiItems.forEach((kpi) => {
+      if (label && isMonthBlockedForKpi(kpi, label)) return;
       kpi.subRows.forEach((sub, si) => {
         if (sub.compute) return;
         if (sub.label.toLowerCase().startsWith("target")) return;
@@ -1426,6 +1439,7 @@ function AddMonthModal({
   };
   const separatorErrors: Record<string, string> = {};
   kpiItems.forEach((kpi) => {
+    if (label && isMonthBlockedForKpi(kpi, label)) return;
     if (kpi.colorIndicator || kpi.indicatorMode === "color" || kpi.indicatorMode === "ratio") return;
     const target = targetFor(kpi);
     kpi.subRows.forEach((sub, si) => {
@@ -1569,6 +1583,8 @@ function AddMonthModal({
                 {secHeader}
               </p>
               {kpiItems.filter((k) => k.section === sec).map((kpi) => {
+                const isBlockedInSelectedMonth = Boolean(label && isMonthBlockedForKpi(kpi, label));
+                const normKpiPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
                 const kpiMissing = attempted ? (missingByKpi[kpi.no] ?? 0) : 0;
                 const getDraftRaw = (idx: number) => cells[ck(kpi.no, idx)] ?? "";
                 // Kelompokkan setiap pasangan Target + Actual (+ % Pencapaian) dalam 1 baris (1 line) agar jelas bagi karyawan
@@ -1615,7 +1631,7 @@ function AddMonthModal({
 
                 return (
                   <div key={kpi.no} className="mb-4">
-                    <div className={`flex items-center gap-2 mb-2 rounded-lg px-3 py-2 ${kpiMissing > 0 ? "bg-red-50 border border-red-200" : "bg-gray-50"}`}>
+                    <div className={`flex items-center gap-2 mb-2 rounded-lg px-3 py-2 ${isBlockedInSelectedMonth ? "bg-slate-100 border border-slate-200" : kpiMissing > 0 ? "bg-red-50 border border-red-200" : "bg-gray-50"}`}>
                       <p className="text-xs font-semibold text-gray-800 flex-1">
                         {kpi.no}. {kpi.kpi.split("\n")[0]}
                         <span className="ml-2 text-gray-400 font-normal">({kpi.satuan})</span>
@@ -1626,6 +1642,12 @@ function AddMonthModal({
                             ? "bg-violet-50 text-violet-700"
                             : "bg-orange-50 text-orange-700"
                         }`}>{kpi.polaritas}</span>
+                        {isBlockedInSelectedMonth && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-600 border border-slate-300">
+                            <Lock className="w-2.5 h-2.5 shrink-0" />
+                            Tracking per {normKpiPeriod} · Bulan {displayMonth(label)} Diblok
+                          </span>
+                        )}
                       </p>
                       {kpiMissing > 0 && (
                         <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-600">
@@ -1635,7 +1657,14 @@ function AddMonthModal({
                       )}
                     </div>
                     <div className="flex flex-col gap-2.5 pl-2">
-                      {rowGroups.map((grp, gi) => {
+                      {isBlockedInSelectedMonth ? (
+                        <div className="rounded-xl border border-slate-200 bg-slate-100/70 px-3.5 py-2.5 text-xs text-slate-500 flex items-center gap-2">
+                          <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>
+                            Target dan Realisasi pada bulan <strong>{displayMonth(label)}</strong> diblok karena mengikuti aturan <strong>Tracking per {normKpiPeriod}</strong> (hanya bulan akhir setiap {normKpiPeriod} yang aktif).
+                          </span>
+                        </div>
+                      ) : rowGroups.map((grp, gi) => {
                         if (grp.kind === "pair") {
                           const targetSub = kpi.subRows[grp.targetIdx];
                           const actualSub = kpi.subRows[grp.actualIdx];
@@ -1707,8 +1736,9 @@ function AddMonthModal({
                                 ) : (
                                   <input
                                     type="text"
+                                    inputMode="decimal"
                                     value={cells[ck(kpi.no, grp.actualIdx)] ?? ""}
-                                    onChange={(e) => setVal(ck(kpi.no, grp.actualIdx), e.target.value)}
+                                    onChange={(e) => setVal(ck(kpi.no, grp.actualIdx), sanitizeKpiNumericInput(e.target.value))}
                                     placeholder="Masukkan nilai aktual"
                                     className={`text-xs border rounded-lg px-3 py-2 outline-none transition-colors bg-white ${
                                       empty || sepErr
@@ -1826,8 +1856,9 @@ function AddMonthModal({
                               <>
                                 <input
                                   type="text"
+                                  inputMode="decimal"
                                   value={cells[ck(kpi.no, si)] ?? ""}
-                                  onChange={(e) => setVal(ck(kpi.no, si), e.target.value)}
+                                  onChange={(e) => setVal(ck(kpi.no, si), sanitizeKpiNumericInput(e.target.value))}
                                   placeholder="Masukkan nilai aktual"
                                   className={`text-xs border rounded px-2 py-1.5 outline-none transition-colors ${
                                     empty || separatorErrors[ck(kpi.no, si)]
@@ -2952,6 +2983,33 @@ function KPITable({
 
             {/* Monthly cells */}
             {months.map((m) => {
+              const isBlockedMonthCell = isMonthBlockedForKpi(kpi, m.label);
+              const normKpiPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
+              if (isBlockedMonthCell) {
+                const isTargetRowBlocked = !sub.compute && sub.label.toLowerCase().startsWith("target");
+                return (
+                  <td
+                    key={m.id}
+                    className="border border-slate-200 bg-slate-100/85 text-center text-xs py-1 px-1 select-none"
+                    style={{ minWidth: 120 }}
+                    title={`Bulan ${displayMonth(m.label)} diblok — mengikuti Tracking per ${normKpiPeriod}`}
+                  >
+                    {isComputed ? (
+                      <span className="text-slate-400 text-[11px] font-medium">—</span>
+                    ) : isTargetRowBlocked ? (
+                      <div className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-slate-200/75 text-slate-500 text-[10px] font-semibold">
+                        <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                        <span>Block</span>
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center justify-center gap-1 text-slate-400 text-[10px] font-medium">
+                        <Lock className="w-2.5 h-2.5 text-slate-300 shrink-0" />
+                        <span>Block</span>
+                      </div>
+                    )}
+                  </td>
+                );
+              }
               const val = getCellDisplay(kpi, m.id, si);
               const isMthEditable = editable && m.id === editableMonthId;
               const isTargetRow = !sub.compute && sub.label.toLowerCase().startsWith("target");
@@ -3080,8 +3138,9 @@ function KPITable({
                   ) : isCellEditable ? (
                     <input
                       type="text"
+                      inputMode="decimal"
                       value={cells[m.id]?.[ck(kpi.no, si)] ?? ""}
-                      onChange={(e) => onCellChange?.(m.id, ck(kpi.no, si), e.target.value)}
+                      onChange={(e) => onCellChange?.(m.id, ck(kpi.no, si), sanitizeKpiNumericInput(e.target.value))}
                       placeholder="—"
                       className={`w-full text-center text-xs bg-transparent outline-none ${
                         isEmptyActual
@@ -4406,6 +4465,16 @@ function KPIWorkspace({
         const prefilled = getPrefilledCells(m.label, trackingKpiItems);
         const curMonthCells = { ...(next[m.id] ?? {}) };
         let monthChanged = false;
+        for (const kpi of trackingKpiItems) {
+          if (isMonthBlockedForKpi(kpi, m.label)) {
+            kpi.subRows.forEach((sub, si) => {
+              if (!sub.compute && sub.label.toLowerCase().startsWith("target") && curMonthCells[ck(kpi.no, si)]) {
+                curMonthCells[ck(kpi.no, si)] = "";
+                monthChanged = true;
+              }
+            });
+          }
+        }
         for (const [cellK, targetVal] of Object.entries(prefilled)) {
           if (targetVal !== "" && curMonthCells[cellK] !== targetVal) {
             curMonthCells[cellK] = targetVal;
@@ -4450,6 +4519,7 @@ function KPIWorkspace({
 
   const openRCA = (kpi: KPIItem, monthId: string, subIdx?: number) => {
     const month = months.find((m) => m.id === monthId);
+    if (month && isMonthBlockedForKpi(kpi, month.label)) return;
     const mCells = { ...(month?.cells ?? {}), ...(cellsMap[monthId] ?? {}) };
     const getRaw = (idx: number) => mCells[ck(kpi.no, idx)] ?? "";
     const effectiveSubIdx =
@@ -4887,6 +4957,7 @@ function KPIWorkspace({
     for (const m of months) {
       if (validatedMonthLabels.has(m.label)) continue;
       for (const kpi of (isBusinessWorkspace ? businessTrackingItems : trackingKpiItems)) {
+        if (isMonthBlockedForKpi(kpi, m.label)) continue;
         kpi.subRows.forEach((sub, si) => {
           if (!sub.compute || sub.compute.type === "avg") return;
           const getRaw = (idx: number) => {
@@ -4933,9 +5004,12 @@ function KPIWorkspace({
       for (const m of pendingMonths) {
         const mCells = cellsMap[m.id] ?? m.cells ?? {};
         let monthHasEmpty = false;
+        let monthHasActiveKpi = false;
         const targetList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
         const activeMap = isBusinessWorkspace ? (businessCellsMap[m.id] ?? {}) : mCells;
         for (const kpi of targetList) {
+          if (isMonthBlockedForKpi(kpi, m.label)) continue;
+          monthHasActiveKpi = true;
           for (let si = 0; si < kpi.subRows.length; si++) {
             const sub = kpi.subRows[si];
             if (sub.compute) continue;
@@ -4947,6 +5021,9 @@ function KPIWorkspace({
               monthHasEmpty = true;
             }
           }
+        }
+        if (targetList.length > 0 && !monthHasActiveKpi) {
+          hasAnyActualInput = true;
         }
         if (monthHasEmpty) {
           incompleteMonths.push(m.label);
@@ -6052,6 +6129,7 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
   for (const m of monthsList) {
     const mCells = { ...(m.cells ?? {}), ...(map[m.id] ?? {}) };
     for (const kpi of candidateKpis) {
+      if (isMonthBlockedForKpi(kpi, m.label)) continue;
       for (let si = 0; si < kpi.subRows.length; si++) {
         const sub = kpi.subRows[si];
         if (!sub.compute || sub.compute.type === "avg") continue;

@@ -718,8 +718,9 @@ function SingleBellCurveCard({
                 key={d.grade}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
+                whileHover={{ y: -2 }}
                 transition={{ duration: 0.35, delay: 0.25 + di * 0.06, ease: [0.22, 1, 0.36, 1] }}
-                className="rounded-xl border border-gray-100 bg-gray-50/70 px-2.5 py-2 text-center"
+                className="rounded-xl border border-gray-100 bg-gray-50/70 px-2.5 py-2 text-center transition-shadow hover:shadow-sm"
               >
                 <span
                   className="inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[11px] font-bold text-white"
@@ -769,6 +770,20 @@ function ComparisonBellCurveCard({
     };
   });
 
+  const [chartReady, setChartReady] = useState(false);
+  useEffect(() => {
+    setChartReady(false);
+    const t = window.setTimeout(() => setChartReady(true), 140);
+    return () => window.clearTimeout(t);
+  }, [soyTotal, eoyTotal]);
+  const chartData = chartReady
+    ? data
+    : data.map((d) => ({
+        ...d,
+        "Awal Tahun (SOY)": 0,
+        "Akhir Tahun (EOY)": 0,
+      }));
+
   const SoyDot = (props: any) =>
     props.cx == null ? null : <Dot cx={props.cx} cy={props.cy} r={5} fill="#1A284F" stroke="#fff" strokeWidth={2} />;
   const EoyDot = (props: any) =>
@@ -800,7 +815,7 @@ function ComparisonBellCurveCard({
       <div className="p-5 grid grid-cols-1 xl:grid-cols-[1fr_230px] gap-6 items-center">
         <div className="w-full h-[290px]">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 16, right: 20, left: -10, bottom: 0 }} barSize={24} barGap={4}>
+            <ComposedChart data={chartData} margin={{ top: 16, right: 20, left: -10, bottom: 0 }} barSize={24} barGap={4}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis
                 dataKey="grade"
@@ -866,7 +881,8 @@ function ComparisonBellCurveCard({
                 fillOpacity={0.22}
                 radius={[4, 4, 0, 0]}
                 isAnimationActive={true}
-                animationDuration={700}
+                animationDuration={760}
+                animationEasing="ease-out"
               />
               <Bar
                 dataKey="Akhir Tahun (EOY)"
@@ -875,7 +891,8 @@ function ComparisonBellCurveCard({
                 fillOpacity={0.24}
                 radius={[4, 4, 0, 0]}
                 isAnimationActive={true}
-                animationDuration={800}
+                animationDuration={840}
+                animationEasing="ease-out"
               />
               <Line
                 type="monotone"
@@ -887,7 +904,8 @@ function ComparisonBellCurveCard({
                 dot={<SoyDot />}
                 activeDot={{ r: 6 }}
                 isAnimationActive={true}
-                animationDuration={850}
+                animationDuration={900}
+                animationEasing="ease-out"
               />
               <Line
                 type="monotone"
@@ -898,20 +916,25 @@ function ComparisonBellCurveCard({
                 dot={<EoyDot />}
                 activeDot={{ r: 6 }}
                 isAnimationActive={true}
-                animationDuration={950}
+                animationDuration={980}
+                animationEasing="ease-out"
               />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
 
         <div className="flex flex-col gap-2">
-          {data.map((d) => {
+          {data.map((d, di) => {
             const diffHC = d.eoyHC - d.soyHC;
             const color = GRADE_COLORS[d.grade] ?? "#1A284F";
             return (
-              <div
+              <motion.div
                 key={d.grade}
-                className="flex items-center gap-2.5 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                whileHover={{ x: -2 }}
+                transition={{ duration: 0.38, delay: 0.18 + di * 0.055, ease: [0.22, 1, 0.36, 1] }}
+                className="flex items-center gap-2.5 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 transition-shadow hover:shadow-xs"
               >
                 <span
                   className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0"
@@ -936,7 +959,7 @@ function ComparisonBellCurveCard({
                     {d.eoyHC} org ({d["Akhir Tahun (EOY)"]}%)
                   </p>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>

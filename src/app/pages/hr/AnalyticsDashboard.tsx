@@ -24,6 +24,7 @@ import {
   BarChart,
   Bar,
   ComposedChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -1224,6 +1225,13 @@ function ScoreGradeDistributionDashboard({
   module: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [chartReady, setChartReady] = useState(false);
+  useEffect(() => {
+    if (collapsed) return;
+    setChartReady(false);
+    const t = window.setTimeout(() => setChartReady(true), 120);
+    return () => window.clearTimeout(t);
+  }, [module, collapsed]);
   // Re-derive grade based on selected module's score field
   const derivedEmployees = useMemo(() => {
     if (module === "All Modules") return employees;
@@ -1254,6 +1262,15 @@ function ScoreGradeDistributionDashboard({
       color: cg.color,
     };
   });
+  const animatedBellData = chartReady
+    ? bellData
+    : bellData.map((d) => ({
+        ...d,
+        areaTarget: 0,
+        areaActual: 0,
+        barTarget: 0,
+        barActual: 0,
+      }));
 
   const actualCounts = calibrationTargets.map(cg => ({
     ...cg,
@@ -1292,7 +1309,11 @@ function ScoreGradeDistributionDashboard({
       {!collapsed && (
       <div className="grid grid-cols-2 gap-8 pa-card-motion">
         {/* ── Bell Curve ─────────────────────────────────────────────────── */}
-        <div>
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+        >
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
             Grade Distribution (Bell Curve)
           </p>
@@ -1300,7 +1321,7 @@ function ScoreGradeDistributionDashboard({
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 key={`bell-${module}`}
-                data={bellData}
+                data={animatedBellData}
                 margin={{ top: 8, right: 12, left: -20, bottom: 0 }}
                 barSize={16}
                 barGap={3}
@@ -1361,31 +1382,29 @@ function ScoreGradeDistributionDashboard({
                   animationDuration={900}
                   animationEasing="ease-out"
                 />
-                <Area
-                  key="area-target"
+                <Line
+                  key="line-target"
                   type="monotone"
                   dataKey="areaTarget"
                   name="Setting"
                   stroke="#6366F1"
                   strokeWidth={2}
                   strokeDasharray="5 3"
-                  fill="#6366F1" fillOpacity={0.08}
-                  dot={false}
-                  activeDot={{ r: 4, fill: "#6366F1" }}
+                  dot={{ r: 3.5, fill: "#6366F1", stroke: "#ffffff", strokeWidth: 1.5 }}
+                  activeDot={{ r: 5, fill: "#6366F1" }}
                   isAnimationActive={true}
                   animationDuration={900}
                   animationEasing="ease-out"
                 />
-                <Area
-                  key="area-actual"
+                <Line
+                  key="line-actual"
                   type="monotone"
                   dataKey="areaActual"
                   name="Actual"
                   stroke="#06B6D4"
                   strokeWidth={2.5}
-                  fill="#06B6D4" fillOpacity={0.14}
-                  dot={{ r: 4, fill: "#06B6D4", strokeWidth: 0 }}
-                  activeDot={{ r: 5, fill: "#06B6D4" }}
+                  dot={{ r: 4, fill: "#06B6D4", stroke: "#ffffff", strokeWidth: 1.5 }}
+                  activeDot={{ r: 5.5, fill: "#06B6D4" }}
                   isAnimationActive={true}
                   animationDuration={950}
                   animationEasing="ease-out"
@@ -1393,7 +1412,12 @@ function ScoreGradeDistributionDashboard({
               </ComposedChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex items-center gap-5 mt-3 text-xs text-gray-500">
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay: 0.14, ease: [0.22, 1, 0.36, 1] }}
+            className="flex items-center gap-5 mt-3 text-xs text-gray-500"
+          >
             <div className="flex items-center gap-2">
               <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#6366F1" strokeWidth="2" strokeDasharray="5 3" /></svg>
               <span>Setting</span>
@@ -1402,11 +1426,15 @@ function ScoreGradeDistributionDashboard({
               <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#06B6D4" strokeWidth="2.5" /></svg>
               <span>Actual</span>
             </div>
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
 
         {/* ── Setting vs Actual Proportion ────────────────────────────────── */}
-        <div>
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, delay: 0.06, ease: [0.22, 1, 0.36, 1] }}
+        >
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
             Setting vs Actual Proportion (%)
           </p>
@@ -1414,7 +1442,7 @@ function ScoreGradeDistributionDashboard({
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 key={`bars-${module}`}
-                data={bellData}
+                data={animatedBellData}
                 margin={{ top: 8, right: 12, left: -20, bottom: 0 }}
                 barSize={18}
                 barGap={4}
@@ -1449,17 +1477,24 @@ function ScoreGradeDistributionDashboard({
             </ResponsiveContainer>
           </div>
           <div className="flex gap-2 mt-3 flex-wrap">
-            {actualCounts.map(cg => (
-              <div key={cg.grade} className="flex items-center gap-1.5 text-xs bg-gray-50 rounded-lg px-2.5 py-1.5 border border-gray-100">
+            {actualCounts.map((cg, idx) => (
+              <motion.div
+                key={cg.grade}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                whileHover={{ y: -1.5 }}
+                transition={{ duration: 0.35, delay: 0.16 + idx * 0.05, ease: [0.22, 1, 0.36, 1] }}
+                className="flex items-center gap-1.5 text-xs bg-gray-50 rounded-lg px-2.5 py-1.5 border border-gray-100 transition-shadow hover:shadow-xs"
+              >
                 <span className="font-bold" style={{ color: cg.color }}>{cg.grade}</span>
                 <span className="text-gray-400">{cg.actual} emp</span>
                 <span className={`font-semibold ${cg.actualPct > cg.target ? "text-orange-500" : cg.actualPct < cg.target ? "text-blue-500" : "text-emerald-500"}`}>
                   {cg.actualPct}%<span className="text-gray-300 font-normal">/{cg.target}%</span>
                 </span>
-              </div>
+              </motion.div>
             ))}
           </div>
-        </div>
+        </motion.div>
       </div>
       )}
     </div>

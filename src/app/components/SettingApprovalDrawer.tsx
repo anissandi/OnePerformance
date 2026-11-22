@@ -682,17 +682,7 @@ function OwnerColorValueBadge({ value, isBaseline }: { value: string; isBaseline
 }
 
 function derivePeriodeTrackingLabel(satuan?: string, trackingPeriod?: string): string {
-  const s = String(satuan ?? "");
-  const idx = s.indexOf("/");
-  if (idx >= 0) {
-    const raw = s.slice(idx + 1).trim();
-    if (raw) {
-      if (/^bulan$/i.test(raw)) return "Bulan";
-      if (/^tahun$/i.test(raw)) return "Tahun";
-      return raw;
-    }
-  }
-  return trackingPeriod || "Bulan";
+  return normalizeTrackingPeriod(trackingPeriod, satuan);
 }
 
 function classifyAttachmentType(name: string, mimeType = ""): {
@@ -1294,3 +1284,4 @@ function ManSkillSettingContent() {
     </div>
   );
 }
+import { normalizeTrackingPeriod } from "../utils/kpiNumberAndPeriod";

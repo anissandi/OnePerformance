@@ -5,6 +5,7 @@ import {
 } from "../shared/scoringWeightStore";
 // @refresh reset
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { motion } from "motion/react";
 import { useLocation, useNavigate } from "react-router";
 import { useRouteTab } from "../../utils/useRouteTab";
 import { getPenilai1ScoreAsPercent, subscribeScores } from "../supervisor/managementInterviewScoreStore";
@@ -350,6 +351,12 @@ function CollapsibleSection({ title, subtitle, defaultOpen = true, actions, chil
 }
 
 // ─── Bell Curve Chart ─────────────────────────────────────────────────────────
+const ADJ_BELL_PALETTE = {
+  soy: "#0284C7", // Ocean Sky Blue
+  eoy: "#F59E0B", // Golden Amber
+  actual: "#10B981", // Emerald Green
+  calibrated: "#F43F5E", // Coral Rose (tanpa ungu)
+} as const;
 
 function BellCurveChart({
   calibrationGrades,
@@ -392,8 +399,31 @@ function BellCurveChart({
     calibratedHC: calTotals[i],
   }));
 
+  const [chartReady, setChartReady] = useState(false);
+  useEffect(() => {
+    setChartReady(false);
+    const t = window.setTimeout(() => setChartReady(true), 120);
+    return () => window.clearTimeout(t);
+  }, []);
+  const chartData = chartReady
+    ? data
+    : data.map((d) => ({
+        ...d,
+        "Setting (SOY)": 0,
+        "Setting (EOY)": 0,
+        "Aktual": 0,
+        "Kalibrasi (EOY)": 0,
+      }));
+
   const gradeColors: Record<string, string> = {
-    "A+": "#10B981", A: "#3B82F6", B: "#F59E0B", C: "#F97316", D: "#EF4444", E: "#991B1B",
+    "A+": "#059669", A: "#0284C7", B: "#0D9488", C: "#F59E0B", D: "#F97316", E: "#E11D48",
+  };
+
+  const seriesColorMap: Record<string, string> = {
+    "Setting (SOY)": ADJ_BELL_PALETTE.soy,
+    "Setting (EOY)": ADJ_BELL_PALETTE.eoy,
+    "Aktual": ADJ_BELL_PALETTE.actual,
+    "Kalibrasi (EOY)": ADJ_BELL_PALETTE.calibrated,
   };
 
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -421,13 +451,14 @@ function BellCurveChart({
               : p.dataKey === "Aktual"
               ? p.payload.actualHC
               : p.payload.calibratedHC;
+          const dotColor = seriesColorMap[p.dataKey] ?? p.color ?? p.fill ?? p.stroke;
           return (
             <div key={p.dataKey} className="flex justify-between gap-4 mt-1">
               <span className="text-gray-500 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full inline-block" style={{ background: p.color ?? p.fill ?? p.stroke }} />
+                <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: dotColor }} />
                 {p.dataKey}
               </span>
-              <span className="font-bold text-gray-800">
+              <span className="font-bold" style={{ color: p.dataKey === "Kalibrasi (EOY)" && !hasCalibration ? "#94A3B8" : dotColor }}>
                 {p.dataKey === "Kalibrasi (EOY)" && !hasCalibration ? (
                   <span className="text-gray-400 font-normal">Belum dikalibrasi</span>
                 ) : (
@@ -445,37 +476,53 @@ function BellCurveChart({
   };
 
   const CustomBarShape = (props: any) => {
-    const { x, y, width, height, fill } = props;
+    const { x, y, width, height, fill, fillOpacity } = props;
     if (height <= 0) return null;
-    return <rect x={x} y={y} width={width} height={height} fill={fill} rx={3} ry={3} />;
+    return (
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        fill={fill}
+        fillOpacity={fillOpacity ?? 0.5}
+        rx={4}
+        ry={4}
+        style={{ transition: "height 380ms cubic-bezier(0.22, 1, 0.36, 1), y 380ms cubic-bezier(0.22, 1, 0.36, 1)" }}
+      />
+    );
   };
 
   const SettingDot = (props: any) => {
     const { cx, cy } = props;
-    return <Dot cx={cx} cy={cy} r={5} fill="#06B6D4" stroke="#fff" strokeWidth={2} />;
+    if (cx == null || cy == null) return null;
+    return <Dot cx={cx} cy={cy} r={5} fill={ADJ_BELL_PALETTE.soy} stroke="#fff" strokeWidth={2} />;
   };
 
   const SettingEoyDot = (props: any) => {
     const { cx, cy } = props;
-    return <Dot cx={cx} cy={cy} r={4.5} fill="#F59E0B" stroke="#fff" strokeWidth={2} />;
+    if (cx == null || cy == null) return null;
+    return <Dot cx={cx} cy={cy} r={4.5} fill={ADJ_BELL_PALETTE.eoy} stroke="#fff" strokeWidth={2} />;
   };
 
   const AktualDot = (props: any) => {
     const { cx, cy } = props;
-    return <Dot cx={cx} cy={cy} r={5} fill="#0D9488" stroke="#fff" strokeWidth={2} />;
+    if (cx == null || cy == null) return null;
+    return <Dot cx={cx} cy={cy} r={5} fill={ADJ_BELL_PALETTE.actual} stroke="#fff" strokeWidth={2} />;
   };
 
   const KalibrasiDot = (props: any) => {
     const { cx, cy } = props;
+    if (cx == null || cy == null) return null;
     if (!hasCalibration) return <Dot cx={cx} cy={cy} r={3.5} fill="#94A3B8" stroke="#fff" strokeWidth={1.5} />;
-    return <Dot cx={cx} cy={cy} r={5} fill="#1A284F" stroke="#fff" strokeWidth={2} />;
+    return <Dot cx={cx} cy={cy} r={5} fill={ADJ_BELL_PALETTE.calibrated} stroke="#fff" strokeWidth={2} />;
   };
 
   const legendPayload = [
-    { value: "Setting (SOY)",   type: "square" as const, color: "#06B6D4" },
-    { value: "Setting (EOY)",   type: "square" as const, color: "#F59E0B" },
-    { value: "Aktual",          type: "square" as const, color: "#0D9488" },
-    { value: "Kalibrasi (EOY)", type: "square" as const, color: "#1A284F" },
+    { value: "Setting (SOY)",   type: "square" as const, color: ADJ_BELL_PALETTE.soy },
+    { value: "Setting (EOY)",   type: "square" as const, color: ADJ_BELL_PALETTE.eoy },
+    { value: "Aktual",          type: "square" as const, color: ADJ_BELL_PALETTE.actual },
+    { value: "Kalibrasi (EOY)", type: "square" as const, color: ADJ_BELL_PALETTE.calibrated },
   ];
 
   return (
@@ -485,72 +532,96 @@ function BellCurveChart({
     >
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Chart */}
-        <div className="flex-1 min-w-0">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          className="flex-1 min-w-0"
+        >
           <ResponsiveContainer width="100%" height={335}>
             <ComposedChart
-              data={data}
+              data={chartData}
               margin={{ top: 16, right: 24, left: -8, bottom: 0 }}
-              barSize={16}
+              barSize={21}
               barGap={3}
-              barCategoryGap="22%"
+              barCategoryGap="14%"
             >
               <CartesianGrid key="bc-grid" strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis key="bc-xaxis" dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#374151", fontWeight: 600 }} dy={6} />
               <YAxis key="bc-yaxis" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={v => `${v}%`} domain={[0, "auto"]} />
-              <Tooltip key="bc-tooltip" content={<CustomTooltip />} cursor={{ fill: "rgba(26,40,79,0.04)" }} />
+              <Tooltip key="bc-tooltip" content={<CustomTooltip />} cursor={{ fill: "rgba(2,132,199,0.04)" }} />
               <Legend
                 key="bc-legend"
                 payload={legendPayload}
                 iconSize={10}
                 formatter={(value) => <span className="text-xs text-gray-600 font-medium">{value}</span>}
               />
-              {/* Bars */}
-              <Bar key="bc-bar-setting"     dataKey="Setting (SOY)"   name="Setting (SOY)"   fill="#06B6D4" fillOpacity={0.26} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-setting-eoy" dataKey="Setting (EOY)"   name="Setting (EOY)"   fill="#F59E0B" fillOpacity={0.25} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-actual"      dataKey="Aktual"          name="Aktual"          fill="#0D9488" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
-              <Bar key="bc-bar-cal"         dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#1A284F" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
+              {/* Bars (+30% ukuran bar, kepekatan warna dikurangi 50% -> fillOpacity 0.5) */}
+              <Bar key="bc-bar-setting"     dataKey="Setting (SOY)"   name="Setting (SOY)"   fill={ADJ_BELL_PALETTE.soy}        fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={720} animationEasing="ease-out" legendType="none" />
+              <Bar key="bc-bar-setting-eoy" dataKey="Setting (EOY)"   name="Setting (EOY)"   fill={ADJ_BELL_PALETTE.eoy}        fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={780} animationEasing="ease-out" legendType="none" />
+              <Bar key="bc-bar-actual"      dataKey="Aktual"          name="Aktual"          fill={ADJ_BELL_PALETTE.actual}     fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={840} animationEasing="ease-out" legendType="none" />
+              <Bar key="bc-bar-cal"         dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill={ADJ_BELL_PALETTE.calibrated} fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={900} animationEasing="ease-out" legendType="none" />
               {/* Lines */}
-              <Line key="bc-line-setting" type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke="#06B6D4" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}   activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
-              <Line key="bc-line-setting-eoy" type="monotone" dataKey="Setting (EOY)" name="Setting (EOY)" stroke="#F59E0B" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingEoyDot />} activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
-              <Line key="bc-line-actual"  type="monotone" dataKey="Aktual"          name="Aktual"          stroke="#0D9488" strokeWidth={2.5}                       dot={<AktualDot />}    activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
-              <Line key="bc-line-cal"     type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? "#1A284F" : "#CBD5E1"} strokeWidth={hasCalibration ? 2.5 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6 } : false} isAnimationActive={false} legendType="none" />
+              <Line key="bc-line-setting"     type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke={ADJ_BELL_PALETTE.soy}    strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}    activeDot={{ r: 6, fill: ADJ_BELL_PALETTE.soy }}    isAnimationActive={true} animationDuration={780} animationEasing="ease-out" legendType="none" />
+              <Line key="bc-line-setting-eoy" type="monotone" dataKey="Setting (EOY)"   name="Setting (EOY)"   stroke={ADJ_BELL_PALETTE.eoy}    strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingEoyDot />} activeDot={{ r: 6, fill: ADJ_BELL_PALETTE.eoy }}    isAnimationActive={true} animationDuration={840} animationEasing="ease-out" legendType="none" />
+              <Line key="bc-line-actual"      type="monotone" dataKey="Aktual"          name="Aktual"          stroke={ADJ_BELL_PALETTE.actual} strokeWidth={2.5}                       dot={<AktualDot />}     activeDot={{ r: 6, fill: ADJ_BELL_PALETTE.actual }} isAnimationActive={true} animationDuration={900} animationEasing="ease-out" legendType="none" />
+              <Line key="bc-line-cal"         type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? ADJ_BELL_PALETTE.calibrated : "#CBD5E1"} strokeWidth={hasCalibration ? 2.6 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6, fill: ADJ_BELL_PALETTE.calibrated } : false} isAnimationActive={true} animationDuration={960} animationEasing="ease-out" legendType="none" />
             </ComposedChart>
           </ResponsiveContainer>
-        </div>
+        </motion.div>
 
         {/* Info Grade di samping Bell Curve — sinkron dengan Setting (SOY), Setting (EOY), Aktual & Kalibrasi (EOY) */}
         <div className="w-full lg:w-96 xl:w-[420px] shrink-0 flex flex-col gap-2.5 justify-center">
-          {data.map(d => {
+          {data.map((d, di) => {
             const comparePct = hasCalibration ? d["Kalibrasi (EOY)"] : d["Aktual"];
             const diffEoy = parseFloat((comparePct - d["Setting (EOY)"]).toFixed(1));
             const diffCalVsAct = hasCalibration ? d.calibratedHC - d.actualHC : 0;
             const color = gradeColors[d.grade] ?? "#6B7280";
             return (
-              <div key={d.grade} className="flex items-center gap-3 bg-slate-50/85 rounded-xl px-3.5 py-2.5 border border-slate-200/80">
+              <motion.div
+                key={d.grade}
+                initial={{ opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0 }}
+                whileHover={{ x: -2 }}
+                transition={{ duration: 0.4, delay: 0.14 + di * 0.055, ease: [0.22, 1, 0.36, 1] }}
+                className="flex items-center gap-3 bg-gradient-to-r from-slate-50/90 via-white to-sky-50/30 rounded-xl px-3.5 py-2.5 border border-slate-200/85 transition-shadow hover:shadow-xs"
+              >
                 <span className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-xs"
                   style={{ background: color }}>{d.grade}</span>
                 <div className="flex-1 min-w-0">
                   <div className="grid grid-cols-4 gap-2 text-[11px] leading-snug">
                     <div>
-                      <span className="block text-[10px] font-semibold text-cyan-600">Set. SOY</span>
-                      <span className="font-bold text-cyan-600 tabular-nums">{d["Setting (SOY)"]}%</span>
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-sky-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7] shrink-0" />
+                        Set. SOY
+                      </span>
+                      <span className="font-bold text-[#0284C7] tabular-nums">{d["Setting (SOY)"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingHC} org)</span>
                     </div>
                     <div>
-                      <span className="block text-[10px] font-semibold text-amber-600">Set. EOY</span>
-                      <span className="font-bold text-amber-600 tabular-nums">{d["Setting (EOY)"]}%</span>
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] shrink-0" />
+                        Set. EOY
+                      </span>
+                      <span className="font-bold text-[#D97706] tabular-nums">{d["Setting (EOY)"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingEoyHC} org)</span>
                     </div>
                     <div>
-                      <span className="block text-[10px] font-semibold text-teal-700/85">Aktual</span>
-                      <span className="font-bold text-teal-700 tabular-nums">{d["Aktual"]}%</span>
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] shrink-0" />
+                        Aktual
+                      </span>
+                      <span className="font-bold text-[#059669] tabular-nums">{d["Aktual"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.actualHC} org)</span>
                     </div>
                     <div>
-                      <span className="block text-[10px] font-semibold text-[#1A284F]/85">Kalibrasi</span>
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E] shrink-0" />
+                        Kalibrasi
+                      </span>
                       {hasCalibration ? (
                         <>
-                          <span className="font-bold text-[#1A284F] tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
+                          <span className="font-bold text-[#E11D48] tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
                           <span className="block text-[10px] text-gray-400 tabular-nums">
                             ({d.calibratedHC}{diffCalVsAct !== 0 ? ` · ${diffCalVsAct > 0 ? `+${diffCalVsAct}` : diffCalVsAct}` : ""})
                           </span>
@@ -569,7 +640,7 @@ function BellCurveChart({
                 }`} title={hasCalibration ? "Selisih Kalibrasi (EOY) terhadap Setting (EOY)" : "Selisih Aktual terhadap Setting (EOY)"}>
                   {diffEoy > 0 ? `+${diffEoy}%` : diffEoy < 0 ? `${diffEoy}%` : "0%"}
                 </span>
-              </div>
+              </motion.div>
             );
           })}
         </div>
@@ -2759,27 +2830,42 @@ function CalibrationPanel({
           {activeTab === "distribusi" ? (
             <>
               {/* Legend */}
-              <div className="flex flex-wrap items-center gap-6 bg-gray-50 border border-gray-100 rounded-xl px-5 py-3">
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+                className="flex flex-wrap items-center gap-6 bg-slate-50/80 border border-slate-200/70 rounded-xl px-5 py-3"
+              >
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Legend:</p>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-[#06B6D4] inline-block" />
+                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.soy, opacity: 0.75 }} />
+                  <svg width="18" height="10" className="shrink-0">
+                    <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.soy} strokeWidth="2.5" strokeDasharray="5 3" />
+                  </svg>
                   <span className="text-xs text-gray-700 font-semibold">Setting (SOY)</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <svg width="22" height="10" className="shrink-0">
-                    <line x1="0" y1="5" x2="22" y2="5" stroke="#F59E0B" strokeWidth="2.5" strokeDasharray="5 3" />
+                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.eoy, opacity: 0.75 }} />
+                  <svg width="18" height="10" className="shrink-0">
+                    <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.eoy} strokeWidth="2.5" strokeDasharray="5 3" />
                   </svg>
                   <span className="text-xs text-gray-700 font-semibold">Setting (EOY)</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-teal-600 inline-block" />
+                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.actual, opacity: 0.75 }} />
+                  <svg width="18" height="10" className="shrink-0">
+                    <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.actual} strokeWidth="2.5" />
+                  </svg>
                   <span className="text-xs text-gray-700 font-semibold">Aktual</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm bg-[#1A284F] inline-block" />
+                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.calibrated, opacity: 0.75 }} />
+                  <svg width="18" height="10" className="shrink-0">
+                    <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.calibrated} strokeWidth="2.5" />
+                  </svg>
                   <span className="text-xs text-gray-700 font-semibold">Kalibrasi (EOY)</span>
                 </div>
-              </div>
+              </motion.div>
 
               <BellCurveChart
                 calibrationGrades={effectiveGrades}

@@ -54,6 +54,16 @@ import {
 } from "../../../components/KpiTableDisplayControls";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
+import {
+  STANDARD_TRACKING_PERIODS,
+  formatComputedKpiNumber,
+  getActiveMonthIndicesForPeriod,
+  isMonthBlockedForKpi,
+  isPeriodicTrackingType,
+  normalizeTrackingPeriod,
+  parseFlexibleKpiNumber,
+  sanitizeKpiNumericInput,
+} from "../../../utils/kpiNumberAndPeriod";
 
 const MONTHS_LIST = ["Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26","Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -107,17 +117,31 @@ function computeColorTarget2026(mt: Record<string, string>, formula: string): st
   return "";
 }
 
-function computeTarget2026(mt: Record<string, string>, formula: string): string {
+function computeTarget2026(
+  mt: Record<string, string>,
+  formula: string,
+  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; baselineSample?: string },
+): string {
+  const activeIndices =
+    opts?.periodicTargetBlock && isPeriodicTrackingType(opts?.trackingPeriod)
+      ? getActiveMonthIndicesForPeriod(opts?.trackingPeriod)
+      : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const activeKeys = activeIndices.map((idx) => MONTHS_LIST[idx]).filter(Boolean);
   if (formula === "Nilai Akhir") {
-    return mt["Dec-26"] ?? "";
+    const lastKey = activeKeys[activeKeys.length - 1] ?? "Dec-26";
+    return String(mt[lastKey] ?? "").trim();
   }
-  const vals = MONTHS_LIST.map((m) => parseFloat(mt[m] ?? "")).filter((v) => !isNaN(v));
+  const rawInputs = activeKeys.map((m) => String(mt[m] ?? "").trim()).filter(Boolean);
+  const vals = rawInputs
+    .map((s) => parseFlexibleKpiNumber(s))
+    .filter((v): v is number => v !== null);
   if (vals.length === 0) return "";
   const sum = vals.reduce((s, v) => s + v, 0);
-  if (formula === "Jumlah") return String(+sum.toFixed(4).replace(/\.?0+$/, ""));
+  const samples = opts?.baselineSample ? [...rawInputs, opts.baselineSample] : rawInputs;
+  if (formula === "Jumlah") return formatComputedKpiNumber(sum, samples);
   if (formula === "Rata-Rata") {
     const avg = sum / vals.length;
-    return String(+avg.toFixed(4).replace(/\.?0+$/, ""));
+    return formatComputedKpiNumber(avg, samples);
   }
   return "";
 }
@@ -184,6 +208,8 @@ export interface KPISetting {
   // Corporate KPI extra fields
   scope?: string;
   trackingPeriod?: string;
+  /** Aktif jika tag "Tracking per {{tipe}}" diklik sehingga hanya bulan akhir periode yang aktif */
+  periodicTargetBlock?: boolean;
   coo?: string;
   gmVgmIndustry?: string;
   gmVgmPerkebunan?: string;
@@ -1829,7 +1855,11 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
       const computed =
         mode === "color" ? computeColorTarget2026(mt, item.formula) :
         mode === "ratio" ? computeRatioTarget2026(mt) :
-        computeTarget2026(mt, item.formula);
+        computeTarget2026(mt, item.formula, {
+          trackingPeriod: item.trackingPeriod,
+          periodicTargetBlock: item.periodicTargetBlock,
+          baselineSample: item.baseline2025,
+        });
       return { ...item, monthlyTargets: mt, target2026: computed || item.target2026 };
     })
   );
@@ -1849,12 +1879,17 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
     setEditItems((prev) =>
       prev.map((item) => {
         if (item.id !== itemId) return item;
-        const mt = { ...item.monthlyTargets, [month]: val };
         const mode = item.indicatorMode ?? "numeric";
+        const cleanVal = mode === "numeric" ? sanitizeKpiNumericInput(val) : val;
+        const mt = { ...item.monthlyTargets, [month]: cleanVal };
         const t2026 =
           mode === "color" ? computeColorTarget2026(mt, item.formula) :
           mode === "ratio" ? computeRatioTarget2026(mt) :
-          computeTarget2026(mt, item.formula);
+          computeTarget2026(mt, item.formula, {
+            trackingPeriod: item.trackingPeriod,
+            periodicTargetBlock: item.periodicTargetBlock,
+            baselineSample: item.baseline2025,
+          });
         return { ...item, monthlyTargets: mt, target2026: t2026 || item.target2026 };
       })
     );
@@ -1954,11 +1989,17 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
                           {MONTHS_LIST.map((month, idx) => {
                             const isPast = idx < CURRENT_MONTH_IDX;
                             const isCur = idx === CURRENT_MONTH_IDX;
+                            const isPeriodicBlocked = isMonthBlockedForKpi(item, month);
                             const val = mt[month] ?? "";
-                            const cellBg = isPast ? "#f3f4f6" : isCur ? "#eff6ff" : "#f0fdf4";
+                            const cellBg = isPeriodicBlocked ? "#f1f5f9" : isPast ? "#f3f4f6" : isCur ? "#eff6ff" : "#f0fdf4";
                             return (
                               <td key={month} className="border border-gray-200 py-1 px-1 text-center" style={{ background: cellBg }}>
-                                {isPast || targetSubmitted ? (
+                                {isPeriodicBlocked ? (
+                                  <div className="flex items-center justify-center gap-1 text-slate-400">
+                                    <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                                    <span className="text-[10px] font-medium">Block</span>
+                                  </div>
+                                ) : isPast || targetSubmitted ? (
                                   <div className="flex items-center justify-center gap-1">
                                     {isPast && <Lock className="w-2.5 h-2.5 text-gray-300 shrink-0" />}
                                     <span className="text-[10px] text-gray-400">{val || "—"}</span>
@@ -1976,7 +2017,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
                                     {RATIO_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                                   </select>
                                 ) : (
-                                  <input type="text" value={val}
+                                  <input type="text" inputMode="decimal" value={val}
                                     onChange={(e) => setMonthTarget(item.id, month, e.target.value)}
                                     placeholder="—"
                                     className={`w-full text-[10px] border rounded px-1 py-0.5 outline-none text-center ${isCur ? "border-blue-300 focus:border-blue-500" : "border-gray-200 focus:border-green-400"}`}
@@ -2306,12 +2347,14 @@ function Target2026Field({
   colorMode,
   ratioMode,
   monthlyTargets,
+  onChange,
   softOrangeHighlight = false,
   softYellowHighlight = false,
   softYellowSourceLabel,
 }: {
   value: string; colorMode: boolean; ratioMode?: boolean;
   monthlyTargets?: Record<string, string>;
+  onChange?: (val: string) => void;
   softOrangeHighlight?: boolean;
   softYellowHighlight?: boolean;
   softYellowSourceLabel?: string;
@@ -2401,9 +2444,12 @@ function Target2026Field({
       ) : (
         <div className="relative">
           <input
+            type="text"
+            inputMode="decimal"
             value={value}
-            readOnly
-            className={`text-sm rounded-lg px-3 py-2 outline-none w-full text-[#1A284F] font-bold cursor-default ${
+            readOnly={!onChange}
+            onChange={onChange ? (e) => onChange(sanitizeKpiNumericInput(e.target.value)) : undefined}
+            className={`text-sm rounded-lg px-3 py-2 pr-14 outline-none w-full text-[#1A284F] font-bold ${onChange ? "focus:border-[#1A284F]" : "cursor-default"} ${
               softYellowHighlight
                 ? value.trim()
                   ? "border-2 border-yellow-300 bg-white"
@@ -2412,7 +2458,7 @@ function Target2026Field({
                 ? "border-2 border-orange-300 bg-white"
                 : "border border-gray-200 bg-gray-50"
             }`}
-            placeholder="Auto-computed from Monthly Target"
+            placeholder="Otomatis dari Monthly Target (mendukung . dan ,)"
           />
           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 font-medium pointer-events-none">auto</span>
         </div>
@@ -2439,6 +2485,10 @@ function MonthlyTargetTable({
   colorMode,
   ratioMode,
   onChange,
+  trackingPeriod,
+  periodicTargetBlock = false,
+  onTogglePeriodicBlock,
+  baselineSample,
   softOrangeHighlight = false,
   softYellowHighlight = false,
   softYellowSourceLabel,
@@ -2448,38 +2498,109 @@ function MonthlyTargetTable({
   colorMode: boolean;
   ratioMode?: boolean;
   onChange: (mt: Record<string, string>, computed2026: string) => void;
+  trackingPeriod?: string;
+  periodicTargetBlock?: boolean;
+  onTogglePeriodicBlock?: (nextBlocked: boolean, nextMt: Record<string, string>, computed2026: string) => void;
+  baselineSample?: string;
   softOrangeHighlight?: boolean;
   softYellowHighlight?: boolean;
   softYellowSourceLabel?: string;
 }) {
+  const normPeriod = normalizeTrackingPeriod(trackingPeriod);
+  const isPeriodic = isPeriodicTrackingType(normPeriod);
+  const activeIndices =
+    isPeriodic && periodicTargetBlock
+      ? getActiveMonthIndicesForPeriod(normPeriod)
+      : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const activeIdxSet = new Set<number>(activeIndices);
+  const firstActiveIdx = activeIndices[0] ?? 0;
+  const firstActiveKey = MONTHS_LIST[firstActiveIdx] ?? MONTHS_LIST[0];
+
   const handleChange = (key: string, val: string) => {
-    // Auto-fill all months when Jan is changed (ratio or color mode)
-    const isJan = key === MONTHS_LIST[0];
-    const shouldAutoFill = isJan && (ratioMode || colorMode);
+    const cleanVal = !colorMode && !ratioMode ? sanitizeKpiNumericInput(val) : val;
+    const isFirstActive = key === firstActiveKey;
+    const shouldAutoFill = isFirstActive && (ratioMode || colorMode);
     const updated = shouldAutoFill
-      ? MONTHS_LIST.reduce((acc, k) => ({ ...acc, [k]: val }), { ...monthlyTargets })
-      : { ...monthlyTargets, [key]: val };
+      ? MONTHS_LIST.reduce(
+          (acc, k, idx) => ({ ...acc, [k]: activeIdxSet.has(idx) ? cleanVal : "" }),
+          { ...monthlyTargets },
+        )
+      : { ...monthlyTargets, [key]: cleanVal };
     const computed = ratioMode
       ? computeRatioTarget2026(updated)
-      : computeTarget2026(updated, formula);
+      : colorMode
+      ? computeColorTarget2026(updated, formula)
+      : computeTarget2026(updated, formula, {
+          trackingPeriod: normPeriod,
+          periodicTargetBlock: isPeriodic && periodicTargetBlock,
+          baselineSample,
+        });
     onChange(updated, computed);
   };
 
+  const handleTogglePeriodicTag = () => {
+    if (!isPeriodic) return;
+    const nextBlocked = !periodicTargetBlock;
+    const nextActiveSet = new Set<number>(
+      nextBlocked ? getActiveMonthIndicesForPeriod(normPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    );
+    const cleanedMt: Record<string, string> = {};
+    MONTHS_LIST.forEach((mKey, idx) => {
+      cleanedMt[mKey] = nextActiveSet.has(idx) ? (monthlyTargets[mKey] ?? "") : "";
+    });
+    const computed = ratioMode
+      ? computeRatioTarget2026(cleanedMt)
+      : colorMode
+      ? computeColorTarget2026(cleanedMt, formula)
+      : computeTarget2026(cleanedMt, formula, {
+          trackingPeriod: normPeriod,
+          periodicTargetBlock: nextBlocked,
+          baselineSample,
+        });
+    if (onTogglePeriodicBlock) {
+      onTogglePeriodicBlock(nextBlocked, cleanedMt, computed);
+    } else {
+      onChange(cleanedMt, computed);
+    }
+  };
+
+  const firstActiveShort = MONTHS_SHORT[firstActiveIdx] ?? "Jan";
   const ruleHint = ratioMode
-    ? "Pilih Jan → auto isi semua bulan"
+    ? `Pilih ${firstActiveShort} → auto isi bulan aktif`
     : colorMode
-    ? "Pilih Jan → auto isi semua bulan"
-    : formula === "Jumlah"      ? `Target ${KPI_CYCLE_YEAR} = Sum (Jan–Dec)`
-    : formula === "Rata-Rata"   ? `Target ${KPI_CYCLE_YEAR} = Average (Jan–Dec)`
+    ? `Pilih ${firstActiveShort} → auto isi bulan aktif`
+    : formula === "Jumlah"      ? `Target ${KPI_CYCLE_YEAR} = Sum (${isPeriodic && periodicTargetBlock ? `Bulan Aktif ${normPeriod}` : "Jan–Dec"})`
+    : formula === "Rata-Rata"   ? `Target ${KPI_CYCLE_YEAR} = Average (${isPeriodic && periodicTargetBlock ? `Bulan Aktif ${normPeriod}` : "Jan–Dec"})`
     : formula === "Nilai Akhir" ? `Target ${KPI_CYCLE_YEAR} = December value`
     : "";
-  const hasAnyEmptyMonth = MONTHS_LIST.some((k) => !(monthlyTargets[k] ?? "").trim());
+  const hasAnyEmptyMonth = activeIndices.some((idx) => !(monthlyTargets[MONTHS_LIST[idx]] ?? "").trim());
 
   return (
     <div className={`flex flex-col gap-1.5 ${softYellowHighlight ? "rounded-xl border-2 border-yellow-300 bg-yellow-50/80 ring-2 ring-yellow-100/90 p-3.5" : softOrangeHighlight ? "rounded-xl border-2 border-orange-300 bg-orange-50/50 ring-2 ring-orange-100 p-3.5" : ""}`}>
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <label className={`text-[11px] font-bold uppercase tracking-wide ${softYellowHighlight ? "text-amber-800" : softOrangeHighlight ? "text-orange-800" : "text-gray-500"}`}>Monthly Target</label>
+          {isPeriodic && (
+            <>
+              <button
+                type="button"
+                onClick={handleTogglePeriodicTag}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
+                  periodicTargetBlock
+                    ? "bg-teal-50 text-teal-800 border-teal-300 ring-2 ring-teal-100 shadow-2xs"
+                    : "bg-sky-50/90 text-sky-700 border-sky-200 hover:bg-sky-100"
+                }`}
+                title={`Klik untuk ${periodicTargetBlock ? "membuka kembali semua bulan" : `mengaktifkan hanya bulan akhir setiap ${normPeriod}`}`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${periodicTargetBlock ? "bg-teal-600" : "bg-sky-500"}`} />
+                <span>Tracking per {normPeriod}</span>
+                {periodicTargetBlock && <CheckCircle2 className="w-3 h-3 text-teal-600 shrink-0" />}
+              </button>
+              <span className="text-[11px] text-slate-600 font-medium">
+                Pencapaian target berdasarkan hitungan setiap <strong className="text-[#1A284F]">{normPeriod}</strong> dalam satu tahun
+              </span>
+            </>
+          )}
           {softYellowHighlight && hasAnyEmptyMonth && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-100 text-amber-800 border border-yellow-300">
               Belum diisi · Wajib dilengkapi
@@ -2500,21 +2621,49 @@ function MonthlyTargetTable({
         <table className="border-collapse w-full text-xs" style={{ minWidth: 680 }}>
           <thead>
             <tr className="bg-[#1A284F]/5">
-              {MONTHS_SHORT.map((m, i) => (
-                <th key={m} className={`border border-gray-200 py-2 px-1 text-center font-bold text-[#1A284F] text-[11px] ${
-                  !colorMode && !ratioMode && i === 11 ? "bg-amber-50" : ""
-                } ${(ratioMode || colorMode) && i === 0 ? "bg-[#1A284F]/10" : ""}`}>
-                  {m}{(ratioMode || colorMode) && i === 0 ? " *" : ""}
-                </th>
-              ))}
+              {MONTHS_SHORT.map((m, i) => {
+                const isBlockedMonth = isPeriodic && periodicTargetBlock && !activeIdxSet.has(i);
+                const isActivePeriodicMonth = isPeriodic && periodicTargetBlock && activeIdxSet.has(i);
+                return (
+                  <th
+                    key={m}
+                    className={`border border-gray-200 py-2 px-1 text-center font-bold text-[11px] ${
+                      isBlockedMonth
+                        ? "bg-slate-100 text-slate-400"
+                        : isActivePeriodicMonth
+                        ? "bg-teal-50/80 text-teal-900"
+                        : !colorMode && !ratioMode && i === 11
+                        ? "bg-amber-50 text-[#1A284F]"
+                        : "text-[#1A284F]"
+                    } ${(ratioMode || colorMode) && i === firstActiveIdx && !isBlockedMonth ? "bg-[#1A284F]/10" : ""}`}
+                  >
+                    <span className="inline-flex items-center justify-center gap-0.5">
+                      {m}
+                      {isBlockedMonth && <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />}
+                      {(ratioMode || colorMode) && i === firstActiveIdx && !isBlockedMonth ? " *" : ""}
+                    </span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             <tr>
               {MONTHS_LIST.map((key, i) => {
+                const isBlockedMonth = isPeriodic && periodicTargetBlock && !activeIdxSet.has(i);
+                if (isBlockedMonth) {
+                  return (
+                    <td key={key} className="border border-gray-200 p-1 bg-slate-100/85 text-center select-none" title={`Bulan diblok — mengikuti periode ${normPeriod}`}>
+                      <div className="w-full text-[10px] font-medium text-slate-400 border border-slate-200/80 bg-slate-100 rounded-md px-1 py-1.5 flex items-center justify-center gap-0.5 cursor-not-allowed">
+                        <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                        <span>Block</span>
+                      </div>
+                    </td>
+                  );
+                }
                 if (ratioMode) {
                   const selected = monthlyTargets[key] ?? "";
-                  const isLocked = i > 0 && !!monthlyTargets[MONTHS_LIST[0]];
+                  const isLocked = i !== firstActiveIdx && !!monthlyTargets[firstActiveKey];
                   return (
                     <td key={key} className={`border border-gray-200 p-1 ${softYellowHighlight && !selected ? "bg-yellow-50/80" : isLocked ? "bg-purple-50/10" : "bg-purple-50/20"}`}>
                       <select
@@ -2532,7 +2681,7 @@ function MonthlyTargetTable({
                 if (colorMode) {
                   const selected = monthlyTargets[key] ?? "";
                   const flagMeta = MONTHLY_FLAG_OPTIONS.find((o) => o.value === selected);
-                  const isLocked = i > 0 && !!monthlyTargets[MONTHS_LIST[0]];
+                  const isLocked = i !== firstActiveIdx && !!monthlyTargets[firstActiveKey];
                   return (
                     <td key={key} className="border border-gray-200 p-1" style={{ background: flagMeta ? flagMeta.bg : softYellowHighlight ? "#fefce8" : "white" }}>
                       <select
@@ -2551,14 +2700,16 @@ function MonthlyTargetTable({
                 }
                 const cellVal = monthlyTargets[key] ?? "";
                 const isCellEmptyYellow = softYellowHighlight && !cellVal.trim();
+                const isActivePeriodicCell = isPeriodic && periodicTargetBlock && activeIdxSet.has(i);
                 return (
-                  <td key={key} className={`border border-gray-200 p-1 ${isCellEmptyYellow ? "bg-yellow-50/85" : i === 11 ? "bg-amber-50/40" : "bg-white"}`}>
+                  <td key={key} className={`border border-gray-200 p-1 ${isCellEmptyYellow ? "bg-yellow-50/85" : isActivePeriodicCell ? "bg-teal-50/35" : i === 11 ? "bg-amber-50/40" : "bg-white"}`}>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={cellVal}
                       onChange={(e) => handleChange(key, e.target.value)}
                       placeholder="—"
-                      className={`w-full text-xs text-center border rounded-md px-1 py-1.5 outline-none focus:border-[#1A284F] ${isCellEmptyYellow ? "border-yellow-300 bg-yellow-50/75" : i === 11 ? "border-amber-200 bg-amber-50/60" : "border-gray-200 bg-white"}`}
+                      className={`w-full text-xs text-center border rounded-md px-1 py-1.5 outline-none focus:border-[#1A284F] ${isCellEmptyYellow ? "border-yellow-300 bg-yellow-50/75" : isActivePeriodicCell ? "border-teal-300 bg-white font-semibold text-[#1A284F]" : i === 11 ? "border-amber-200 bg-amber-50/60" : "border-gray-200 bg-white"}`}
                     />
                   </td>
                 );
@@ -2567,6 +2718,11 @@ function MonthlyTargetTable({
           </tbody>
         </table>
       </div>
+      {!colorMode && !ratioMode && (
+        <p className="text-[10px] text-slate-500">
+          Mendukung operator titik (<code className="font-bold text-slate-700">.</code>) untuk pemisah angka (mis. <code className="font-semibold">10.000</code>), koma (<code className="font-bold text-slate-700">,</code>) untuk pecahan, atau gabungan seperti <code className="font-semibold">10.00,01</code>.
+        </p>
+      )}
       {!colorMode && !ratioMode && formula === "Nilai Akhir" && (
         <p className="text-[10px] text-amber-700 font-medium">December (highlighted) is used as the final target value.</p>
       )}
@@ -3034,7 +3190,8 @@ function adaptBusinessKpiToPersonalItem(src: KPISetting): KPISetting {
     monthlyTargets: {},
     colorIndicator: resolvedMode === "color",
     indicatorMode: resolvedMode,
-    trackingPeriod: derivePeriodeTrackingFromSatuan(adaptedSatuan, src.trackingPeriod),
+    trackingPeriod: normalizeTrackingPeriod(src.trackingPeriod, adaptedSatuan),
+    periodicTargetBlock: src.periodicTargetBlock,
     scope: "",
     coo: "",
     gmVgmIndustry: "",
@@ -3429,18 +3586,59 @@ export function AddKPIModal({
     perspektif: "Proses", kpi: "", satuan: "", formula: "Jumlah",
     bobot: "", definisi: "", source: "", baseline2025: "", target2026: "", polaritas: "Maximize",
     detailFormula: "", keterangan: "", monthlyTargets: {}, colorIndicator: false, indicatorMode: "numeric",
+    trackingPeriod: "Bulan", periodicTargetBlock: false,
   });
   const [bobotError, setBobotError] = useState<BobotViolation | null>(null);
   const [sectionCascadeType, setSectionCascadeType] = useState<string>("FC");
   const indicatorMode: IndicatorMode = form.indicatorMode ?? "numeric";
   const colorMode = indicatorMode === "color";
   const ratioMode = indicatorMode === "ratio";
+  const trackingPeriodOpts = master.trackingPeriod?.length ? master.trackingPeriod : [...STANDARD_TRACKING_PERIODS];
+  const isCopiedPersonalKpi = fromAtasanKpi || Boolean(fromBusinessKpiSource);
 
   const set = (key: keyof typeof form, val: string) => setForm((p) => {
     const next = { ...p, [key]: val } as typeof form;
-    if (key === "formula") next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val);
+    if (key === "formula") {
+      next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val, {
+        trackingPeriod: p.trackingPeriod,
+        periodicTargetBlock: p.periodicTargetBlock,
+        baselineSample: p.baseline2025,
+      });
+    }
     return next;
   });
+
+  const handlePersonalTrackingPeriodChange = (nextPeriodRaw: string) => {
+    const nextPeriod = normalizeTrackingPeriod(nextPeriodRaw);
+    setForm((p) => {
+      const stillPeriodic = isPeriodicTrackingType(nextPeriod);
+      const nextBlock = stillPeriodic ? Boolean(p.periodicTargetBlock) : false;
+      const activeSet = new Set<number>(
+        nextBlock ? getActiveMonthIndicesForPeriod(nextPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      );
+      const nextMt: Record<string, string> = {};
+      MONTHS_LIST.forEach((mKey, idx) => {
+        nextMt[mKey] = activeSet.has(idx) ? (p.monthlyTargets?.[mKey] ?? "") : "";
+      });
+      const nextTarget =
+        (p.indicatorMode ?? "numeric") === "ratio"
+          ? computeRatioTarget2026(nextMt)
+          : (p.indicatorMode ?? "numeric") === "color"
+          ? computeColorTarget2026(nextMt, p.formula)
+          : computeTarget2026(nextMt, p.formula, {
+              trackingPeriod: nextPeriod,
+              periodicTargetBlock: nextBlock,
+              baselineSample: p.baseline2025,
+            });
+      return {
+        ...p,
+        trackingPeriod: nextPeriod,
+        periodicTargetBlock: nextBlock,
+        monthlyTargets: nextMt,
+        target2026: nextTarget,
+      };
+    });
+  };
 
   // When section changes, auto-fill sectionLabel, sectionAlphabet, and sectionBobot
   const [manualSection, setManualSection] = useState(false);
@@ -3591,6 +3789,7 @@ export function AddKPIModal({
     if (!form.definisi.trim()) miss.push("Definisi / Deskripsi");
     if (!form.source.trim()) miss.push("Source");
     if (!form.baseline2025.trim()) miss.push("Baseline 2025");
+    if (!String(form.trackingPeriod ?? "").trim()) miss.push("Periode Tracking");
     if (!fromBusinessKpiSource && !form.target2026.trim()) miss.push(`Target ${KPI_CYCLE_YEAR} (isi Target Bulanan)`);
     if (!form.detailFormula.trim()) miss.push("Detail Formula Pencapaian");
     return miss;
@@ -3636,13 +3835,13 @@ export function AddKPIModal({
       return;
     }
     if (!hideCascading && sectionCascadeType) onSectionCascade?.(form.section, sectionCascadeType);
-    // S2: Periode Tracking otomatis diambil dari bagian /Periode pada field Satuan (/Periode) di tab Sub Section
-    const derivedTracking = derivePeriodeTrackingFromSatuan(form.satuan, form.trackingPeriod);
+    const derivedTracking = normalizeTrackingPeriod(form.trackingPeriod, form.satuan);
     const pinnedSectionBobot = `${formatPctNum(sectionLimit)}%`;
     onAdd({
       ...form,
       sectionBobot: pinnedSectionBobot,
       trackingPeriod: derivedTracking,
+      periodicTargetBlock: isPeriodicTrackingType(derivedTracking) ? Boolean(form.periodicTargetBlock) : false,
       id: `kpi-${Date.now()}`,
     });
     onClose();
@@ -3915,8 +4114,18 @@ export function AddKPIModal({
           {tab === "subsection" && (
             <>
               {atasanBobotWarning && (
-                <div className="flex items-start gap-2 px-4 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 font-medium">
-                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <div
+                  className={`flex items-start gap-2 px-4 py-2.5 rounded-xl border text-xs font-medium ${
+                    parsePctNum(form.bobot) > subRemainingInSection + 1e-6
+                      ? "bg-rose-50 border-rose-200 text-rose-800"
+                      : "bg-yellow-50/90 border-yellow-300 text-amber-900"
+                  }`}
+                >
+                  <AlertCircle
+                    className={`w-4 h-4 shrink-0 mt-0.5 ${
+                      parsePctNum(form.bobot) > subRemainingInSection + 1e-6 ? "text-rose-500" : "text-amber-600"
+                    }`}
+                  />
                   <span>{atasanBobotWarning}</span>
                 </div>
               )}
@@ -3941,29 +4150,67 @@ export function AddKPIModal({
               )}
 
               <div className="grid grid-cols-2 gap-3">
-                <Field label="No *">
-                  {(() => {
-                    const hasDupNo = Boolean(
-                      normalizeKpiNoKey(form.no) &&
-                        existingItems.some((x) => normalizeKpiNoKey(x.no) === normalizeKpiNoKey(form.no)),
-                    );
-                    return (
-                      <>
-                        <input
-                          value={form.no}
-                          onChange={(e) => set("no", e.target.value)}
-                          placeholder="e.g. 8"
-                          className={`${inputCls} ${hasDupNo ? "border-rose-300 bg-rose-50/70 focus:border-rose-400" : ""}`}
+                {(() => {
+                  const hasDupNo = Boolean(
+                    normalizeKpiNoKey(form.no) &&
+                      existingItems.some((x) => normalizeKpiNoKey(x.no) === normalizeKpiNoKey(form.no)),
+                  );
+                  const showSoftYellowNo = !hasDupNo && isCopiedPersonalKpi && Boolean(form.no.trim());
+                  return (
+                    <div
+                      className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${
+                        hasDupNo
+                          ? "bg-rose-50/90 border-2 border-rose-300 ring-2 ring-rose-100"
+                          : showSoftYellowNo
+                          ? "bg-yellow-50/85 border-2 border-yellow-300 ring-2 ring-yellow-100/90"
+                          : `border ${FIELD_TONE_STYLES.indigo.wrap}`
+                      }`}
+                    >
+                      <label
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${
+                          hasDupNo
+                            ? "text-rose-800"
+                            : showSoftYellowNo
+                            ? "text-amber-800"
+                            : FIELD_TONE_STYLES.indigo.label
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            hasDupNo
+                              ? "bg-rose-500"
+                              : showSoftYellowNo
+                              ? "bg-yellow-500"
+                              : FIELD_TONE_STYLES.indigo.dot
+                          }`}
                         />
-                        {hasDupNo && (
-                          <p className="mt-1 text-[10px] font-semibold text-rose-700">
-                            No KPI sama, pastikan tidak ada No KPI yang sama
-                          </p>
-                        )}
-                      </>
-                    );
-                  })()}
-                </Field>
+                        <span>No *</span>
+                      </label>
+                      <input
+                        value={form.no}
+                        onChange={(e) => set("no", e.target.value)}
+                        placeholder="e.g. 8"
+                        className={`${inputCls} ${
+                          hasDupNo
+                            ? "border-rose-300 bg-rose-50/70 focus:border-rose-400"
+                            : showSoftYellowNo
+                            ? "border-yellow-300 bg-yellow-50/60 text-amber-950 font-semibold focus:border-amber-500"
+                            : ""
+                        }`}
+                      />
+                      {hasDupNo ? (
+                        <p className="mt-0.5 text-[10px] font-semibold text-rose-700">
+                          No KPI sama, pastikan tidak ada No KPI yang sama
+                        </p>
+                      ) : showSoftYellowNo ? (
+                        <p className="mt-0.5 text-[11px] font-medium text-amber-800 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Pastikan nomor Perspektif KPI sudah sesuai</span>
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })()}
                 <Field label="Perspektif">
                   <select value={form.perspektif} onChange={(e) => set("perspektif", e.target.value)} className={inputCls}>
                     <option value="">— Perspektif —</option>
@@ -3976,7 +4223,7 @@ export function AddKPIModal({
               </div>
 
               <Field label="KPI *"><textarea rows={3} value={form.kpi} onChange={(e) => set("kpi", e.target.value)} placeholder="KPI name / description" className={inputCls + " resize-none"} /></Field>
-              <SatuanField value={form.satuan} onChange={(v) => setForm((p) => ({ ...p, satuan: v, trackingPeriod: derivePeriodeTrackingFromSatuan(v, p.trackingPeriod) }))} unitOptions={master.satuan} periodeOptions={master.period} />
+              <SatuanField value={form.satuan} onChange={(v) => setForm((p) => ({ ...p, satuan: v }))} unitOptions={master.satuan} periodeOptions={master.period} />
 
               <Field label="Formula Pencapaian">
                 {colorMode || ratioMode
@@ -3989,21 +4236,36 @@ export function AddKPIModal({
               <div className="grid grid-cols-2 gap-4">
                 {(() => {
                   const bobotExceedsRemaining = parsePctNum(form.bobot) > subRemainingInSection + 1e-6;
-                  const showSoftRedBobot = bobotExceedsRemaining || ((fromAtasanKpi || Boolean(fromBusinessKpiSource)) && atasanBobotNeedsAdjust);
+                  const showSoftRedBobot = bobotExceedsRemaining;
+                  const showSoftYellowBobot = !bobotExceedsRemaining && isCopiedPersonalKpi && Boolean(form.bobot);
                   return (
                     <div
                       className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${
                         showSoftRedBobot
                           ? "bg-rose-50/90 border-2 border-rose-300 ring-2 ring-rose-100"
+                          : showSoftYellowBobot
+                          ? "bg-yellow-50/85 border-2 border-yellow-300 ring-2 ring-yellow-100/90"
                           : `border ${FIELD_TONE_STYLES.emerald.wrap}`
                       }`}
                     >
                       <label
                         className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${
-                          showSoftRedBobot ? "text-rose-800" : FIELD_TONE_STYLES.emerald.label
+                          showSoftRedBobot
+                            ? "text-rose-800"
+                            : showSoftYellowBobot
+                            ? "text-amber-800"
+                            : FIELD_TONE_STYLES.emerald.label
                         }`}
                       >
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${showSoftRedBobot ? "bg-rose-500" : FIELD_TONE_STYLES.emerald.dot}`} />
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            showSoftRedBobot
+                              ? "bg-rose-500"
+                              : showSoftYellowBobot
+                              ? "bg-yellow-500"
+                              : FIELD_TONE_STYLES.emerald.dot
+                          }`}
+                        />
                         <span>{`Bobot * (Maks. Sisa Section: ${formatPctNum(subRemainingInSection)}%)`}</span>
                       </label>
                       <select
@@ -4019,7 +4281,11 @@ export function AddKPIModal({
                           }
                         }}
                         className={`${inputCls} disabled:bg-gray-100 disabled:cursor-not-allowed ${
-                          showSoftRedBobot ? "border-2 border-rose-300 bg-white text-rose-900 font-semibold" : ""
+                          showSoftRedBobot
+                            ? "border-2 border-rose-300 bg-white text-rose-900 font-semibold"
+                            : showSoftYellowBobot
+                            ? "border-2 border-yellow-300 bg-yellow-50/60 text-amber-950 font-semibold"
+                            : ""
                         }`}
                       >
                         <option value="">— Pilih Bobot (Sisa {formatPctNum(subRemainingInSection)}%) —</option>
@@ -4039,9 +4305,17 @@ export function AddKPIModal({
                       </select>
                       {showSoftRedBobot && (
                         <p className="text-[11px] font-medium text-rose-700 leading-snug mt-0.5">
-                          {bobotExceedsRemaining
-                            ? `Bobot (${form.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Sesuaikan bobot agar tidak melebihi sisa kuota.`
-                            : `Bobot ${fromBusinessKpiSource || "KPI Atasan"} (${form.bobot}) belum sama dengan sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan.`}
+                          {`Bobot (${form.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Sesuaikan bobot agar tidak melebihi sisa kuota.`}
+                        </p>
+                      )}
+                      {showSoftYellowBobot && (
+                        <p className="text-[11px] font-medium text-amber-800 leading-snug mt-0.5 flex items-start gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                          <span>
+                            {atasanBobotNeedsAdjust
+                              ? `Bobot ${fromBusinessKpiSource || "KPI Atasan"} (${form.bobot}) belum sama dengan sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan.`
+                              : `Bobot berasal dari ${fromBusinessKpiSource || "KPI yang di-copy"} (${form.bobot}) — pastikan bobot KPI sudah sesuai.`}
+                          </span>
                         </p>
                       )}
                     </div>
@@ -4062,21 +4336,53 @@ export function AddKPIModal({
               {colorMode ? (
                 <BaselineColorField value={form.baseline2025} onChange={(v) => set("baseline2025", v)} />
               ) : ratioMode ? (
-                <Field label="Baseline 2025">
+                <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
                   <select value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls}>
                     <option value="">— Pilih Ratio —</option>
                     {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </Field>
               ) : (
-                <Field label="Baseline 2025"><input value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls} /></Field>
+                <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={form.baseline2025}
+                    onChange={(e) => set("baseline2025", sanitizeKpiNumericInput(e.target.value))}
+                    placeholder="Contoh: 10.000 / 10,5 / 10.00,01"
+                    className={inputCls}
+                  />
+                </Field>
               )}
+
+              <Field label="Periode Tracking *">
+                <select
+                  value={normalizeTrackingPeriod(form.trackingPeriod)}
+                  onChange={(e) => handlePersonalTrackingPeriodChange(e.target.value)}
+                  className={inputCls}
+                >
+                  {trackingPeriodOpts.map((tp) => (
+                    <option key={tp} value={tp}>{tp}</option>
+                  ))}
+                </select>
+              </Field>
 
               <MonthlyTargetTable
                 monthlyTargets={form.monthlyTargets ?? {}}
                 formula={form.formula}
                 colorMode={colorMode}
                 ratioMode={ratioMode}
+                trackingPeriod={form.trackingPeriod}
+                periodicTargetBlock={Boolean(form.periodicTargetBlock)}
+                baselineSample={form.baseline2025}
+                onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
+                  setForm((p) => ({
+                    ...p,
+                    periodicTargetBlock: nextBlocked,
+                    monthlyTargets: nextMt,
+                    target2026: computed,
+                  }))
+                }
                 softOrangeHighlight={fromAtasanKpi}
                 softYellowHighlight={Boolean(fromBusinessKpiSource)}
                 softYellowSourceLabel={fromBusinessKpiSource ?? undefined}
@@ -4088,6 +4394,7 @@ export function AddKPIModal({
                 colorMode={colorMode}
                 ratioMode={ratioMode}
                 monthlyTargets={form.monthlyTargets}
+                onChange={(val) => set("target2026", val)}
                 softOrangeHighlight={fromAtasanKpi}
                 softYellowHighlight={Boolean(fromBusinessKpiSource)}
                 softYellowSourceLabel={fromBusinessKpiSource ?? undefined}
@@ -4215,7 +4522,8 @@ export function AddKPIModal({
               ratioNegativeLabel: picked.ratioNegativeLabel,
               cascading: picked.cascading ?? p.cascading,
               copiedFromId: picked.id,
-              trackingPeriod: derivePeriodeTrackingFromSatuan(picked.satuan || p.satuan, picked.trackingPeriod || p.trackingPeriod),
+              trackingPeriod: normalizeTrackingPeriod(picked.trackingPeriod, picked.satuan || p.satuan),
+              periodicTargetBlock: Boolean(picked.periodicTargetBlock),
             }));
           }}
           onClose={() => setShowLihatAtasan(false)}
@@ -4275,7 +4583,8 @@ export function AddKPIModal({
               ratioNegativeLabel: picked.ratioNegativeLabel,
               cascading: "",
               copiedFromId: picked.id,
-              trackingPeriod: derivePeriodeTrackingFromSatuan(picked.satuan || p.satuan, picked.trackingPeriod || p.trackingPeriod),
+              trackingPeriod: normalizeTrackingPeriod(picked.trackingPeriod, picked.satuan || p.satuan),
+              periodicTargetBlock: Boolean(picked.periodicTargetBlock),
             }));
           }}
           onClose={() => setShowLihatBusinessSource(null)}
@@ -4321,7 +4630,7 @@ function getMasterSectionCode(label: string, allMasterLabels: string[], usedCode
   return String.fromCharCode(charCode);
 }
 
-const TRACKING_PERIOD_OPTIONS = ["Bulanan", "Triwulan", "Semesteran", "Tahunan"];
+const TRACKING_PERIOD_OPTIONS = [...STANDARD_TRACKING_PERIODS];
 
 type CorporateKPIForm = Omit<KPISetting, "id"> & {
   sectionAlphabet: string;
@@ -4540,10 +4849,12 @@ function CascadingDropdownRow({
 
 export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], sectionLabel = "Business", hideScope = false, hideCascading = false }: { onAdd: (item: KPISetting) => void; onClose: () => void; existingItems?: KPISetting[]; sectionLabel?: string; hideScope?: boolean; hideCascading?: boolean }) {
   const master = useMasterKpi();
+  const activeActor = getActiveUser();
   const corpFormulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
   const corpPolaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
     : POLARITAS_OPTIONS;
+  const corpTrackingPeriodOpts = master.trackingPeriod?.length ? master.trackingPeriod : TRACKING_PERIOD_OPTIONS;
   const corpCascTypeOpts = master.cascadingTypes?.length
     ? master.cascadingTypes
     : [
@@ -4553,13 +4864,17 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
       ];
   const [tab, setTab] = useState<"section" | "subsection">("section");
   const [manualCustomSection, setManualCustomSection] = useState(false);
+  const [showLihatGroupInCorp, setShowLihatGroupInCorp] = useState(false);
+  const [fromCopiedCorpKpi, setFromCopiedCorpKpi] = useState(false);
+  const [copiedCorpBobotMismatch, setCopiedCorpBobotMismatch] = useState(false);
+  const canLihatGroupFromCorpUnit = sectionLabel.toLowerCase().includes("unit");
   const [form, setForm] = useState<CorporateKPIForm>({
     no: "", sectionAlphabet: "", sectionBobot: "", section: "",
     sectionLabel: "",
     perspektif: "", kpi: "", satuan: "", formula: "Jumlah",
     bobot: "", definisi: "", source: "", baseline2025: "", target2026: "", polaritas: "Maximize",
     detailFormula: "", keterangan: "", monthlyTargets: {}, colorIndicator: false, indicatorMode: "numeric" as IndicatorMode,
-    scope: "", trackingPeriod: "",
+    scope: "", trackingPeriod: "Bulan", periodicTargetBlock: false,
     coo: "", gmVgmIndustry: "", gmVgmPerkebunan: "", gmAsd: "", gmRstm: "", gmGhs: "",
     cascadingMap: {},
   });
@@ -4569,9 +4884,47 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
 
   const set = (key: keyof CorporateKPIForm, val: string) => setForm((p) => {
     const next = { ...p, [key]: val } as CorporateKPIForm;
-    if (key === "formula") next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val);
+    if (key === "formula") {
+      next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val, {
+        trackingPeriod: p.trackingPeriod,
+        periodicTargetBlock: p.periodicTargetBlock,
+        baselineSample: p.baseline2025,
+      });
+    }
     return next;
   });
+
+  const handleCorpTrackingPeriodChange = (nextPeriodRaw: string) => {
+    const nextPeriod = normalizeTrackingPeriod(nextPeriodRaw);
+    setForm((p) => {
+      const stillPeriodic = isPeriodicTrackingType(nextPeriod);
+      const nextBlock = stillPeriodic ? Boolean(p.periodicTargetBlock) : false;
+      const activeSet = new Set<number>(
+        nextBlock ? getActiveMonthIndicesForPeriod(nextPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      );
+      const nextMt: Record<string, string> = {};
+      MONTHS_LIST.forEach((mKey, idx) => {
+        nextMt[mKey] = activeSet.has(idx) ? (p.monthlyTargets?.[mKey] ?? "") : "";
+      });
+      const nextTarget =
+        (p.indicatorMode ?? "numeric") === "ratio"
+          ? computeRatioTarget2026(nextMt)
+          : (p.indicatorMode ?? "numeric") === "color"
+          ? computeColorTarget2026(nextMt, p.formula)
+          : computeTarget2026(nextMt, p.formula, {
+              trackingPeriod: nextPeriod,
+              periodicTargetBlock: nextBlock,
+              baselineSample: p.baseline2025,
+            });
+      return {
+        ...p,
+        trackingPeriod: nextPeriod,
+        periodicTargetBlock: nextBlock,
+        monthlyTargets: nextMt,
+        target2026: nextTarget,
+      };
+    });
+  };
 
   const computeCorpSectionState = (code: string, label: string) => {
     const existingRows = existingItems.filter((i) => i.section === code);
@@ -4694,7 +5047,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
   const availableCorpSubBobotOpts = buildRemainingBobotOptions(
     activeSectionLimitNum === 0 ? 0 : 1,
     subRemainingInSection,
-    undefined,
+    form.bobot || undefined,
     activeSectionLimitNum === 0,
   );
 
@@ -4747,11 +5100,12 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
       setBobotError({ kind: "sub_section_bobot", sectionLabel: form.sectionLabel || `Section ${form.section}`, sectionLimit, remaining: Math.max(0, sectionLimit - subUsed), conflictItems });
       return;
     }
-    const derivedTracking = derivePeriodeTrackingFromSatuan(form.satuan, form.trackingPeriod);
+    const derivedTracking = normalizeTrackingPeriod(form.trackingPeriod, form.satuan);
     onAdd({
       ...form,
       sectionBobot: `${formatPctNum(sectionLimit)}%`,
       trackingPeriod: derivedTracking,
+      periodicTargetBlock: isPeriodicTrackingType(derivedTracking) ? Boolean(form.periodicTargetBlock) : false,
       id: `corp-kpi-${Date.now()}`,
     });
     onClose();
@@ -4778,7 +5132,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-200/80 bg-slate-50/70 px-6 sm:px-8 pt-3 gap-1 shrink-0">
+        <div className="flex items-center border-b border-slate-200/80 bg-slate-50/70 px-6 sm:px-8 pt-3 gap-1 shrink-0 flex-wrap">
           {TABS.map(t => (
             <button
               key={t.id}
@@ -4797,6 +5151,16 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               {t.label}
             </button>
           ))}
+          {canLihatGroupFromCorpUnit && tab === "subsection" && (
+            <button
+              type="button"
+              onClick={() => setShowLihatGroupInCorp(true)}
+              className="ml-2 mb-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Lihat KPI (Group)
+            </button>
+          )}
         </div>
 
         <div className="px-6 sm:px-8 py-5 flex flex-col gap-4 flex-1 overflow-y-auto">
@@ -4976,10 +5340,64 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               )}
 
               {/* No (narrow) + Perspektif */}
-              <div className="grid gap-3" style={{ gridTemplateColumns: "100px 1fr" }}>
-                <Field label="No *">
-                  <input value={form.no} onChange={(e) => set("no", e.target.value)} placeholder="e.g. 1a" className={inputCls} />
-                </Field>
+              <div className="grid grid-cols-2 gap-3">
+                {(() => {
+                  const hasDupNo = Boolean(
+                    normalizeKpiNoKey(form.no) &&
+                      existingItems.some((x) => normalizeKpiNoKey(x.no) === normalizeKpiNoKey(form.no)),
+                  );
+                  const showSoftYellowNo = !hasDupNo && fromCopiedCorpKpi && Boolean(form.no.trim());
+                  return (
+                    <div
+                      className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${
+                        hasDupNo
+                          ? "bg-rose-50/90 border-2 border-rose-300 ring-2 ring-rose-100"
+                          : showSoftYellowNo
+                          ? "bg-yellow-50/85 border-2 border-yellow-300 ring-2 ring-yellow-100/90"
+                          : `border ${FIELD_TONE_STYLES.indigo.wrap}`
+                      }`}
+                    >
+                      <label
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${
+                          hasDupNo
+                            ? "text-rose-800"
+                            : showSoftYellowNo
+                            ? "text-amber-800"
+                            : FIELD_TONE_STYLES.indigo.label
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            hasDupNo ? "bg-rose-500" : showSoftYellowNo ? "bg-yellow-500" : FIELD_TONE_STYLES.indigo.dot
+                          }`}
+                        />
+                        <span>No *</span>
+                      </label>
+                      <input
+                        value={form.no}
+                        onChange={(e) => set("no", e.target.value)}
+                        placeholder="e.g. 1a"
+                        className={`${inputCls} ${
+                          hasDupNo
+                            ? "border-rose-300 bg-rose-50/70 focus:border-rose-400"
+                            : showSoftYellowNo
+                            ? "border-yellow-300 bg-yellow-50/60 text-amber-950 font-semibold focus:border-amber-500"
+                            : ""
+                        }`}
+                      />
+                      {hasDupNo ? (
+                        <p className="mt-0.5 text-[10px] font-semibold text-rose-700">
+                          No KPI sama, pastikan tidak ada No KPI yang sama
+                        </p>
+                      ) : showSoftYellowNo ? (
+                        <p className="mt-0.5 text-[11px] font-medium text-amber-800 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Pastikan nomor Perspektif KPI sudah sesuai</span>
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })()}
                 <Field label="Perspektif">
                   <select value={form.perspektif} onChange={(e) => set("perspektif", e.target.value)} className={inputCls}>
                     <option value="">— Perspektif —</option>
@@ -4994,19 +5412,14 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
 
               <SatuanField value={form.satuan} onChange={(v) => set("satuan", v)} unitOptions={master.satuan} periodeOptions={master.period} />
 
-              {/* Formula Setahun | Tracking Period | Scope */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Formula Setahun | Scope */}
+              <div className={`grid gap-3 ${hideScope ? "grid-cols-1" : "grid-cols-2"}`}>
                 <Field label="Formula Setahun">
                   {colorMode || ratioMode
                     ? <div className={inputCls + " bg-gray-50 text-[#1A284F] font-semibold cursor-default select-none"}>{form.formula}</div>
                     : <select value={form.formula} onChange={(e) => set("formula", e.target.value)} className={inputCls}>
                         {corpFormulaOpts.map((f) => <option key={f}>{f}</option>)}
                       </select>}
-                </Field>
-                <Field label="Periode Tracking (dari Satuan)">
-                  <div className={inputCls + " bg-gray-50 text-[#1A284F] font-semibold select-none"}>
-                    {derivePeriodeTrackingFromSatuan(form.satuan, form.trackingPeriod) || "—"}
-                  </div>
                 </Field>
                 {!hideScope && (
                   <ScopeCheckboxField
@@ -5018,21 +5431,87 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <Field label={`Bobot * (Maks. Sisa Section: ${formatPctNum(subRemainingInSection)}%)`}>
-                  <select
-                    value={form.bobot}
-                    disabled={isSectionQuotaFull}
-                    onChange={(e) => set("bobot", e.target.value)}
-                    className={inputCls + " disabled:bg-gray-100 disabled:cursor-not-allowed"}
-                  >
-                    <option value="">— Pilih Bobot (Sisa {formatPctNum(subRemainingInSection)}%) —</option>
-                    {availableCorpSubBobotOpts.map((b) => (
-                      <option key={b} value={b}>
-                        {b}{parsePctNum(b) === subRemainingInSection && subRemainingInSection > 0 ? " (Gunakan seluruh sisa section)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                {(() => {
+                  const bobotExceedsRemaining = parsePctNum(form.bobot) > subRemainingInSection + 1e-6;
+                  const showSoftRedBobot = bobotExceedsRemaining;
+                  const showSoftYellowBobot = !bobotExceedsRemaining && fromCopiedCorpKpi && Boolean(form.bobot);
+                  return (
+                    <div
+                      className={`flex flex-col gap-1.5 rounded-xl p-3.5 transition-all shadow-2xs ${
+                        showSoftRedBobot
+                          ? "bg-rose-50/90 border-2 border-rose-300 ring-2 ring-rose-100"
+                          : showSoftYellowBobot
+                          ? "bg-yellow-50/85 border-2 border-yellow-300 ring-2 ring-yellow-100/90"
+                          : `border ${FIELD_TONE_STYLES.emerald.wrap}`
+                      }`}
+                    >
+                      <label
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${
+                          showSoftRedBobot
+                            ? "text-rose-800"
+                            : showSoftYellowBobot
+                            ? "text-amber-800"
+                            : FIELD_TONE_STYLES.emerald.label
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            showSoftRedBobot ? "bg-rose-500" : showSoftYellowBobot ? "bg-yellow-500" : FIELD_TONE_STYLES.emerald.dot
+                          }`}
+                        />
+                        <span>{`Bobot * (Maks. Sisa Section: ${formatPctNum(subRemainingInSection)}%)`}</span>
+                      </label>
+                      <select
+                        value={form.bobot}
+                        disabled={isSectionQuotaFull}
+                        onChange={(e) => {
+                          const nextVal = e.target.value;
+                          set("bobot", nextVal);
+                          if (nextVal && parsePctNum(nextVal) <= subRemainingInSection + 1e-6) {
+                            setCopiedCorpBobotMismatch(false);
+                          }
+                        }}
+                        className={`${inputCls} disabled:bg-gray-100 disabled:cursor-not-allowed ${
+                          showSoftRedBobot
+                            ? "border-2 border-rose-300 bg-white text-rose-900 font-semibold"
+                            : showSoftYellowBobot
+                            ? "border-2 border-yellow-300 bg-yellow-50/60 text-amber-950 font-semibold"
+                            : ""
+                        }`}
+                      >
+                        <option value="">— Pilih Bobot (Sisa {formatPctNum(subRemainingInSection)}%) —</option>
+                        {availableCorpSubBobotOpts.map((b) => {
+                          const bNum = parsePctNum(b);
+                          return (
+                            <option key={b} value={b}>
+                              {b}
+                              {bNum > subRemainingInSection + 1e-6
+                                ? ` (Melebihi sisa ${formatPctNum(subRemainingInSection)}% — wajib disesuaikan)`
+                                : bNum === subRemainingInSection && subRemainingInSection > 0
+                                ? " (Gunakan seluruh sisa section)"
+                                : ""}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {showSoftRedBobot && (
+                        <p className="text-[11px] font-medium text-rose-700 leading-snug mt-0.5">
+                          {`Bobot (${form.bobot}) melebihi sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Sesuaikan bobot agar tidak melebihi sisa kuota.`}
+                        </p>
+                      )}
+                      {showSoftYellowBobot && (
+                        <p className="text-[11px] font-medium text-amber-800 leading-snug mt-0.5 flex items-start gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                          <span>
+                            {copiedCorpBobotMismatch
+                              ? `Bobot KPI yang di-copy (${form.bobot}) belum sama dengan sisa bobot Section ${form.section} (${formatPctNum(subRemainingInSection)}%). Pastikan sisa bobot disesuaikan.`
+                              : `Bobot berasal dari KPI yang di-copy (${form.bobot}) — pastikan bobot KPI sudah sesuai.`}
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
                 <Field label="Polaritas">
                   <select value={form.polaritas} onChange={(e) => set("polaritas", e.target.value as Polaritas)} className={inputCls}>
                     {corpPolaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
@@ -5054,19 +5533,53 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               {colorMode
                 ? <BaselineColorField value={form.baseline2025} onChange={(v) => set("baseline2025", v)} />
                 : ratioMode
-                ? <Field label="Baseline 2025">
+                ? <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
                     <select value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls}>
                       <option value="">— Pilih Ratio —</option>
                       {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </Field>
-                : <Field label="Baseline 2025"><input value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls} /></Field>}
+                : <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={form.baseline2025}
+                      onChange={(e) => set("baseline2025", sanitizeKpiNumericInput(e.target.value))}
+                      placeholder="Contoh: 10.000 / 10,5 / 10.00,01"
+                      className={inputCls}
+                    />
+                  </Field>}
+
+              <Field label="Periode Tracking *">
+                <select
+                  value={normalizeTrackingPeriod(form.trackingPeriod)}
+                  onChange={(e) => handleCorpTrackingPeriodChange(e.target.value)}
+                  className={inputCls}
+                >
+                  {corpTrackingPeriodOpts.map((tp) => (
+                    <option key={tp} value={tp}>{tp}</option>
+                  ))}
+                </select>
+              </Field>
 
               <MonthlyTargetTable
                 monthlyTargets={form.monthlyTargets ?? {}}
                 formula={form.formula}
                 colorMode={colorMode}
                 ratioMode={ratioMode}
+                trackingPeriod={form.trackingPeriod}
+                periodicTargetBlock={Boolean(form.periodicTargetBlock)}
+                baselineSample={form.baseline2025}
+                onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
+                  setForm((p) => ({
+                    ...p,
+                    periodicTargetBlock: nextBlocked,
+                    monthlyTargets: nextMt,
+                    target2026: computed,
+                  }))
+                }
+                softYellowHighlight={fromCopiedCorpKpi}
+                softYellowSourceLabel="KPI (Group)"
                 onChange={(mt, computed) => setForm((p) => ({ ...p, monthlyTargets: mt, target2026: computed }))}
               />
 
@@ -5075,6 +5588,9 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 colorMode={colorMode}
                 ratioMode={ratioMode}
                 monthlyTargets={form.monthlyTargets}
+                onChange={(val) => set("target2026", val)}
+                softYellowHighlight={fromCopiedCorpKpi}
+                softYellowSourceLabel="KPI (Group)"
               />
 
               <Field label="Detail Formula Pencapaian">
@@ -5149,6 +5665,52 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
         </div>
       </div>
       {bobotError && <BobotExceededModal violation={bobotError} onClose={() => setBobotError(null)} />}
+      {showLihatGroupInCorp && (
+        <LihatKpiBusinessSourceModal
+          ownerUser={activeActor}
+          sourceKind="group"
+          targetSectionCode={form.section}
+          targetSectionLabel={form.sectionLabel || `Section ${form.section}`}
+          remainingSectionBobot={subRemainingInSection}
+          onSelectKpi={(picked) => {
+            const pickedBobotNum = parsePctNum(picked.bobot);
+            const validPickedBobot = pickedBobotNum > 0 ? picked.bobot : "";
+            const mismatch = pickedBobotNum > 0 && Math.abs(pickedBobotNum - subRemainingInSection) > 1e-6;
+            setFromCopiedCorpKpi(true);
+            setCopiedCorpBobotMismatch(mismatch);
+            const resolvedMode: IndicatorMode =
+              picked.indicatorMode ?? (picked.colorIndicator ? "color" : "numeric");
+            const nextSeqNo = existingItems.some((x) => normalizeKpiNoKey(x.no) === normalizeKpiNoKey(picked.no))
+              ? String(existingItems.length + 1)
+              : picked.no || String(existingItems.length + 1);
+            setForm((p) => ({
+              ...p,
+              no: p.no.trim() || nextSeqNo,
+              perspektif: picked.perspektif || p.perspektif,
+              kpi: picked.kpi || p.kpi,
+              satuan: picked.satuan || p.satuan,
+              formula: picked.formula || p.formula,
+              bobot: validPickedBobot || p.bobot,
+              definisi: picked.definisi || "",
+              source: picked.source || "",
+              baseline2025: picked.baseline2025 || "",
+              target2026: "",
+              polaritas: picked.polaritas || "Maximize",
+              detailFormula: picked.detailFormula || "",
+              keterangan: picked.keterangan || "",
+              monthlyTargets: {},
+              colorIndicator: resolvedMode === "color",
+              indicatorMode: resolvedMode,
+              ratioPositiveLabel: picked.ratioPositiveLabel,
+              ratioNegativeLabel: picked.ratioNegativeLabel,
+              trackingPeriod: normalizeTrackingPeriod(picked.trackingPeriod, picked.satuan || p.satuan),
+              periodicTargetBlock: Boolean(picked.periodicTargetBlock),
+              copiedFromId: picked.id,
+            }));
+          }}
+          onClose={() => setShowLihatGroupInCorp(false)}
+        />
+      )}
     </div>
   );
 }
@@ -5174,11 +5736,17 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
   onSave: (updates: Partial<KPISetting>) => void;
   onClose: () => void;
 }) {
+  const master = useMasterKpi();
+  const periodOpts = master.trackingPeriod?.length ? master.trackingPeriod : [...STANDARD_TRACKING_PERIODS];
   const initMode: IndicatorMode = item.indicatorMode ?? (item.colorIndicator ? "color" : "numeric");
   const [indicatorMode, setIndicatorMode] = useState<IndicatorMode>(initMode);
   const colorMode = indicatorMode === "color";
   const ratioMode = indicatorMode === "ratio";
   const [formula, setFormula] = useState(item.formula || "Jumlah");
+  const [trackingPeriod, setTrackingPeriod] = useState<string>(
+    normalizeTrackingPeriod(item.trackingPeriod, item.satuan),
+  );
+  const [periodicTargetBlock, setPeriodicTargetBlock] = useState<boolean>(Boolean(item.periodicTargetBlock));
   const [monthlyTargets, setMonthlyTargets] = useState<Record<string, string>>(item.monthlyTargets ?? {});
   const [target2026, setTarget2026] = useState(item.target2026);
   const [baseline2025, setBaseline2025] = useState(item.baseline2025);
@@ -5206,7 +5774,21 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
           <Field label="Formula Pencapaian">
             {colorMode || ratioMode
               ? <div className={inputCls + " bg-gray-50 text-[#1A284F] font-semibold pointer-events-none"}>{formula}</div>
-              : <select value={formula} onChange={(e) => setFormula(e.target.value)} className={inputCls}>
+              : <select
+                  value={formula}
+                  onChange={(e) => {
+                    const nextF = e.target.value;
+                    setFormula(nextF);
+                    setTarget2026(
+                      computeTarget2026(monthlyTargets, nextF, {
+                        trackingPeriod,
+                        periodicTargetBlock,
+                        baselineSample: baseline2025,
+                      }),
+                    );
+                  }}
+                  className={inputCls}
+                >
                   {FORMULA_OPTIONS.map((f) => <option key={f}>{f}</option>)}
                 </select>}
           </Field>
@@ -5214,20 +5796,70 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
           {colorMode
             ? <BaselineColorField value={baseline2025} onChange={setBaseline2025} />
             : ratioMode
-            ? <Field label="Baseline 2025">
+            ? <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
                 <select value={baseline2025} onChange={(e) => setBaseline2025(e.target.value)} className={inputCls}>
                   <option value="">— Pilih Ratio —</option>
                   {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </Field>
-            : <Field label="Baseline 2025">
-                <input value={baseline2025} onChange={(e) => setBaseline2025(e.target.value)} className={inputCls} placeholder="e.g. 95" />
+            : <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={baseline2025}
+                  onChange={(e) => setBaseline2025(sanitizeKpiNumericInput(e.target.value))}
+                  className={inputCls}
+                  placeholder="Contoh: 10.000 / 10,5 / 10.00,01"
+                />
               </Field>}
+          <Field label="Periode Tracking *">
+            <select
+              value={normalizeTrackingPeriod(trackingPeriod)}
+              onChange={(e) => {
+                const nextPeriod = normalizeTrackingPeriod(e.target.value);
+                const stillPeriodic = isPeriodicTrackingType(nextPeriod);
+                const nextBlock = stillPeriodic ? periodicTargetBlock : false;
+                const activeSet = new Set<number>(
+                  nextBlock ? getActiveMonthIndicesForPeriod(nextPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+                );
+                const nextMt: Record<string, string> = {};
+                MONTHS_LIST.forEach((mKey, idx) => {
+                  nextMt[mKey] = activeSet.has(idx) ? (monthlyTargets[mKey] ?? "") : "";
+                });
+                const nextTgt = ratioMode
+                  ? computeRatioTarget2026(nextMt)
+                  : colorMode
+                  ? computeColorTarget2026(nextMt, formula)
+                  : computeTarget2026(nextMt, formula, {
+                      trackingPeriod: nextPeriod,
+                      periodicTargetBlock: nextBlock,
+                      baselineSample: baseline2025,
+                    });
+                setTrackingPeriod(nextPeriod);
+                setPeriodicTargetBlock(nextBlock);
+                setMonthlyTargets(nextMt);
+                setTarget2026(nextTgt);
+              }}
+              className={inputCls}
+            >
+              {periodOpts.map((tp) => (
+                <option key={tp} value={tp}>{tp}</option>
+              ))}
+            </select>
+          </Field>
           <MonthlyTargetTable
             monthlyTargets={monthlyTargets}
             formula={formula}
             colorMode={colorMode}
             ratioMode={ratioMode}
+            trackingPeriod={trackingPeriod}
+            periodicTargetBlock={periodicTargetBlock}
+            baselineSample={baseline2025}
+            onTogglePeriodicBlock={(nextBlocked, nextMt, computed) => {
+              setPeriodicTargetBlock(nextBlocked);
+              setMonthlyTargets(nextMt);
+              setTarget2026(computed);
+            }}
             softYellowHighlight={!String(target2026 ?? "").trim()}
             onChange={(mt, computed) => { setMonthlyTargets(mt); setTarget2026(computed); }}
           />
@@ -5236,13 +5868,26 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             colorMode={colorMode}
             ratioMode={ratioMode}
             monthlyTargets={monthlyTargets}
+            onChange={(val) => setTarget2026(val)}
             softYellowHighlight={!String(target2026 ?? "").trim()}
           />
         </div>
         <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
           <button onClick={onClose} className="px-5 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
           <button
-            onClick={() => { onSave({ indicatorMode, colorIndicator: colorMode, monthlyTargets, target2026, baseline2025, formula }); onClose(); }}
+            onClick={() => {
+              onSave({
+                indicatorMode,
+                colorIndicator: colorMode,
+                monthlyTargets,
+                target2026,
+                baseline2025,
+                formula,
+                trackingPeriod: normalizeTrackingPeriod(trackingPeriod),
+                periodicTargetBlock: isPeriodicTrackingType(trackingPeriod) ? periodicTargetBlock : false,
+              });
+              onClose();
+            }}
             className="px-5 py-2 rounded-lg text-sm font-semibold bg-[#1A284F] text-white hover:bg-[#131d3b]">
             Save Target
           </button>
@@ -5265,6 +5910,7 @@ function isKpiDraftDirty(draft: KPISetting | null, original: KPISetting | undefi
   for (const k of keys) {
     if (String(draft[k] ?? "") !== String(original[k] ?? "")) return true;
   }
+  if (Boolean(draft.periodicTargetBlock) !== Boolean(original.periodicTargetBlock)) return true;
   if (JSON.stringify(draft.monthlyTargets ?? {}) !== JSON.stringify(original.monthlyTargets ?? {})) return true;
   if (JSON.stringify(draft.cascadingMap ?? {}) !== JSON.stringify(original.cascadingMap ?? {})) return true;
   return false;
@@ -5896,7 +6542,19 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           </td>
           {/* Periode Tracking (otomatis dari Satuan / Periode) */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 120 }}>
-            {derivePeriodeTrackingFromSatuan(isEditing ? row.satuan : item.satuan, isEditing ? row.trackingPeriod : item.trackingPeriod)}
+            {isEditing ? (
+              <select
+                value={normalizeTrackingPeriod(row.trackingPeriod, row.satuan)}
+                onChange={(e) => setD({ trackingPeriod: e.target.value })}
+                className={ci + " text-center"}
+              >
+                {tableTrackingPeriodOpts.map((tp) => (
+                  <option key={tp} value={tp}>{tp}</option>
+                ))}
+              </select>
+            ) : (
+              normalizeTrackingPeriod(item.trackingPeriod, item.satuan)
+            )}
           </td>
           {/* CASCADING */}
           {!hideCascading && (
@@ -7151,11 +7809,11 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                       {/* Tracking Period */}
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("trackingPeriod")
-                          ? <select value={row.trackingPeriod ?? ""} onChange={(e) => setDraftField({ trackingPeriod: e.target.value })} className={cellInput + " text-center"}>
+                          ? <select value={normalizeTrackingPeriod(row.trackingPeriod, row.satuan)} onChange={(e) => setDraftField({ trackingPeriod: e.target.value })} className={cellInput + " text-center"}>
                               <option value="">— Period —</option>
                               {(master.trackingPeriod.length ? master.trackingPeriod : TRACKING_PERIOD_OPTIONS).map((t) => <option key={t}>{t}</option>)}
                             </select>
-                          : <span className="text-[11px] text-gray-500">{row.trackingPeriod || "—"}</span>}
+                          : <span className="text-[11px] text-gray-500">{normalizeTrackingPeriod(row.trackingPeriod, row.satuan) || "—"}</span>}
                       </td>
                       {/* Cascading columns — inverted: sub-columns = type (FC/PC/CC), cells = role names */}
                       {!previewMode && !hideCascading && (() => {
@@ -7379,19 +8037,8 @@ function readStoredBusinessKpiItems(scopeKey: string): KPISetting[] | null {
   return null;
 }
 
-/** Ambil nilai Periode Tracking dari bagian /Periode pada Satuan (Add New KPI -> Sub Section -> Satuan -> Periode). */
 export function derivePeriodeTrackingFromSatuan(satuan?: string, fallback?: string): string {
-  const s = String(satuan ?? "");
-  const idx = s.indexOf("/");
-  if (idx >= 0) {
-    const raw = s.slice(idx + 1).trim();
-    if (raw) {
-      if (/^bulan$/i.test(raw)) return "Bulan";
-      if (/^tahun$/i.test(raw)) return "Tahun";
-      return raw;
-    }
-  }
-  return fallback || "Bulan";
+  return normalizeTrackingPeriod(fallback, satuan);
 }
 
 const SECTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");

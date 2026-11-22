@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { ChartSpline, X } from "lucide-react";
 import {
@@ -87,6 +88,21 @@ export function GradeBellCurveModal({
   }));
   const hasSoy = data.some((d) => d.target > 0 || d.targetCount > 0);
   const hasEoy = data.some((d) => d.targetEoy > 0 || d.targetEoyCount > 0);
+  const [chartReady, setChartReady] = useState(false);
+  useEffect(() => {
+    setChartReady(false);
+    const t = window.setTimeout(() => setChartReady(true), 120);
+    return () => window.clearTimeout(t);
+  }, [title, mode]);
+  const animatedData = chartReady
+    ? data
+    : data.map((d) => ({
+        ...d,
+        target: 0,
+        targetEoy: 0,
+        actual: 0,
+        calibration: 0,
+      }));
   const fmtPct = (v: unknown) => `${v}%`;
   const renderBellTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload?: (typeof data)[number] }> }) => {
     if (!active || !payload?.length || !payload[0]?.payload) return null;
@@ -175,7 +191,11 @@ export function GradeBellCurveModal({
         </div>
 
         <div className="space-y-6 overflow-y-auto p-6">
-          <div>
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+          >
             <div className="mb-2 flex items-center gap-2 flex-wrap">
               <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
                 {mode === "compare" ? "Kurva Aktual vs Calibration" : "Grade Distribution (Bell Curve)"}
@@ -200,7 +220,7 @@ export function GradeBellCurveModal({
             <div className="h-[280px] w-full rounded-xl border border-gray-100 bg-white p-3">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart
-                  data={data}
+                  data={animatedData}
                   margin={{ top: 12, right: 18, left: -10, bottom: 0 }}
                   barSize={mode === "compare" ? 16 : 30}
                   barGap={3}
@@ -212,67 +232,72 @@ export function GradeBellCurveModal({
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {mode === "single" ? (
                     <>
-                      <Bar dataKey="target" name="Proporsi (%)" fill="#6366F1" fillOpacity={0.18} radius={[6, 6, 0, 0]} animationDuration={700} />
-                      <Line type="monotone" dataKey="target" name="Kurva Distribusi" stroke="#1A284F" strokeWidth={2.5} dot={{ r: 4.5, fill: "#1A284F", stroke: "#fff", strokeWidth: 2 }} animationDuration={900} />
+                      <Bar dataKey="target" name="Proporsi (%)" fill="#6366F1" fillOpacity={0.18} radius={[6, 6, 0, 0]} isAnimationActive={true} animationDuration={760} animationEasing="ease-out" />
+                      <Line type="monotone" dataKey="target" name="Kurva Distribusi" stroke="#1A284F" strokeWidth={2.5} dot={{ r: 4.5, fill: "#1A284F", stroke: "#fff", strokeWidth: 2 }} isAnimationActive={true} animationDuration={920} animationEasing="ease-out" />
                     </>
                   ) : (
                     <>
                       {hasSoy && (
-                        <Bar dataKey="target" name="Setting (SOY)" fill="#06B6D4" fillOpacity={0.24} radius={[4, 4, 0, 0]} animationDuration={680} legendType="none" />
+                        <Bar dataKey="target" name="Setting (SOY)" fill="#06B6D4" fillOpacity={0.24} radius={[4, 4, 0, 0]} isAnimationActive={true} animationDuration={700} animationEasing="ease-out" legendType="none" />
                       )}
                       {hasEoy && (
-                        <Bar dataKey="targetEoy" name="Setting (EOY)" fill="#F59E0B" fillOpacity={0.25} radius={[4, 4, 0, 0]} animationDuration={720} legendType="none" />
+                        <Bar dataKey="targetEoy" name="Setting (EOY)" fill="#F59E0B" fillOpacity={0.25} radius={[4, 4, 0, 0]} isAnimationActive={true} animationDuration={760} animationEasing="ease-out" legendType="none" />
                       )}
-                      <Bar dataKey="actual" name="Aktual (%)" fill="#0D9488" fillOpacity={0.24} radius={[4, 4, 0, 0]} animationDuration={780} legendType="none" />
-                      <Bar dataKey="calibration" name="Calibration (%)" fill="#4F46E5" fillOpacity={0.26} radius={[4, 4, 0, 0]} animationDuration={840} legendType="none" />
+                      <Bar dataKey="actual" name="Aktual (%)" fill="#0D9488" fillOpacity={0.24} radius={[4, 4, 0, 0]} isAnimationActive={true} animationDuration={820} animationEasing="ease-out" legendType="none" />
+                      <Bar dataKey="calibration" name="Calibration (%)" fill="#4F46E5" fillOpacity={0.26} radius={[4, 4, 0, 0]} isAnimationActive={true} animationDuration={880} animationEasing="ease-out" legendType="none" />
                       {hasSoy && (
-                        <Line type="monotone" dataKey="target" name="Setting (SOY)" stroke="#06B6D4" strokeDasharray="5 4" strokeWidth={2.2} dot={{ r: 3.5, fill: "#06B6D4", stroke: "#fff", strokeWidth: 1.5 }} animationDuration={700} />
+                        <Line type="monotone" dataKey="target" name="Setting (SOY)" stroke="#06B6D4" strokeDasharray="5 4" strokeWidth={2.2} dot={{ r: 3.5, fill: "#06B6D4", stroke: "#fff", strokeWidth: 1.5 }} isAnimationActive={true} animationDuration={760} animationEasing="ease-out" />
                       )}
                       {hasEoy && (
-                        <Line type="monotone" dataKey="targetEoy" name="Setting (EOY)" stroke="#F59E0B" strokeDasharray="5 4" strokeWidth={2.3} dot={{ r: 3.5, fill: "#F59E0B", stroke: "#fff", strokeWidth: 1.5 }} animationDuration={780} />
+                        <Line type="monotone" dataKey="targetEoy" name="Setting (EOY)" stroke="#F59E0B" strokeDasharray="5 4" strokeWidth={2.3} dot={{ r: 3.5, fill: "#F59E0B", stroke: "#fff", strokeWidth: 1.5 }} isAnimationActive={true} animationDuration={820} animationEasing="ease-out" />
                       )}
-                      <Line type="monotone" dataKey="actual" name="Aktual (%)" stroke="#0D9488" strokeWidth={2.5} dot={{ r: 4, fill: "#0D9488", stroke: "#fff", strokeWidth: 2 }} animationDuration={850} />
-                      <Line type="monotone" dataKey="calibration" name="Calibration (%)" stroke="#4F46E5" strokeWidth={2.8} dot={{ r: 4.5, fill: "#4F46E5", stroke: "#fff", strokeWidth: 2 }} animationDuration={1000} />
+                      <Line type="monotone" dataKey="actual" name="Aktual (%)" stroke="#0D9488" strokeWidth={2.5} dot={{ r: 4, fill: "#0D9488", stroke: "#fff", strokeWidth: 2 }} isAnimationActive={true} animationDuration={900} animationEasing="ease-out" />
+                      <Line type="monotone" dataKey="calibration" name="Calibration (%)" stroke="#4F46E5" strokeWidth={2.8} dot={{ r: 4.5, fill: "#4F46E5", stroke: "#fff", strokeWidth: 2 }} isAnimationActive={true} animationDuration={980} animationEasing="ease-out" />
                     </>
                   )}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
-          </div>
+          </motion.div>
 
           {mode === "compare" && (
-            <div>
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.44, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
+            >
               <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Setting vs Actual vs Calibration Proportion (%)</p>
               <div className="h-[240px] w-full rounded-xl border border-gray-100 bg-white p-3">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={data} margin={{ top: 12, right: 18, left: -10, bottom: 0 }} barSize={16} barGap={3}>
+                  <BarChart data={animatedData} margin={{ top: 12, right: 18, left: -10, bottom: 0 }} barSize={16} barGap={3}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                     <XAxis dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#334155", fontWeight: 700 }} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={fmtPct} />
                     <Tooltip content={renderBellTooltip as never} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     {hasSoy && (
-                      <Bar dataKey="target" name="Setting (SOY)" fill="#06B6D4" fillOpacity={0.8} radius={[5, 5, 0, 0]} animationDuration={680} />
+                      <Bar dataKey="target" name="Setting (SOY)" fill="#06B6D4" fillOpacity={0.8} radius={[5, 5, 0, 0]} isAnimationActive={true} animationDuration={720} animationEasing="ease-out" />
                     )}
                     {hasEoy && (
-                      <Bar dataKey="targetEoy" name="Setting (EOY)" fill="#F59E0B" fillOpacity={0.85} radius={[5, 5, 0, 0]} animationDuration={720} />
+                      <Bar dataKey="targetEoy" name="Setting (EOY)" fill="#F59E0B" fillOpacity={0.85} radius={[5, 5, 0, 0]} isAnimationActive={true} animationDuration={780} animationEasing="ease-out" />
                     )}
-                    <Bar dataKey="actual" name="Actual (%)" fill="#0D9488" fillOpacity={0.85} radius={[6, 6, 0, 0]} animationDuration={750} />
-                    <Bar dataKey="calibration" name="Calibration (%)" fill="#6366F1" radius={[6, 6, 0, 0]} animationDuration={950} />
+                    <Bar dataKey="actual" name="Actual (%)" fill="#0D9488" fillOpacity={0.85} radius={[6, 6, 0, 0]} isAnimationActive={true} animationDuration={840} animationEasing="ease-out" />
+                    <Bar dataKey="calibration" name="Calibration (%)" fill="#6366F1" radius={[6, 6, 0, 0]} isAnimationActive={true} animationDuration={940} animationEasing="ease-out" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            </motion.div>
           )}
 
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {data.map((d, i) => (
               <motion.div
                 key={d.grade}
-                initial={{ opacity: 0, y: 8 }}
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: 0.15 + i * 0.05 }}
-                className="rounded-xl border border-gray-100 bg-gray-50/70 px-2.5 py-2 text-center"
+                whileHover={{ y: -2 }}
+                transition={{ duration: 0.38, delay: 0.16 + i * 0.055, ease: [0.22, 1, 0.36, 1] }}
+                className="rounded-xl border border-gray-100 bg-gray-50/70 px-2.5 py-2 text-center transition-shadow hover:shadow-sm"
               >
                 <span className="inline-flex items-center justify-center rounded-md px-2 py-0.5 text-[11px] font-bold text-white" style={{ background: d.color }}>
                   {d.grade}

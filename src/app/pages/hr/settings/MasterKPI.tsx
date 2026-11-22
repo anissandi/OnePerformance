@@ -134,11 +134,11 @@ const SECTIONS: SectionConfig[] = [
   },
   {
     key: "trackingPeriod",
-    label: "Tracking Period",
+    label: "Periode Tracking",
     color: "bg-indigo-500",
     hasDescription: false,
     modalGroup: "subsection",
-    fieldHint: "Tab Sub Section → Field Tracking Period",
+    fieldHint: "Tab Sub Section → Field Periode Tracking (Bulan; Triwulan; Semester; Quarter; Tahun)",
   },
   {
     key: "scope",
@@ -627,7 +627,7 @@ export function MasterKPIPage() {
           polaritas: ((g(r, polarI) as Polaritas) || "Maximize"),
           detailFormula: g(r, detailI),
           keterangan: g(r, ketI),
-          trackingPeriod: g(r, trackI) || "Bulanan",
+          trackingPeriod: g(r, trackI) || "Bulan",
           monthlyTargets: {},
           colorIndicator: false,
           indicatorMode: "numeric",
