@@ -139,11 +139,25 @@ function toPaUserRow(u, now, mode = "full") {
       normCalRoleMap[canonicalizeUnitName(k)] = val;
     }
   }
+  const rawSoyRoleMap =
+    u.soyCalibrationRoleByUnit && typeof u.soyCalibrationRoleByUnit === "object"
+      ? u.soyCalibrationRoleByUnit
+      : u.soy_calibration_role_by_unit && typeof u.soy_calibration_role_by_unit === "object"
+        ? u.soy_calibration_role_by_unit
+        : {};
+  const normSoyRoleMap = {};
+  for (const [k, v] of Object.entries(rawSoyRoleMap)) {
+    const val = String(v ?? "").trim();
+    if (val === "approver" || val === "mengetahui" || val === "readonly" || val === "") {
+      normSoyRoleMap[canonicalizeUnitName(k)] = val;
+    }
+  }
   return {
     ...extended,
     checker_units: Array.from(new Set(rawCheckerUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
     managed_units: Array.from(new Set(rawManagedUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
     calibration_role_by_unit: normCalRoleMap,
+    soy_calibration_role_by_unit: normSoyRoleMap,
     director_calibration_role: String(u.directorCalibrationRole ?? u.director_calibration_role ?? ""),
   };
 }

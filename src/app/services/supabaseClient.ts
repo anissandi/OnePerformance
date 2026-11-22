@@ -755,6 +755,7 @@ const EPHEMERAL_OR_LEGACY_LOCAL_KEYS = [
   "sg_checkin_entries_v1",
   "pa_project_icf_excel_v1",
   "inter_department_feedback_workflows_v1",
+  "pa_login_origin_user_v1",
 ];
 
 const ATTACHMENT_HEAVY_LOCAL_KEYS = new Set([
@@ -2365,6 +2366,12 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
             : dbU?.calibration_role_by_unit && typeof dbU.calibration_role_by_unit === "object"
               ? (dbU.calibration_role_by_unit as Record<string, string>)
               : undefined,
+        soyCalibrationRoleByUnit:
+          kvU.soyCalibrationRoleByUnit && typeof kvU.soyCalibrationRoleByUnit === "object"
+            ? (kvU.soyCalibrationRoleByUnit as Record<string, string>)
+            : dbU?.soy_calibration_role_by_unit && typeof dbU.soy_calibration_role_by_unit === "object"
+              ? (dbU.soy_calibration_role_by_unit as Record<string, string>)
+              : undefined,
         directorCalibrationRole: String(kvU.directorCalibrationRole ?? dbU?.director_calibration_role ?? ""),
       };
     });
@@ -2404,6 +2411,10 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
             calibrationRoleByUnit:
               u.calibration_role_by_unit && typeof u.calibration_role_by_unit === "object"
                 ? (u.calibration_role_by_unit as Record<string, string>)
+                : undefined,
+            soyCalibrationRoleByUnit:
+              u.soy_calibration_role_by_unit && typeof u.soy_calibration_role_by_unit === "object"
+                ? (u.soy_calibration_role_by_unit as Record<string, string>)
                 : undefined,
             directorCalibrationRole: String(u.director_calibration_role ?? ""),
           }));
@@ -2449,6 +2460,10 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     calibrationRoleByUnit:
       u.calibration_role_by_unit && typeof u.calibration_role_by_unit === "object"
         ? (u.calibration_role_by_unit as Record<string, string>)
+        : undefined,
+    soyCalibrationRoleByUnit:
+      u.soy_calibration_role_by_unit && typeof u.soy_calibration_role_by_unit === "object"
+        ? (u.soy_calibration_role_by_unit as Record<string, string>)
         : undefined,
     directorCalibrationRole: String(u.director_calibration_role ?? ""),
   })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
@@ -2559,6 +2574,8 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       const skipKeys = new Set([
         "pa_active_user_v1",
         "pa_auth_session_v1",
+        "pa_login_origin_user_v1",
+        "pa_switch_origin_session_v2",
         "pa_session_expired_notice_v1",
         "pa_login_default_pwd_migrated_v2",
         "pa_user_password_security_v1",
@@ -2692,7 +2709,18 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     const syncedActiveUsers: Array<Record<string, unknown>> = applyDbUsersToLocal(Array.isArray(users) ? users : []);
 
     // 2b. Hydrate sisa non-auth KV states secara aman (tahan QuotaExceededError)
+    const nonSharedBrowserKeys = new Set([
+      "pa_active_user_v1",
+      "pa_auth_session_v1",
+      "pa_login_origin_user_v1",
+      "pa_switch_origin_session_v2",
+      "pa_session_expired_notice_v1",
+    ]);
+    if (seenBackendKvKeys.has("pa_login_origin_user_v1")) {
+      void deleteBackendRecordFromSupabase("pa_kv_state", "state_key", "pa_login_origin_user_v1");
+    }
     for (const row of deferredNonAuthKvRows) {
+      if (nonSharedBrowserKeys.has(row.state_key)) continue;
       if ((localWriteTs.get(row.state_key) ?? 0) >= hydrateStartedAt) continue;
       safeSetLocalJson(row.state_key, row.state_value);
     }

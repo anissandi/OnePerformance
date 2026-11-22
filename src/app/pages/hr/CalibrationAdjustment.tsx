@@ -19,7 +19,7 @@ import { getApproverNotesHistory, normalizeEmployeeId } from "../shared/appraisa
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 import { loadRCASubmissions, type StoredRCASubmission } from "../shared/rcaStore";
 import { UnifiedRCADetailTable, isStoredRcaSubmissionClosed } from "../../components/UnifiedRCADetailTable";
-import { loadPersistedState, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
+import { loadPersistedState, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveEffectiveUserGrouping, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import {
@@ -354,12 +354,14 @@ function CollapsibleSection({ title, subtitle, defaultOpen = true, actions, chil
 function BellCurveChart({
   calibrationGrades,
   settingCounts,
+  settingEoyCounts,
   actualCounts,
   calibratedCounts,
   hasCalibration,
 }: {
   calibrationGrades: CalibrationGrade[];
   settingCounts: number[];
+  settingEoyCounts?: number[];
   actualCounts?: number[];
   calibratedCounts?: number[];
   hasCalibration: boolean;
@@ -367,21 +369,25 @@ function BellCurveChart({
   const gradeHeaders  = calibrationGrades.map(g => g.grade);
 
   const settingTotals = calibrationGrades.map((_, idx) => settingCounts[idx] ?? 0);
+  const settingEoyTotals = calibrationGrades.map((_, idx) => settingEoyCounts?.[idx] ?? 0);
   const actualTotals = actualCounts ? actualCounts : calibrationGrades.map(() => 0);
   const calTotals = hasCalibration && calibratedCounts
     ? calibratedCounts
     : calibrationGrades.map(() => 0);
 
   const totalSetting = settingTotals.reduce((a, b) => a + b, 0);
+  const totalSettingEoy = settingEoyTotals.reduce((a, b) => a + b, 0);
   const totalActual  = actualTotals.reduce((a, b) => a + b, 0);
   const totalCal     = calTotals.reduce((a, b) => a + b, 0);
 
   const data = gradeHeaders.map((grade, i) => ({
     grade,
     "Setting (SOY)":   totalSetting > 0 ? parseFloat(((settingTotals[i] / totalSetting) * 100).toFixed(1)) : 0,
+    "Setting (EOY)":   totalSettingEoy > 0 ? parseFloat(((settingEoyTotals[i] / totalSettingEoy) * 100).toFixed(1)) : (parseFloat(String(calibrationGrades[i]?.proporsi ?? "0").replace("%", "")) || 0),
     "Aktual":          totalActual  > 0 ? parseFloat(((actualTotals[i]  / totalActual)  * 100).toFixed(1)) : 0,
     "Kalibrasi (EOY)": hasCalibration && totalCal > 0 ? parseFloat(((calTotals[i] / totalCal) * 100).toFixed(1)) : 0,
     settingHC:    settingTotals[i],
+    settingEoyHC: settingEoyTotals[i],
     actualHC:     actualTotals[i],
     calibratedHC: calTotals[i],
   }));
@@ -410,6 +416,8 @@ function BellCurveChart({
           const hc =
             p.dataKey === "Setting (SOY)"
               ? p.payload.settingHC
+              : p.dataKey === "Setting (EOY)"
+              ? p.payload.settingEoyHC
               : p.dataKey === "Aktual"
               ? p.payload.actualHC
               : p.payload.calibratedHC;
@@ -447,6 +455,11 @@ function BellCurveChart({
     return <Dot cx={cx} cy={cy} r={5} fill="#06B6D4" stroke="#fff" strokeWidth={2} />;
   };
 
+  const SettingEoyDot = (props: any) => {
+    const { cx, cy } = props;
+    return <Dot cx={cx} cy={cy} r={4.5} fill="#F59E0B" stroke="#fff" strokeWidth={2} />;
+  };
+
   const AktualDot = (props: any) => {
     const { cx, cy } = props;
     return <Dot cx={cx} cy={cy} r={5} fill="#0D9488" stroke="#fff" strokeWidth={2} />;
@@ -460,6 +473,7 @@ function BellCurveChart({
 
   const legendPayload = [
     { value: "Setting (SOY)",   type: "square" as const, color: "#06B6D4" },
+    { value: "Setting (EOY)",   type: "line"   as const, color: "#F59E0B" },
     { value: "Aktual",          type: "square" as const, color: "#0D9488" },
     { value: "Kalibrasi (EOY)", type: "square" as const, color: "#1A284F" },
   ];
@@ -467,7 +481,7 @@ function BellCurveChart({
   return (
     <CollapsibleSection
       title="Grade Distribution — Bell Curve"
-      subtitle="Setting (SOY) vs Aktual vs Kalibrasi (EOY)"
+      subtitle="Setting (SOY) vs Setting (EOY) vs Aktual vs Kalibrasi (EOY)"
     >
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Chart */}
@@ -496,17 +510,18 @@ function BellCurveChart({
               <Bar key="bc-bar-cal"     dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill="#1A284F" fillOpacity={0.24} shape={<CustomBarShape />} isAnimationActive={false} legendType="none" />
               {/* Lines */}
               <Line key="bc-line-setting" type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke="#06B6D4" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}   activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
+              <Line key="bc-line-setting-eoy" type="monotone" dataKey="Setting (EOY)" name="Setting (EOY)" stroke="#F59E0B" strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingEoyDot />} activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
               <Line key="bc-line-actual"  type="monotone" dataKey="Aktual"          name="Aktual"          stroke="#0D9488" strokeWidth={2.5}                       dot={<AktualDot />}    activeDot={{ r: 6 }} isAnimationActive={false} legendType="none" />
               <Line key="bc-line-cal"     type="monotone" dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" stroke={hasCalibration ? "#1A284F" : "#CBD5E1"} strokeWidth={hasCalibration ? 2.5 : 1.5} strokeDasharray={hasCalibration ? undefined : "3 3"} dot={<KalibrasiDot />} activeDot={hasCalibration ? { r: 6 } : false} isAnimationActive={false} legendType="none" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Info Grade di samping Bell Curve — sinkron dengan Setting (SOY), Aktual & Kalibrasi (EOY) */}
-        <div className="w-full lg:w-80 xl:w-[360px] shrink-0 flex flex-col gap-2.5 justify-center">
+        {/* Info Grade di samping Bell Curve — sinkron dengan Setting (SOY), Setting (EOY), Aktual & Kalibrasi (EOY) */}
+        <div className="w-full lg:w-96 xl:w-[420px] shrink-0 flex flex-col gap-2.5 justify-center">
           {data.map(d => {
             const comparePct = hasCalibration ? d["Kalibrasi (EOY)"] : d["Aktual"];
-            const diffSoy = parseFloat((comparePct - d["Setting (SOY)"]).toFixed(1));
+            const diffEoy = parseFloat((comparePct - d["Setting (EOY)"]).toFixed(1));
             const diffCalVsAct = hasCalibration ? d.calibratedHC - d.actualHC : 0;
             const color = gradeColors[d.grade] ?? "#6B7280";
             return (
@@ -514,11 +529,16 @@ function BellCurveChart({
                 <span className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-xs"
                   style={{ background: color }}>{d.grade}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="grid grid-cols-3 gap-2.5 text-[11px] leading-snug">
+                  <div className="grid grid-cols-4 gap-2 text-[11px] leading-snug">
                     <div>
-                      <span className="block text-[10px] font-semibold text-cyan-600">Setting</span>
+                      <span className="block text-[10px] font-semibold text-cyan-600">Set. SOY</span>
                       <span className="font-bold text-cyan-600 tabular-nums">{d["Setting (SOY)"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingHC} org)</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-semibold text-amber-600">Set. EOY</span>
+                      <span className="font-bold text-amber-600 tabular-nums">{d["Setting (EOY)"]}%</span>
+                      <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingEoyHC} org)</span>
                     </div>
                     <div>
                       <span className="block text-[10px] font-semibold text-teal-700/85">Aktual</span>
@@ -544,9 +564,9 @@ function BellCurveChart({
                   </div>
                 </div>
                 <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-md tabular-nums ${
-                  diffSoy > 0 ? "bg-emerald-50 text-emerald-700" : diffSoy < 0 ? "bg-rose-50 text-rose-600" : "bg-gray-100 text-gray-500"
-                }`} title={hasCalibration ? "Selisih Kalibrasi (EOY) terhadap Setting (SOY)" : "Selisih Aktual terhadap Setting (SOY)"}>
-                  {diffSoy > 0 ? `+${diffSoy}%` : diffSoy < 0 ? `${diffSoy}%` : "0%"}
+                  diffEoy > 0 ? "bg-emerald-50 text-emerald-700" : diffEoy < 0 ? "bg-rose-50 text-rose-600" : "bg-gray-100 text-gray-500"
+                }`} title={hasCalibration ? "Selisih Kalibrasi (EOY) terhadap Setting (EOY)" : "Selisih Aktual terhadap Setting (EOY)"}>
+                  {diffEoy > 0 ? `+${diffEoy}%` : diffEoy < 0 ? `${diffEoy}%` : "0%"}
                 </span>
               </div>
             );
@@ -2183,17 +2203,29 @@ function EmployeeAdjustmentSection({
                   <td className="border border-slate-200/60 px-2.5 py-2.5 text-center">
                     {editMode ? (
                       empReadyForCal ? (
-                        <div className="flex flex-col items-center gap-0.5">
-                          <div className="flex items-center gap-0.5">
-                            <button disabled={!canDec}
+                        <div className="flex flex-col items-center gap-1">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={!canDec}
                               onClick={() => setFinal(emp, Math.max(minFinal, parseFloat((final - step).toFixed(2))))}
-                              className="w-5 h-5 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-slate-700 font-bold text-xs transition-colors select-none">−</button>
-                            <span className={`px-1.5 py-0.5 rounded-md border text-center font-bold text-xs tabular-nums min-w-[64px] ${finalStyle.pill}`}>
+                              className="w-8 h-8 rounded-lg bg-white border border-slate-300 shadow-2xs hover:bg-[#1A284F] hover:text-white hover:border-[#1A284F] active:scale-95 disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-slate-700 disabled:hover:border-slate-300 disabled:cursor-not-allowed flex items-center justify-center text-slate-700 font-extrabold text-base transition-all select-none cursor-pointer"
+                              title="Kurangi Nilai Akhir"
+                            >
+                              −
+                            </button>
+                            <span className={`px-2.5 py-1 rounded-lg border text-center font-extrabold text-xs tabular-nums min-w-[70px] ${finalStyle.pill}`}>
                               {final.toFixed(2)}%
                             </span>
-                            <button disabled={!canInc}
+                            <button
+                              type="button"
+                              disabled={!canInc}
                               onClick={() => setFinal(emp, Math.min(maxFinal, parseFloat((final + step).toFixed(2))))}
-                              className="w-5 h-5 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-slate-700 font-bold text-xs transition-colors select-none">+</button>
+                              className="w-8 h-8 rounded-lg bg-white border border-slate-300 shadow-2xs hover:bg-[#1A284F] hover:text-white hover:border-[#1A284F] active:scale-95 disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-slate-700 disabled:hover:border-slate-300 disabled:cursor-not-allowed flex items-center justify-center text-slate-700 font-extrabold text-base transition-all select-none cursor-pointer"
+                              title="Tambah Nilai Akhir"
+                            >
+                              +
+                            </button>
                           </div>
                           <span className={`text-[10px] font-bold tabular-nums ${diffPct > 0 ? "text-emerald-600" : diffPct < 0 ? "text-rose-500" : "text-slate-400"}`}>
                             {diffPct > 0 ? `+${diffPct.toFixed(1)}%` : diffPct < 0 ? `${diffPct.toFixed(1)}%` : "base"}
@@ -2417,6 +2449,20 @@ function CalibrationPanel({
   const [liveAdjustments, setLiveAdjustments] = useState<Record<string, number>>(() =>
     loadPersistedState("pa_calibration_adj_scores_v1", {})
   );
+  const editModeRef = useRef(editMode);
+  editModeRef.current = editMode;
+  const preEditAdjustmentsRef = useRef<Record<string, number>>({});
+  const updateLiveAdjustments: React.Dispatch<React.SetStateAction<Record<string, number>>> = useCallback(
+    (updater) => {
+      setLiveAdjustments((prev) => {
+        const next = typeof updater === "function" ? updater(prev) : updater;
+        // Simpan draft langsung ke localStorage agar event hidrasi dari kolom Bukti tidak pernah me-reset Nilai Akhir
+        safeSetLocalJson("pa_calibration_adj_scores_v1", next);
+        return next;
+      });
+    },
+    [],
+  );
   const [activeTab, setActiveTab] = useRouteTab<"distribusi" | "proporsi">(["distribusi", "proporsi"], "distribusi");
   const [soyTick, setSoyTick] = useState(0);
 
@@ -2445,8 +2491,12 @@ function CalibrationPanel({
 
   useEffect(() => {
     const onHydrated = () => {
-      const s = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
-      setLiveAdjustments(s);
+      // Selama berada di mode Edit (Start Adjusting), pertahankan nilai adjustment di memori
+      // agar aktivitas pada kolom Bukti (+ Note / Upload File) tidak pernah mengembalikan Nilai Akhir ke angka awal!
+      if (!editModeRef.current) {
+        const s = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
+        setLiveAdjustments(s);
+      }
       setSoyTick((v) => v + 1);
     };
     const onSoyUpdated = () => setSoyTick((v) => v + 1);
@@ -2480,9 +2530,14 @@ function CalibrationPanel({
     }
   }, [saveVersion]);
 
-  const handleStart  = () => setEditMode(true);
+  const handleStart  = () => {
+    preEditAdjustmentsRef.current = { ...liveAdjustments };
+    setEditMode(true);
+  };
   const handleCancel = () => {
-    setLiveAdjustments(loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {}));
+    const restored = { ...preEditAdjustmentsRef.current };
+    safeSetLocalJson("pa_calibration_adj_scores_v1", restored);
+    setLiveAdjustments(restored);
     setEditMode(false);
   };
   const handleSave   = () => { setEditMode(false); setIsSaved(true); setSaveVersion(v => v + 1); };
@@ -2536,6 +2591,29 @@ function CalibrationPanel({
       }),
     [soySource],
   );
+
+  // Sumber Setting (EOY): diambil dari Grade Distribution (Bell Curve) tab HC Akhir Tahun (EOY) pada /calibration/setting
+  const eoySettingAlloc = useMemo(() => {
+    const eoyGrades = calibrationGrades ?? soySource.grades;
+    const eoyDivs =
+      divisionProportions && divisionProportions.length > 0
+        ? divisionProportions
+        : applyImportedEmployeesDistribution(unit).divisionProportions;
+    const eoyDepts =
+      departemenenProportions && departemenenProportions.length > 0
+        ? departemenenProportions
+        : applyImportedEmployeesDistribution(unit).departemenenProportions;
+    const eoyBags =
+      bagianProportions && bagianProportions.length > 0
+        ? bagianProportions
+        : applyImportedEmployeesDistribution(unit).bagianProportions;
+    return computeUnitQuotaAllocation({
+      calibrationGrades: eoyGrades,
+      divisionProportions: eoyDivs,
+      departemenenProportions: eoyDepts,
+      bagianProportions: eoyBags,
+    });
+  }, [unit, calibrationGrades, divisionProportions, departemenenProportions, bagianProportions, soySource.grades, soyTick]);
 
   const safeDivisions = soySource.divisions;
   const safeDepts     = soySource.depts;
@@ -2687,6 +2765,12 @@ function CalibrationPanel({
                   <span className="text-xs text-gray-700 font-semibold">Setting (SOY)</span>
                 </div>
                 <div className="flex items-center gap-2">
+                  <svg width="22" height="10" className="shrink-0">
+                    <line x1="0" y1="5" x2="22" y2="5" stroke="#F59E0B" strokeWidth="2.5" strokeDasharray="5 3" />
+                  </svg>
+                  <span className="text-xs text-gray-700 font-semibold">Setting (EOY)</span>
+                </div>
+                <div className="flex items-center gap-2">
                   <span className="w-4 h-3 rounded-sm bg-teal-600 inline-block" />
                   <span className="text-xs text-gray-700 font-semibold">Aktual</span>
                 </div>
@@ -2699,6 +2783,7 @@ function CalibrationPanel({
               <BellCurveChart
                 calibrationGrades={effectiveGrades}
                 settingCounts={soyAlloc.unitGradeTargets}
+                settingEoyCounts={eoySettingAlloc.unitGradeTargets}
                 actualCounts={actualBaseCounts}
                 calibratedCounts={calibratedCounts.globalCounts}
                 hasCalibration={hasCalibration}
@@ -2718,7 +2803,7 @@ function CalibrationPanel({
                 miScores={miScores}
                 editMode={editMode}
                 adjustments={liveAdjustments}
-                setAdjustments={setLiveAdjustments}
+                setAdjustments={updateLiveAdjustments}
                 onStart={handleStart}
                 onSave={handleSave}
                 onCancel={handleCancel}
@@ -3051,26 +3136,50 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
               ? "Select a company unit to compare setting targets with actual appraisal data."
               : "No submitted data yet. Submit from Calibration Setting first."}
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {companyUnits.map((unit, idx) => {
-              const gradients = ["from-blue-600 to-blue-800","from-emerald-600 to-emerald-800","from-violet-600 to-violet-800","from-amber-500 to-orange-700","from-sky-500 to-cyan-700","from-rose-500 to-red-700","from-teal-500 to-teal-700","from-indigo-500 to-indigo-700"];
-              const gradient = gradients[idx % gradients.length];
+              const unitTones: AnalyticsCardTone[] = ["navy", "emerald", "plum", "terracotta", "teal", "rose", "slate", "navy"];
+              const spec = ANALYTICS_CARD_TONES[unitTones[idx % unitTones.length]];
+              const unitActiveHC = ALL_EMPLOYEES.filter(
+                (e) => e.companyUnit === unit.name && !isYearEndInactive(e.employeeId),
+              ).length;
               return (
-                <button key={unit.id} onClick={() => selectUnit(unit)}
-                  className="group text-left rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5">
-                  <div className={`bg-gradient-to-br ${gradient} px-5 py-4`}>
-                    <Building2 className="w-5 h-5 text-white/80 mb-2" />
-                    <p className="text-white font-semibold text-sm leading-tight">{unit.name}</p>
+                <button
+                  key={unit.id}
+                  onClick={() => selectUnit(unit)}
+                  style={{ animationDelay: `${Math.min(idx, 8) * 50}ms` }}
+                  className={`group relative overflow-hidden text-left bg-gradient-to-br ${spec.gradient} border ${spec.border} rounded-2xl p-4 min-h-[132px] flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion cursor-pointer`}
+                >
+                  <div
+                    className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+                    style={{ backgroundColor: `${spec.accentHex}0D` }}
+                  />
+                  <div className="flex items-start justify-between gap-2 relative z-10">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-gray-500 truncate">
+                        {unit.code}{unit.industry ? ` · ${unit.industry}` : ""}
+                      </p>
+                      <p className="text-base font-extrabold text-[#111827] leading-snug mt-1">{unit.name}</p>
+                    </div>
+                    <div
+                      className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+                      style={{ backgroundColor: spec.accentHex }}
+                    >
+                      <Building2 className="w-5 h-5" />
+                    </div>
                   </div>
-                  <div className="bg-white px-5 py-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-medium text-gray-700 truncate max-w-[120px]">{unit.industry}</p>
-                      <span className="inline-block mt-0.5 font-mono text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{unit.code}</span>
+                  <div className="flex items-center justify-between gap-2 mt-4 relative z-10">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1A284F] tabular-nums">
+                        <Users className="w-3 h-3" /> {unitActiveHC} Active HC
+                      </span>
                       {submittedAt && (
-                        <span className="block mt-0.5 text-[10px] font-medium text-blue-600">● From Setting</span>
+                        <span className="text-[10px] font-semibold text-sky-700 bg-white/85 border border-sky-200 px-2 py-0.5 rounded-full">
+                          From Setting
+                        </span>
                       )}
                     </div>
-                    <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors shrink-0" />
+                    <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-[#1A284F] group-hover:translate-x-0.5 transition-all shrink-0" />
                   </div>
                 </button>
               );

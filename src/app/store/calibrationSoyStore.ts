@@ -4,6 +4,7 @@ import {
   getActiveUser,
   getCalibrationRoleForUnit,
   getGroupCompaniesForUnit,
+  getSoyCalibrationRoleForUnit,
   isAdminOrHrIcfRole,
   isDirectorRoleOrGrouping,
   isExcludedFromAppraisalCalibration,
@@ -37,7 +38,8 @@ export interface SoyApprovalRecord {
   decidedAt?: string;
   decidedBy?: string;
   note?: string;
-  history: Array<{ status: SoyStatus | "Submitted"; by: string; at: string; note?: string }>;
+  acknowledgedBy?: Record<string, { employeeId: string; by: string; at: string; note?: string }>;
+  history: Array<{ status: SoyStatus | "Submitted" | "Mengetahui"; by: string; at: string; note?: string }>;
   snapshot: SoyUnitSnapshot;
 }
 
@@ -114,6 +116,12 @@ export function loadSoyEmployeeSnapshot(): Record<string, ManagedUser[]> {
  * Administrator / HR ICF hanya dihitung bila dipetakan eksplisit per unit agar tidak membanjiri notifikasi.
  */
 export function resolveSoyRoleForUser(user: ManagedUser, unitName: string, includeGlobalAdmins = false): "approve" | "view" | null {
+  const explicitSoy = user.soyCalibrationRoleByUnit?.[canonicalizeCompanyUnitName(unitName)] ?? user.soyCalibrationRoleByUnit?.[unitName];
+  if (explicitSoy === "approver") return "approve";
+  if (explicitSoy === "mengetahui" || explicitSoy === "readonly") return "view";
+  if (user.soyCalibrationRoleByUnit && Object.values(user.soyCalibrationRoleByUnit).some(Boolean)) {
+    return null;
+  }
   const explicit = user.calibrationRoleByUnit?.[unitName];
   if (explicit === "approver") return "approve";
   if (explicit === "mengetahui" || explicit === "readonly") return "view";
@@ -121,7 +129,7 @@ export function resolveSoyRoleForUser(user: ManagedUser, unitName: string, inclu
   if (isDirectorRoleOrGrouping(user) && !getGroupCompaniesForUnit(user.company, user.managedUnits).includes(unitName)) {
     return null;
   }
-  const r = getCalibrationRoleForUnit(user, unitName);
+  const r = getSoyCalibrationRoleForUnit(user, unitName) || getCalibrationRoleForUnit(user, unitName);
   if (r === "approver") return "approve";
   if (r === "mengetahui" || r === "readonly") return "view";
   return null;
@@ -246,6 +254,30 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
       // ignore local parse issues
     }
   }
+}
+
+export function acknowledgeSoyApproval(unitId: string, note = ""): void {
+  const map = loadSoyApprovals();
+  const rec = map[unitId];
+  if (!rec) return;
+  const u = getActiveUser();
+  const now = new Date().toISOString();
+  const by = actorLabel();
+  const empKey = (u?.employeeId || "USER").trim().toUpperCase();
+  map[unitId] = {
+    ...rec,
+    acknowledgedBy: {
+      ...(rec.acknowledgedBy ?? {}),
+      [empKey]: {
+        employeeId: u?.employeeId || "",
+        by,
+        at: now,
+        note: note.trim() || undefined,
+      },
+    },
+    history: [...rec.history, { status: "Mengetahui", by, at: now, note: note.trim() || undefined }],
+  };
+  save(map);
 }
 
 /** Reset status pengajuan HC Awal Tahun (SOY) agar unit dapat diedit dan di-submit ulang. */

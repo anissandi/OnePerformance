@@ -6,6 +6,7 @@ import {
   listPendingTransactions,
   type PendingTransaction,
 } from "../store/transactionCancelStore";
+import { canCancelTransaction } from "../store/authStore";
 
 const SOURCE_TONE: Record<PendingTransaction["source"], string> = {
   workflow: "bg-indigo-50 text-indigo-700 border-indigo-200",
@@ -14,8 +15,9 @@ const SOURCE_TONE: Record<PendingTransaction["source"], string> = {
   "calibration-soy": "bg-emerald-50 text-emerald-700 border-emerald-200",
 };
 
-/** Modal fitur sementara (DEMO) Cancel Transaction — khusus Role Administrator. */
+/** Modal Cancel Transaction — khusus Role Administrator & HR ICF. */
 export function CancelTransactionModal({ onClose }: { onClose: () => void }) {
+  const allowed = canCancelTransaction();
   const [rows, setRows] = useState<PendingTransaction[]>(() => listPendingTransactions());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -63,6 +65,8 @@ export function CancelTransactionModal({ onClose }: { onClose: () => void }) {
     toast.success(`${n} transaksi pending berhasil dibatalkan dan dikembalikan ke status awal.`);
   };
 
+  if (!allowed) return null;
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -71,9 +75,6 @@ export function CancelTransactionModal({ onClose }: { onClose: () => void }) {
             <div className="flex items-center gap-2">
               <RotateCcw className="h-4 w-4 text-rose-600" />
               <h3 className="text-base font-bold text-[#1A284F]">Cancel Transaction</h3>
-              <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-                Fitur Sementara · Administrator
-              </span>
             </div>
             <p className="mt-1 text-xs text-gray-500">
               Pilih transaksi yang masih pending untuk dibersihkan. Transaksi akan dikembalikan ke status awal

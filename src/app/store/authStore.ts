@@ -90,8 +90,10 @@ export interface ManagedUser {
   checkerUnits?: string[];
   /** Peran khusus pada Calibration Approval: "approver" | "mengetahui" | "readonly" | "" */
   directorCalibrationRole?: CalibrationUnitRole;
-  /** Mapping Peran Approval Calibration per Company Unit ("approver" | "mengetahui" | "readonly" | "") */
+  /** Mapping Peran Approval Calibration (EOY) per Company Unit ("approver" | "mengetahui" | "readonly" | "") */
   calibrationRoleByUnit?: Record<string, CalibrationUnitRole>;
+  /** Mapping Peran Approval Setting (SOY) per Company Unit ("approver" | "mengetahui" | "readonly" | "") */
+  soyCalibrationRoleByUnit?: Record<string, CalibrationUnitRole>;
   /** Cakupan tambahan jika pejabat membawahi >1 Unit / Divisi / Departemen / Bagian */
   managedUnits?: string[];
   managedDivisions?: string[];
@@ -182,7 +184,26 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     }
     calibrationRoleByUnit = nextCal;
   }
-  return { ...user, company, regNoAp1, regNoAp2, managedUnits, checkerUnits, calibrationRoleByUnit };
+  let soyCalibrationRoleByUnit = user.soyCalibrationRoleByUnit;
+  if (soyCalibrationRoleByUnit && typeof soyCalibrationRoleByUnit === "object") {
+    const nextSoyCal: Record<string, CalibrationUnitRole> = {};
+    for (const [k, v] of Object.entries(soyCalibrationRoleByUnit)) {
+      if (v === "approver" || v === "mengetahui" || v === "readonly" || v === "") {
+        nextSoyCal[canonicalizeCompanyUnitName(k)] = v;
+      }
+    }
+    soyCalibrationRoleByUnit = nextSoyCal;
+  }
+  return {
+    ...user,
+    company,
+    regNoAp1,
+    regNoAp2,
+    managedUnits,
+    checkerUnits,
+    calibrationRoleByUnit,
+    soyCalibrationRoleByUnit,
+  };
 }
 
 /**
@@ -1099,8 +1120,10 @@ export function defaultAllowedModulesForGrouping(group: string): AppraisalModule
 
 const USERS_KEY = "pa_managed_users_v1";
 const ACTIVE_USER_KEY = "pa_active_user_v1";
-/** Akun asli yang melakukan login (dipertahankan saat Pindah Akun) untuk menentukan hak fitur Pindah Akun / Cancel Transaction. */
-const LOGIN_ORIGIN_USER_KEY = "pa_login_origin_user_v1";
+/** Key legacy yang tidak lagi dipakai (dibersihkan agar tidak pernah bocor lintas sesi/perangkat). */
+const LEGACY_LOGIN_ORIGIN_KEY = "pa_login_origin_user_v1";
+/** Akun asli Administrator / HR ICF pada tab browser ini saat menggunakan Pindah Akun (sessionStorage saja). */
+const SWITCH_ORIGIN_SESSION_KEY = "pa_switch_origin_session_v2";
 const GROUP_RULES_BY_UNIT_KEY = "pa_group_rules_by_unit_v1";
 export const AUTH_SESSION_KEY = "pa_auth_session_v1";
 export const SESSION_EXPIRED_NOTICE_KEY = "pa_session_expired_notice_v1";
@@ -1155,7 +1178,8 @@ export function logoutCurrentUser(reason: "manual" | "expired" = "manual"): void
   try {
     localStorage.removeItem(AUTH_SESSION_KEY);
     localStorage.removeItem(ACTIVE_USER_KEY);
-    localStorage.removeItem(LOGIN_ORIGIN_USER_KEY);
+    localStorage.removeItem(LEGACY_LOGIN_ORIGIN_KEY);
+    sessionStorage.removeItem(SWITCH_ORIGIN_SESSION_KEY);
     if (reason === "expired") {
       sessionStorage.setItem(SESSION_EXPIRED_NOTICE_KEY, "1");
     } else {
@@ -1265,14 +1289,93 @@ export function markSessionAwayFromPaPage(now = Date.now()): void {
   safeSetLocalJson(AUTH_SESSION_KEY, { ...session, awayStartedAt: now });
 }
 
+const _cleanedRegNoDupSignatures = new Set<string>();
+
+/**
+ * Memastikan tidak ada user dengan Reg No yang duplikat dalam 1 Unit Usaha yang sama.
+ * Jika ditemukan duplikat Reg No pada Unit Usaha yang sama, salah satu dihapus otomatis
+ * (mempertahankan akun yang sedang aktif / paling lengkap).
+ */
+export function deduplicateUsersByUnitAndRegNo(
+  users: ManagedUser[],
+  preferredKeepId?: string,
+): { unique: ManagedUser[]; removedDuplicates: ManagedUser[] } {
+  let activeEmpLower = "";
+  try {
+    const rawActive = safeGetLocalRaw(ACTIVE_USER_KEY);
+    if (rawActive) {
+      activeEmpLower = String((JSON.parse(rawActive) as { employeeId?: string })?.employeeId ?? "")
+        .trim()
+        .toLowerCase();
+    }
+  } catch {
+    activeEmpLower = "";
+  }
+  const scoreUser = (u: ManagedUser): number => {
+    let s = 0;
+    if (preferredKeepId && u.id === preferredKeepId) s += 1000;
+    if (activeEmpLower && u.employeeId.trim().toLowerCase() === activeEmpLower) s += 500;
+    if (u.status === "Active") s += 100;
+    if (u.lastLogin) s += 20;
+    if (u.role) s += 10;
+    if (u.email) s += 5;
+    if (u.position && u.position !== "-") s += 5;
+    return s;
+  };
+
+  const byUnitReg = new Map<string, number>();
+  const unique: ManagedUser[] = [];
+  const removedDuplicates: ManagedUser[] = [];
+
+  for (const rawUser of users) {
+    const u = normalizeManagedUserUnits(rawUser);
+    const regClean = String(u.regNo ?? "").trim().toLowerCase();
+    const unitClean = canonicalizeCompanyUnitName(u.company).trim().toLowerCase();
+    if (!regClean || !unitClean) {
+      unique.push(u);
+      continue;
+    }
+    const key = `${unitClean}::${regClean}`;
+    const existingIdx = byUnitReg.get(key);
+    if (existingIdx === undefined) {
+      byUnitReg.set(key, unique.length);
+      unique.push(u);
+    } else {
+      const existing = unique[existingIdx];
+      if (scoreUser(u) > scoreUser(existing)) {
+        removedDuplicates.push(existing);
+        unique[existingIdx] = u;
+      } else {
+        removedDuplicates.push(u);
+      }
+    }
+  }
+  return { unique, removedDuplicates };
+}
+
 export function loadManagedUsers(): ManagedUser[] {
   try {
     const raw = safeGetLocalRaw(USERS_KEY);
     if (!raw) return DEFAULT_MANAGED_USERS;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0
-      ? (parsed as ManagedUser[]).map(normalizeManagedUserUnits)
-      : DEFAULT_MANAGED_USERS;
+    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_MANAGED_USERS;
+    const { unique, removedDuplicates } = deduplicateUsersByUnitAndRegNo(parsed as ManagedUser[]);
+    if (removedDuplicates.length > 0) {
+      const sig = removedDuplicates.map((d) => `${d.company}:${d.regNo}:${d.employeeId}`).join("|");
+      safeSetLocalJson(USERS_KEY, unique);
+      if (!_cleanedRegNoDupSignatures.has(sig)) {
+        _cleanedRegNoDupSignatures.add(sig);
+        savePersistedState(USERS_KEY, unique);
+        const keptEmpIds = new Set(unique.map((u) => u.employeeId.trim().toLowerCase()));
+        for (const dup of removedDuplicates) {
+          if (dup.employeeId && !keptEmpIds.has(dup.employeeId.trim().toLowerCase())) {
+            void syncToSupabase({ kind: "user-delete", employeeId: dup.employeeId });
+          }
+        }
+        void syncToSupabase({ kind: "users-batch", users: unique });
+      }
+    }
+    return unique;
   } catch {
     return DEFAULT_MANAGED_USERS;
   }
@@ -1280,11 +1383,19 @@ export function loadManagedUsers(): ManagedUser[] {
 
 export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser, deletedId?: string): void {
   try {
-    const normalizedUsers = users.map(normalizeManagedUserUnits);
     const normalizedChanged = changedUser ? normalizeManagedUserUnits(changedUser) : undefined;
-    users = normalizedUsers;
+    const { unique, removedDuplicates } = deduplicateUsersByUnitAndRegNo(users, normalizedChanged?.id);
+    users = unique;
     changedUser = normalizedChanged;
     savePersistedState(USERS_KEY, users);
+    if (removedDuplicates.length > 0) {
+      const keptEmpIds = new Set(users.map((u) => u.employeeId.trim().toLowerCase()));
+      for (const dup of removedDuplicates) {
+        if (dup.employeeId && !keptEmpIds.has(dup.employeeId.trim().toLowerCase())) {
+          void syncToSupabase({ kind: "user-delete", employeeId: dup.employeeId });
+        }
+      }
+    }
     window.dispatchEvent(new Event("pa-auth-updated"));
     if (changedUser) {
       void syncToSupabase({
@@ -1717,8 +1828,27 @@ export function loginWithCompanyAndEmployeeId(
   const updatedList = users.map((u) => (u.id === matched.id ? updatedUser : u));
   safeSetLocalJson(USERS_KEY, updatedList);
   safeSetLocalJson(ACTIVE_USER_KEY, updatedUser);
-  safeSetLocalJson(LOGIN_ORIGIN_USER_KEY, { employeeId: updatedUser.employeeId });
-  startOrRefreshAuthSession(updatedUser.employeeId);
+  try {
+    localStorage.removeItem(LEGACY_LOGIN_ORIGIN_KEY);
+    sessionStorage.removeItem(SWITCH_ORIGIN_SESSION_KEY);
+  } catch {
+    // ignore storage errors
+  }
+  const newSess = startOrRefreshAuthSession(updatedUser.employeeId);
+  if (isAdminOrHrIcfRole(updatedUser.role)) {
+    try {
+      sessionStorage.setItem(
+        SWITCH_ORIGIN_SESSION_KEY,
+        JSON.stringify({
+          employeeId: updatedUser.employeeId,
+          role: updatedUser.role,
+          loginAt: newSess.loginAt,
+        }),
+      );
+    } catch {
+      // ignore
+    }
+  }
   window.dispatchEvent(new Event("pa-auth-updated"));
   void notifyLoginToSupabase({
     employeeId: updatedUser.employeeId,
@@ -1732,20 +1862,27 @@ export function loginWithCompanyAndEmployeeId(
 }
 
 export function switchActiveUserByEmployeeId(employeeId: string): ManagedUser | null {
+  if (!canSwitchAccount()) return null;
   const users = loadManagedUsers();
   const found = users.find((u) => u.employeeId.toUpperCase() === employeeId.toUpperCase());
   if (!found) return null;
-  // Pertahankan akun asli yang login (jika belum tercatat, akun aktif saat ini adalah akun asli)
+  const origin = getLoginOriginUser();
+  if (!isAdminOrHrIcfRole(origin.role)) return null;
+  const newSess = startOrRefreshAuthSession(found.employeeId);
   try {
-    if (!safeGetLocalRaw(LOGIN_ORIGIN_USER_KEY)) {
-      const current = getActiveUser();
-      if (current?.employeeId) safeSetLocalJson(LOGIN_ORIGIN_USER_KEY, { employeeId: current.employeeId });
-    }
+    localStorage.removeItem(LEGACY_LOGIN_ORIGIN_KEY);
+    sessionStorage.setItem(
+      SWITCH_ORIGIN_SESSION_KEY,
+      JSON.stringify({
+        employeeId: origin.employeeId,
+        role: origin.role,
+        loginAt: newSess.loginAt,
+      }),
+    );
   } catch {
     // ignore
   }
   safeSetLocalJson(ACTIVE_USER_KEY, found);
-  startOrRefreshAuthSession(found.employeeId);
   window.dispatchEvent(new Event("pa-auth-updated"));
   return found;
 }
@@ -1754,13 +1891,22 @@ export function switchActiveUserByEmployeeId(employeeId: string): ManagedUser | 
 export function getLoginOriginUser(): ManagedUser {
   const active = getActiveUser();
   try {
-    const raw = safeGetLocalRaw(LOGIN_ORIGIN_USER_KEY);
-    const parsed = raw ? (JSON.parse(raw) as { employeeId?: string }) : null;
-    if (parsed?.employeeId) {
+    localStorage.removeItem(LEGACY_LOGIN_ORIGIN_KEY);
+    const sess = readAuthSessionRaw();
+    const raw = sessionStorage.getItem(SWITCH_ORIGIN_SESSION_KEY);
+    const parsed = raw
+      ? (JSON.parse(raw) as { employeeId?: string; role?: string; loginAt?: number })
+      : null;
+    if (
+      parsed?.employeeId &&
+      sess?.isAuthenticated &&
+      typeof parsed.loginAt === "number" &&
+      parsed.loginAt === sess.loginAt
+    ) {
       const found = loadManagedUsers().find(
         (u) => u.employeeId.toUpperCase() === String(parsed.employeeId).toUpperCase(),
       );
-      if (found) return found;
+      if (found && isAdminOrHrIcfRole(found.role)) return found;
     }
   } catch {
     // ignore
@@ -1771,13 +1917,13 @@ export function getLoginOriginUser(): ManagedUser {
 /** Pindah Akun (User Management) hanya untuk Role Administrator & HR ICF (berdasarkan akun asli yang login). */
 export function canSwitchAccount(): boolean {
   const origin = getLoginOriginUser();
-  const r = String(origin.role);
-  return r === "Administrator" || r === "HR ICF";
+  return isAdminOrHrIcfRole(origin.role);
 }
 
-/** Cancel Transaction (fitur demo sementara) hanya untuk Role Administrator (akun asli yang login). */
+/** Cancel Transaction hanya untuk Role Administrator & HR ICF (berdasarkan akun asli yang login). */
 export function canCancelTransaction(): boolean {
-  return String(getLoginOriginUser().role) === "Administrator";
+  const origin = getLoginOriginUser();
+  return isAdminOrHrIcfRole(origin.role);
 }
 
 export function useAuthStore() {
@@ -1880,4 +2026,68 @@ export function getCalibrationInvolvedUnits(
   }
   if (user.role === "BOD") return allUnitNames;
   return [];
+}
+
+/** Mengecek apakah user diberi akses eksplisit pada Peran Approval Setting (SOY) untuk minimal 1 Unit Usaha. */
+export function hasExplicitSoyCalibrationRole(user: ManagedUser | null | undefined): boolean {
+  if (!user || !user.soyCalibrationRoleByUnit || typeof user.soyCalibrationRoleByUnit !== "object") {
+    return false;
+  }
+  return Object.values(user.soyCalibrationRoleByUnit).some(
+    (v) => v === "approver" || v === "mengetahui" || v === "readonly",
+  );
+}
+
+/** User dapat mengakses halaman /approvals/calibration/setting jika di-allow di Peran Approval Setting (SOY) atau memiliki role standar Approval Calibration. */
+export function canUserAccessCalibrationSoyApproval(user: ManagedUser | null | undefined): boolean {
+  if (!user) return false;
+  if (hasExplicitSoyCalibrationRole(user)) return true;
+  return canRoleAccessCalibrationApproval(user.role);
+}
+
+/** Menentukan peran ("approver" | "mengetahui" | "readonly" | "") user pada suatu Unit Usaha di /approvals/calibration/setting. */
+export function getSoyCalibrationRoleForUnit(
+  user: ManagedUser | null | undefined,
+  unitName: string,
+): CalibrationUnitRole {
+  if (!user) return "";
+  const canonUnit = canonicalizeCompanyUnitName(unitName);
+  if (user.soyCalibrationRoleByUnit && typeof user.soyCalibrationRoleByUnit === "object") {
+    const values = Object.values(user.soyCalibrationRoleByUnit);
+    const hasConfigured = values.some((v) => v === "approver" || v === "mengetahui" || v === "readonly");
+    if (hasConfigured) {
+      return user.soyCalibrationRoleByUnit[canonUnit] ?? user.soyCalibrationRoleByUnit[unitName] ?? "";
+    }
+    if (Object.keys(user.soyCalibrationRoleByUnit).length > 0 && !isAdminOrHrIcfRole(user.role)) {
+      return "";
+    }
+  }
+  if (!canRoleAccessCalibrationApproval(user.role)) return "";
+  return getCalibrationRoleForUnit(user, canonUnit);
+}
+
+/** Mengembalikan daftar Unit Usaha yang dapat dilihat/ditindak pada /approvals/calibration/setting oleh user tsb. */
+export function getSoyCalibrationInvolvedUnits(
+  user: ManagedUser | null | undefined,
+  allUnitNames: string[],
+): string[] {
+  if (!user) return [];
+  if (user.soyCalibrationRoleByUnit && typeof user.soyCalibrationRoleByUnit === "object") {
+    const keys = Object.keys(user.soyCalibrationRoleByUnit);
+    const hasConfigured = Object.values(user.soyCalibrationRoleByUnit).some(
+      (v) => v === "approver" || v === "mengetahui" || v === "readonly",
+    );
+    if (hasConfigured) {
+      return allUnitNames.filter((u) => {
+        const canon = canonicalizeCompanyUnitName(u);
+        const r = user.soyCalibrationRoleByUnit?.[canon] ?? user.soyCalibrationRoleByUnit?.[u];
+        return r === "approver" || r === "mengetahui" || r === "readonly";
+      });
+    }
+    if (keys.length > 0 && !isAdminOrHrIcfRole(user.role)) {
+      return [];
+    }
+  }
+  if (!canRoleAccessCalibrationApproval(user.role)) return [];
+  return getCalibrationInvolvedUnits(user, allUnitNames);
 }

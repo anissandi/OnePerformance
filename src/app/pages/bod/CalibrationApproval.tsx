@@ -567,17 +567,72 @@ export function BODCalibrationApproval() {
     };
   }, [selectedUnitId, unit.name, unit.code, authTick]);
 
+  // Hitung Setting (EOY) dari tab HC Akhir Tahun (EOY) pada /calibration/setting
+  const eoySettingQuotaInfo = useMemo(() => {
+    const defaultGrades = [
+      { id: "1", grade: "A+", proporsi: "5%" },
+      { id: "2", grade: "A",  proporsi: "15%" },
+      { id: "3", grade: "B",  proporsi: "40%" },
+      { id: "4", grade: "C",  proporsi: "25%" },
+      { id: "5", grade: "D",  proporsi: "10%" },
+      { id: "6", grade: "E",  proporsi: "5%" },
+    ];
+    const savedUnits =
+      loadPersistedState<SettingCompanyUnit[] | null>("calibration_hc_settings_2026", null) ??
+      loadPersistedState<SettingCompanyUnit[] | null>("calibration_submitted_units", null) ??
+      [];
+    const foundUnit = Array.isArray(savedUnits)
+      ? savedUnits.find((u) => u.id === selectedUnitId || canonicalizeCompanyUnitName(u.name) === unit.name)
+      : undefined;
+    if (foundUnit && foundUnit.divisionProportions && foundUnit.divisionProportions.length > 0) {
+      const grades = foundUnit.calibrationGrades ?? defaultGrades;
+      const alloc = computeUnitQuotaAllocation({
+        calibrationGrades: grades,
+        divisionProportions: foundUnit.divisionProportions,
+        departemenenProportions: foundUnit.departemenenProportions ?? [],
+        bagianProportions: foundUnit.bagianProportions ?? [],
+      });
+      return {
+        grades,
+        targets: alloc.unitGradeTargets,
+        eoySettingTotalHC: alloc.totalHC,
+      };
+    }
+    const fallbackSynced = applyImportedEmployeesDistribution({
+      id: selectedUnitId,
+      name: unit.name,
+      code: unit.code,
+      industry: "",
+      calibrationGrades: foundUnit?.calibrationGrades ?? defaultGrades,
+      divisionProportions: [],
+      departemenenProportions: [],
+      bagianProportions: [],
+    });
+    const fallbackAlloc = computeUnitQuotaAllocation(fallbackSynced);
+    return {
+      grades: fallbackSynced.calibrationGrades,
+      targets: fallbackAlloc.unitGradeTargets,
+      eoySettingTotalHC: fallbackAlloc.totalHC,
+    };
+  }, [selectedUnitId, unit.name, unit.code, authTick]);
+
   const gradeDist  = useMemo(() => {
     return GRADE_KEYS.map((grade, i) => {
       const gDef = soyQuotaInfo.grades.find((g) => g.grade === grade) ?? soyQuotaInfo.grades[i];
       const gIdx = soyQuotaInfo.grades.findIndex((g) => g.grade === grade);
       const configuredPct = parseFloat(String(gDef?.proporsi ?? "0").replace("%", "")) || 0;
       const setting = gIdx >= 0 ? (soyQuotaInfo.targets[gIdx] ?? 0) : (soyQuotaInfo.targets[i] ?? 0);
+
+      const eoyGDef = eoySettingQuotaInfo.grades.find((g) => g.grade === grade) ?? eoySettingQuotaInfo.grades[i];
+      const eoyGIdx = eoySettingQuotaInfo.grades.findIndex((g) => g.grade === grade);
+      const configuredEoyPct = parseFloat(String(eoyGDef?.proporsi ?? "0").replace("%", "")) || 0;
+      const settingEoy = eoyGIdx >= 0 ? (eoySettingQuotaInfo.targets[eoyGIdx] ?? 0) : (eoySettingQuotaInfo.targets[i] ?? 0);
+
       const aktual = employees.filter((e) => e.currentGrade === grade).length;
       const proposed = employees.filter((e) => e.proposedGrade === grade).length;
-      return { grade, color: GRADE_COLORS[grade], configuredPct, setting, aktual, proposed };
+      return { grade, color: GRADE_COLORS[grade], configuredPct, setting, configuredEoyPct, settingEoy, aktual, proposed };
     });
-  }, [soyQuotaInfo, employees]);
+  }, [soyQuotaInfo, eoySettingQuotaInfo, employees]);
   const divSummary = useMemo(() => getDivisionSummary(employees), [employees]);
   const deptSummary = useMemo(() => getDepartmentSummary(employees), [employees]);
   const [bellOpen, setBellOpen] = useState(false);
@@ -586,6 +641,7 @@ export function BODCalibrationApproval() {
   const totalEOYHC   = employees.length;
   const totalHC      = totalEOYHC;
   const totalSettingHC = gradeDist.reduce((s, g) => s + g.setting, 0);
+  const totalEoySettingHC = gradeDist.reduce((s, g) => s + g.settingEoy, 0);
   const totalAktualHC  = gradeDist.reduce((s, g) => s + g.aktual, 0);
   const totalChanged = gradeChanges.length;
   const totalUpgraded   = gradeChanges.filter(e => e.status === "Upgraded").length;
@@ -1116,7 +1172,7 @@ export function BODCalibrationApproval() {
           <GradeBellCurveModal
             mode="compare"
             title={`Grade Distribution (Bell Curve) — ${unit.name}`}
-            subtitle={`Setting SOY (${totalSettingHC} HC) vs Aktual EOY (${totalAktualHC} HC) vs Proposed EOY (${totalProposed} HC)`}
+            subtitle={`Setting (SOY) (${totalSettingHC} HC) vs Setting (EOY) (${totalEoySettingHC} HC) vs Aktual (${totalAktualHC} HC) vs Proposed (${totalProposed} HC)`}
             calibrationStatusBadge={
               allApproversCompleted || status === "approved"
                 ? { label: "Final", tone: "final" }
@@ -1127,6 +1183,8 @@ export function BODCalibrationApproval() {
               color: g.color,
               target: totalSettingHC > 0 ? (g.setting / totalSettingHC) * 100 : g.configuredPct,
               targetCount: g.setting,
+              targetEoy: totalEoySettingHC > 0 ? (g.settingEoy / totalEoySettingHC) * 100 : g.configuredEoyPct,
+              targetEoyCount: g.settingEoy,
               actual: totalAktualHC > 0 ? (g.aktual / totalAktualHC) * 100 : 0,
               actualCount: g.aktual,
               calibration: totalProposed > 0 ? (g.proposed / totalProposed) * 100 : 0,

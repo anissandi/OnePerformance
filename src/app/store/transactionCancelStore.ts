@@ -10,7 +10,7 @@ import {
   normalizeEmployeeId,
   type WorkflowRecord,
 } from "../pages/shared/appraisalWorkflowStore";
-import { getActiveUser, loadManagedUsers } from "./authStore";
+import { canCancelTransaction, getLoginOriginUser, loadManagedUsers } from "./authStore";
 import { loadSoyApprovals, resetSoyApproval } from "./calibrationSoyStore";
 import { pushEmployeeNotification } from "./notificationStore";
 import { projectStore } from "./projectStore";
@@ -339,7 +339,8 @@ function resetRcaRows(
 
 /** Membatalkan transaksi terpilih & mengembalikannya ke status awal. Mengembalikan jumlah transaksi yang dibatalkan. */
 export function cancelPendingTransactions(ids: string[]): number {
-  const admin = getActiveUser();
+  if (!canCancelTransaction()) return 0;
+  const admin = getLoginOriginUser();
   const workflowKeys = new Set<string>();
   let count = 0;
   const notifyIds = new Set<string>();
@@ -433,8 +434,8 @@ export function cancelPendingTransactions(ids: string[]): number {
       role: admin.role,
       action: "Cancel Transaction",
       module: "System",
-      subModule: "Cancel Transaction (Demo)",
-      description: `Administrator ${admin.name} membatalkan ${count} transaksi pending`,
+      subModule: "Cancel Transaction",
+      description: `${admin.role || "Administrator"} ${admin.name} membatalkan ${count} transaksi pending`,
     },
   });
 

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Building2, CheckCircle2, Clock, Eye, RotateCcw, Settings, ShieldAlert, Target, X } from "lucide-react";
+import { Building2, CheckCircle2, Clock, Eye, RotateCcw, Settings, ShieldAlert, UserCheck, X } from "lucide-react";
 import { toast } from "sonner";
 import {
+  acknowledgeSoyApproval,
   decideSoyApproval,
   formatActorWithPosition,
   loadSoyApprovals,
@@ -11,12 +12,10 @@ import {
 } from "../../store/calibrationSoyStore";
 import { computeUnitQuotaAllocation } from "../hr/CalibrationSetting";
 import {
-  canRoleAccessCalibrationApproval,
+  canUserAccessCalibrationSoyApproval,
   getActiveUser,
-  getCalibrationInvolvedUnits,
-  getCalibrationRoleForUnit,
-  getGroupCompaniesForUnit,
-  getRoleAllowedCompanyUnits,
+  getSoyCalibrationInvolvedUnits,
+  getSoyCalibrationRoleForUnit,
   isAdminOrHrIcfRole,
   isDirectorRoleOrGrouping,
 } from "../../store/authStore";
@@ -155,17 +154,23 @@ export function CalibrationSettingApproval() {
   const activeUser = getActiveUser();
   const [records, setRecords] = useState<Record<string, SoyApprovalRecord>>(() => loadSoyApprovals());
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [action, setAction] = useState<"Approved" | "Revision" | null>(null);
+  const [action, setAction] = useState<"Approved" | "Revision" | "Mengetahui" | null>(null);
   const [note, setNote] = useState("");
   const [bellOpen, setBellOpen] = useState(false);
+  const [authTick, setAuthTick] = useState(0);
 
   useEffect(() => {
-    const refresh = () => setRecords(loadSoyApprovals());
+    const refresh = () => {
+      setRecords(loadSoyApprovals());
+      setAuthTick((t) => t + 1);
+    };
     window.addEventListener(SOY_EVENT, refresh);
     window.addEventListener("pa-db-hydrated", refresh);
+    window.addEventListener("pa-auth-updated", refresh);
     return () => {
       window.removeEventListener(SOY_EVENT, refresh);
       window.removeEventListener("pa-db-hydrated", refresh);
+      window.removeEventListener("pa-auth-updated", refresh);
     };
   }, []);
 
@@ -173,23 +178,17 @@ export function CalibrationSettingApproval() {
   const isDirector = isDirectorRoleOrGrouping(activeUser);
   const allowedUnits = useMemo(() => {
     const all = Object.values(records).map((r) => r.unitName);
-    if (isHrAdmin) return all;
-    if (activeUser.calibrationRoleByUnit && Object.keys(activeUser.calibrationRoleByUnit).length > 0) {
-      return getCalibrationInvolvedUnits(activeUser, all);
-    }
-    const roleUnits = getRoleAllowedCompanyUnits(activeUser.role);
-    if (roleUnits.length > 0) return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])]));
-    if (isDirector) return getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits);
-    return activeUser.company ? [activeUser.company] : [];
-  }, [records, activeUser, isHrAdmin, isDirector]);
+    return getSoyCalibrationInvolvedUnits(activeUser, all);
+  }, [records, activeUser, isHrAdmin, isDirector, authTick]);
 
   const list = Object.values(records)
     .filter((r) => allowedUnits.includes(r.unitName))
     .sort((a, b) => (a.status === "Pending" ? -1 : 1) - (b.status === "Pending" ? -1 : 1) || b.submittedAt.localeCompare(a.submittedAt));
   const selected = list.find((r) => r.unitId === selectedId) ?? list[0] ?? null;
 
+  const getUnitSoyRole = (rec: SoyApprovalRecord) => getSoyCalibrationRoleForUnit(activeUser, rec.unitName);
   const canApprove = (rec: SoyApprovalRecord) => {
-    const unitRole = getCalibrationRoleForUnit(activeUser, rec.unitName);
+    const unitRole = getUnitSoyRole(rec);
     if (unitRole === "mengetahui" || unitRole === "readonly") return false;
     if (unitRole === "approver") return true;
     if (isAdminOrHrIcfRole(activeUser.role)) return false;
@@ -199,6 +198,13 @@ export function CalibrationSettingApproval() {
   const submitDecision = () => {
     if (!selected || !action) return;
     if (action === "Revision" && !note.trim()) return;
+    if (action === "Mengetahui") {
+      acknowledgeSoyApproval(selected.unitId, note);
+      toast.success(`Calibration Setting (SOY) ${selected.unitName} telah dikonfirmasi Mengetahui.`);
+      setAction(null);
+      setNote("");
+      return;
+    }
     decideSoyApproval(selected.unitId, action, note);
     toast.success(action === "Approved" ? `Calibration Setting (SOY) ${selected.unitName} disetujui.` : `Revisi dikirim ke HR untuk ${selected.unitName}.`);
     setAction(null);
@@ -229,13 +235,13 @@ export function CalibrationSettingApproval() {
   const unitTotalTargets = (snapAlloc?.unitGradeTargets ?? []).reduce((a, b) => a + b, 0);
   const gradeCardTones: AnalyticsCardTone[] = ["plum", "navy", "emerald", "terracotta", "rose", "slate"];
 
-  if (!canRoleAccessCalibrationApproval(activeUser.role)) {
+  if (!canUserAccessCalibrationSoyApproval(activeUser)) {
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center">
         <ShieldAlert className="mx-auto mb-2 h-8 w-8 text-amber-600" />
         <p className="text-sm font-bold text-amber-900">Akses Halaman Terbatas</p>
         <p className="mt-1 text-xs text-amber-800">
-          Halaman Calibration Approval — Setting (SOY) hanya dapat diakses oleh role Director, DirectorNonOpr, BOD, Administrator, dan HR ICF.
+          Halaman Calibration Approval — Setting (SOY) hanya dapat diakses oleh user yang diberikan akses pada Peran Approval Setting (SOY) atau role Director, DirectorNonOpr, BOD, Administrator, dan HR ICF.
         </p>
       </div>
     );
@@ -414,8 +420,42 @@ export function CalibrationSettingApproval() {
                 </ul>
               </div>
 
-              {selected.status === "Pending" && (
-                canApprove(selected) ? (
+              {(() => {
+                const myUnitRole = getUnitSoyRole(selected);
+                const myAck = selected.acknowledgedBy?.[activeUser.employeeId.trim().toUpperCase()];
+                if (myUnitRole === "mengetahui") {
+                  return myAck ? (
+                    <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-5 py-3 text-xs font-medium text-sky-800">
+                      <CheckCircle2 className="h-4 w-4 text-sky-600 shrink-0" />
+                      <span>
+                        Telah Diketahui oleh <strong>{formatActorWithPosition(myAck.by)}</strong> pada {fmt(myAck.at)}.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="sticky bottom-0 flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white px-5 py-4 shadow-sm">
+                      <span className="text-xs text-slate-600">
+                        Akun Anda memiliki peran <strong className="text-sky-700">Mengetahui</strong> untuk unit <strong>{selected.unitName}</strong>.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => { setAction("Mengetahui"); setNote(""); }}
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#1A284F] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#131d3b]"
+                      >
+                        <UserCheck className="h-4 w-4" /> Mengetahui
+                      </button>
+                    </div>
+                  );
+                }
+                if (myUnitRole === "readonly" || (!canApprove(selected) && selected.status === "Pending")) {
+                  return (
+                    <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-5 py-3 text-xs text-gray-600">
+                      <Eye className="h-4 w-4 shrink-0" />
+                      <span>Anda memiliki akses <strong>Read Only</strong> untuk unit ini (tanpa tombol tindakan).</span>
+                    </div>
+                  );
+                }
+                if (selected.status === "Pending" && canApprove(selected)) {
+                  return (
                   <div className="sticky bottom-0 flex justify-end gap-3 rounded-xl border border-gray-100 bg-white px-5 py-4 shadow-sm">
                     <button onClick={() => { setAction("Revision"); setNote(""); }} className="inline-flex items-center gap-2 rounded-xl border-2 border-orange-400 px-5 py-2.5 text-sm font-semibold text-orange-600 hover:bg-orange-50">
                       <RotateCcw className="h-4 w-4" /> Request Revision
@@ -424,15 +464,10 @@ export function CalibrationSettingApproval() {
                       <CheckCircle2 className="h-4 w-4" /> Approve
                     </button>
                   </div>
-                ) : (
-                  <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-gray-50 px-5 py-3 text-xs text-gray-500">
-                    <Eye className="h-4 w-4" />
-                    {getCalibrationRoleForUnit(activeUser, selected.unitName) === "readonly"
-                      ? "Anda memiliki akses Read Only untuk unit ini."
-                      : "Anda memiliki akses lihat (Mengetahui) untuk unit ini."}
-                  </div>
-                )
-              )}
+                  );
+                }
+                return null;
+              })()}
             </div>
           )}
         </div>
@@ -457,7 +492,9 @@ export function CalibrationSettingApproval() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setAction(null)}>
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="font-bold text-gray-900">{action === "Approved" ? "Approve" : "Request Revision"} — {selected.unitName}</h3>
+              <h3 className="font-bold text-gray-900">
+                {action === "Approved" ? "Approve" : action === "Mengetahui" ? "Konfirmasi Mengetahui" : "Request Revision"} — {selected.unitName}
+              </h3>
               <button onClick={() => setAction(null)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
             </div>
             <label className="mb-1 block text-xs font-semibold text-gray-600">
@@ -475,9 +512,15 @@ export function CalibrationSettingApproval() {
               <button
                 onClick={submitDecision}
                 disabled={action === "Revision" && !note.trim()}
-                className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 ${action === "Approved" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-orange-500 hover:bg-orange-600"}`}
+                className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 ${
+                  action === "Approved"
+                    ? "bg-emerald-600 hover:bg-emerald-700"
+                    : action === "Mengetahui"
+                    ? "bg-[#1A284F] hover:bg-[#131d3b]"
+                    : "bg-orange-500 hover:bg-orange-600"
+                }`}
               >
-                {action === "Approved" ? "Approve" : "Kirim Revisi"}
+                {action === "Approved" ? "Approve" : action === "Mengetahui" ? "Ya, Mengetahui" : "Kirim Revisi"}
               </button>
             </div>
           </div>

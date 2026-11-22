@@ -189,6 +189,15 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
             ]),
           )
         : {},
+    soy_calibration_role_by_unit:
+      u.soyCalibrationRoleByUnit && typeof u.soyCalibrationRoleByUnit === "object"
+        ? Object.fromEntries(
+            Object.entries(u.soyCalibrationRoleByUnit as Record<string, unknown>).map(([k, v]) => [
+              canonicalizeUnitName(k),
+              String(v ?? ""),
+            ]),
+          )
+        : {},
     director_calibration_role: String(u.directorCalibrationRole ?? ""),
     updated_at: now,
   };
@@ -199,6 +208,7 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
       checker_units: _cu,
       managed_units: _mu,
       calibration_role_by_unit: _cr,
+      soy_calibration_role_by_unit: _scr,
       director_calibration_role: _dr,
       ...legacyRow
     } = fullRow;

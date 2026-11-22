@@ -643,7 +643,6 @@ export function Topbar({
                 >
                   <RotateCcw className="w-4 h-4 text-rose-500" />
                   <span className="flex-1 text-left">Cancel Transaction</span>
-                  <span className="rounded-full bg-rose-50 border border-rose-200 px-1.5 py-0.5 text-[9px] font-semibold text-rose-600">Demo</span>
                 </button>
               )}
               {showSwitchAccount && (

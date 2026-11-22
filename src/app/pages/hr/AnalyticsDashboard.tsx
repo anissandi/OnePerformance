@@ -1217,10 +1217,12 @@ function ScoreGradeDistributionDashboard({
   employees,
   calibrationTargets,
   module,
+  scopedHcCount = 0,
 }: {
   employees: Employee[];
   calibrationTargets: CalibrationTarget[];
   module: string;
+  scopedHcCount?: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   // Re-derive grade based on selected module's score field
@@ -1238,9 +1240,16 @@ function ScoreGradeDistributionDashboard({
   const evaluatedEmployees = derivedEmployees.filter((e) => e.grade && e.grade !== "N/A" && e.grade !== "—");
   const total = evaluatedEmployees.length || 1;
   const gradeMap = Object.fromEntries(calibrationTargets.map(cg => [cg.grade, cg]));
+  const settingPoolTotal = scopedHcCount > 0 ? scopedHcCount : evaluatedEmployees.length;
+  const settingHcMap = useMemo(() => {
+    const weights = GRADE_ORDER.map((g) => gradeMap[g]?.target ?? 0);
+    const counts = apportionLargestRemainder(settingPoolTotal, weights);
+    return Object.fromEntries(GRADE_ORDER.map((g, i) => [g, counts[i] ?? 0]));
+  }, [settingPoolTotal, calibrationTargets]);
 
   const bellData = GRADE_ORDER.map(g => {
     const cg          = gradeMap[g] ?? { target: 0, color: "#6B7280" };
+    const settingCount = settingHcMap[g] ?? 0;
     const actualCount = evaluatedEmployees.filter(e => e.grade === g).length;
     const actualPct   = evaluatedEmployees.length > 0 ? Math.round((actualCount / total) * 100) : 0;
     return {
@@ -1249,6 +1258,7 @@ function ScoreGradeDistributionDashboard({
       areaActual: actualPct,
       barTarget:  cg.target,
       barActual:  actualPct,
+      settingCount,
       actualCount,
       color: cg.color,
     };
@@ -1256,11 +1266,37 @@ function ScoreGradeDistributionDashboard({
 
   const actualCounts = calibrationTargets.map(cg => ({
     ...cg,
+    settingCount: settingHcMap[cg.grade] ?? 0,
     actual:    evaluatedEmployees.filter(e => e.grade === cg.grade).length,
     actualPct: evaluatedEmployees.length > 0 ? Math.round((evaluatedEmployees.filter(e => e.grade === cg.grade).length / total) * 100) : 0,
   }));
 
   const moduleLabel = module !== "All Modules" ? ` — ${module}` : "";
+  const renderDistributionTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload?: (typeof bellData)[number] }> }) => {
+    if (!active || !payload?.length || !payload[0]?.payload) return null;
+    const d = payload[0].payload;
+    const cg = gradeMap[d.grade];
+    return (
+      <div className="bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 shadow-lg text-xs min-w-[195px]">
+        <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-gray-100">
+          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: cg?.color ?? "#6B7280" }} />
+          <p className="font-bold text-gray-900">Grade {d.grade}</p>
+        </div>
+        <div className="flex items-center justify-between gap-3 text-gray-600">
+          <span>Setting:</span>
+          <span className="font-bold text-indigo-700 tabular-nums">
+            {d.areaTarget}% ({d.settingCount} HC)
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-3 text-gray-600 mt-1">
+          <span>Actual:</span>
+          <span className="font-bold text-cyan-700 tabular-nums">
+            {d.areaActual}% ({d.actualCount} HC)
+          </span>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-6 pa-infographic-surface">
@@ -1322,18 +1358,7 @@ function ScoreGradeDistributionDashboard({
                 <YAxis key="yaxis" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#9CA3AF" }} tickFormatter={v => `${v}%`} />
                 <Tooltip
                   key="tooltip"
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const d = payload[0].payload;
-                    const cg = gradeMap[d.grade];
-                    return (
-                      <div className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 shadow-lg text-xs">
-                        <p className="font-bold mb-1" style={{ color: cg?.color }}>{d.grade}</p>
-                        <p className="text-gray-500">Setting: <span className="font-semibold text-gray-700">{d.areaTarget}%</span></p>
-                        <p className="text-gray-500">Actual: <span className="font-semibold text-gray-700">{d.areaActual}%</span> ({d.actualCount} employees)</p>
-                      </div>
-                    );
-                  }}
+                  content={renderDistributionTooltip as never}
                 />
                 <Area
                   key="area-target"
@@ -1412,7 +1437,7 @@ function ScoreGradeDistributionDashboard({
                   }}
                 />
                 <YAxis key="yaxis" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#9CA3AF" }} tickFormatter={v => `${v}%`} />
-                <Tooltip key="tooltip" formatter={(v: number) => `${v}%`} />
+                <Tooltip key="tooltip" content={renderDistributionTooltip as never} />
                 <Bar key="bar-target" dataKey="barTarget" name="Setting" radius={[4, 4, 0, 0]} fill="#C7D2FE" isAnimationActive={true} animationDuration={850} animationEasing="ease-out" />
                 <Bar key="bar-actual" dataKey="barActual" name="Actual" radius={[4, 4, 0, 0]} isAnimationActive={true} animationDuration={950} animationEasing="ease-out">
                   {bellData.map((d, i) => (
@@ -1422,14 +1447,27 @@ function ScoreGradeDistributionDashboard({
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex gap-2 mt-3 flex-wrap">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
             {actualCounts.map(cg => (
-              <div key={cg.grade} className="flex items-center gap-1.5 text-xs bg-gray-50 rounded-lg px-2.5 py-1.5 border border-gray-100">
-                <span className="font-bold" style={{ color: cg.color }}>{cg.grade}</span>
-                <span className="text-gray-400">{cg.actual} emp</span>
-                <span className={`font-semibold ${cg.actualPct > cg.target ? "text-orange-500" : cg.actualPct < cg.target ? "text-blue-500" : "text-emerald-500"}`}>
-                  {cg.actualPct}%<span className="text-gray-300 font-normal">/{cg.target}%</span>
+              <div key={cg.grade} className="flex items-center gap-2 text-xs bg-slate-50/80 rounded-xl px-2.5 py-2 border border-slate-200/70">
+                <span
+                  className="inline-flex items-center justify-center min-w-[26px] h-6 px-1.5 rounded-md text-[11px] font-black text-white shrink-0"
+                  style={{ backgroundColor: cg.color }}
+                >
+                  {cg.grade}
                 </span>
+                <div className="min-w-0 flex-1 leading-tight text-[10px]">
+                  <div className="flex items-center justify-between gap-1 text-slate-600">
+                    <span>HC Setting:</span>
+                    <span className="font-bold text-indigo-700 tabular-nums">{cg.settingCount} ({cg.target}%)</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-1 text-slate-600 mt-0.5">
+                    <span>HC Aktual:</span>
+                    <span className={`font-bold tabular-nums ${cg.actualPct > cg.target ? "text-orange-600" : cg.actualPct < cg.target ? "text-blue-600" : "text-emerald-600"}`}>
+                      {cg.actual} ({cg.actualPct}%)
+                    </span>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -2087,6 +2125,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         employees={filteredEmployees}
         calibrationTargets={calibrationTargets}
         module={module}
+        scopedHcCount={scopedUsers.filter((u) => !isExcludedFromAppraisalCalibration(u)).length}
       />
 
       {/* ── 3. Module Completion Overview (9 Pie/Donut Cards — 3 per Line) ── */}
@@ -2161,3 +2200,4 @@ function StatCard({
     </div>
   );
 }
+import { apportionLargestRemainder } from "./CalibrationSetting";

@@ -4,8 +4,9 @@ import { archiveUsers } from "../../../store/archiveStore";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT, weightColumnFromGrouping } from "../../shared/scoringWeightStore";
 import { loadLocalAuditLogs } from "../../../services/supabaseClient";
-import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw } from "lucide-react";
+import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw, AlertTriangle } from "lucide-react";
 import {
+  COMPANY_UNIT_LOCATIONS,
   defaultAllowedModulesForGrouping,
   getActiveUser,
   getEffectiveCheckerUnits,
@@ -22,6 +23,7 @@ import {
   useLoginManagement,
   type LoginMethodOption,
 } from "../../../store/loginManagementStore";
+import { ANALYTICS_CARD_TONES, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 
 type Role = "Employee" | "Supervisor" | "GM" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "" | string;
 type Status = "Active" | "Inactive";
@@ -315,6 +317,27 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
 
   type CalRoleOption = "approver" | "mengetahui" | "readonly" | "";
   const calRoleMap: Record<string, CalRoleOption> = form.calibrationRoleByUnit ?? {};
+  const soyRoleMap: Record<string, CalRoleOption> = form.soyCalibrationRoleByUnit ?? {};
+  const [formError, setFormError] = useState("");
+
+  const allExistingUsers = useMemo(() => loadManagedUsers(), []);
+  const sameUnitDupRegUser = useMemo(() => {
+    const regClean = String(form.regNo ?? "").trim().toLowerCase();
+    if (!regClean) return undefined;
+    return allExistingUsers.find(
+      (u) =>
+        u.id !== form.id &&
+        u.company === form.company &&
+        String(u.regNo ?? "").trim().toLowerCase() === regClean,
+    );
+  }, [allExistingUsers, form.id, form.company, form.regNo]);
+  const dupEmpIdPeers = useMemo(() => {
+    const empClean = String(form.employeeId ?? "").trim().toLowerCase();
+    if (!empClean) return [];
+    return allExistingUsers.filter(
+      (u) => u.id !== form.id && u.employeeId.trim().toLowerCase() === empClean,
+    );
+  }, [allExistingUsers, form.id, form.employeeId]);
 
   const setUnitCalRole = (unitName: string, val: CalRoleOption) => {
     setForm((p) => {
@@ -350,15 +373,46 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
     });
   };
 
+  const setUnitSoyRole = (unitName: string, val: CalRoleOption) => {
+    setForm((p) => ({
+      ...p,
+      soyCalibrationRoleByUnit: {
+        ...(p.soyCalibrationRoleByUnit ?? {}),
+        [unitName]: val,
+      },
+    }));
+  };
+
+  const setGroupSoyRole = (units: readonly string[], val: CalRoleOption) => {
+    setForm((p) => {
+      const nextMap: Record<string, CalRoleOption> = {
+        ...(p.soyCalibrationRoleByUnit ?? {}),
+      };
+      for (const u of units) {
+        nextMap[u] = val;
+      }
+      return {
+        ...p,
+        soyCalibrationRoleByUnit: nextMap,
+      };
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <h2 className="font-semibold text-gray-800 text-lg">{isNew ? "Add New User" : "Edit User"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
         <div className="overflow-y-auto p-6 grid grid-cols-2 gap-4">
+          {formError && (
+            <div className="col-span-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700 flex items-center gap-2">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
           {[
             { label: "Full Name", key: "name" as keyof User, type: "text" },
             { label: "Reg No", key: "regNo" as keyof User, type: "text" },
@@ -375,8 +429,29 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
           ].map(({ label, key, type }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-              <input type={type} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={(form[key] as string) ?? ""} onChange={e => f(key, e.target.value)} />
+              <input
+                type={type}
+                className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
+                  (key === "regNo" && sameUnitDupRegUser) || (key === "employeeId" && dupEmpIdPeers.length > 0)
+                    ? "border-rose-400 bg-rose-50/40 focus:ring-rose-400"
+                    : "border-gray-200 focus:ring-blue-500"
+                }`}
+                value={(form[key] as string) ?? ""}
+                onChange={e => {
+                  setFormError("");
+                  f(key, e.target.value);
+                }}
+              />
+              {key === "regNo" && sameUnitDupRegUser && (
+                <p className="mt-1 text-[11px] font-medium text-rose-600">
+                  Reg No duplikat di {form.company} dengan {sameUnitDupRegUser.name} ({sameUnitDupRegUser.employeeId}). Tidak diizinkan duplikat Reg No dalam 1 unit usaha.
+                </p>
+              )}
+              {key === "employeeId" && dupEmpIdPeers.length > 0 && !sameUnitDupRegUser && (
+                <p className="mt-1 text-[11px] font-medium text-rose-600">
+                  ID Karyawan sama dengan: {dupEmpIdPeers.map((p) => `${p.name} (Reg No: ${p.regNo || "—"}, ${p.company})`).join("; ")}
+                </p>
+              )}
             </div>
           ))}
 
@@ -502,73 +577,146 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
               </div>
             )}
             <div className="pt-2.5 border-t border-gray-200 space-y-2.5">
-              <div>
-                <p className="text-xs font-semibold text-[#1A284F]">Peran Approval Calibration</p>
-                <p className="text-[11px] text-gray-500">
-                  Atur peran pada halaman Calibration Approval (/approvals/calibration) per Group &amp; Unit Usaha. Memilih pada baris Group akan otomatis mengisi seluruh Unit Usaha di dalamnya (pilih kosong jika tidak terlibat).
-                </p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {HIERARCHICAL_COMPANY_GROUPS.map((grp, gIdx) => {
-                  const unitVals = grp.units.map((u) => calRoleMap[u] ?? "");
-                  const allSame = unitVals.every((v) => v === unitVals[0]);
-                  const groupDropdownVal = allSame ? unitVals[0] : "";
-                  return (
-                    <div key={grp.groupName} className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
-                      {/* Group header row with inline dropdown */}
-                      <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-100">
-                        <span className="text-xs font-bold text-[#1A284F]">
-                          {gIdx + 1}. {grp.groupName}:
-                        </span>
-                        <select
-                          value={groupDropdownVal}
-                          onChange={(e) =>
-                            setGroupCalRole(grp.units, e.target.value as CalRoleOption)
-                          }
-                          className="border border-indigo-200 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-50/50 text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">— Tidak Terlibat (Kosong) —</option>
-                          <option value="approver">Approver</option>
-                          <option value="mengetahui">Mengetahui</option>
-                          <option value="readonly">Read Only</option>
-                        </select>
-                      </div>
-                      {/* Unit rows with inline dropdown */}
-                      <div className="space-y-1.5 pl-2">
-                        {grp.units.map((unit) => {
-                          const unitVal = calRoleMap[unit] ?? "";
-                          return (
-                            <div key={unit} className="flex items-center justify-between gap-2">
-                              <span className="text-[11px] text-gray-700 truncate">
-                                - {unit}
-                              </span>
-                              <select
-                                value={unitVal}
-                                onChange={(e) =>
-                                  setUnitCalRole(unit, e.target.value as CalRoleOption)
-                                }
-                                className={`border rounded-lg px-2 py-1 text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0 ${
-                                  unitVal === "approver"
-                                    ? "border-emerald-200 bg-emerald-50 text-emerald-800 font-semibold"
-                                    : unitVal === "mengetahui"
-                                    ? "border-sky-200 bg-sky-50 text-sky-800 font-semibold"
-                                    : unitVal === "readonly"
-                                    ? "border-violet-200 bg-violet-50 text-violet-800 font-semibold"
-                                    : "border-gray-200 bg-white text-gray-400"
-                                }`}
-                              >
-                                <option value="">— Kosong —</option>
-                                <option value="approver">Approver</option>
-                                <option value="mengetahui">Mengetahui</option>
-                                <option value="readonly">Read Only</option>
-                              </select>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 items-start">
+                {/* Kolom Kiri: Peran Approval Setting (SOY) */}
+                <div className="rounded-xl border border-indigo-100 bg-white p-3.5 space-y-2.5">
+                  <div>
+                    <p className="text-xs font-bold text-[#1A284F]">Peran Approval Setting (SOY)</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Akses &amp; aksi pada <strong>/approvals/calibration/setting</strong> per Group &amp; Unit Usaha. User dari role mana pun yang di-allow di sini dapat mengakses sesuai perannya.
+                    </p>
+                  </div>
+                  <div className="space-y-2.5">
+                    {HIERARCHICAL_COMPANY_GROUPS.map((grp, gIdx) => {
+                      const unitVals = grp.units.map((u) => soyRoleMap[u] ?? "");
+                      const allSame = unitVals.every((v) => v === unitVals[0]);
+                      const groupDropdownVal = allSame ? unitVals[0] : "";
+                      return (
+                        <div key={`soy-${grp.groupName}`} className="bg-slate-50/70 rounded-xl border border-gray-200 p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-200/70">
+                            <span className="text-xs font-bold text-[#1A284F]">
+                              {gIdx + 1}. {grp.groupName}:
+                            </span>
+                            <select
+                              value={groupDropdownVal}
+                              onChange={(e) =>
+                                setGroupSoyRole(grp.units, e.target.value as CalRoleOption)
+                              }
+                              className="border border-indigo-200 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-50/70 text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">— Tidak Terlibat (Kosong) —</option>
+                              <option value="approver">Approver</option>
+                              <option value="mengetahui">Mengetahui</option>
+                              <option value="readonly">Read Only</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1.5 pl-2">
+                            {grp.units.map((unit) => {
+                              const unitVal = soyRoleMap[unit] ?? "";
+                              return (
+                                <div key={`soy-u-${unit}`} className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] text-gray-700 truncate">
+                                    - {unit}
+                                  </span>
+                                  <select
+                                    value={unitVal}
+                                    onChange={(e) =>
+                                      setUnitSoyRole(unit, e.target.value as CalRoleOption)
+                                    }
+                                    className={`border rounded-lg px-2 py-1 text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0 ${
+                                      unitVal === "approver"
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-800 font-semibold"
+                                        : unitVal === "mengetahui"
+                                        ? "border-sky-200 bg-sky-50 text-sky-800 font-semibold"
+                                        : unitVal === "readonly"
+                                        ? "border-violet-200 bg-violet-50 text-violet-800 font-semibold"
+                                        : "border-gray-200 bg-white text-gray-400"
+                                    }`}
+                                  >
+                                    <option value="">— Kosong —</option>
+                                    <option value="approver">Approver</option>
+                                    <option value="mengetahui">Mengetahui</option>
+                                    <option value="readonly">Read Only</option>
+                                  </select>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Kolom Kanan: Peran Approval Calibration (EOY) */}
+                <div className="rounded-xl border border-indigo-100 bg-white p-3.5 space-y-2.5">
+                  <div>
+                    <p className="text-xs font-bold text-[#1A284F]">Peran Approval Calibration (EOY)</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Akses &amp; aksi pada <strong>/approvals/calibration/adjustment</strong> per Group &amp; Unit Usaha. Memilih pada baris Group mengisi seluruh unit di dalamnya.
+                    </p>
+                  </div>
+                  <div className="space-y-2.5">
+                    {HIERARCHICAL_COMPANY_GROUPS.map((grp, gIdx) => {
+                      const unitVals = grp.units.map((u) => calRoleMap[u] ?? "");
+                      const allSame = unitVals.every((v) => v === unitVals[0]);
+                      const groupDropdownVal = allSame ? unitVals[0] : "";
+                      return (
+                        <div key={`eoy-${grp.groupName}`} className="bg-slate-50/70 rounded-xl border border-gray-200 p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-200/70">
+                            <span className="text-xs font-bold text-[#1A284F]">
+                              {gIdx + 1}. {grp.groupName}:
+                            </span>
+                            <select
+                              value={groupDropdownVal}
+                              onChange={(e) =>
+                                setGroupCalRole(grp.units, e.target.value as CalRoleOption)
+                              }
+                              className="border border-indigo-200 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-50/70 text-[#1A284F] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">— Tidak Terlibat (Kosong) —</option>
+                              <option value="approver">Approver</option>
+                              <option value="mengetahui">Mengetahui</option>
+                              <option value="readonly">Read Only</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1.5 pl-2">
+                            {grp.units.map((unit) => {
+                              const unitVal = calRoleMap[unit] ?? "";
+                              return (
+                                <div key={`eoy-u-${unit}`} className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] text-gray-700 truncate">
+                                    - {unit}
+                                  </span>
+                                  <select
+                                    value={unitVal}
+                                    onChange={(e) =>
+                                      setUnitCalRole(unit, e.target.value as CalRoleOption)
+                                    }
+                                    className={`border rounded-lg px-2 py-1 text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0 ${
+                                      unitVal === "approver"
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-800 font-semibold"
+                                        : unitVal === "mengetahui"
+                                        ? "border-sky-200 bg-sky-50 text-sky-800 font-semibold"
+                                        : unitVal === "readonly"
+                                        ? "border-violet-200 bg-violet-50 text-violet-800 font-semibold"
+                                        : "border-gray-200 bg-white text-gray-400"
+                                    }`}
+                                  >
+                                    <option value="">— Kosong —</option>
+                                    <option value="approver">Approver</option>
+                                    <option value="mengetahui">Mengetahui</option>
+                                    <option value="readonly">Read Only</option>
+                                  </select>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -619,8 +767,27 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
           <button
             onClick={() => {
+              const effectiveRegNo = String(form.regNo || form.employeeId || "").trim();
+              const conflictReg = loadManagedUsers().find(
+                (u) =>
+                  u.id !== form.id &&
+                  u.company === form.company &&
+                  String(u.regNo || "").trim().toLowerCase() === effectiveRegNo.toLowerCase() &&
+                  effectiveRegNo !== "",
+              );
+              if (conflictReg) {
+                setFormError(
+                  `Reg No "${effectiveRegNo}" sudah terdaftar pada ${conflictReg.name} (${conflictReg.employeeId}) di unit ${form.company}. Gunakan Reg No yang unik.`,
+                );
+                return;
+              }
               const ap = normalizeApproverPair(form.regNoAp1, form.regNoAp2);
-              onSave({ ...form, regNoAp1: ap.regNoAp1, regNoAp2: ap.regNoAp2 });
+              onSave({
+                ...form,
+                regNo: effectiveRegNo,
+                regNoAp1: ap.regNoAp1,
+                regNoAp2: ap.regNoAp2,
+              });
               onClose();
             }}
             className="px-4 py-2 text-sm bg-[#1A284F] text-white rounded-lg hover:bg-[#2a3d6e] flex items-center gap-1.5">
@@ -1165,6 +1332,7 @@ function CompanyUnitPicker({
   const [search, setSearch] = useState("");
   const { getUnitLoginConfig } = useLoginManagement();
   const filtered = COMPANIES.filter(c => c.toLowerCase().includes(search.toLowerCase()));
+  const unitTones: AnalyticsCardTone[] = ["navy", "emerald", "plum", "terracotta", "teal", "rose", "slate", "navy"];
 
   return (
     <div className="p-6 w-full space-y-6">
@@ -1198,31 +1366,51 @@ function CompanyUnitPicker({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filtered.map((company, idx) => {
             const userCount = users.filter(u => u.company === company).length;
             const activeCount = users.filter(u => u.company === company && u.status === "Active").length;
-            const gradient = COMPANY_COLORS[idx % COMPANY_COLORS.length];
             const loginCfg = getUnitLoginConfig(company);
+            const locMeta = COMPANY_UNIT_LOCATIONS.find((l) => l.company === company);
+            const spec = ANALYTICS_CARD_TONES[unitTones[idx % unitTones.length]];
+            const loginLabel = loginCfg.enabledMethods
+              .map((m) => LOGIN_METHOD_DEFS.find((d) => d.id === m)?.label ?? m)
+              .join(", ");
             return (
               <button
                 key={company}
                 onClick={() => onSelect(company)}
-                className="group text-left rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5"
+                style={{ animationDelay: `${Math.min(idx, 8) * 50}ms` }}
+                className={`group relative overflow-hidden text-left bg-gradient-to-br ${spec.gradient} border ${spec.border} rounded-2xl p-4 min-h-[132px] flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion cursor-pointer`}
               >
-                <div className={`bg-gradient-to-br ${gradient} px-5 py-4`}>
-                  <Building2 size={22} className="text-white/80 mb-2" />
-                  <p className="text-white font-semibold text-sm leading-tight">{company}</p>
-                </div>
-                <div className="bg-white px-5 py-3 flex items-center justify-between">
-                  <div>
-                    <p className="text-lg font-bold text-gray-800">{userCount}</p>
-                    <p className="text-[11px] text-gray-400">{activeCount} active</p>
-                    <p className="text-[10px] font-semibold text-indigo-600 mt-1">
-                      Login: {loginCfg.enabledMethods.map((m) => LOGIN_METHOD_DEFS.find((d) => d.id === m)?.label ?? m).join(", ")}
+                <div
+                  className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+                  style={{ backgroundColor: `${spec.accentHex}0D` }}
+                />
+                <div className="flex items-start justify-between gap-2 relative z-10">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-gray-500 truncate">
+                      {locMeta?.code ?? `UNIT-${idx + 1}`}
                     </p>
+                    <p className="text-base font-extrabold text-[#111827] leading-snug mt-1">{company}</p>
                   </div>
-                  <ChevronRight size={16} className="text-gray-300 group-hover:text-gray-500 transition-colors" />
+                  <div
+                    className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+                    style={{ backgroundColor: spec.accentHex }}
+                  >
+                    <Building2 size={20} />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2 mt-4 relative z-10">
+                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                    <span className="text-[11px] font-bold text-[#1A284F] tabular-nums">
+                      {userCount} Users ({activeCount} Active)
+                    </span>
+                    <span className="text-[10px] font-semibold text-indigo-700 bg-white/85 border border-indigo-200 px-2 py-0.5 rounded-full truncate max-w-[150px]" title={`Login: ${loginLabel}`}>
+                      {loginLabel}
+                    </span>
+                  </div>
+                  <ChevronRight size={16} className="text-gray-400 group-hover:text-[#1A284F] group-hover:translate-x-0.5 transition-all shrink-0" />
                 </div>
               </button>
             );
@@ -1864,6 +2052,24 @@ export function UserManagementPage() {
   }
 
   const companyUsers = users.filter(u => u.company === selectedCompany);
+  // Peta duplikat ID Karyawan (ketika Reg No berbeda, baik dalam satu unit maupun lintas unit)
+  const duplicateEmployeeIdPeersByUserId = useMemo(() => {
+    const byEmpId = new Map<string, User[]>();
+    for (const u of users) {
+      const key = String(u.employeeId ?? "").trim().toLowerCase();
+      if (!key) continue;
+      const arr = byEmpId.get(key) ?? [];
+      arr.push(u);
+      byEmpId.set(key, arr);
+    }
+    const out = new Map<string, User[]>();
+    for (const u of companyUsers) {
+      const key = String(u.employeeId ?? "").trim().toLowerCase();
+      const peers = (byEmpId.get(key) ?? []).filter((o) => o.id !== u.id);
+      if (peers.length > 0) out.set(u.id, peers);
+    }
+    return out;
+  }, [users, companyUsers]);
   const divisiOpts = Array.from(new Set(companyUsers.map(u => (u.division || "").trim()).filter(Boolean))).sort();
   const deptOpts = Array.from(
     new Set(
@@ -2121,6 +2327,13 @@ export function UserManagementPage() {
                 const userUnitCfg = getUnitLoginConfig(user.company);
                 const isUserUnitPwdMode = userUnitCfg.enabledMethods.includes("password");
                 const userSec = securityMap[user.employeeId.trim().toUpperCase()];
+                const dupPeers = duplicateEmployeeIdPeersByUserId.get(user.id) ?? [];
+                const dupTooltipText =
+                  dupPeers.length > 0
+                    ? `Duplikat ID Karyawan (${user.employeeId}) dengan: ${dupPeers
+                        .map((p) => `${p.name} (Reg No: ${p.regNo || "—"}, Unit: ${p.company})`)
+                        .join(" • ")}`
+                    : "";
                 return (
                 <tr key={user.id} className={`border-b border-gray-50 hover:bg-blue-50/20 transition-colors ${selectedIds.has(user.id) ? "bg-rose-50/50" : idx % 2 === 1 ? "bg-gray-50/20" : ""}`}>
                   <td className="pl-5 pr-1 py-3">
@@ -2166,7 +2379,24 @@ export function UserManagementPage() {
                       </div>
                       <div>
                         <p className="font-semibold text-gray-800 leading-tight">{user.name}</p>
-                        <p className="text-xs text-gray-400">{user.employeeId} · {user.position}{user.bagian ? ` (${user.bagian})` : ""}</p>
+                        <div className="text-xs text-gray-400 flex items-center gap-1.5 flex-wrap mt-0.5">
+                          {dupPeers.length > 0 ? (
+                            <span className="group/dupid relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-300 font-mono font-bold text-[11px] cursor-help">
+                              <AlertTriangle size={11} className="text-rose-600 shrink-0" />
+                              <span>{user.employeeId}</span>
+                              <span
+                                role="tooltip"
+                                className="pointer-events-none invisible opacity-0 group-hover/dupid:visible group-hover/dupid:opacity-100 transition-opacity absolute left-0 bottom-full mb-1.5 z-50 w-72 rounded-xl bg-[#1A284F] text-white p-2.5 text-[11px] font-sans font-normal shadow-xl leading-relaxed"
+                              >
+                                <span className="block font-bold text-rose-300 mb-0.5">ID Karyawan Duplikat</span>
+                                {dupTooltipText}
+                              </span>
+                            </span>
+                          ) : (
+                            <span>{user.employeeId}</span>
+                          )}
+                          <span>· {user.position}{user.bagian ? ` (${user.bagian})` : ""}</span>
+                        </div>
                       </div>
                     </div>
                   </td>

@@ -301,7 +301,9 @@ export function DataSyncPage() {
           };
 
           const existingIdx = existingUsers.findIndex(
-            (u) => u.employeeId.toLowerCase() === empId.toLowerCase() || (u.regNo && u.regNo.toLowerCase() === regNo.toLowerCase()),
+            (u) =>
+              (u.company === rowCompany && u.regNo && u.regNo.toLowerCase() === regNo.toLowerCase()) ||
+              (u.company === rowCompany && u.employeeId.toLowerCase() === empId.toLowerCase()),
           );
           const prev = existingIdx >= 0 ? existingUsers[existingIdx] : undefined;
 
@@ -349,6 +351,7 @@ export function DataSyncPage() {
             managedDepartments: prev?.managedDepartments,
             managedBagians: prev?.managedBagians,
             calibrationRoleByUnit: prev?.calibrationRoleByUnit,
+            soyCalibrationRoleByUnit: prev?.soyCalibrationRoleByUnit,
             directorCalibrationRole: prev?.directorCalibrationRole,
           };
 

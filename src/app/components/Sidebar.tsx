@@ -40,6 +40,7 @@ import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import {
   canRoleAccessCalibrationApproval,
   canUserAccessApprovalsDelegation,
+  hasExplicitSoyCalibrationRole,
   useAuthStore,
 } from "../store/authStore";
 import { useAccessManagement } from "../pages/hr/settings/AccessManagement";
@@ -339,11 +340,13 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     isMenuVisibleInMenuManagement("approvals_delegation") &&
     canUserAccessApprovalsDelegation(activeUser, Boolean(rolePerms.approvals_delegation?.view));
   const canViewCalibrationApproval = canRoleAccessCalibrationApproval(activeUser.role);
+  const hasSoyExplicitAccess = hasExplicitSoyCalibrationRole(activeUser);
   const canViewCalSoy =
-    canViewCalibrationApproval &&
-    isMenuVisibleInMenuManagement("approvals_calibration") &&
-    isMenuVisibleInMenuManagement("approvals_calibration_soy") &&
-    Boolean(rolePerms.approvals_calibration_soy?.view ?? true);
+    hasSoyExplicitAccess ||
+    (canViewCalibrationApproval &&
+      isMenuVisibleInMenuManagement("approvals_calibration") &&
+      isMenuVisibleInMenuManagement("approvals_calibration_soy") &&
+      Boolean(rolePerms.approvals_calibration_soy?.view ?? true));
   const canViewCalEoy =
     canViewCalibrationApproval &&
     isMenuVisibleInMenuManagement("approvals_calibration") &&
@@ -452,7 +455,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/hr/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
         ...(canViewApprovalsDelegation ? [{ to: "/hr/approvals/delegation", label: "Delegation", icon: UserCheck }] : []),
-        ...(canViewCalibrationApproval && (canViewCalSoy || canViewCalEoy)
+        ...((canViewCalSoy || canViewCalEoy)
           ? [{ label: "Calibration", icon: Target, children: [
               ...(canViewCalSoy ? [{ to: "/hr/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
               ...(canViewCalEoy ? [{ to: "/hr/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
@@ -460,7 +463,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
           : []),
         ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
-      if (canView("approvals") && approvalSubs.length > 0) {
+      if ((canView("approvals") || hasSoyExplicitAccess) && approvalSubs.length > 0) {
         list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
       }
 
@@ -567,7 +570,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
         ...(canView("approvals_mgmt_interview") ? [{ to: "/bod/approvals/management-interview", label: "Management Interview", icon: MessageSquare }] : []),
         ...(canViewApprovalsDelegation ? [{ to: "/bod/approvals/delegation", label: "Delegation", icon: UserCheck }] : []),
-        ...(canViewCalibrationApproval && (canViewCalSoy || canViewCalEoy)
+        ...((canViewCalSoy || canViewCalEoy)
           ? [{ label: "Calibration", icon: Target, children: [
               ...(canViewCalSoy ? [{ to: "/bod/approvals/calibration/setting", label: "Setting (SOY)", icon: Settings }] : []),
               ...(canViewCalEoy ? [{ to: "/bod/approvals/calibration/adjustment", label: "Adjustment (EOY)", icon: RefreshCw }] : []),
@@ -575,7 +578,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
           : []),
         ...(canView("approvals_open_lock") ? [{ to: "/bod/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
-      if (canView("approvals") && approvalSubs.length > 0) {
+      if ((canView("approvals") || hasSoyExplicitAccess) && approvalSubs.length > 0) {
         list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
       }
 
@@ -712,7 +715,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
         : []),
       ...(canView("approvals_mgmt_interview") ? [{ to: `${prefix}/approvals/management-interview`, label: "Management Interview", icon: MessageSquare }] : []),
       ...(canViewApprovalsDelegation ? [{ to: `${prefix}/approvals/delegation`, label: "Delegation", icon: UserCheck }] : []),
-      ...(canViewCalibrationApproval && (canViewCalSoy || canViewCalEoy)
+      ...((canViewCalSoy || canViewCalEoy)
           ? [{ label: "Calibration", icon: Target, children: [
               ...(canViewCalSoy ? [{ to: `${prefix}/approvals/calibration/setting`, label: "Setting (SOY)", icon: Settings }] : []),
               ...(canViewCalEoy ? [{ to: `${prefix}/approvals/calibration/adjustment`, label: "Adjustment (EOY)", icon: RefreshCw }] : []),
@@ -720,7 +723,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
           : []),
       ...(canView("approvals_open_lock") ? [{ to: `${prefix}/settings/open-lock`, label: "Open Lock", icon: LockOpen }] : []),
     ];
-    if ((canView("approvals") || Boolean(activeUser.isHrUnitChecker)) && approvalSubs.length > 0) {
+    if ((canView("approvals") || Boolean(activeUser.isHrUnitChecker) || hasSoyExplicitAccess) && approvalSubs.length > 0) {
       list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
     }
 
