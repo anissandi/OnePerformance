@@ -55,14 +55,22 @@ import {
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, parseXLSXMatrix, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
+  KPI_COLOR_BAND_OPTIONS,
   STANDARD_TRACKING_PERIODS,
+  applyAutoPercentInput,
   formatComputedKpiNumber,
   getActiveMonthIndicesForPeriod,
+  isKnownKpiColorBandValue,
   isMonthBlockedForKpi,
+  isPercentSatuan,
   isPeriodicTrackingType,
+  kpiColorBandRank,
+  normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
+  resolveKpiColorBandMeta,
   sanitizeKpiNumericInput,
+  syncPercentSuffixOnValue,
 } from "../../../utils/kpiNumberAndPeriod";
 
 const MONTHS_LIST = ["Jan-26","Feb-26","Mar-26","Apr-26","May-26","Jun-26","Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26"];
@@ -71,56 +79,21 @@ const KPI_CYCLE_YEAR = "2026";
 
 // ─── Color Indicator constants ────────────────────────────────────────────────
 
-const MONTHLY_FLAG_OPTIONS = [
-  { value: "100", label: "100%", color: "#1d4ed8", bg: "#eff6ff", border: "#93c5fd", dot: "#3b82f6" },
-  { value: "75",  label: "75%",  color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
-  { value: "0",   label: "0%",   color: "#111827", bg: "#f9fafb", border: "#d1d5db", dot: "#374151" },
-];
-
-const COLOR_BAND_OPTIONS = [
-  { value: "95%-100%",   label: "95%-100%",   color: "#16a34a", bg: "#f0fdf4", border: "#86efac", dot: "#22c55e" },
-  { value: "≥80%-<95%",  label: "≥80%-<95%",  color: "#b45309", bg: "#fefce8", border: "#fde047", dot: "#eab308" },
-  { value: "<80%",       label: "<80%",        color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
-] as const;
-
-const BASELINE_COLOR_OPTIONS = [
-  { value: "Blue",  color: "#1d4ed8", bg: "#eff6ff", border: "#93c5fd", dot: "#3b82f6" },
-  { value: "Red",   color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
-  { value: "Black", color: "#111827", bg: "#f9fafb", border: "#d1d5db", dot: "#374151" },
-] as const;
-
-
-type ColorBandValue = typeof COLOR_BAND_OPTIONS[number]["value"] | "";
-type BaselineColorValue = typeof BASELINE_COLOR_OPTIONS[number]["value"] | "";
+const MONTHLY_FLAG_OPTIONS = KPI_COLOR_BAND_OPTIONS;
+const COLOR_BAND_OPTIONS = KPI_COLOR_BAND_OPTIONS;
+const BASELINE_COLOR_OPTIONS = KPI_COLOR_BAND_OPTIONS;
 
 function colorBandMeta(v: string) {
-  return COLOR_BAND_OPTIONS.find((o) => o.value === v);
+  return resolveKpiColorBandMeta(v);
 }
 function baselineColorMeta(v: string) {
-  return BASELINE_COLOR_OPTIONS.find((o) => o.value === v);
+  return resolveKpiColorBandMeta(v);
 }
 
-function computeColorTarget2026(mt: Record<string, string>, formula: string): string {
-  if (formula === "Nilai Akhir") return mt["Dec-26"] ?? "";
-  const vals = MONTHS_LIST.map((m) => mt[m]).filter((v) => v && v.length > 0);
-  if (vals.length === 0) return "";
-  if (formula === "Rata-Rata") {
-    const counts: Record<string, number> = {};
-    vals.forEach((v) => { counts[v] = (counts[v] ?? 0) + 1; });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-  }
-  if (formula === "Jumlah") {
-    if (vals.includes("<80%")) return "<80%";
-    if (vals.includes("≥80%-<95%")) return "≥80%-<95%";
-    return "95%-100%";
-  }
-  return "";
-}
-
-function computeTarget2026(
+function computeColorTarget2026(
   mt: Record<string, string>,
   formula: string,
-  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; baselineSample?: string },
+  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean },
 ): string {
   const activeIndices =
     opts?.periodicTargetBlock && isPeriodicTrackingType(opts?.trackingPeriod)
@@ -129,7 +102,40 @@ function computeTarget2026(
   const activeKeys = activeIndices.map((idx) => MONTHS_LIST[idx]).filter(Boolean);
   if (formula === "Nilai Akhir") {
     const lastKey = activeKeys[activeKeys.length - 1] ?? "Dec-26";
-    return String(mt[lastKey] ?? "").trim();
+    return normalizeKpiColorBandValue(mt[lastKey]) || "";
+  }
+  const vals = activeKeys
+    .map((m) => normalizeKpiColorBandValue(mt[m]))
+    .filter((v): v is "Biru" | "Merah" | "Hitam" => Boolean(v));
+  if (vals.length === 0) return "";
+  if (formula === "Rata-Rata") {
+    const counts: Record<string, number> = {};
+    vals.forEach((v) => { counts[v] = (counts[v] ?? 0) + 1; });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1] || kpiColorBandRank(b[0]) - kpiColorBandRank(a[0]))[0][0];
+  }
+  if (formula === "Jumlah") {
+    if (vals.includes("Hitam")) return "Hitam";
+    if (vals.includes("Merah")) return "Merah";
+    return "Biru";
+  }
+  return "";
+}
+
+function computeTarget2026(
+  mt: Record<string, string>,
+  formula: string,
+  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; baselineSample?: string; satuan?: string },
+): string {
+  const forcePct = isPercentSatuan(opts?.satuan);
+  const activeIndices =
+    opts?.periodicTargetBlock && isPeriodicTrackingType(opts?.trackingPeriod)
+      ? getActiveMonthIndicesForPeriod(opts?.trackingPeriod)
+      : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const activeKeys = activeIndices.map((idx) => MONTHS_LIST[idx]).filter(Boolean);
+  if (formula === "Nilai Akhir") {
+    const lastKey = activeKeys[activeKeys.length - 1] ?? "Dec-26";
+    const rawLast = String(mt[lastKey] ?? "").trim();
+    return forcePct ? syncPercentSuffixOnValue(rawLast, true) : rawLast;
   }
   const rawInputs = activeKeys.map((m) => String(mt[m] ?? "").trim()).filter(Boolean);
   const vals = rawInputs
@@ -138,10 +144,10 @@ function computeTarget2026(
   if (vals.length === 0) return "";
   const sum = vals.reduce((s, v) => s + v, 0);
   const samples = opts?.baselineSample ? [...rawInputs, opts.baselineSample] : rawInputs;
-  if (formula === "Jumlah") return formatComputedKpiNumber(sum, samples);
+  if (formula === "Jumlah") return formatComputedKpiNumber(sum, samples, { forcePercent: forcePct });
   if (formula === "Rata-Rata") {
     const avg = sum / vals.length;
-    return formatComputedKpiNumber(avg, samples);
+    return formatComputedKpiNumber(avg, samples, { forcePercent: forcePct });
   }
   return "";
 }
@@ -1853,12 +1859,13 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
       // Compute Target 2026 from the (possibly generated) monthly targets
       const mode = item.indicatorMode ?? "numeric";
       const computed =
-        mode === "color" ? computeColorTarget2026(mt, item.formula) :
+        mode === "color" ? computeColorTarget2026(mt, item.formula, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock }) :
         mode === "ratio" ? computeRatioTarget2026(mt) :
         computeTarget2026(mt, item.formula, {
           trackingPeriod: item.trackingPeriod,
           periodicTargetBlock: item.periodicTargetBlock,
           baselineSample: item.baseline2025,
+          satuan: item.satuan,
         });
       return { ...item, monthlyTargets: mt, target2026: computed || item.target2026 };
     })
@@ -1880,15 +1887,22 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
       prev.map((item) => {
         if (item.id !== itemId) return item;
         const mode = item.indicatorMode ?? "numeric";
-        const cleanVal = mode === "numeric" ? sanitizeKpiNumericInput(val) : val;
+        const prevVal = item.monthlyTargets?.[month] ?? "";
+        const cleanVal =
+          mode === "numeric"
+            ? isPercentSatuan(item.satuan)
+              ? applyAutoPercentInput(val, prevVal)
+              : sanitizeKpiNumericInput(val)
+            : val;
         const mt = { ...item.monthlyTargets, [month]: cleanVal };
         const t2026 =
-          mode === "color" ? computeColorTarget2026(mt, item.formula) :
+          mode === "color" ? computeColorTarget2026(mt, item.formula, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock }) :
           mode === "ratio" ? computeRatioTarget2026(mt) :
           computeTarget2026(mt, item.formula, {
             trackingPeriod: item.trackingPeriod,
             periodicTargetBlock: item.periodicTargetBlock,
             baselineSample: item.baseline2025,
+            satuan: item.satuan,
           });
         return { ...item, monthlyTargets: mt, target2026: t2026 || item.target2026 };
       })
@@ -2280,7 +2294,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
 function ColorIndicatorRadio({ value, onChange }: { value: IndicatorMode; onChange: (mode: IndicatorMode) => void }) {
   const options: { mode: IndicatorMode; label: string; desc: string }[] = [
     { mode: "numeric", label: "Numeric",  desc: "Input target as numbers" },
-    { mode: "color",   label: "Color",    desc: "Use color bands (Green / Yellow / Red)" },
+    { mode: "color",   label: "Color",    desc: "Use color bands (Blue/ Red / Black)" },
     { mode: "ratio",   label: "Ratio",    desc: "Monthly target as ratio (e.g. 10:1)" },
   ];
   return (
@@ -2312,15 +2326,16 @@ function ColorIndicatorRadio({ value, onChange }: { value: IndicatorMode; onChan
 
 function BaselineColorField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const meta = baselineColorMeta(value);
+  const normalizedValue = normalizeKpiColorBandValue(value);
   return (
     <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.amber.wrap}`}>
       <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
-        <span>Baseline 2025</span>
+        <span>{`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}</span>
       </label>
       <div className="relative">
         <select
-          value={value}
+          value={normalizedValue}
           onChange={(e) => onChange(e.target.value)}
           className="w-full text-sm border rounded-lg px-3 py-2 outline-none appearance-none cursor-pointer font-semibold"
           style={{
@@ -2329,9 +2344,9 @@ function BaselineColorField({ value, onChange }: { value: string; onChange: (v: 
             color: meta ? meta.color : "#6b7280",
           }}
         >
-          <option value="">— Pilih —</option>
+          <option value="">— Pilih Warna —</option>
           {BASELINE_COLOR_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.value}</option>
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
         {meta && (
@@ -2347,6 +2362,7 @@ function Target2026Field({
   colorMode,
   ratioMode,
   monthlyTargets,
+  satuan,
   onChange,
   softOrangeHighlight = false,
   softYellowHighlight = false,
@@ -2354,12 +2370,14 @@ function Target2026Field({
 }: {
   value: string; colorMode: boolean; ratioMode?: boolean;
   monthlyTargets?: Record<string, string>;
+  satuan?: string;
   onChange?: (val: string) => void;
   softOrangeHighlight?: boolean;
   softYellowHighlight?: boolean;
   softYellowSourceLabel?: string;
 }) {
-  const meta = colorMode ? MONTHLY_FLAG_OPTIONS.find((o) => o.value === value) : null;
+  const meta = colorMode ? resolveKpiColorBandMeta(value) : null;
+  const pctSatuan = isPercentSatuan(satuan);
   const orangeWrapCls = softOrangeHighlight
     ? "border-2 border-orange-300 bg-orange-50/50 ring-2 ring-orange-100"
     : "";
@@ -2448,7 +2466,23 @@ function Target2026Field({
             inputMode="decimal"
             value={value}
             readOnly={!onChange}
-            onChange={onChange ? (e) => onChange(sanitizeKpiNumericInput(e.target.value)) : undefined}
+            onChange={
+              onChange
+                ? (e) => {
+                    const el = e.currentTarget;
+                    const formatted = pctSatuan
+                      ? applyAutoPercentInput(el.value, value)
+                      : sanitizeKpiNumericInput(el.value);
+                    onChange(formatted);
+                    if (pctSatuan && formatted.endsWith("%")) {
+                      const pos = Math.max(0, formatted.length - 1);
+                      window.requestAnimationFrame(() => {
+                        try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                      });
+                    }
+                  }
+                : undefined
+            }
             className={`text-sm rounded-lg px-3 py-2 pr-14 outline-none w-full text-[#1A284F] font-bold ${onChange ? "focus:border-[#1A284F]" : "cursor-default"} ${
               softYellowHighlight
                 ? value.trim()
@@ -2489,6 +2523,7 @@ function MonthlyTargetTable({
   periodicTargetBlock = false,
   onTogglePeriodicBlock,
   baselineSample,
+  satuan,
   softOrangeHighlight = false,
   softYellowHighlight = false,
   softYellowSourceLabel,
@@ -2502,10 +2537,12 @@ function MonthlyTargetTable({
   periodicTargetBlock?: boolean;
   onTogglePeriodicBlock?: (nextBlocked: boolean, nextMt: Record<string, string>, computed2026: string) => void;
   baselineSample?: string;
+  satuan?: string;
   softOrangeHighlight?: boolean;
   softYellowHighlight?: boolean;
   softYellowSourceLabel?: string;
 }) {
+  const pctSatuan = isPercentSatuan(satuan);
   const normPeriod = normalizeTrackingPeriod(trackingPeriod);
   const isPeriodic = isPeriodicTrackingType(normPeriod);
   const activeIndices =
@@ -2517,7 +2554,13 @@ function MonthlyTargetTable({
   const firstActiveKey = MONTHS_LIST[firstActiveIdx] ?? MONTHS_LIST[0];
 
   const handleChange = (key: string, val: string) => {
-    const cleanVal = !colorMode && !ratioMode ? sanitizeKpiNumericInput(val) : val;
+    const prevCellVal = monthlyTargets[key] ?? "";
+    const cleanVal =
+      !colorMode && !ratioMode
+        ? pctSatuan
+          ? applyAutoPercentInput(val, prevCellVal)
+          : sanitizeKpiNumericInput(val)
+        : val;
     const isFirstActive = key === firstActiveKey;
     const shouldAutoFill = isFirstActive && (ratioMode || colorMode);
     const updated = shouldAutoFill
@@ -2529,11 +2572,15 @@ function MonthlyTargetTable({
     const computed = ratioMode
       ? computeRatioTarget2026(updated)
       : colorMode
-      ? computeColorTarget2026(updated, formula)
+      ? computeColorTarget2026(updated, formula, {
+          trackingPeriod: normPeriod,
+          periodicTargetBlock: isPeriodic && periodicTargetBlock,
+        })
       : computeTarget2026(updated, formula, {
           trackingPeriod: normPeriod,
           periodicTargetBlock: isPeriodic && periodicTargetBlock,
           baselineSample,
+          satuan,
         });
     onChange(updated, computed);
   };
@@ -2551,11 +2598,15 @@ function MonthlyTargetTable({
     const computed = ratioMode
       ? computeRatioTarget2026(cleanedMt)
       : colorMode
-      ? computeColorTarget2026(cleanedMt, formula)
+      ? computeColorTarget2026(cleanedMt, formula, {
+          trackingPeriod: normPeriod,
+          periodicTargetBlock: nextBlocked,
+        })
       : computeTarget2026(cleanedMt, formula, {
           trackingPeriod: normPeriod,
           periodicTargetBlock: nextBlocked,
           baselineSample,
+          satuan,
         });
     if (onTogglePeriodicBlock) {
       onTogglePeriodicBlock(nextBlocked, cleanedMt, computed);
@@ -2679,8 +2730,8 @@ function MonthlyTargetTable({
                   );
                 }
                 if (colorMode) {
-                  const selected = monthlyTargets[key] ?? "";
-                  const flagMeta = MONTHLY_FLAG_OPTIONS.find((o) => o.value === selected);
+                  const selected = normalizeKpiColorBandValue(monthlyTargets[key]);
+                  const flagMeta = resolveKpiColorBandMeta(selected);
                   const isLocked = i !== firstActiveIdx && !!monthlyTargets[firstActiveKey];
                   return (
                     <td key={key} className="border border-gray-200 p-1" style={{ background: flagMeta ? flagMeta.bg : softYellowHighlight ? "#fefce8" : "white" }}>
@@ -2691,7 +2742,7 @@ function MonthlyTargetTable({
                         className={`w-full text-[10px] font-semibold border rounded-md px-0.5 py-1.5 outline-none cursor-pointer ${isLocked ? "opacity-70 cursor-not-allowed" : ""}`}
                         style={{ borderColor: flagMeta ? flagMeta.border : softYellowHighlight ? "#fde047" : "#e5e7eb", color: flagMeta ? flagMeta.color : "#6b7280", background: "transparent" }}
                       >
-                        <option value="">—</option>
+                        <option value="">— Warna —</option>
                         {MONTHLY_FLAG_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </select>
                       {flagMeta && <div className="flex justify-center mt-0.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: flagMeta.dot }} /></div>}
@@ -2707,8 +2758,21 @@ function MonthlyTargetTable({
                       type="text"
                       inputMode="decimal"
                       value={cellVal}
-                      onChange={(e) => handleChange(key, e.target.value)}
-                      placeholder="—"
+                      onChange={(e) => {
+                        const el = e.currentTarget;
+                        const rawNext = el.value;
+                        handleChange(key, rawNext);
+                        if (pctSatuan) {
+                          const nextPreview = applyAutoPercentInput(rawNext, cellVal);
+                          if (nextPreview.endsWith("%")) {
+                            const pos = Math.max(0, nextPreview.length - 1);
+                            window.requestAnimationFrame(() => {
+                              try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                            });
+                          }
+                        }
+                      }}
+                      placeholder={pctSatuan ? "—%" : "—"}
                       className={`w-full text-xs text-center border rounded-md px-1 py-1.5 outline-none focus:border-[#1A284F] ${isCellEmptyYellow ? "border-yellow-300 bg-yellow-50/75" : isActivePeriodicCell ? "border-teal-300 bg-white font-semibold text-[#1A284F]" : i === 11 ? "border-amber-200 bg-amber-50/60" : "border-gray-200 bg-white"}`}
                     />
                   </td>
@@ -3176,9 +3240,7 @@ function adaptBusinessKpiToPersonalItem(src: KPISetting): KPISetting {
   const resolvedMode: IndicatorMode = src.indicatorMode ?? (src.colorIndicator ? "color" : "numeric");
   let adaptedBaseline = String(src.baseline2025 ?? "").trim();
   if (resolvedMode === "color") {
-    if (/^biru$/i.test(adaptedBaseline)) adaptedBaseline = "Blue";
-    else if (/^merah$/i.test(adaptedBaseline)) adaptedBaseline = "Red";
-    else if (/^hitam$/i.test(adaptedBaseline)) adaptedBaseline = "Black";
+    adaptedBaseline = normalizeKpiColorBandValue(adaptedBaseline) || adaptedBaseline;
   }
 
   return {
@@ -3603,6 +3665,7 @@ export function AddKPIModal({
         trackingPeriod: p.trackingPeriod,
         periodicTargetBlock: p.periodicTargetBlock,
         baselineSample: p.baseline2025,
+        satuan: p.satuan,
       });
     }
     return next;
@@ -3624,11 +3687,15 @@ export function AddKPIModal({
         (p.indicatorMode ?? "numeric") === "ratio"
           ? computeRatioTarget2026(nextMt)
           : (p.indicatorMode ?? "numeric") === "color"
-          ? computeColorTarget2026(nextMt, p.formula)
+          ? computeColorTarget2026(nextMt, p.formula, {
+              trackingPeriod: nextPeriod,
+              periodicTargetBlock: nextBlock,
+            })
           : computeTarget2026(nextMt, p.formula, {
               trackingPeriod: nextPeriod,
               periodicTargetBlock: nextBlock,
               baselineSample: p.baseline2025,
+              satuan: p.satuan,
             });
       return {
         ...p,
@@ -4223,7 +4290,28 @@ export function AddKPIModal({
               </div>
 
               <Field label="KPI *"><textarea rows={3} value={form.kpi} onChange={(e) => set("kpi", e.target.value)} placeholder="KPI name / description" className={inputCls + " resize-none"} /></Field>
-              <SatuanField value={form.satuan} onChange={(v) => setForm((p) => ({ ...p, satuan: v }))} unitOptions={master.satuan} periodeOptions={master.period} />
+              <SatuanField
+                value={form.satuan}
+                onChange={(v) =>
+                  setForm((p) => {
+                    if ((p.indicatorMode ?? "numeric") !== "numeric") return { ...p, satuan: v };
+                    const wantPct = isPercentSatuan(v);
+                    const nextMt: Record<string, string> = {};
+                    Object.entries(p.monthlyTargets ?? {}).forEach(([mk, mv]) => {
+                      nextMt[mk] = syncPercentSuffixOnValue(mv, wantPct);
+                    });
+                    const nextTgt = computeTarget2026(nextMt, p.formula, {
+                      trackingPeriod: p.trackingPeriod,
+                      periodicTargetBlock: p.periodicTargetBlock,
+                      baselineSample: p.baseline2025,
+                      satuan: v,
+                    });
+                    return { ...p, satuan: v, monthlyTargets: nextMt, target2026: nextTgt || syncPercentSuffixOnValue(p.target2026, wantPct) };
+                  })
+                }
+                unitOptions={master.satuan}
+                periodeOptions={master.period}
+              />
 
               <Field label="Formula Pencapaian">
                 {colorMode || ratioMode
@@ -4375,6 +4463,7 @@ export function AddKPIModal({
                 trackingPeriod={form.trackingPeriod}
                 periodicTargetBlock={Boolean(form.periodicTargetBlock)}
                 baselineSample={form.baseline2025}
+                satuan={form.satuan}
                 onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
                   setForm((p) => ({
                     ...p,
@@ -4394,6 +4483,7 @@ export function AddKPIModal({
                 colorMode={colorMode}
                 ratioMode={ratioMode}
                 monthlyTargets={form.monthlyTargets}
+                satuan={form.satuan}
                 onChange={(val) => set("target2026", val)}
                 softOrangeHighlight={fromAtasanKpi}
                 softYellowHighlight={Boolean(fromBusinessKpiSource)}
@@ -4889,6 +4979,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
         trackingPeriod: p.trackingPeriod,
         periodicTargetBlock: p.periodicTargetBlock,
         baselineSample: p.baseline2025,
+        satuan: p.satuan,
       });
     }
     return next;
@@ -4910,11 +5001,15 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
         (p.indicatorMode ?? "numeric") === "ratio"
           ? computeRatioTarget2026(nextMt)
           : (p.indicatorMode ?? "numeric") === "color"
-          ? computeColorTarget2026(nextMt, p.formula)
+          ? computeColorTarget2026(nextMt, p.formula, {
+              trackingPeriod: nextPeriod,
+              periodicTargetBlock: nextBlock,
+            })
           : computeTarget2026(nextMt, p.formula, {
               trackingPeriod: nextPeriod,
               periodicTargetBlock: nextBlock,
               baselineSample: p.baseline2025,
+              satuan: p.satuan,
             });
       return {
         ...p,
@@ -5410,7 +5505,28 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 <textarea rows={3} value={form.kpi} onChange={(e) => set("kpi", e.target.value)} placeholder="KPI name / description" className={inputCls + " resize-none"} />
               </Field>
 
-              <SatuanField value={form.satuan} onChange={(v) => set("satuan", v)} unitOptions={master.satuan} periodeOptions={master.period} />
+              <SatuanField
+                value={form.satuan}
+                onChange={(v) =>
+                  setForm((p) => {
+                    if ((p.indicatorMode ?? "numeric") !== "numeric") return { ...p, satuan: v };
+                    const wantPct = isPercentSatuan(v);
+                    const nextMt: Record<string, string> = {};
+                    Object.entries(p.monthlyTargets ?? {}).forEach(([mk, mv]) => {
+                      nextMt[mk] = syncPercentSuffixOnValue(mv, wantPct);
+                    });
+                    const nextTgt = computeTarget2026(nextMt, p.formula, {
+                      trackingPeriod: p.trackingPeriod,
+                      periodicTargetBlock: p.periodicTargetBlock,
+                      baselineSample: p.baseline2025,
+                      satuan: v,
+                    });
+                    return { ...p, satuan: v, monthlyTargets: nextMt, target2026: nextTgt || syncPercentSuffixOnValue(p.target2026, wantPct) };
+                  })
+                }
+                unitOptions={master.satuan}
+                periodeOptions={master.period}
+              />
 
               {/* Formula Setahun | Scope */}
               <div className={`grid gap-3 ${hideScope ? "grid-cols-1" : "grid-cols-2"}`}>
@@ -5570,6 +5686,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 trackingPeriod={form.trackingPeriod}
                 periodicTargetBlock={Boolean(form.periodicTargetBlock)}
                 baselineSample={form.baseline2025}
+                satuan={form.satuan}
                 onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
                   setForm((p) => ({
                     ...p,
@@ -5588,6 +5705,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 colorMode={colorMode}
                 ratioMode={ratioMode}
                 monthlyTargets={form.monthlyTargets}
+                satuan={form.satuan}
                 onChange={(val) => set("target2026", val)}
                 softYellowHighlight={fromCopiedCorpKpi}
                 softYellowSourceLabel="KPI (Group)"
@@ -5717,14 +5835,14 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
 
 // ─── Color badge for Setting table ───────────────────────────────────────────
 
-function ColorValueBadge({ value, isBaseline }: { value: string; isBaseline?: boolean }) {
-  const meta = isBaseline ? baselineColorMeta(value) : colorBandMeta(value);
+function ColorValueBadge({ value }: { value: string; isBaseline?: boolean }) {
+  const meta = resolveKpiColorBandMeta(value);
   if (!meta) return <span className="text-gray-400 italic text-[11px]">{value || "—"}</span>;
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border"
       style={{ background: meta.bg, borderColor: meta.border, color: meta.color }}>
       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.dot }} />
-      {value}
+      {meta.label}
     </span>
   );
 }
@@ -5784,6 +5902,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                         trackingPeriod,
                         periodicTargetBlock,
                         baselineSample: baseline2025,
+                        satuan: item.satuan,
                       }),
                     );
                   }}
@@ -5829,11 +5948,15 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                 const nextTgt = ratioMode
                   ? computeRatioTarget2026(nextMt)
                   : colorMode
-                  ? computeColorTarget2026(nextMt, formula)
+                  ? computeColorTarget2026(nextMt, formula, {
+                      trackingPeriod: nextPeriod,
+                      periodicTargetBlock: nextBlock,
+                    })
                   : computeTarget2026(nextMt, formula, {
                       trackingPeriod: nextPeriod,
                       periodicTargetBlock: nextBlock,
                       baselineSample: baseline2025,
+                      satuan: item.satuan,
                     });
                 setTrackingPeriod(nextPeriod);
                 setPeriodicTargetBlock(nextBlock);
@@ -5855,6 +5978,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             trackingPeriod={trackingPeriod}
             periodicTargetBlock={periodicTargetBlock}
             baselineSample={baseline2025}
+            satuan={item.satuan}
             onTogglePeriodicBlock={(nextBlocked, nextMt, computed) => {
               setPeriodicTargetBlock(nextBlocked);
               setMonthlyTargets(nextMt);
@@ -5868,6 +5992,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             colorMode={colorMode}
             ratioMode={ratioMode}
             monthlyTargets={monthlyTargets}
+            satuan={item.satuan}
             onChange={(val) => setTarget2026(val)}
             softYellowHighlight={!String(target2026 ?? "").trim()}
           />
@@ -6489,8 +6614,23 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           {/* Baseline 2025 */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-700 font-medium text-center" style={{ minWidth: 96 }}>
             {isEditing
-              ? <input value={row.baseline2025} onChange={(e) => setD({ baseline2025: e.target.value })} className={ci + " text-center"} />
-              : item.colorIndicator ? <ColorValueBadge value={item.baseline2025} isBaseline /> : item.baseline2025}
+              ? (row.colorIndicator || row.indicatorMode === "color")
+                ? (
+                  <select
+                    value={normalizeKpiColorBandValue(row.baseline2025)}
+                    onChange={(e) => setD({ baseline2025: e.target.value })}
+                    className={ci + " text-center font-semibold"}
+                  >
+                    <option value="">— Warna —</option>
+                    {BASELINE_COLOR_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                )
+                : <input value={row.baseline2025} onChange={(e) => setD({ baseline2025: e.target.value })} className={ci + " text-center"} />
+              : (item.colorIndicator || item.indicatorMode === "color" || isKnownKpiColorBandValue(item.baseline2025))
+                ? <ColorValueBadge value={item.baseline2025} isBaseline />
+                : item.baseline2025}
           </td>
           {/* Target 2026 */}
           <td
@@ -6515,7 +6655,9 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                 </button>
               : !String(item.target2026 ?? "").trim()
               ? <span className="inline-flex items-center px-2 py-0.5 rounded bg-yellow-100 text-amber-800 border border-yellow-300 text-[10px] font-bold">Belum diisi</span>
-              : item.colorIndicator ? <ColorValueBadge value={item.target2026} /> : item.target2026}
+              : (item.colorIndicator || item.indicatorMode === "color" || isKnownKpiColorBandValue(item.target2026))
+                ? <ColorValueBadge value={item.target2026} />
+                : item.target2026}
           </td>
           {/* Polaritas */}
           <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 96 }}>
@@ -7766,8 +7908,23 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                       {/* Baseline 2025 */}
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("baseline2025")
-                          ? <input value={row.baseline2025} onChange={(e) => setDraftField({ baseline2025: e.target.value })} className={cellInput + " text-center"} />
-                          : row.colorIndicator ? <ColorValueBadge value={row.baseline2025} isBaseline /> : <span className="text-[11px] text-gray-700 font-medium">{row.baseline2025 || "—"}</span>}
+                          ? (row.colorIndicator || row.indicatorMode === "color")
+                            ? (
+                              <select
+                                value={normalizeKpiColorBandValue(row.baseline2025)}
+                                onChange={(e) => setDraftField({ baseline2025: e.target.value })}
+                                className={cellInput + " text-center font-semibold"}
+                              >
+                                <option value="">— Warna —</option>
+                                {BASELINE_COLOR_OPTIONS.map((o) => (
+                                  <option key={o.value} value={o.value}>{o.label}</option>
+                                ))}
+                              </select>
+                            )
+                            : <input value={row.baseline2025} onChange={(e) => setDraftField({ baseline2025: e.target.value })} className={cellInput + " text-center"} />
+                          : (row.colorIndicator || row.indicatorMode === "color" || isKnownKpiColorBandValue(row.baseline2025))
+                            ? <ColorValueBadge value={row.baseline2025} isBaseline />
+                            : <span className="text-[11px] text-gray-700 font-medium">{row.baseline2025 || "—"}</span>}
                       </td>
                       {/* Target 2026 — button opens TargetEditMiniModal when editing */}
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
@@ -7776,10 +7933,16 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                               onClick={() => setCorpTargetEdit({ ...row })}
                               className="w-full flex items-center justify-between gap-1 px-2 py-1.5 rounded border border-[#1A284F]/30 bg-[#1A284F]/5 hover:bg-[#1A284F]/10 transition-colors"
                             >
-                              <span className="text-[11px] font-bold text-[#1A284F] truncate">{row.target2026 || "— Set"}</span>
+                              {(row.colorIndicator || row.indicatorMode === "color" || isKnownKpiColorBandValue(row.target2026)) && row.target2026 ? (
+                                <ColorValueBadge value={row.target2026} />
+                              ) : (
+                                <span className="text-[11px] font-bold text-[#1A284F] truncate">{row.target2026 || "— Set"}</span>
+                              )}
                               <Edit3 className="w-3 h-3 text-[#1A284F] shrink-0" />
                             </button>
-                          : row.colorIndicator ? <ColorValueBadge value={row.target2026} /> : <span className="text-[11px] font-bold text-[#1A284F]">{row.target2026 || "—"}</span>}
+                          : (row.colorIndicator || row.indicatorMode === "color" || isKnownKpiColorBandValue(row.target2026))
+                            ? <ColorValueBadge value={row.target2026} />
+                            : <span className="text-[11px] font-bold text-[#1A284F]">{row.target2026 || "—"}</span>}
                       </td>
                       {/* Polaritas */}
                       <td className="border border-gray-200 py-2 px-1.5 text-center">

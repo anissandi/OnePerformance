@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Users, ChevronDown, ChevronUp, Check, CheckCircle2, X,
   Search, Filter, Eye, FileText, Download, AlertCircle,
 } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { loadFeedbackSubmissions } from "../../shared/interDepartmentFeedbackStore";
 import { getActiveUser, getAuthorizedSubordinates, resolveUserAllowedModules } from "../../../store/authStore";
 
@@ -619,6 +620,17 @@ export function SupervisorMonitoringInterDeptFeedback() {
     return matchSearch && matchStatus && matchEval;
   });
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, statusFilter, evalFilter]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filtered.length / pageSize)));
+  const pagedFiltered = useMemo(
+    () => filtered.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filtered, safePage, pageSize],
+  );
+
   const submittedCount = records.filter(r => approvalStatus(r) === "submitted").length;
   const totalPos = records.reduce((sum, r) => sum + r.feedbacks.length * 3, 0);
   const totalNeg = records.reduce((sum, r) => sum + r.feedbacks.length * 2, 0);
@@ -702,13 +714,14 @@ export function SupervisorMonitoringInterDeptFeedback() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((rec, idx) => {
+              {pagedFiltered.map((rec, idx) => {
+                const globalIdx = (safePage - 1) * pageSize + idx;
                 const posCount = rec.feedbacks.length * INDICATORS.filter(i => !NEGATIVE_IND.has(i.key)).length;
                 const negCount = rec.feedbacks.length * INDICATORS.filter(i => NEGATIVE_IND.has(i.key)).length;
                 const isSelf = rec.id.toLowerCase() === activeUser.employeeId.toLowerCase();
                 return (
                   <tr key={rec.id} className={isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
-                    <td className="py-3 px-4 text-center text-xs font-semibold text-gray-400">{idx + 1}</td>
+                    <td className="py-3 px-4 text-center text-xs font-semibold text-gray-400">{globalIdx + 1}</td>
                     <td className="py-3 px-4 text-center">
                       <button
                         type="button"
@@ -760,6 +773,14 @@ export function SupervisorMonitoringInterDeptFeedback() {
         {filtered.length === 0 && (
           <div className="py-14 text-center text-gray-400 text-sm">No data matches the selected filters.</div>
         )}
+        <TablePaginationBar
+          totalItems={filtered.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
         <div className="px-5 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-400">
           {filtered.length} of {records.length} employees shown
         </div>

@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Search, MessageSquare, CheckCircle2, AlertCircle, Filter, Calendar, Users, XCircle } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 import { getPenilai1Score, subscribeScores } from "../../supervisor/managementInterviewScoreStore";
 import { getEntries, subscribe as subscribeSchedules } from "../../supervisor/interviewScheduleStore";
@@ -211,6 +212,20 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
 
   // Numbered rows after filtering
   const rows = baseRows.map((r, idx) => ({ ...r, no: idx + 1 }));
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, unitFilter, statusFilter]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
+  const managedUsersByLower = useMemo(
+    () => new Map(managedUsers.map((u) => [u.employeeId.toLowerCase(), u])),
+    [managedUsers],
+  );
 
   const hasActiveFilters = unitFilter !== "Semua Unit" || statusFilter !== "Semua Status";
 
@@ -301,11 +316,11 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ no, emp, mi }) => {
+              {pagedRows.map(({ no, emp, mi }) => {
                 const st          = STATUS_STYLE[mi.status];
                 const Icon        = st.icon;
                 const finalScore  = computeFinalScore(mi.penilaiScores);
-                const matchedManaged = managedUsers.find((u) => u.employeeId.toLowerCase() === emp.id.toLowerCase());
+                const matchedManaged = managedUsersByLower.get(emp.id.toLowerCase());
                 const effGrouping = matchedManaged ? resolveEffectiveUserGrouping(matchedManaged) : "Ka./Wa.Ka.Div ke atas";
                 const wFrac = getModuleWeightFraction(emp.unit, effGrouping, "Management Interview", 0.1) || 0.1;
                 const weightedScore = finalScore !== null ? parseFloat((finalScore * wFrac).toFixed(2)) : null;
@@ -382,6 +397,14 @@ export function HRMonitoringManagementInterview({ lockedUnits }: { lockedUnits?:
         {rows.length === 0 && (
           <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>
         )}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
         <div className="px-5 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-400 flex items-center gap-4">
           <span>{rows.length} of {filteredEmployees.length} employees shown</span>
           <span className="text-gray-300">·</span>

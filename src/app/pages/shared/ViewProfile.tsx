@@ -29,7 +29,7 @@ import {
   useAuthStore,
   type AppraisalModuleName,
 } from "../../store/authStore";
-import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
+import { getLiveTransactionalEmployeeById } from "../../data/mockEmployees";
 import { loadUnitScoreWeights, SCORE_WEIGHT_EVENT, weightColumnFromGrouping } from "./scoringWeightStore";
 import { ACCESS_UPDATED_EVENT } from "../hr/settings/AccessManagement";
 import { getApproverNotesHistory, getRecordDecisionLog, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
@@ -370,6 +370,11 @@ export function ViewProfile() {
 
   // Live 2026 KPI score — same computation as My Appraisal page
   // Inject live KPI score into 2026 module results
+  const liveMe = useMemo(
+    () => (isCurrent ? getLiveTransactionalEmployeeById(activeUser.employeeId) : null),
+    [isCurrent, activeUser.employeeId, tick],
+  );
+
   const activeModules = useMemo(() => {
     const allowed = resolveUserAllowedModules(activeUser);
     const grouping = resolveEffectiveUserGrouping(activeUser);
@@ -384,9 +389,7 @@ export function ViewProfile() {
       return Number.isFinite(num) ? num : fallback;
     };
 
-    const liveEmp = getLiveTransactionalEmployees().find(
-      (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
-    );
+    const liveEmp = liveMe;
     const normEmpId = normalizeEmployeeId(activeUser.employeeId);
     const myWorkflows = loadWorkflowRecords().filter(
       (w) =>
@@ -452,7 +455,7 @@ export function ViewProfile() {
       const status: ModuleStatus = isFullApproved ? "approved" : "pending";
       return { ...m, weight, score, grade, status, weightedScore: parseFloat(((score * weight) / 100).toFixed(2)) };
     });
-  }, [activeUser, selectedYear, isCurrent, tick]);
+  }, [activeUser, selectedYear, isCurrent, liveMe, tick]);
 
   const effectiveJoinDate = activeUser.joinDate || USER.joinDate;
   const parsedJoinYear = new Date(effectiveJoinDate).getFullYear();
@@ -474,9 +477,6 @@ export function ViewProfile() {
     if (s <= 0) return "N/A";
     return resolveGradeForScore(s);
   }
-  const liveMe = getLiveTransactionalEmployees().find(
-    (e) => e.id.toLowerCase() === activeUser.employeeId.toLowerCase(),
-  );
   const displayScore    = isCurrent ? (liveMe?.totalScore ?? parseFloat(totalWeighted.toFixed(1))) : yearData.score;
   const displayGrade    = isCurrent ? scoreToGrade(displayScore) : yearData.grade;
   const displayKPIScore = isCurrent ? (liveMe?.kpi.score ?? 0) : yearData.kpiScore;

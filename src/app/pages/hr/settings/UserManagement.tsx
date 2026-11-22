@@ -4,7 +4,7 @@ import { archiveUsers } from "../../../store/archiveStore";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT, weightColumnFromGrouping } from "../../shared/scoringWeightStore";
 import { loadLocalAuditLogs } from "../../../services/supabaseClient";
-import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw, AlertTriangle } from "lucide-react";
+import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw, AlertTriangle, UserCheck, Shield, Award, Briefcase } from "lucide-react";
 import {
   COMPANY_UNIT_LOCATIONS,
   defaultAllowedModulesForGrouping,
@@ -23,7 +23,7 @@ import {
   useLoginManagement,
   type LoginMethodOption,
 } from "../../../store/loginManagementStore";
-import { ANALYTICS_CARD_TONES, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { ANALYTICS_CARD_TONES, AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 
 type Role = "Employee" | "Supervisor" | "GM" | "HR Unit" | "HR ICF" | "Director" | "BOD" | "Administrator" | "HR Admin" | "" | string;
 type Status = "Active" | "Inactive";
@@ -1174,15 +1174,21 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
   return (
     <div className="space-y-4">
       {/* Group summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {groupCounts.map(({ group, count }) => {
-          const c = GROUP_COLORS[group] ?? { bg: "bg-gray-50", text: "text-gray-700", dot: "bg-gray-300" };
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
+        {groupCounts.map(({ group, count }, idx) => {
+          const groupToneCycle: AnalyticsCardTone[] = ["navy", "emerald", "teal", "plum", "terracotta", "slate", "rose"];
+          const tone = groupToneCycle[idx % groupToneCycle.length];
           return (
-            <div key={group} className={`rounded-xl px-4 py-3.5 border border-gray-100 shadow-sm ${c.bg}`}>
-              <p className={`text-xl font-black ${c.text}`}>{count}</p>
-              <p className="text-xs font-semibold text-gray-600 mt-0.5 leading-tight">{group}</p>
-              <p className="text-[10px] text-gray-400 mt-0.5">{count === 1 ? "position" : "positions"} mapped</p>
-            </div>
+            <AnalyticsStatCard
+              key={group}
+              title={group}
+              value={count}
+              subtitle={`${count} ${count === 1 ? "position" : "positions"} mapped`}
+              icon={<Layers className="w-4 h-4" />}
+              tone={tone}
+              index={idx}
+              compact
+            />
           );
         })}
       </div>
@@ -2217,21 +2223,27 @@ export function UserManagementPage() {
         </div>
       )}
       {/* Stats */}
-      <div className="grid grid-cols-4 lg:grid-cols-8 gap-3">
-        {[
-          { label: "Total Users",    value: companyUsers.length, color: "bg-[#1A284F] text-white" },
-          { label: "Employee",       value: employeeCount,       color: "bg-emerald-600 text-white" },
-          { label: "Supervisor",     value: supervisorCount,     color: "bg-blue-600 text-white" },
-          { label: "GM",             value: gmCount,             color: "bg-indigo-600 text-white" },
-          { label: "HR Unit",        value: hrUnitCount,         color: "bg-purple-600 text-white" },
-          { label: "HR ICF",         value: hrIcfCount,          color: "bg-amber-500 text-white" },
-          { label: "Director",       value: directorCount,       color: "bg-rose-600 text-white" },
-          { label: "Administrator",  value: adminCount,          color: "bg-slate-600 text-white" },
-        ].map(s => (
-          <div key={s.label} className={`rounded-xl px-5 py-4 ${s.color} shadow-sm`}>
-            <p className="text-2xl font-bold">{s.value}</p>
-            <p className="text-xs opacity-80 mt-0.5">{s.label}</p>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {([
+          { label: "Total Users",   value: companyUsers.length, sub: "Seluruh user unit usaha", tone: "navy" as AnalyticsCardTone,       icon: <Users className="w-4 h-4" /> },
+          { label: "Employee",      value: employeeCount,       sub: "Role Employee",           tone: "emerald" as AnalyticsCardTone,    icon: <UserCheck className="w-4 h-4" /> },
+          { label: "Supervisor",    value: supervisorCount,     sub: "Role Supervisor",         tone: "teal" as AnalyticsCardTone,       icon: <Briefcase className="w-4 h-4" /> },
+          { label: "GM",            value: gmCount,             sub: "Role General Manager",    tone: "plum" as AnalyticsCardTone,       icon: <Building2 className="w-4 h-4" /> },
+          { label: "HR Unit",       value: hrUnitCount,         sub: "Checker unit usaha",      tone: "terracotta" as AnalyticsCardTone, icon: <Shield className="w-4 h-4" /> },
+          { label: "HR ICF",        value: hrIcfCount,          sub: "Validator korporat",      tone: "rose" as AnalyticsCardTone,       icon: <Award className="w-4 h-4" /> },
+          { label: "Director",      value: directorCount,       sub: "Role Director / BOD",     tone: "slate" as AnalyticsCardTone,      icon: <Award className="w-4 h-4" /> },
+          { label: "Administrator", value: adminCount,          sub: "System Administrator",    tone: "navy" as AnalyticsCardTone,       icon: <KeyRound className="w-4 h-4" /> },
+        ]).map((s, idx) => (
+          <AnalyticsStatCard
+            key={s.label}
+            title={s.label}
+            value={s.value}
+            subtitle={s.sub}
+            icon={s.icon}
+            tone={s.tone}
+            index={idx}
+            compact
+          />
         ))}
       </div>
 

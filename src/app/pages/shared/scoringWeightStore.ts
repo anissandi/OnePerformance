@@ -45,10 +45,23 @@ export function toCustomGroupingColumnKey(groupName: string): string {
   return `grp_${slug || "custom"}`;
 }
 
+let _cachedCustomColsRaw: string | null | undefined = undefined;
+let _cachedCustomColsMap: Record<string, CustomScoreWeightColumn[]> = {};
+let _cachedScoreWeightsRaw: string | null | undefined = undefined;
+let _cachedScoreWeightsSaved: Record<string, UnitScoreWeights> = {};
+let _cachedUnitScoreWeightsByCanon = new Map<string, UnitScoreWeights>();
+
 function loadAllCustomColumnsMap(): Record<string, CustomScoreWeightColumn[]> {
   try {
-    const parsed = JSON.parse(safeGetLocalRaw(CUSTOM_COLS_KEY) ?? "{}") as Record<string, CustomScoreWeightColumn[]>;
-    return parsed && typeof parsed === "object" ? parsed : {};
+    const raw = safeGetLocalRaw(CUSTOM_COLS_KEY);
+    if (_cachedCustomColsRaw === raw) {
+      return { ..._cachedCustomColsMap };
+    }
+    const parsed = JSON.parse(raw ?? "{}") as Record<string, CustomScoreWeightColumn[]>;
+    const valid = parsed && typeof parsed === "object" ? parsed : {};
+    _cachedCustomColsRaw = raw;
+    _cachedCustomColsMap = valid;
+    return { ...valid };
   } catch {
     return {};
   }
@@ -147,10 +160,22 @@ export function registerCustomGroupingInAccessSystem(groupName: string): void {
 
 export function loadUnitScoreWeights(companyName: string): UnitScoreWeights {
   try {
-    const saved = JSON.parse(safeGetLocalRaw(KEY) ?? "{}") as Record<string, UnitScoreWeights>;
+    const raw = safeGetLocalRaw(KEY);
+    if (_cachedScoreWeightsRaw !== raw) {
+      const p = JSON.parse(raw ?? "{}") as Record<string, UnitScoreWeights>;
+      _cachedScoreWeightsSaved = p && typeof p === "object" ? p : {};
+      _cachedScoreWeightsRaw = raw;
+      _cachedUnitScoreWeightsByCanon = new Map();
+    }
     const canon = canonicalizeCompanyUnitName(companyName);
+    const cached = _cachedUnitScoreWeightsByCanon.get(canon);
+    if (cached) return cached;
+    const saved = _cachedScoreWeightsSaved;
     const found = saved[canon] ?? (canon === "PT RSUP ASD" ? saved["ASD"] : undefined) ?? saved[companyName];
-    if (!found || typeof found !== "object") return DEFAULT_SCORE_WEIGHTS;
+    if (!found || typeof found !== "object") {
+      _cachedUnitScoreWeightsByCanon.set(canon, DEFAULT_SCORE_WEIGHTS);
+      return DEFAULT_SCORE_WEIGHTS;
+    }
     const merged: UnitScoreWeights = { ...DEFAULT_SCORE_WEIGHTS };
     for (const [indikator, cols] of Object.entries(found)) {
       merged[indikator] = {
@@ -158,6 +183,7 @@ export function loadUnitScoreWeights(companyName: string): UnitScoreWeights {
         ...(cols ?? {}),
       };
     }
+    _cachedUnitScoreWeightsByCanon.set(canon, merged);
     return merged;
   } catch {
     return DEFAULT_SCORE_WEIGHTS;
@@ -189,7 +215,8 @@ export function weightColumnFromGrouping(grouping?: string, companyName?: string
     }
   } else {
     try {
-      const allSaved = JSON.parse(safeGetLocalRaw(KEY) ?? "{}") as Record<string, UnitScoreWeights>;
+      loadUnitScoreWeights("");
+      const allSaved = _cachedScoreWeightsSaved;
       const existsAnywhere = Object.values(allSaved).some(
         (uw) => uw && Object.values(uw).some((row) => row && row[customSlugKey] !== undefined),
       );

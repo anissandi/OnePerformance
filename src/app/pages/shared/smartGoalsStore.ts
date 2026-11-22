@@ -144,10 +144,21 @@ export interface StoredSmartGoalEvidenceFile {
   dataUrl?: string;
 }
 
+let _cachedGoalsByEmpRaw: string | null | undefined = undefined;
+let _cachedGoalsByEmpMap: Record<string, SmartGoal[]> = {};
+let _cachedCheckinByEmpRaw: string | null | undefined = undefined;
+let _cachedCheckinByEmpMap: Record<string, StoredCheckInEntry[]> = {};
+
 function readGoalsByEmpMap(): Record<string, SmartGoal[]> {
   try {
     const raw = safeGetLocalRaw(GOALS_BY_EMP_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, SmartGoal[]>) ?? {} : {};
+    if (_cachedGoalsByEmpRaw === raw) {
+      return { ..._cachedGoalsByEmpMap };
+    }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, SmartGoal[]>) ?? {} : {};
+    _cachedGoalsByEmpRaw = raw;
+    _cachedGoalsByEmpMap = parsed;
+    return { ...parsed };
   } catch {
     return {};
   }
@@ -156,7 +167,13 @@ function readGoalsByEmpMap(): Record<string, SmartGoal[]> {
 function readCheckinByEmpMap(): Record<string, StoredCheckInEntry[]> {
   try {
     const raw = safeGetLocalRaw(CHECKIN_BY_EMP_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, StoredCheckInEntry[]>) ?? {} : {};
+    if (_cachedCheckinByEmpRaw === raw) {
+      return { ..._cachedCheckinByEmpMap };
+    }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, StoredCheckInEntry[]>) ?? {} : {};
+    _cachedCheckinByEmpRaw = raw;
+    _cachedCheckinByEmpMap = parsed;
+    return { ...parsed };
   } catch {
     return {};
   }

@@ -11,6 +11,29 @@ import {
   resolveUserAllowedModules,
   type AppraisalModuleName,
 } from "../../../store/authStore";
+import { ACCESS_UPDATED_EVENT } from "../settings/AccessManagement";
+
+let _monEpoch = 1;
+let _cachedMonSig = "";
+let _cachedMonList: MonitoringEmployee[] | null = null;
+let _cachedSupMonSig = "";
+let _cachedSupMonList: MonitoringEmployee[] | null = null;
+let _cachedUnitsSig = "";
+let _cachedUnitsList: string[] | null = null;
+
+if (typeof window !== "undefined") {
+  const bump = () => {
+    _monEpoch++;
+    _cachedMonList = null;
+    _cachedSupMonList = null;
+    _cachedUnitsList = null;
+  };
+  window.addEventListener("pa-auth-updated", bump);
+  window.addEventListener(ACCESS_UPDATED_EVENT, bump);
+  window.addEventListener("pa-db-hydrated", bump);
+  window.addEventListener("pa-employees-imported", bump);
+  window.addEventListener("storage", bump);
+}
 
 export interface MonitoringEmployee {
   id: string;
@@ -31,6 +54,10 @@ export interface MonitoringEmployee {
 export function getMonitoringEmployees(): MonitoringEmployee[] {
   const users = loadManagedUsers();
   const activeUser = getActiveUser();
+  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}`;
+  if (_cachedMonList && _cachedMonSig === sig) {
+    return _cachedMonList;
+  }
   const isGlobalViewer =
     isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
   const scopedUsers = isGlobalViewer ? users : getAuthorizedSubordinates(activeUser, users);
@@ -62,14 +89,25 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
       hasInterDeptFeedback: allowed.includes("Inter-Departement Feedback"),
     };
   });
-  return mapped.sort((a, b) => (a.isSelf === b.isSelf ? 0 : a.isSelf ? -1 : 1));
+  const sorted = mapped.sort((a, b) => (a.isSelf === b.isSelf ? 0 : a.isSelf ? -1 : 1));
+  _cachedMonSig = sig;
+  _cachedMonList = sorted;
+  return sorted;
 }
 
 export function getSupervisorScopedMonitoringEmployees(): MonitoringEmployee[] {
   const activeUser = getActiveUser();
-  const authorized = getAuthorizedSubordinates(activeUser);
+  const users = loadManagedUsers();
+  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}`;
+  if (_cachedSupMonList && _cachedSupMonSig === sig) {
+    return _cachedSupMonList;
+  }
+  const authorized = getAuthorizedSubordinates(activeUser, users);
   const allowedIds = new Set(authorized.map((s) => s.employeeId.toLowerCase()));
-  return getMonitoringEmployees().filter((e) => allowedIds.has(e.id.toLowerCase()));
+  const filtered = getMonitoringEmployees().filter((e) => allowedIds.has(e.id.toLowerCase()));
+  _cachedSupMonSig = sig;
+  _cachedSupMonList = filtered;
+  return filtered;
 }
 
 /**
@@ -114,12 +152,21 @@ const ALL_COMPANY_UNITS = [
 
 function getScopedCompanyUnits(): string[] {
   const activeUser = getActiveUser();
+  const sig = `${_monEpoch}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}`;
+  if (_cachedUnitsList && _cachedUnitsSig === sig) {
+    return _cachedUnitsList;
+  }
   const isGlobalViewer = isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
   const roleUnits = getRoleAllowedCompanyUnits(activeUser.role);
   if (isGlobalViewer) {
     if (roleUnits.length > 0) {
-      return Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+      const u = Array.from(new Set([...roleUnits, ...(activeUser.managedUnits ?? [])].filter(Boolean)));
+      _cachedUnitsSig = sig;
+      _cachedUnitsList = u;
+      return u;
     }
+    _cachedUnitsSig = sig;
+    _cachedUnitsList = ALL_COMPANY_UNITS;
     return ALL_COMPANY_UNITS;
   }
   const visibleUnits = new Set(getMonitoringEmployees().map((e) => e.unit).filter(Boolean));
@@ -127,7 +174,10 @@ function getScopedCompanyUnits(): string[] {
     ...ALL_COMPANY_UNITS.filter((u) => visibleUnits.has(u)),
     ...Array.from(visibleUnits).filter((u) => !ALL_COMPANY_UNITS.includes(u)),
   ];
-  return ordered.length > 0 ? ordered : [activeUser.company].filter(Boolean);
+  const finalUnits = ordered.length > 0 ? ordered : [activeUser.company].filter(Boolean);
+  _cachedUnitsSig = sig;
+  _cachedUnitsList = finalUnits;
+  return finalUnits;
 }
 
 export const COMPANY_UNITS: string[] = new Proxy([] as string[], {

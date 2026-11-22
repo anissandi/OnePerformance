@@ -140,6 +140,108 @@ export function sanitizeKpiNumericInput(raw: string, allowRangeDash = true): str
   return raw.replace(/[^0-9.,\-%]/g, "");
 }
 
+/** Mengecek apakah bagian unit pada field Satuan dipilih "%" (mis. "%", "%/Bulan", "% /Tahun"). */
+export function isPercentSatuan(satuan?: string | null): boolean {
+  const s = String(satuan ?? "").trim();
+  if (!s) return false;
+  const unitPart = (s.indexOf("/") >= 0 ? s.slice(0, s.indexOf("/")) : s).trim();
+  return unitPart === "%";
+}
+
+/**
+ * Menambahkan simbol "%" secara otomatis setelah input angka apabila Satuan = "%"
+ * (mis. mengetik "50" otomatis menjadi "50%", termasuk mendukung Backspace & pengetikan lanjutan).
+ */
+export function applyAutoPercentInput(nextRaw: string, prevRaw = ""): string {
+  const cleaned = sanitizeKpiNumericInput(nextRaw);
+  if (!cleaned.trim()) return "";
+
+  // Jika user menekan Backspace tepat saat kursor berada setelah simbol "%" di akhir nilai sebelumnya
+  if (prevRaw.endsWith("%") && cleaned === prevRaw.slice(0, -1)) {
+    const coreAfterBackspace = cleaned.slice(0, -1).trim();
+    if (!coreAfterBackspace || !/\d/.test(coreAfterBackspace)) return "";
+    return `${coreAfterBackspace}%`;
+  }
+
+  // Hilangkan seluruh "%" di tengah/akhir, lalu tempelkan kembali "%" di paling akhir bila bernilai angka
+  const withoutPct = cleaned.replace(/%/g, "").trim();
+  if (!withoutPct) return "";
+  if (/\d/.test(withoutPct)) {
+    return `${withoutPct}%`;
+  }
+  return withoutPct;
+}
+
+/** Sinkronkan akhiran "%" pada nilai yang sudah terisi ketika pilihan Satuan berubah ke/dari "%". */
+export function syncPercentSuffixOnValue(raw: string, shouldHavePercent: boolean): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+  const withoutPct = trimmed.replace(/%/g, "").trim();
+  if (!withoutPct) return "";
+  if (shouldHavePercent && /\d/.test(withoutPct)) {
+    return `${withoutPct}%`;
+  }
+  return withoutPct;
+}
+
+// ─── KPI Color Indicator Bands (Biru > Merah > Hitam) ─────────────────────────
+
+export interface KpiColorBandOption {
+  value: "Biru" | "Merah" | "Hitam";
+  label: "Biru" | "Merah" | "Hitam";
+  rank: 3 | 2 | 1;
+  color: string;
+  bg: string;
+  border: string;
+  dot: string;
+}
+
+export const KPI_COLOR_BAND_OPTIONS: readonly KpiColorBandOption[] = [
+  { value: "Biru",  label: "Biru",  rank: 3, color: "#1d4ed8", bg: "#eff6ff", border: "#93c5fd", dot: "#3b82f6" },
+  { value: "Merah", label: "Merah", rank: 2, color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
+  { value: "Hitam", label: "Hitam", rank: 1, color: "#111827", bg: "#f3f4f6", border: "#9ca3af", dot: "#1f2937" },
+] as const;
+
+/** Normalisasi nilai warna KPI (mendukung data lama Blue/Red/Black atau 100/75/0 ke Biru/Merah/Hitam). */
+export function normalizeKpiColorBandValue(raw?: string | null): "Biru" | "Merah" | "Hitam" | "" {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (/^(biru|blue|100|100%|95%-100%|green|hijau)$/i.test(s)) return "Biru";
+  if (/^(merah|red|75|75%|≥80%-<95%|yellow|kuning)$/i.test(s)) return "Merah";
+  if (/^(hitam|black|0|0%|<80%)$/i.test(s)) return "Hitam";
+  return "";
+}
+
+export function resolveKpiColorBandMeta(raw?: string | null): KpiColorBandOption | undefined {
+  const norm = normalizeKpiColorBandValue(raw);
+  if (!norm) return undefined;
+  return KPI_COLOR_BAND_OPTIONS.find((o) => o.value === norm);
+}
+
+export function isKnownKpiColorBandValue(raw?: string | null): boolean {
+  const s = String(raw ?? "").trim();
+  return /^(biru|merah|hitam|blue|red|black|95%-100%|≥80%-<95%|<80%)$/i.test(s);
+}
+
+export function kpiColorBandRank(raw?: string | null): number {
+  return resolveKpiColorBandMeta(raw)?.rank ?? 0;
+}
+
+/**
+ * Perhitungan pencapaian KPI mode warna (Biru tertinggi = 3, Merah = 2, Hitam = 1):
+ * - Jika Aktual >= Target (contoh: Target Biru & Aktual Biru; atau Target Merah & Aktual Biru/Merah; atau Target Hitam & Aktual apa saja) -> 100% (TIDAK memicu RCA).
+ * - Jika Target Biru & Aktual Merah -> 75% (< 100%, MEMICU RCA).
+ * - Jika Aktual Hitam sementara Target Biru atau Merah -> 0% (< 100%, MEMICU RCA).
+ */
+export function computeKpiColorBandAchievementPct(actualBand?: string | null, targetBand?: string | null): number | null {
+  const actR = kpiColorBandRank(actualBand);
+  if (actR === 0) return null;
+  const tgtR = kpiColorBandRank(targetBand) || 3;
+  if (actR >= tgtR) return 100;
+  if (actR === 2) return 75;
+  return 0;
+}
+
 /**
  * Parsing fleksibel angka KPI dengan dukungan penuh:
  * - Koma (,) untuk pecahan desimal: "10,5" -> 10.5; "0,31" -> 0.31
@@ -269,7 +371,11 @@ function detectPreferredStyle(samples: string[]): {
  * Format hasil perhitungan Target Tahunan menyesuaikan gaya operator titik (.) dan koma (,)
  * yang digunakan pada input Monthly Target / Baseline (mis. "10.000" -> "120.000", "10,5" -> "126", "10.00,01" -> "12.000,12").
  */
-export function formatComputedKpiNumber(value: number, sampleInputs: string[] = []): string {
+export function formatComputedKpiNumber(
+  value: number,
+  sampleInputs: string[] = [],
+  opts?: { forcePercent?: boolean },
+): string {
   if (!Number.isFinite(value)) return "";
   const { style, useThousands, minDecimals, appendPercent } = detectPreferredStyle(sampleInputs);
   const rounded = Math.round(value * 10000) / 10000;
@@ -293,5 +399,5 @@ export function formatComputedKpiNumber(value: number, sampleInputs: string[] = 
   const decSep = style === "id" ? "," : ".";
   const combined = decRaw ? `${formattedInt}${decSep}${decRaw}` : formattedInt;
   const signed = isNeg ? `-${combined}` : combined;
-  return appendPercent ? `${signed}%` : signed;
+  return opts?.forcePercent || appendPercent ? `${signed}%` : signed;
 }

@@ -1,4 +1,4 @@
-import { loadPersistedState, mergeKvMapRecord, safeSetLocalJson, syncToSupabase } from "../services/supabaseClient";
+import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, syncToSupabase } from "../services/supabaseClient";
 import type { ManagedUser } from "./authStore";
 
 /**
@@ -38,13 +38,47 @@ const norm = (id: string) => String(id ?? "").trim().toUpperCase();
 const numKey = (id: string) => norm(id).replace(/^(?:EMP-?|E)0*/i, "");
 const sameEmp = (a: string, b: string) => Boolean(a && b) && (norm(a) === norm(b) || (numKey(a) !== "" && numKey(a) === numKey(b)));
 
+type DelegatedModuleFlags = {
+  kpiSetting: boolean;
+  kpiTracking: boolean;
+  smartGoalsSetting: boolean;
+  smartGoalsMeasurement: boolean;
+  approveSetting: boolean;
+  approveMeasurement: boolean;
+};
+
+const EMPTY_DELEGATED_FLAGS: DelegatedModuleFlags = {
+  kpiSetting: false,
+  kpiTracking: false,
+  smartGoalsSetting: false,
+  smartGoalsMeasurement: false,
+  approveSetting: false,
+  approveMeasurement: false,
+};
+
+let _cachedDelegationsRaw: string | null | undefined = undefined;
+let _cachedDelegationsMap: Record<string, DelegationRecord> = {};
+let _cachedActiveDelegations: DelegationRecord[] = [];
+let _cachedDelegateFlagsByKey = new Map<string, DelegatedModuleFlags>();
+
 export function loadDelegations(): Record<string, DelegationRecord> {
+  const rawStr = safeGetLocalRaw(DELEGATION_KEY);
+  if (_cachedDelegationsRaw === rawStr) {
+    return _cachedDelegationsMap;
+  }
   const raw = loadPersistedState<Record<string, DelegationRecord>>(DELEGATION_KEY, {});
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    _cachedDelegationsRaw = rawStr;
+    _cachedDelegationsMap = {};
+    _cachedActiveDelegations = [];
+    _cachedDelegateFlagsByKey = new Map();
+    return {};
+  }
   const normalized: Record<string, DelegationRecord> = {};
+  const activeList: DelegationRecord[] = [];
   for (const [k, rec] of Object.entries(raw)) {
     if (!rec || typeof rec !== "object") continue;
-    normalized[k] = {
+    const item: DelegationRecord = {
       ...rec,
       kpiSetting: Boolean(rec.kpiSetting),
       kpiTracking: Boolean(rec.kpiTracking),
@@ -52,7 +86,15 @@ export function loadDelegations(): Record<string, DelegationRecord> {
       smartGoalsMeasurement: Boolean(rec.smartGoalsMeasurement),
       access: { ...EMPTY_ACCESS, ...(rec.access ?? {}) },
     };
+    normalized[k] = item;
+    if (item.active && item.delegateEmployeeId) {
+      activeList.push(item);
+    }
   }
+  _cachedDelegationsRaw = rawStr;
+  _cachedDelegationsMap = normalized;
+  _cachedActiveDelegations = activeList;
+  _cachedDelegateFlagsByKey = new Map();
   return normalized;
 }
 
@@ -254,14 +296,13 @@ export function getReceivedWorkspaceDelegations(
 }
 
 /** Ringkasan hak modul yang diterima user via delegasi aktif (untuk menu Sidebar & allowedModules). */
-export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): {
-  kpiSetting: boolean;
-  kpiTracking: boolean;
-  smartGoalsSetting: boolean;
-  smartGoalsMeasurement: boolean;
-  approveSetting: boolean;
-  approveMeasurement: boolean;
-} {
+export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): DelegatedModuleFlags {
+  if (!delegateEmployeeId) return EMPTY_DELEGATED_FLAGS;
+  loadDelegations();
+  if (_cachedActiveDelegations.length === 0) return EMPTY_DELEGATED_FLAGS;
+  const cacheKey = norm(delegateEmployeeId);
+  const cached = _cachedDelegateFlagsByKey.get(cacheKey);
+  if (cached) return cached;
   const out = {
     kpiSetting: false,
     kpiTracking: false,
@@ -270,9 +311,7 @@ export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): {
     approveSetting: false,
     approveMeasurement: false,
   };
-  if (!delegateEmployeeId) return out;
-  for (const rec of Object.values(loadDelegations())) {
-    if (!rec.active || !rec.delegateEmployeeId) continue;
+  for (const rec of _cachedActiveDelegations) {
     if (!sameEmp(rec.delegateEmployeeId, delegateEmployeeId)) continue;
     if (hasWorkspaceDelegationAccess(rec.access)) {
       if (rec.kpiSetting) out.kpiSetting = true;
@@ -285,5 +324,6 @@ export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): {
       if (rec.kpiTracking || rec.smartGoalsMeasurement) out.approveMeasurement = true;
     }
   }
+  _cachedDelegateFlagsByKey.set(cacheKey, out);
   return out;
 }

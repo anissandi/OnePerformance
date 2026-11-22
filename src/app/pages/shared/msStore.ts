@@ -1,5 +1,5 @@
 import { submitWorkflowModule, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
-import { savePersistedState } from "../../services/supabaseClient";
+import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 const SELF_BY_EMP_KEY     = "ms_self_by_emp_v2";
@@ -13,10 +13,21 @@ export interface MSSelfRatings {
   submittedAt: string;
 }
 
+let _cachedMsSelfRaw: string | null | undefined = undefined;
+let _cachedMsSelfMap: Record<string, MSSelfRatings> = {};
+let _cachedMsApproverRaw: string | null | undefined = undefined;
+let _cachedMsApproverMap: Record<string, MSApproverEntry[]> = {};
+
 function readSelfMap(): Record<string, MSSelfRatings> {
   try {
-    const raw = localStorage.getItem(SELF_BY_EMP_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, MSSelfRatings>) ?? {} : {};
+    const raw = safeGetLocalRaw(SELF_BY_EMP_KEY);
+    if (_cachedMsSelfRaw === raw) {
+      return { ..._cachedMsSelfMap };
+    }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, MSSelfRatings>) ?? {} : {};
+    _cachedMsSelfRaw = raw;
+    _cachedMsSelfMap = parsed;
+    return { ...parsed };
   } catch {
     return {};
   }
@@ -24,8 +35,14 @@ function readSelfMap(): Record<string, MSSelfRatings> {
 
 function readApproverMap(): Record<string, MSApproverEntry[]> {
   try {
-    const raw = localStorage.getItem(APPROVER_BY_EMP_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, MSApproverEntry[]>) ?? {} : {};
+    const raw = safeGetLocalRaw(APPROVER_BY_EMP_KEY);
+    if (_cachedMsApproverRaw === raw) {
+      return { ..._cachedMsApproverMap };
+    }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, MSApproverEntry[]>) ?? {} : {};
+    _cachedMsApproverRaw = raw;
+    _cachedMsApproverMap = parsed;
+    return { ...parsed };
   } catch {
     return {};
   }

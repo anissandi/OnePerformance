@@ -1,10 +1,11 @@
 // @refresh reset
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../../shared/appraisalFormStore";
-import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 import { useAppraisalRevision } from "../../shared/useAppraisalRevision";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, ClipboardList, CheckCircle2, AlertCircle, Clock, Filter, TrendingUp, Users } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 
 // ─── Mock Appraisal Form data ─────────────────────────────────────────────────
@@ -203,7 +204,7 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 
 export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   useAppraisalRevision();
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     const onRefresh = () => setTick((t) => t + 1);
     window.addEventListener("appraisal-updated", onRefresh);
@@ -220,19 +221,27 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
   const average = (values: number[]) => values.length ? values.reduce((sum, score) => sum + score, 0) / values.length : 0;
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
-  const filteredEmployees = filterMonitoringByModuleAccess(
-    lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
-    "Appraisals Form",
+  const filteredEmployees = useMemo(
+    () =>
+      filterMonitoringByModuleAccess(
+        lockedUnits ? EMPLOYEES.filter((e) => lockedUnits.includes(e.unit)) : EMPLOYEES,
+        "Appraisals Form",
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lockedUnits?.join(","), tick],
   );
-  const workflows = loadWorkflowRecords();
-  const allRows = filteredEmployees.map((emp) => {
-    const normId = normalizeEmployeeId(emp.id);
-    const self = loadAppraisalSelf(emp.id);
-    const approvers = loadAllAppraisalApprovers(emp.id);
-    const wfRec = workflows.find(
-      (w) => w.year === "2026" && w.module === "Appraisal Form" && w.phase === "measurement" && w.employeeId === normId,
-    );
+  const allRows = useMemo(() => {
+    const wfByEmp = loadWorkflowRecordsByEmployeeMap();
+    return filteredEmployees.map((emp) => {
+      const normId = normalizeEmployeeId(emp.id);
+      const self = loadAppraisalSelf(emp.id);
+      const approvers = loadAllAppraisalApprovers(emp.id);
+      const wfRec = (wfByEmp.get(normId) ?? []).find(
+        (w) => w.year === "2026" && w.module === "Appraisal Form" && w.phase === "measurement",
+      );
     const first = approvers.find((entry) => entry.approverLevel === 1);
     const second = approvers.find((entry) => entry.approverLevel === 2);
     const selfValues = self
@@ -287,16 +296,28 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
         "—",
     };
     return { emp, af };
-  });
-  const filteredAF = allRows.map((r) => r.af);
+    });
+  }, [filteredEmployees, tick]);
+  const filteredAF = useMemo(() => allRows.map((r) => r.af), [allRows]);
   const data = filteredAF;
 
-  const rows = allRows.filter(({ emp }) => {
+  const rows = useMemo(() => {
     const q = search.toLowerCase();
-    const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
-    const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;
-    return matchSearch && matchUnit;
-  });
+    return allRows.filter(({ emp }) => {
+      const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
+      const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;
+      return matchSearch && matchUnit;
+    });
+  }, [allRows, search, unitFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, unitFilter]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
 
   const hasActiveFilters = unitFilter !== "Semua Unit";
 
@@ -368,7 +389,7 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ emp, af }) => {
+              {pagedRows.map(({ emp, af }) => {
                 const selfSt = ASSESS_STYLE[af.selfAssessmentStatus];
                 const supSt  = ASSESS_STYLE[af.supervisorAssessmentStatus];
                 const SelfIcon = selfSt.icon;
@@ -414,6 +435,14 @@ export function HRMonitoringAppraisalForm({ lockedUnits }: { lockedUnits?: strin
         {rows.length === 0 && (
           <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>
         )}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       {/* Competency summary */}

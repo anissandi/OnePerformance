@@ -1,8 +1,9 @@
 import { loadMSSelfRatings, loadAllMSApprovers } from "../../shared/msStore";
 import { useAppraisalRevision } from "../../shared/useAppraisalRevision";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Briefcase, CheckCircle2, AlertCircle, Clock, Filter, TrendingUp, Users } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
@@ -134,6 +135,8 @@ export function HRMonitoringManagerialSkill({ lockedUnits }: { lockedUnits?: str
   useAppraisalRevision();
   const [search, setSearch]       = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const supervisors = filterMonitoringByModuleAccess(
     lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
@@ -159,16 +162,26 @@ export function HRMonitoringManagerialSkill({ lockedUnits }: { lockedUnits?: str
       };
     })
     .filter((r): r is MSRecord => Boolean(r));
+  const msByEmpId = new Map(data.map((k) => [k.employeeId, k]));
 
   const rows = supervisors.map((emp) => ({
     emp,
-    ms: data.find((k) => k.employeeId === emp.id),
+    ms: msByEmpId.get(emp.id),
   })).filter(({ emp }) => {
     const q = search.toLowerCase();
     const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
     const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;
     return matchSearch && matchUnit;
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, unitFilter]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
 
   const hasActiveFilters = unitFilter !== "Semua Unit";
 
@@ -244,7 +257,7 @@ export function HRMonitoringManagerialSkill({ lockedUnits }: { lockedUnits?: str
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ emp, ms }) => {
+              {pagedRows.map(({ emp, ms }) => {
                 const selfSt = STATUS_STYLE[ms?.selfStatus ?? "Belum Mulai"];
                 const supSt  = STATUS_STYLE[ms?.supervisorStatus ?? "Belum Mulai"];
                 const SelfIcon = selfSt.icon;
@@ -293,6 +306,14 @@ export function HRMonitoringManagerialSkill({ lockedUnits }: { lockedUnits?: str
           </table>
         </div>
         {rows.length === 0 && <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       {/* Avg breakdown */}

@@ -1,5 +1,5 @@
 import { submitWorkflowModule, loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
-import { savePersistedState } from "../../services/supabaseClient";
+import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 import { getActiveUser } from "../../store/authStore";
 import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
 const SELF_BY_EMP_KEY     = "af_self_by_emp_v2";
@@ -19,10 +19,21 @@ export interface StoredAppraisalSelf {
   submitted?: boolean;
 }
 
+let _cachedAfSelfRaw: string | null | undefined = undefined;
+let _cachedAfSelfMap: Record<string, StoredAppraisalSelf> = {};
+let _cachedAfApproverRaw: string | null | undefined = undefined;
+let _cachedAfApproverMap: Record<string, StoredAppraisalApproverEntry[]> = {};
+
 function readSelfMap(): Record<string, StoredAppraisalSelf> {
   try {
-    const raw = localStorage.getItem(SELF_BY_EMP_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, StoredAppraisalSelf>) ?? {} : {};
+    const raw = safeGetLocalRaw(SELF_BY_EMP_KEY);
+    if (_cachedAfSelfRaw === raw) {
+      return { ..._cachedAfSelfMap };
+    }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, StoredAppraisalSelf>) ?? {} : {};
+    _cachedAfSelfRaw = raw;
+    _cachedAfSelfMap = parsed;
+    return { ...parsed };
   } catch {
     return {};
   }
@@ -30,8 +41,14 @@ function readSelfMap(): Record<string, StoredAppraisalSelf> {
 
 function readApproverMap(): Record<string, StoredAppraisalApproverEntry[]> {
   try {
-    const raw = localStorage.getItem(APPROVER_BY_EMP_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, StoredAppraisalApproverEntry[]>) ?? {} : {};
+    const raw = safeGetLocalRaw(APPROVER_BY_EMP_KEY);
+    if (_cachedAfApproverRaw === raw) {
+      return { ..._cachedAfApproverMap };
+    }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, StoredAppraisalApproverEntry[]>) ?? {} : {};
+    _cachedAfApproverRaw = raw;
+    _cachedAfApproverMap = parsed;
+    return { ...parsed };
   } catch {
     return {};
   }

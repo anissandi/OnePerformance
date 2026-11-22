@@ -1,9 +1,10 @@
 // @refresh reset
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, Users, X, Lock, CheckCircle2, FileText, Eye } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
-import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { getKpiMonthStatuses, loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 const countValidatedKpiMonths = (employeeId: string) =>
   getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;
@@ -1058,7 +1059,7 @@ function resolveSupKpiMeasurementStatus(empId: string, rec?: ReturnType<typeof l
 }
 
 export function SupervisorMonitoringKPI() {
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     const onRefresh = () => setTick((t) => t + 1);
     window.addEventListener("appraisal-updated", onRefresh);
@@ -1073,20 +1074,22 @@ export function SupervisorMonitoringKPI() {
     };
   }, []);
   const [search, setSearch]     = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [kpiModal, setKpiModal] = useState<{ rec: KPIRecord; empName: string } | null>(null);
   const [rcaModal, setRcaModal] = useState<{ rec: KPIRecord; empName: string } | null>(null);
 
-  const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "KPI (Setting/Measurement)");
-  const workflows = loadWorkflowRecords();
-  const rows = allowedTeamEmployees
-    .map((emp, idx) => {
+  const allowedTeamEmployees = useMemo(
+    () => filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "KPI (Setting/Measurement)"),
+    [tick],
+  );
+  const allTeamRows = useMemo(() => {
+    const wfByEmp = loadWorkflowRecordsByEmployeeMap();
+    return allowedTeamEmployees.map((emp, idx) => {
       const normId = normalizeEmployeeId(emp.id);
-      const wfSet = workflows.find(
-        (w) => w.year === "2026" && w.module === "KPI" && w.phase === "setting" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
-      );
-      const wfMeas = workflows.find(
-        (w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
-      );
+      const empRecs = wfByEmp.get(normId) ?? [];
+      const wfSet = empRecs.find((w) => w.year === "2026" && w.module === "KPI" && w.phase === "setting");
+      const wfMeas = empRecs.find((w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement");
       const setApproved = Boolean(
         wfSet?.decisions.validator?.status === "Validated" ||
           wfSet?.decisions.approver2?.status === "Validated",
@@ -1122,8 +1125,23 @@ export function SupervisorMonitoringKPI() {
             rcaItems: [],
           };
       return { idx, emp, kpi, settingStatus, measurementStatus };
-    })
-    .filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()) || emp.id.toLowerCase().includes(search.toLowerCase()));
+    });
+  }, [allowedTeamEmployees, tick]);
+
+  const rows = useMemo(() => {
+    const q = search.toLowerCase();
+    if (!q) return allTeamRows;
+    return allTeamRows.filter(({ emp }) => emp.name.toLowerCase().includes(q) || emp.id.toLowerCase().includes(q));
+  }, [allTeamRows, search]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
 
   const totalSubmitted = KPI_DATA.filter((k) => k.totalKPI > 0 && k.submittedKPI === k.totalKPI).length;
   const avgAch         = KPI_DATA.length ? Math.round(KPI_DATA.reduce((s, k) => s + k.avgAchievement, 0) / KPI_DATA.length) : 0;
@@ -1184,7 +1202,7 @@ export function SupervisorMonitoringKPI() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ idx, emp, kpi, settingStatus, measurementStatus }) => {
+              {pagedRows.map(({ idx, emp, kpi, settingStatus, measurementStatus }) => {
                 const setSt = KPI_WORKFLOW_STATUS_STYLE[settingStatus] ?? KPI_WORKFLOW_STATUS_STYLE["Unsubmitted"];
                 const SetIcon = setSt.icon;
                 const measSt = KPI_WORKFLOW_STATUS_STYLE[measurementStatus] ?? KPI_WORKFLOW_STATUS_STYLE["Unsubmitted"];
@@ -1251,6 +1269,14 @@ export function SupervisorMonitoringKPI() {
           </table>
         </div>
         {rows.length === 0 && <div className="py-16 text-center text-gray-400 text-sm">No data matches the search.</div>}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       {kpiModal && <KPIModal rec={kpiModal.rec} empName={kpiModal.empName} onClose={() => setKpiModal(null)} />}

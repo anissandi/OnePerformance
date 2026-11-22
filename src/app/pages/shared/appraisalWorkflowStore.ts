@@ -122,7 +122,7 @@ function deriveCanonicalAlias(no: string): WorkflowAlias | undefined {
     const phase: WorkflowRecord["phase"] = phaseCode === "ST" ? "setting" : "measurement";
     const normEmpId = normalizeEmployeeId(rawEmpId);
     const key = keyFor(normEmpId, module, phase, "2026");
-    const existing = loadWorkflowRecords().find((r) => r.key === key);
+    const existing = loadWorkflowRecordsByKeyMap().get(key);
     const role: ReviewerRole = hPrefix === "H" ? "approver2" : "approver1";
     return {
       key,
@@ -140,7 +140,7 @@ function deriveCanonicalAlias(no: string): WorkflowAlias | undefined {
     const [, rawEmpId, year] = idfMatch;
     const normEmpId = normalizeEmployeeId(rawEmpId);
     const key = keyFor(normEmpId, "Inter-Department Feedback", "measurement", year);
-    const existing = loadWorkflowRecords().find((r) => r.key === key);
+    const existing = loadWorkflowRecordsByKeyMap().get(key);
     return {
       key,
       employeeId: normEmpId,
@@ -192,8 +192,54 @@ function sanitizeWorkflowRecord(rec: WorkflowRecord): WorkflowRecord {
   };
 }
 
+let _cachedWorkflowRaw: string | null | undefined = undefined;
+let _cachedWorkflowList: WorkflowRecord[] = [];
+let _cachedWorkflowByKey = new Map<string, WorkflowRecord>();
+let _cachedWorkflowByNormEmp = new Map<string, WorkflowRecord[]>();
+
 export function loadWorkflowRecords(): WorkflowRecord[] {
-  return read<WorkflowRecord[]>(KEY, []).map(sanitizeWorkflowRecord);
+  const raw = safeGetLocalRaw(KEY);
+  if (_cachedWorkflowRaw === raw) {
+    return _cachedWorkflowList;
+  }
+  let parsed: WorkflowRecord[] = [];
+  if (raw) {
+    try {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p)) {
+        parsed = p.map(sanitizeWorkflowRecord);
+      }
+    } catch {
+      parsed = [];
+    }
+  }
+  const byKey = new Map<string, WorkflowRecord>();
+  const byEmp = new Map<string, WorkflowRecord[]>();
+  for (const rec of parsed) {
+    if (!rec) continue;
+    if (rec.key) byKey.set(rec.key, rec);
+    const normEmp = normalizeEmployeeId(rec.employeeId);
+    if (normEmp) {
+      const list = byEmp.get(normEmp);
+      if (list) list.push(rec);
+      else byEmp.set(normEmp, [rec]);
+    }
+  }
+  _cachedWorkflowRaw = raw;
+  _cachedWorkflowList = parsed;
+  _cachedWorkflowByKey = byKey;
+  _cachedWorkflowByNormEmp = byEmp;
+  return parsed;
+}
+
+export function loadWorkflowRecordsByKeyMap(): Map<string, WorkflowRecord> {
+  loadWorkflowRecords();
+  return _cachedWorkflowByKey;
+}
+
+export function loadWorkflowRecordsByEmployeeMap(): Map<string, WorkflowRecord[]> {
+  loadWorkflowRecords();
+  return _cachedWorkflowByNormEmp;
 }
 export function workflowAlias(no: string): WorkflowAlias | undefined {
   ensureLegacyAliasesMigrated();
@@ -705,9 +751,8 @@ export type KpiMonthState = "validated" | "pending" | "revision" | "not_submitte
 /** Status per bulan (Jan–Dec) KPI Tracking milik karyawan. */
 export function getKpiMonthStatuses(employeeId: string): Array<{ label: string; state: KpiMonthState }> {
   const normId = normalizeEmployeeId(employeeId);
-  const rec = loadWorkflowRecords().find(
-    (r) => r.module === "KPI" && r.phase === "measurement" && normalizeEmployeeId(r.employeeId) === normId,
-  );
+  const empRecs = loadWorkflowRecordsByEmployeeMap().get(normId) ?? [];
+  const rec = empRecs.find((r) => r.module === "KPI" && r.phase === "measurement");
   const validated = new Set(rec?.validatedMonths ?? []);
   const isValidatedRecord = rec?.decisions.validator?.status === "Validated";
   // Record lama yang sudah Validated tanpa validatedMonths: anggap semua bulan tercatat tervalidasi
@@ -733,12 +778,12 @@ export function getKpiMonthStatuses(employeeId: string): Array<{ label: string; 
 export function saveWorkflowAssessment(no: string, role: ReviewerRole, ratings: Record<string, number>, comments: Record<string, string>, date: string) {
   const alias = workflowAlias(no);
   if (!alias) return;
-  const record = loadWorkflowRecords().find((item) => item.key === alias.key) ?? { ...alias, decisions: {}, assessments: {} };
+  const record = loadWorkflowRecordsByKeyMap().get(alias.key) ?? { ...alias, decisions: {}, assessments: {} };
   write({ ...record, assessments: { ...record.assessments, [role]: { ratings, comments, date } } });
 }
 export function workflowRowStatus(row: ApprovalRow, role: ReviewerRole): Partial<ApprovalRow> | null {
   const alias = workflowAlias(row.no);
-  const record = alias && loadWorkflowRecords().find((item) => item.key === alias.key);
+  const record = alias ? loadWorkflowRecordsByKeyMap().get(alias.key) : undefined;
   if (!record) return null;
   const isFourStep = record.module === "KPI" || record.module === "SMART Goals" || record.module === "RCA";
   const stage: WorkflowStageRole = row.workflowStageForRow ?? alias?.stage ?? role;

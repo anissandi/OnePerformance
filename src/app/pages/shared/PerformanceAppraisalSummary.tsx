@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Award, Download, ChevronDown, ChevronUp, ChevronsUpDown, Eye, TrendingUp, Users, X, Star } from "lucide-react";
 import { ANALYTICS_CARD_TONES, AnalyticsStatCard } from "../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../components/TablePaginationBar";
 import { EXCEL_THEME, exportStyledXLSX, type StyledExcelCell, type StyledExcelMerge } from "../../utils/excelUtils";
 import type { Employee, CalibrationTarget, ScoreGrade } from "../../data/mockEmployees";
 import {
@@ -448,7 +449,9 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   }, []);
   const [liveMI, setLiveMI] = useState<Record<string, ScoreGrade>>(buildMIScores);
   useEffect(() => subscribeScores(() => setLiveMI(buildMIScores())), [buildMIScores]);
-  const [, setRefreshTick] = useState(0);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   useEffect(() => {
     const onRefresh = () => setRefreshTick((t) => t + 1);
     window.addEventListener("pa-auth-updated", onRefresh);
@@ -484,62 +487,96 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     activeUser.role === "Coordinator";
   const { lockedUnits: authLockedUnits } = useAuthStore();
   const globalLockedUnits = isGlobalViewer ? (lockedUnits ?? authLockedUnits) : undefined;
-  const supervisorAllowedIds = new Set(
-    !isGlobalViewer || role === "supervisor" || isUnitScopedRole
-      ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
-      : [],
+  const supervisorAllowedIds = useMemo(
+    () =>
+      new Set(
+        !isGlobalViewer || role === "supervisor" || isUnitScopedRole
+          ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
+          : [],
+      ),
+    [isGlobalViewer, role, isUnitScopedRole, activeUser, refreshTick],
   );
 
-  const liveEmployees = getLiveTransactionalEmployees();
-  const visibleBaseEmployees = liveEmployees.filter((emp) => {
-    if (!isGlobalViewer || role === "supervisor" || isUnitScopedRole) {
-      return supervisorAllowedIds.has(emp.id.toLowerCase());
+  const liveEmployees = useMemo(() => getLiveTransactionalEmployees(), [refreshTick]);
+  const visibleBaseEmployees = useMemo(
+    () =>
+      liveEmployees.filter((emp) => {
+        if (!isGlobalViewer || role === "supervisor" || isUnitScopedRole) {
+          return supervisorAllowedIds.has(emp.id.toLowerCase());
+        }
+        if (globalLockedUnits && !globalLockedUnits.includes(emp.companyUnit)) return false;
+        return true;
+      }),
+    [liveEmployees, isGlobalViewer, role, isUnitScopedRole, supervisorAllowedIds, globalLockedUnits],
+  );
+  const approvedSettingKeySet = useMemo(() => {
+    const set = new Set<string>();
+    for (const w of loadWorkflowRecords()) {
+      if (w.year !== year || w.phase !== "setting") continue;
+      const a2 = w.decisions.approver2?.status ?? "";
+      if (a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed")) {
+        set.add(`${normalizeEmployeeId(w.employeeId)}::${w.module}`);
+      }
     }
-    if (globalLockedUnits && !globalLockedUnits.includes(emp.companyUnit)) return false;
-    return true;
-  });
-  const allWorkflows = loadWorkflowRecords();
+    return set;
+  }, [year, refreshTick]);
   const isSettingFullyApproved = (empId: string, modName: "KPI" | "SMART Goals"): boolean => {
-    const normId = normalizeEmployeeId(empId);
-    const rec = allWorkflows.find(
-      (w) =>
-        w.year === year &&
-        w.module === modName &&
-        w.phase === "setting" &&
-        (w.employeeId === normId || w.employeeId.toLowerCase() === empId.toLowerCase()),
-    );
-    const a2 = rec?.decisions.approver2?.status ?? "";
-    return a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed");
+    return approvedSettingKeySet.has(`${normalizeEmployeeId(empId)}::${modName}`);
   };
 
-  const filtered = visibleBaseEmployees.filter(emp => {
-    if (companyUnit !== "All Units"       && emp.companyUnit !== companyUnit) return false;
-    if (division    !== "All Divisions"   && emp.division    !== division)    return false;
-    if (department  !== "All Departments" && emp.department  !== department)  return false;
-    if (position    !== "All Positions"   && emp.position    !== position)    return false;
-    return true;
-  });
+  const filtered = useMemo(
+    () =>
+      visibleBaseEmployees.filter((emp) => {
+        if (companyUnit !== "All Units" && emp.companyUnit !== companyUnit) return false;
+        if (division !== "All Divisions" && emp.division !== division) return false;
+        if (department !== "All Departments" && emp.department !== department) return false;
+        if (position !== "All Positions" && emp.position !== position) return false;
+        return true;
+      }),
+    [visibleBaseEmployees, companyUnit, division, department, position],
+  );
 
-  const GRADE_SORT_ORDER = ["A+", "A", "B", "C", "D", "E"];
-  const sorted = [...filtered].sort((a, b) => {
-    const aSelf = a.id.toLowerCase() === activeUser.employeeId.toLowerCase();
-    const bSelf = b.id.toLowerCase() === activeUser.employeeId.toLowerCase();
-    if (aSelf !== bSelf) return aSelf ? -1 : 1;
-    let cmp = 0;
-    if (sortKey === "totalScore") cmp = a.totalScore - b.totalScore;
-    else if (sortKey === "grade") cmp = GRADE_SORT_ORDER.indexOf(a.grade) - GRADE_SORT_ORDER.indexOf(b.grade);
-    else cmp = (a[sortKey] ?? "").toString().localeCompare((b[sortKey] ?? "").toString());
-    return sortDir === "asc" ? cmp : -cmp;
-  });
+  const sorted = useMemo(() => {
+    const GRADE_SORT_ORDER = ["A+", "A", "B", "C", "D", "E"];
+    const selfLower = activeUser.employeeId.toLowerCase();
+    return [...filtered].sort((a, b) => {
+      const aSelf = a.id.toLowerCase() === selfLower;
+      const bSelf = b.id.toLowerCase() === selfLower;
+      if (aSelf !== bSelf) return aSelf ? -1 : 1;
+      let cmp = 0;
+      if (sortKey === "totalScore") cmp = a.totalScore - b.totalScore;
+      else if (sortKey === "grade") cmp = GRADE_SORT_ORDER.indexOf(a.grade) - GRADE_SORT_ORDER.indexOf(b.grade);
+      else cmp = (a[sortKey] ?? "").toString().localeCompare((b[sortKey] ?? "").toString());
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [filtered, activeUser.employeeId, sortKey, sortDir]);
 
-  const gradeCounts = ["A+", "A", "B", "C", "D", "E"].map(g => ({
-    grade: g,
-    count: filtered.filter(e => e.grade === g).length,
-  }));
+  const gradeCounts = useMemo(() => {
+    const counts: Record<string, number> = { "A+": 0, A: 0, B: 0, C: 0, D: 0, E: 0 };
+    for (const e of filtered) {
+      if (counts[e.grade] !== undefined) counts[e.grade]++;
+    }
+    return ["A+", "A", "B", "C", "D", "E"].map((g) => ({ grade: g, count: counts[g] ?? 0 }));
+  }, [filtered]);
 
-  const avgScore = filtered.length
-    ? (filtered.reduce((s, e) => s + e.totalScore, 0) / filtered.length).toFixed(1)
-    : "—";
+  const avgScore = useMemo(
+    () =>
+      filtered.length
+        ? (filtered.reduce((s, e) => s + e.totalScore, 0) / filtered.length).toFixed(1)
+        : "—",
+    [filtered],
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [companyUnit, division, department, position, year]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedSorted = useMemo(
+    () => sorted.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [sorted, safePage, pageSize],
+  );
 
   const managedUsersById = useMemo(() => {
     const map = new Map<string, ReturnType<typeof loadManagedUsers>[number]>();
@@ -871,12 +908,13 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                   </td>
                 </tr>
               ) : (
-                sorted.map((emp, idx) => {
+                pagedSorted.map((emp, idx) => {
+                  const globalIdx = (safePage - 1) * pageSize + idx;
                   const isSelf = emp.id.toLowerCase() === activeUser.employeeId.toLowerCase();
                   const u = managedUsersById.get(emp.id.toLowerCase());
                   return (
                   <tr key={emp.id} className={isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/50 transition-colors"}>
-                    <td className="px-3 py-2.5 border border-gray-100 text-center text-xs font-semibold text-gray-500">{idx + 1}</td>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center text-xs font-semibold text-gray-500">{globalIdx + 1}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-center">
                       <button
                         onClick={() => setSelectedEmployee(emp)}
@@ -925,6 +963,14 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
             </tbody>
           </table>
         </div>
+        <TablePaginationBar
+          totalItems={sorted.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       <DistributionByGroup employees={filtered} calibrationTargets={calibrationTargets} />

@@ -21,6 +21,7 @@ import {
   type KpiHierarchyValidationChecklist,
 } from "../ModuleActivation";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
+import { isKnownKpiColorBandValue, resolveKpiColorBandMeta } from "../../../utils/kpiNumberAndPeriod";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ interface KPISetting {
   keterangan: string;
   monthlyTargets?: Record<string, string>;
   colorIndicator?: boolean;
+  indicatorMode?: "numeric" | "color" | "ratio";
   // Corporate / Business fields
   scope?: string;
   trackingPeriod?: string;
@@ -155,6 +157,20 @@ const GM_KPI: KPISetting[] = [
 ];
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+
+function HrKpiColorBadge({ value }: { value?: string }) {
+  const meta = resolveKpiColorBandMeta(value);
+  if (!meta) return <span className="text-[11px] text-gray-700 font-medium">{value || "—"}</span>;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border"
+      style={{ background: meta.bg, borderColor: meta.border, color: meta.color }}
+    >
+      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: meta.dot }} />
+      {meta.label}
+    </span>
+  );
+}
 
 
 const CORP_SECTION_META_BIZ: Record<string, { label: string; bobot: string; bg: string }> = {
@@ -383,10 +399,14 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
                           <span className="text-[11px] text-gray-600 whitespace-pre-line leading-relaxed">{item.keterangan || "—"}</span>
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
-                          <span className="text-[11px] text-gray-700 font-medium">{item.baseline2025 || "—"}</span>
+                          {(item.colorIndicator || item.indicatorMode === "color" || isKnownKpiColorBandValue(item.baseline2025))
+                            ? <HrKpiColorBadge value={item.baseline2025} />
+                            : <span className="text-[11px] text-gray-700 font-medium">{item.baseline2025 || "—"}</span>}
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
-                          <span className="text-[11px] font-bold text-[#1A284F]">{item.target2026 || "—"}</span>
+                          {(item.colorIndicator || item.indicatorMode === "color" || isKnownKpiColorBandValue(item.target2026))
+                            ? <HrKpiColorBadge value={item.target2026} />
+                            : <span className="text-[11px] font-bold text-[#1A284F]">{item.target2026 || "—"}</span>}
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-500">{item.trackingPeriod || "—"}</span>
@@ -525,10 +545,14 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
                           <span className="text-[11px] text-gray-500 whitespace-pre-line leading-relaxed">{item.keterangan || "—"}</span>
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
-                          <span className="text-[11px] text-gray-700 font-medium">{item.baseline2025 || "—"}</span>
+                          {(item.colorIndicator || item.indicatorMode === "color" || isKnownKpiColorBandValue(item.baseline2025))
+                            ? <HrKpiColorBadge value={item.baseline2025} />
+                            : <span className="text-[11px] text-gray-700 font-medium">{item.baseline2025 || "—"}</span>}
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
-                          <span className="text-[11px] font-bold text-[#1A284F]">{item.target2026 || "—"}</span>
+                          {(item.colorIndicator || item.indicatorMode === "color" || isKnownKpiColorBandValue(item.target2026))
+                            ? <HrKpiColorBadge value={item.target2026} />
+                            : <span className="text-[11px] font-bold text-[#1A284F]">{item.target2026 || "—"}</span>}
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
                           <span className="text-[11px] text-gray-500">{item.trackingPeriod || "—"}</span>

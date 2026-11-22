@@ -667,8 +667,8 @@ const OWNER_BASELINE_COLOR_META: Record<string, { color: string; bg: string; bor
   Black: { color: "#111827", bg: "#f9fafb", border: "#d1d5db", dot: "#374151" },
 };
 
-function OwnerColorValueBadge({ value, isBaseline }: { value: string; isBaseline?: boolean }) {
-  const meta = isBaseline ? OWNER_BASELINE_COLOR_META[value] : OWNER_COLOR_BAND_META[value];
+function OwnerColorValueBadge({ value }: { value: string; isBaseline?: boolean }) {
+  const meta = resolveKpiColorBandMeta(value);
   if (!meta) return <span className="text-gray-400 italic text-[11px]">{value || "—"}</span>;
   return (
     <span
@@ -676,7 +676,7 @@ function OwnerColorValueBadge({ value, isBaseline }: { value: string; isBaseline
       style={{ background: meta.bg, borderColor: meta.border, color: meta.color }}
     >
       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.dot }} />
-      {value}
+      {meta.label}
     </span>
   );
 }
@@ -976,10 +976,10 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                         <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 leading-relaxed whitespace-pre-line">{kpi.definisi || "—"}</td>
                         <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600">{kpi.source || "—"}</td>
                         <td className="border border-gray-200 py-3 px-3 text-center text-xs font-medium text-gray-700">
-                          {isColorMode ? <OwnerColorValueBadge value={kpi.baseline2025} isBaseline /> : (kpi.baseline2025 || "—")}
+                          {(isColorMode || isKnownKpiColorBandValue(kpi.baseline2025)) ? <OwnerColorValueBadge value={kpi.baseline2025} isBaseline /> : (kpi.baseline2025 || "—")}
                         </td>
                         <td className="border border-gray-200 py-3 px-3 text-center text-xs font-bold text-[#1A284F]">
-                          {isColorMode ? <OwnerColorValueBadge value={kpi.target2026} /> : (kpi.target2026 || "—")}
+                          {(isColorMode || isKnownKpiColorBandValue(kpi.target2026)) ? <OwnerColorValueBadge value={kpi.target2026} /> : (kpi.target2026 || "—")}
                         </td>
                         <td className="border border-gray-200 py-3 px-2 text-center">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : kpi.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
@@ -1284,4 +1284,8 @@ function ManSkillSettingContent() {
     </div>
   );
 }
-import { normalizeTrackingPeriod } from "../utils/kpiNumberAndPeriod";
+import {
+  isKnownKpiColorBandValue,
+  normalizeTrackingPeriod,
+  resolveKpiColorBandMeta,
+} from "../utils/kpiNumberAndPeriod";

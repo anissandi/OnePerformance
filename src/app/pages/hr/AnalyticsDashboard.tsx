@@ -95,6 +95,24 @@ function matchesMonthFilter(dateStr: string | undefined, monthFilter: string): b
   return parts.length === 3 && parts[1] === targetMm;
 }
 
+import { safeGetLocalRaw } from "../../services/supabaseClient";
+
+const _workflowsIndexWeak = new WeakMap<WorkflowRecord[], Map<string, WorkflowRecord[]>>();
+function getWorkflowsByNormEmpMap(workflows: WorkflowRecord[]): Map<string, WorkflowRecord[]> {
+  const cached = _workflowsIndexWeak.get(workflows);
+  if (cached) return cached;
+  const map = new Map<string, WorkflowRecord[]>();
+  for (const w of workflows) {
+    const k = normalizeEmployeeId(w.employeeId);
+    if (!k) continue;
+    const list = map.get(k);
+    if (list) list.push(w);
+    else map.set(k, [w]);
+  }
+  _workflowsIndexWeak.set(workflows, map);
+  return map;
+}
+
 // ── Live Transactional Completion Calculator ──────────────────────────────────
 function computeModuleStatsForUsers(
   users: ManagedUser[],
@@ -124,13 +142,20 @@ function computeModuleStatsForUsers(
   let projectByEmp: Record<string, { rows?: unknown[]; submitted?: boolean }> = {};
   if (modLabel === "Project OJS") {
     try {
-      projectByEmp = JSON.parse(localStorage.getItem("pa_project_icf_by_emp_v1") ?? "{}");
+      projectByEmp = JSON.parse(safeGetLocalRaw("pa_project_icf_by_emp_v1") ?? "{}");
     } catch {
       projectByEmp = {};
     }
   }
 
   const feedbackSubs = modLabel === "Inter-Department Feedback" ? loadFeedbackSubmissions() : [];
+  const feedbackByNormId = new Map<string, (typeof feedbackSubs)[number]>();
+  for (const fbItem of feedbackSubs) {
+    const nk = normalizeEmployeeId(fbItem.row.employeeId);
+    if (nk && !feedbackByNormId.has(nk)) {
+      feedbackByNormId.set(nk, fbItem);
+    }
+  }
 
   const mapModPhase = (m: string): { moduleName: string; phase: "setting" | "measurement" } => {
     if (m === "KPI (Setting)") return { moduleName: "KPI", phase: "setting" };
@@ -142,18 +167,19 @@ function computeModuleStatsForUsers(
   };
 
   const { moduleName, phase } = mapModPhase(modLabel);
+  const wfByEmp = getWorkflowsByNormEmpMap(workflows);
   let completed = 0;
   let inProgress = 0;
   let pending = 0;
 
   for (const u of eligibleUsers) {
     const normId = normalizeEmployeeId(u.employeeId);
-    const rec = workflows.find(
+    const empRecs = wfByEmp.get(normId) ?? [];
+    const rec = empRecs.find(
       (w) =>
         w.year === year &&
         w.module === moduleName &&
-        w.phase === phase &&
-        (w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
+        w.phase === phase,
     );
     if (modLabel === "KPI (Tracking)") {
       const evalKpi = evaluateEmployeeKPITracking(u.employeeId);
@@ -189,11 +215,7 @@ function computeModuleStatsForUsers(
       continue;
     }
     if (modLabel === "Inter-Department Feedback") {
-      const fb = feedbackSubs.find(
-        (s) =>
-          normalizeEmployeeId(s.row.employeeId) === normId ||
-          s.row.employeeId.toLowerCase() === u.employeeId.toLowerCase(),
-      );
+      const fb = feedbackByNormId.get(normId);
       const fbDone = Boolean(
         (fb && isFeedbackFollowUpComplete(fb)) ||
           (rec &&
@@ -379,11 +401,15 @@ function ModuleCompletionOverview({
   const isAllUnits = companyUnit === "All Units";
   const [collapsed, setCollapsed] = useState(false);
 
-  const rows = ALL_MODULES.map((mod) => {
-    const { total, completed, inProgress, pending } = computeModuleStatsForUsers(scopedUsers, workflows, mod, year);
-    const rate = total > 0 ? (completed / total) * 100 : 0;
-    return { mod, total, completed, inProgress, pending, rate };
-  });
+  const rows = useMemo(
+    () =>
+      ALL_MODULES.map((mod) => {
+        const { total, completed, inProgress, pending } = computeModuleStatsForUsers(scopedUsers, workflows, mod, year);
+        const rate = total > 0 ? (completed / total) * 100 : 0;
+        return { mod, total, completed, inProgress, pending, rate };
+      }),
+    [scopedUsers, workflows, year],
+  );
 
   const isFiltered = module !== "All Modules";
 
@@ -1547,12 +1573,13 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const globalLockedUnits = isGlobalViewer ? (lockedUnits ?? authLockedUnits) : undefined;
 
   const allManagedActiveUsers = useMemo(() => {
-    const all = loadManagedUsers().filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
+    const rawUsers = loadManagedUsers();
+    const all = rawUsers.filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
     if (isGlobalViewer) {
       return globalLockedUnits ? all.filter((u) => globalLockedUnits.includes(u.company)) : all;
     }
     const authorizedIds = new Set(
-      getAuthorizedSubordinates(scopeUser, loadManagedUsers()).map((u) => u.employeeId.toLowerCase()),
+      getAuthorizedSubordinates(scopeUser, rawUsers).map((u) => u.employeeId.toLowerCase()),
     );
     if (isCheckerRole) {
       // Checker: melihat seluruh karyawan di Company Unit yang di-allow pada konfigurasi Checker (Lintas Unit Usaha) + bawahan approver bila ada
@@ -1755,17 +1782,16 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
 
     let projectByEmpAll: Record<string, { rows?: unknown[] }> = {};
     try {
-      projectByEmpAll = JSON.parse(localStorage.getItem("pa_project_icf_by_emp_v1") ?? "{}");
+      projectByEmpAll = JSON.parse(safeGetLocalRaw("pa_project_icf_by_emp_v1") ?? "{}");
     } catch {
       projectByEmpAll = {};
     }
+    const wfByEmp = getWorkflowsByNormEmpMap(workflows);
 
     for (const u of scopedUsers) {
       const normId = normalizeEmployeeId(u.employeeId);
       const allowed = resolveUserAllowedModules(u);
-      const userRecs = workflows.filter(
-        (w) => w.year === year && (w.employeeId === normId || w.employeeId.toLowerCase() === u.employeeId.toLowerCase()),
-      );
+      const userRecs = (wfByEmp.get(normId) ?? []).filter((w) => w.year === year);
       const evalKpi = evaluateEmployeeKPITracking(u.employeeId);
       const prj = projectByEmpAll[normId] ?? projectByEmpAll[u.employeeId];
       const hasPrjRows = Boolean(prj && Array.isArray(prj.rows) && prj.rows.length > 0);

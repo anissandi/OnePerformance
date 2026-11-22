@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, TrendingUp, CheckCircle2, AlertCircle, Clock, Filter, Users } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { EMPLOYEES, COMPANY_UNITS, filterMonitoringByModuleAccess } from "./monitoringData";
-import { getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../../shared/appraisalWorkflowStore";
+import { getKpiMonthStatuses, loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId, type WorkflowRecord } from "../../shared/appraisalWorkflowStore";
 
 const countValidatedKpiMonths = (employeeId: string) =>
   getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;
@@ -90,7 +91,7 @@ function AchievementBar({ value }: { value: number }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}) {
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     const onRefresh = () => setTick((t) => t + 1);
     window.addEventListener("appraisal-updated", onRefresh);
@@ -107,21 +108,26 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("Semua Unit");
   const [statusFilter, setStatusFilter] = useState("Semua Status");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
-  const filteredEmployees = filterMonitoringByModuleAccess(
-    lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
-    "KPI (Setting/Measurement)",
+  const filteredEmployees = useMemo(
+    () =>
+      filterMonitoringByModuleAccess(
+        lockedUnits ? EMPLOYEES.filter((e) => lockedUnits.includes(e.unit)) : EMPLOYEES,
+        "KPI (Setting/Measurement)",
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lockedUnits?.join(","), tick],
   );
-  const workflows = loadWorkflowRecords();
 
-  const allRows = filteredEmployees.map((emp) => {
-    const normId = normalizeEmployeeId(emp.id);
-    const wfSet = workflows.find(
-      (w) => w.year === "2026" && w.module === "KPI" && w.phase === "setting" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
-    );
-    const wfMeas = workflows.find(
-      (w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === emp.id.toLowerCase()),
-    );
+  const allRows = useMemo(() => {
+    const wfByEmp = loadWorkflowRecordsByEmployeeMap();
+    return filteredEmployees.map((emp) => {
+      const normId = normalizeEmployeeId(emp.id);
+      const empRecs = wfByEmp.get(normId) ?? [];
+      const wfSet = empRecs.find((w) => w.year === "2026" && w.module === "KPI" && w.phase === "setting");
+      const wfMeas = empRecs.find((w) => w.year === "2026" && w.module === "KPI" && w.phase === "measurement");
     const evalKpi = evaluateEmployeeKPITracking(emp.id);
     const rcaStats = getEmployeeRcaMonitoringStats(emp.id);
     const settingStatus = resolveKpiPhaseStatus(wfSet);
@@ -167,21 +173,34 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
           measurementStatus: "Unsubmitted",
           lastUpdated: "-",
         };
-    return { emp, kpi };
-  });
-  const filteredKPI = allRows.map((r) => r.kpi);
+      return { emp, kpi };
+    });
+  }, [filteredEmployees, tick]);
+  const filteredKPI = useMemo(() => allRows.map((r) => r.kpi), [allRows]);
 
-  const rows = allRows.filter(({ emp, kpi }) => {
+  const rows = useMemo(() => {
     const q = search.toLowerCase();
-    const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
-    const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;
-    const matchStatus =
-      statusFilter === "Semua Status" ||
-      statusFilter === "All Status" ||
-      kpi.status === statusFilter ||
-      kpi.measurementStatus === statusFilter;
-    return matchSearch && matchUnit && matchStatus;
-  });
+    return allRows.filter(({ emp, kpi }) => {
+      const matchSearch = !q || emp.name.toLowerCase().includes(q) || emp.unit.toLowerCase().includes(q) || emp.division.toLowerCase().includes(q);
+      const matchUnit = unitFilter === "Semua Unit" || emp.unit === unitFilter;
+      const matchStatus =
+        statusFilter === "Semua Status" ||
+        statusFilter === "All Status" ||
+        kpi.status === statusFilter ||
+        kpi.measurementStatus === statusFilter;
+      return matchSearch && matchUnit && matchStatus;
+    });
+  }, [allRows, search, unitFilter, statusFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, unitFilter, statusFilter]);
+
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
 
   const hasActiveFilters = unitFilter !== "Semua Unit" || statusFilter !== "Semua Status";
 
@@ -261,7 +280,7 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ emp, kpi }) => {
+              {pagedRows.map(({ emp, kpi }) => {
                 const st = STATUS_STYLE[kpi.status] ?? STATUS_STYLE["Unsubmitted"];
                 const Icon = st.icon;
                 const mst = STATUS_STYLE[kpi.measurementStatus] ?? STATUS_STYLE["Unsubmitted"];
@@ -318,6 +337,14 @@ export function HRMonitoringKPI({ lockedUnits }: { lockedUnits?: string[] } = {}
         {rows.length === 0 && (
           <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>
         )}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       {/* Perspektif breakdown legend */}

@@ -1,7 +1,8 @@
 // @refresh reset
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { FolderKanban, CheckCircle2, AlertCircle, Clock, Lightbulb, Search, Filter, Download, ShieldCheck, ShieldX, TrendingUp, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { loadAllIcfProjectsByEmployee } from "../../../store/projectStore";
 import { getProjectApprovalStatus, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
@@ -277,6 +278,17 @@ export function SupervisorMonitoringProject() {
     return sortDir === "asc" ? cmp : -cmp;
   }) : baseRows;
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, typeFilter, roleFilter, progressFilter, unitFilter, deptFilter]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
+
   const hasActiveFilters = typeFilter !== "All Scopes" || roleFilter !== "All Roles" || progressFilter !== "All Status" || unitFilter !== "All Units" || deptFilter !== "All Departments";
 
   const handleExport = () => {
@@ -389,7 +401,7 @@ export function SupervisorMonitoringProject() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ no, emp, rec }) => {
+              {pagedRows.map(({ no, emp, rec }) => {
                 const pm         = rec.progressStatus ? PROGRESS_META[rec.progressStatus] : null;
                 const appr       = approvalBadge(rec.employeeId, Boolean(rec.progressStatus));
                 const finalScore = rec.projectScore ?? computeFinalScore(rec);
@@ -435,6 +447,14 @@ export function SupervisorMonitoringProject() {
           </table>
         </div>
         {rows.length === 0 && <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
         <div className="px-5 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-400 flex items-center gap-4">
           <span>{rows.length} of {TEAM_EMPLOYEES.length} members shown</span>
           <span className="text-gray-300">·</span>

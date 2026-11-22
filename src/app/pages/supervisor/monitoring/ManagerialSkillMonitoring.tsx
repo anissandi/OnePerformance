@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Briefcase, CheckCircle2, AlertCircle, Clock, TrendingUp, Users } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { loadAllMSApprovers, loadMSSelfRatings } from "../../shared/msStore";
 
@@ -107,11 +108,23 @@ export function SupervisorMonitoringManagerialSkill() {
       };
     })
     .filter((r): r is MSRecord => Boolean(r));
+  const msByEmpId = new Map(liveMsData.map((k) => [k.employeeId, k]));
 
   const rows = allowedTeamEmployees.map((emp) => ({
     emp,
-    ms: liveMsData.find((k) => k.employeeId === emp.id),
+    ms: msByEmpId.get(emp.id),
   })).filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
 
   const supervisorCount = allowedTeamEmployees.length;
   const selfDone  = liveMsData.filter((k) => k.selfStatus === "Selesai").length;
@@ -179,7 +192,8 @@ export function SupervisorMonitoringManagerialSkill() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ emp, ms }, rowIdx) => {
+              {pagedRows.map(({ emp, ms }, rowIdx) => {
+                const globalIdx = (safePage - 1) * pageSize + rowIdx;
                 const selfSt   = STATUS_STYLE[ms?.selfStatus ?? "Belum Mulai"];
                 const supSt    = STATUS_STYLE[ms?.supervisorStatus ?? "Belum Mulai"];
                 const SelfIcon = selfSt.icon;
@@ -191,7 +205,7 @@ export function SupervisorMonitoringManagerialSkill() {
                   ? (selfAvg + approver1) / 2 : 0;
                 return (
                   <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
-                    <td className="py-3.5 px-5 text-center text-xs font-semibold text-gray-400">{rowIdx + 1}</td>
+                    <td className="py-3.5 px-5 text-center text-xs font-semibold text-gray-400">{globalIdx + 1}</td>
                     <td className="py-3.5 px-5">
                       <span className="text-[11px] font-mono font-semibold text-[#1A284F] bg-[#1A284F]/8 px-1.5 py-0.5 rounded">{emp.id}</span>
                     </td>
@@ -239,6 +253,14 @@ export function SupervisorMonitoringManagerialSkill() {
           </table>
         </div>
         {rows.length === 0 && <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       {/* Avg breakdown */}

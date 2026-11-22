@@ -23,6 +23,7 @@ import {
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { BellCurveTagButton, GradeBellCurveModal } from "../../components/GradeBellCurveModal";
 import { AnalyticsStatCard } from "../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../components/TablePaginationBar";
 import { getSoyApproval, SOY_EVENT } from "../../store/calibrationSoyStore";
 import {
   applyImportedEmployeesDistribution,
@@ -387,6 +388,15 @@ export function BODCalibrationApproval() {
   >(() => loadPersistedState(CAL_USER_DECISIONS_KEY, {}));
   const [empSearch, setEmpSearch] = useState("");
   const [finalEmpSearch, setFinalEmpSearch] = useState("");
+  const [empPage, setEmpPage] = useState(1);
+  const [empPageSize, setEmpPageSize] = useState(25);
+  const [finalEmpPage, setFinalEmpPage] = useState(1);
+  const [finalEmpPageSize, setFinalEmpPageSize] = useState(25);
+
+  useEffect(() => {
+    setEmpPage(1);
+    setFinalEmpPage(1);
+  }, [selectedUnitId]);
 
   useEffect(() => {
     const onHydrated = () => {
@@ -670,6 +680,17 @@ export function BODCalibrationApproval() {
         e.id.toLowerCase().includes(q),
     );
   }, [employees, finalEmpSearch]);
+
+  const safeEmpPage = Math.min(empPage, Math.max(1, Math.ceil(filteredEmps.length / empPageSize)));
+  const pagedFilteredEmps = useMemo(
+    () => filteredEmps.slice((safeEmpPage - 1) * empPageSize, safeEmpPage * empPageSize),
+    [filteredEmps, safeEmpPage, empPageSize],
+  );
+  const safeFinalEmpPage = Math.min(finalEmpPage, Math.max(1, Math.ceil(filteredFinalEmps.length / finalEmpPageSize)));
+  const pagedFilteredFinalEmps = useMemo(
+    () => filteredFinalEmps.slice((safeFinalEmpPage - 1) * finalEmpPageSize, safeFinalEmpPage * finalEmpPageSize),
+    [filteredFinalEmps, safeFinalEmpPage, finalEmpPageSize],
+  );
 
   const totalProposed = gradeDist.reduce((s, g) => s + g.proposed, 0);
 
@@ -1273,9 +1294,9 @@ export function BODCalibrationApproval() {
                 <tbody className="divide-y divide-gray-50">
                   {filteredEmps.length === 0 ? (
                     <tr><td colSpan={11} className="py-10 text-center text-gray-400">No employees match your search.</td></tr>
-                  ) : filteredEmps.map((e, idx) => (
+                  ) : pagedFilteredEmps.map((e, idx) => (
                     <tr key={e.id} className="hover:bg-gray-50/60">
-                      <td className="py-2.5 px-3 text-gray-400 tabular-nums">{idx + 1}</td>
+                      <td className="py-2.5 px-3 text-gray-400 tabular-nums">{(safeEmpPage - 1) * empPageSize + idx + 1}</td>
                       <td className="py-2.5 px-3 font-mono text-gray-400">{e.id}</td>
                       <td className="py-2.5 px-3 font-medium text-gray-900 whitespace-nowrap">{e.name}</td>
                       <td className="py-2.5 px-3 text-gray-500 whitespace-nowrap">{e.division}</td>
@@ -1294,6 +1315,14 @@ export function BODCalibrationApproval() {
                   ))}
                 </tbody>
               </table>
+              <TablePaginationBar
+                totalItems={filteredEmps.length}
+                currentPage={safeEmpPage}
+                pageSize={empPageSize}
+                onPageChange={setEmpPage}
+                onPageSizeChange={setEmpPageSize}
+                itemLabel="karyawan"
+              />
             </div>
           </div>
         </Section>
@@ -1356,14 +1385,14 @@ export function BODCalibrationApproval() {
                         </td>
                       </tr>
                     ) : (
-                      filteredFinalEmps.map((e, idx) => (
+                      pagedFilteredFinalEmps.map((e, idx) => (
                         <tr
                           key={e.id}
                           className={`transition-colors hover:bg-indigo-50/40 ${
                             idx % 2 === 0 ? "bg-white" : "bg-slate-50/65"
                           }`}
                         >
-                          <td className="py-3 px-3 text-center font-semibold text-slate-500 tabular-nums">{idx + 1}</td>
+                          <td className="py-3 px-3 text-center font-semibold text-slate-500 tabular-nums">{(safeFinalEmpPage - 1) * finalEmpPageSize + idx + 1}</td>
                           <td className="py-3 px-3.5 whitespace-nowrap">
                             <span className="inline-block font-mono text-[11px] font-bold text-[#1A284F] bg-[#1A284F]/[0.07] px-2 py-0.5 rounded">
                               {e.id}
@@ -1419,6 +1448,14 @@ export function BODCalibrationApproval() {
                     )}
                   </tbody>
                 </table>
+                <TablePaginationBar
+                  totalItems={filteredFinalEmps.length}
+                  currentPage={safeFinalEmpPage}
+                  pageSize={finalEmpPageSize}
+                  onPageChange={setFinalEmpPage}
+                  onPageSizeChange={setFinalEmpPageSize}
+                  itemLabel="karyawan"
+                />
               </div>
             </div>
           </Section>

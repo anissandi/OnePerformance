@@ -34,6 +34,7 @@ export type UserGrouping =
   | "Ka./Wa.Ka.Bagian"
   | "Ka./Wa.Ka.Dept"
   | "Ka./Wa.Ka.Div ke atas"
+  | "GM / vGM"
   | "Direktur / Director"
   | string;
 
@@ -277,26 +278,141 @@ export function getGroupCompaniesForUnit(company: string, extraUnits?: string[])
   return Array.from(new Set([...base, ...(extraUnits ?? [])].filter(Boolean)));
 }
 
+function normGroupKey(val?: string | null): string {
+  return String(val ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\/\s*/g, "/")
+    .replace(/\s+/g, " ");
+}
+
 export function isDirectorRoleOrGrouping(user?: { role?: string; groupings?: string; position?: string } | null): boolean {
   if (!user) return false;
-  if (user.role === "Director" || user.role === "DirectorNonOpr") return true;
-  const g = (user.groupings ?? "").trim().toLowerCase();
-  if (g === "direktur / director" || g === "director" || g === "direktur") return true;
+  const g = normGroupKey(user.groupings);
   if (g) {
     const tier = getGroupAuthorityLevel(user.groupings ?? "");
     if (tier === "director_group") return true;
+    if (g === "gm/vgm" || g === "level gm/vgm") return false;
   }
+  if (g === "direktur/director" || g === "director" || g === "direktur") return true;
+  if (user.role === "Director" || user.role === "DirectorNonOpr") return true;
   return false;
+}
+
+let _authComputedEpoch = 1;
+let _cachedGroupRulesRaw: string | null | undefined = undefined;
+let _cachedGroupRulesMap: Record<string, ManagedGroupRule[]> = {};
+let _cachedManagedUsersRaw: string | null | undefined = undefined;
+let _cachedManagedUsersActiveRaw: string | null | undefined = undefined;
+let _cachedManagedUsersList: ManagedUser[] | null = null;
+let _cachedUsersByEmpUpper = new Map<string, ManagedUser>();
+let _cachedActiveUserSig: string | undefined = undefined;
+let _cachedActiveUserObj: ManagedUser | null = null;
+
+let _groupingMemoEpoch = 0;
+let _groupingMemoByUser = new WeakMap<ManagedUser, UserGrouping>();
+let _authorityMemoEpoch = 0;
+let _authorityMemoByUser = new WeakMap<ManagedUser, HierarchyAuthorityLevel>();
+let _allowedModsMemoEpoch = 0;
+let _allowedModsMemoByUser = new WeakMap<ManagedUser, AppraisalModuleName[]>();
+let _excludedCalMemoEpoch = 0;
+let _excludedCalMemoByKey = new Map<string, boolean>();
+let _authorizedSubsMemoEpoch = 0;
+let _authorizedSubsMemo = new WeakMap<ManagedUser[], Map<string, ManagedUser[]>>();
+
+interface ApproverAdjacencyIndex {
+  byReg: Map<string, ManagedUser[]>;
+  byEmp: Map<string, ManagedUser[]>;
+  byName: Map<string, ManagedUser[]>;
+  byEmpNum: Map<string, ManagedUser[]>;
+}
+const _approverAdjByUsersRef = new WeakMap<ManagedUser[], ApproverAdjacencyIndex>();
+
+function bumpAuthComputedEpoch(): void {
+  _authComputedEpoch++;
+  _cachedActiveUserSig = undefined;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pa-auth-updated", bumpAuthComputedEpoch);
+  window.addEventListener(ACCESS_UPDATED_EVENT, bumpAuthComputedEpoch);
+  window.addEventListener(DELEGATION_EVENT, bumpAuthComputedEpoch);
+  window.addEventListener("pa-db-hydrated", bumpAuthComputedEpoch);
+  window.addEventListener("pa-employees-imported", bumpAuthComputedEpoch);
+  window.addEventListener("storage", bumpAuthComputedEpoch);
+}
+
+function getCachedGroupRulesMap(): Record<string, ManagedGroupRule[]> {
+  const raw = safeGetLocalRaw(GROUP_RULES_BY_UNIT_KEY);
+  if (_cachedGroupRulesRaw === raw) {
+    return _cachedGroupRulesMap;
+  }
+  let parsed: Record<string, ManagedGroupRule[]> = {};
+  if (raw) {
+    try {
+      const p = JSON.parse(raw);
+      if (p && typeof p === "object" && !Array.isArray(p)) {
+        parsed = p as Record<string, ManagedGroupRule[]>;
+      }
+    } catch {
+      parsed = {};
+    }
+  }
+  _cachedGroupRulesRaw = raw;
+  _cachedGroupRulesMap = parsed;
+  _authComputedEpoch++;
+  return parsed;
+}
+
+function getApproverAdjacencyForUsers(allUsers: ManagedUser[]): ApproverAdjacencyIndex {
+  const cached = _approverAdjByUsersRef.get(allUsers);
+  if (cached) return cached;
+  const byReg = new Map<string, ManagedUser[]>();
+  const byEmp = new Map<string, ManagedUser[]>();
+  const byName = new Map<string, ManagedUser[]>();
+  const byEmpNum = new Map<string, ManagedUser[]>();
+  const pushIdx = (map: Map<string, ManagedUser[]>, key: string, u: ManagedUser) => {
+    if (!key) return;
+    const list = map.get(key);
+    if (list) list.push(u);
+    else map.set(key, [u]);
+  };
+  for (const cand of allUsers) {
+    const ap1 = (cand.regNoAp1 ?? "").trim().toLowerCase();
+    const ap2 = (cand.regNoAp2 ?? "").trim().toLowerCase();
+    for (const ap of [ap1, ap2]) {
+      if (!ap) continue;
+      pushIdx(byReg, ap, cand);
+      pushIdx(byEmp, ap, cand);
+      pushIdx(byName, ap, cand);
+      if (/^(?:emp-?|e)\d+$/i.test(ap)) {
+        pushIdx(byEmpNum, normEmpNum(ap), cand);
+      }
+    }
+  }
+  const built: ApproverAdjacencyIndex = { byReg, byEmp, byName, byEmpNum };
+  _approverAdjByUsersRef.set(allUsers, built);
+  return built;
 }
 
 export function isExcludedFromAppraisalCalibration(user?: { role?: string; groupings?: string; position?: string; company?: string } | null): boolean {
   if (!user) return false;
-  if (user.role && getRoleMetadata(user.role).excludeFromCalibrationHC) return true;
-  if (user.role === "Director" || user.role === "DirectorNonOpr" || user.role === "BOD") return true;
-  if (isDirectorRoleOrGrouping(user)) return true;
-  // Jika Groupings karyawan di-setup tidak memiliki modul appraisal sama sekali (uncheck semua modul),
-  // maka tidak masuk dalam penilaian kinerja, monitoring, summary, maupun kalibrasi.
-  if (user.groupings || user.company || user.position) {
+  getCachedGroupRulesMap();
+  if (_excludedCalMemoEpoch !== _authComputedEpoch) {
+    _excludedCalMemoEpoch = _authComputedEpoch;
+    _excludedCalMemoByKey = new Map();
+  }
+  const cacheKey = `${user.role ?? ""}|${user.groupings ?? ""}|${user.company ?? ""}|${user.position ?? ""}`;
+  const hit = _excludedCalMemoByKey.get(cacheKey);
+  if (hit !== undefined) return hit;
+
+  let result = false;
+  if (user.role && getRoleMetadata(user.role).excludeFromCalibrationHC) result = true;
+  else if (user.role === "Director" || user.role === "DirectorNonOpr" || user.role === "BOD") result = true;
+  else if (isDirectorRoleOrGrouping(user)) result = true;
+  else if (user.groupings || user.company || user.position) {
+    // Jika Groupings karyawan di-setup tidak memiliki modul appraisal sama sekali (uncheck semua modul),
+    // maka tidak masuk dalam penilaian kinerja, monitoring, summary, maupun kalibrasi.
     const allowed = resolveUserAllowedModules({
       id: "",
       name: "",
@@ -312,9 +428,10 @@ export function isExcludedFromAppraisalCalibration(user?: { role?: string; group
       lastLogin: "",
       email: "",
     });
-    if (allowed.length === 0) return true;
+    if (allowed.length === 0) result = true;
   }
-  return false;
+  _excludedCalMemoByKey.set(cacheKey, result);
+  return result;
 }
 
 export function isExcludedFromVerification(user?: { role?: string; groupings?: string; position?: string; company?: string } | null): boolean {
@@ -332,7 +449,10 @@ export function inferGroupingFromPosition(position: string): UserGrouping {
   if (/direktur|director/i.test(p)) {
     return "Direktur / Director";
   }
-  if (/bod|gm|general manager|koordinator|divisi/i.test(p)) {
+  if (/\bv?gm\b|general manager/i.test(p)) {
+    return "GM / vGM";
+  }
+  if (/bod|koordinator|divisi/i.test(p)) {
     return "Ka./Wa.Ka.Div ke atas";
   }
   if (/departemen|dept/i.test(p)) {
@@ -428,15 +548,19 @@ export function resolveGroupingForCompanyAndPosition(
   explicitGrouping?: string,
 ): UserGrouping {
   const normalizeToUserGrouping = (val: string): UserGrouping | null => {
-    const v = val.trim().toLowerCase();
+    const v = normGroupKey(val);
     if (!v) return null;
-    if (v === "direktur / director" || v === "direktur" || v === "director") {
+    if (v === "direktur/director" || v === "direktur" || v === "director") {
       return "Direktur / Director";
     }
+    if (v === "gm/vgm" || v === "level gm/vgm") {
+      const configuredGroups = loadAccessGroups();
+      return configuredGroups.find((g) => normGroupKey(g) === "gm/vgm") ?? "GM / vGM";
+    }
     const configuredGroups = loadAccessGroups();
-    const exactGroup = configuredGroups.find((g) => g.toLowerCase() === v);
+    const exactGroup = configuredGroups.find((g) => normGroupKey(g) === v);
     if (exactGroup) return exactGroup;
-    if (val.trim() === "Ka./Wa.Ka.Div ke atas" || /div|gm|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
+    if (val.trim() === "Ka./Wa.Ka.Div ke atas" || /div|bod/i.test(v)) return "Ka./Wa.Ka.Div ke atas";
     if (val.trim() === "Ka./Wa.Ka.Dept" || /dept|departemen/i.test(v)) return "Ka./Wa.Ka.Dept";
     if (val.trim() === "Ka./Wa.Ka.Bagian" || /bagian/i.test(v)) return "Ka./Wa.Ka.Bagian";
     if (val.trim() === "Ka./Wa.Ka.Seksi" || /seksi|shift/i.test(v)) return "Ka./Wa.Ka.Seksi";
@@ -444,20 +568,27 @@ export function resolveGroupingForCompanyAndPosition(
     return null;
   };
 
+  // 1. Jika user memiliki Groupings eksplisit yang di-setup (mis. "GM / vGM" atau custom group di Access Management),
+  //    utamakan Groupings eksplisit tersebut agar tidak tertimpa aturan posisi umum.
+  if (explicitGrouping && explicitGrouping.trim() !== "") {
+    const fromExplicit = normalizeToUserGrouping(explicitGrouping);
+    if (fromExplicit && normGroupKey(fromExplicit) !== "operasional") {
+      return fromExplicit;
+    }
+  }
+
   // 1. Cek terlebih dahulu di tabel User Groupings milik Company Unit tersebut (pa_group_rules_by_unit_v1)
   try {
-    const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
-    if (raw) {
-      const map = JSON.parse(raw) as Record<string, ManagedGroupRule[]>;
-      const unitRules = map[company];
-      if (Array.isArray(unitRules)) {
-        const matchedRule = unitRules.find(
-          (r) => r.position.trim().toLowerCase() === position.trim().toLowerCase(),
-        );
-        if (matchedRule) {
-          const fromRule = normalizeToUserGrouping(matchedRule.group);
-          if (fromRule) return fromRule;
-        }
+    const map = getCachedGroupRulesMap();
+    const unitRules = map[company];
+    if (Array.isArray(unitRules)) {
+      const posLower = position.trim().toLowerCase();
+      const matchedRule = unitRules.find(
+        (r) => r.position.trim().toLowerCase() === posLower,
+      );
+      if (matchedRule) {
+        const fromRule = normalizeToUserGrouping(matchedRule.group);
+        if (fromRule) return fromRule;
       }
     }
   } catch {
@@ -474,19 +605,75 @@ export function resolveGroupingForCompanyAndPosition(
 }
 
 export function resolveEffectiveUserGrouping(user: ManagedUser): UserGrouping {
-  if (user.role === "Director" && (!user.groupings || user.groupings === "Ka./Wa.Ka.Div ke atas")) {
-    return "Direktur / Director";
+  getCachedGroupRulesMap();
+  if (_groupingMemoEpoch !== _authComputedEpoch) {
+    _groupingMemoEpoch = _authComputedEpoch;
+    _groupingMemoByUser = new WeakMap();
   }
-  return resolveGroupingForCompanyAndPosition(user.company, user.position, user.groupings);
+  const cached = _groupingMemoByUser.get(user);
+  if (cached !== undefined) return cached;
+
+  let resolved: UserGrouping;
+  if (user.role === "Director" && (!user.groupings || user.groupings === "Ka./Wa.Ka.Div ke atas")) {
+    resolved = "Direktur / Director";
+  } else {
+    resolved = resolveGroupingForCompanyAndPosition(user.company, user.position, user.groupings);
+  }
+  _groupingMemoByUser.set(user, resolved);
+  return resolved;
 }
 
 export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthorityLevel {
   if (isAdminOrHrIcfRole(user.role)) return "admin";
-  if (user.role === "BOD") return "bod";
+  getCachedGroupRulesMap();
+  if (_authorityMemoEpoch !== _authComputedEpoch) {
+    _authorityMemoEpoch = _authComputedEpoch;
+    _authorityMemoByUser = new WeakMap();
+  }
+  const cached = _authorityMemoByUser.get(user);
+  if (cached !== undefined) return cached;
 
   // Penentuan level kewenangan berjenjang murni dari Effective Grouping (bebas dari perbedaan nama posisi seperti 'Mandor' vs 'Kepala Bagian')
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
   const configuredTier = getGroupAuthorityLevel(effectiveGrouping);
+  const effGroupNorm = normGroupKey(effectiveGrouping);
+  const hasExplicitGrouping = Boolean((user.groupings ?? "").trim());
+
+  // Bila karyawan secara eksplisit diberi Groupings "GM / vGM" (atau custom grouping di /settings/access-management),
+  // ikuti 100% Level Kewenangan Berjenjang (Data Visibility Scope) yang di-setup pada Group tersebut.
+  const isLegacyBuiltinGrouping =
+    effGroupNorm === "operasional" ||
+    effGroupNorm === "ka./wa.ka.seksi" ||
+    effGroupNorm === "ka./wa.ka.bagian" ||
+    effGroupNorm === "ka./wa.ka.dept" ||
+    effGroupNorm === "ka./wa.ka.div ke atas";
+
+  if (hasExplicitGrouping && !isLegacyBuiltinGrouping) {
+    if (configuredTier === "director_group") {
+      _authorityMemoByUser.set(user, "director_group");
+      return "director_group";
+    }
+    if (configuredTier === "gm_unit") {
+      const lv = user.role === "vGM" || user.role === "Coordinator" ? "vgm_unit" : "gm_unit";
+      _authorityMemoByUser.set(user, lv);
+      return lv;
+    }
+    if (
+      configuredTier === "division" ||
+      configuredTier === "department" ||
+      configuredTier === "bagian" ||
+      configuredTier === "seksi" ||
+      configuredTier === "operational"
+    ) {
+      _authorityMemoByUser.set(user, configuredTier);
+      return configuredTier;
+    }
+  }
+
+  if (user.role === "BOD") {
+    _authorityMemoByUser.set(user, "bod");
+    return "bod";
+  }
 
   let roleLevel: HierarchyAuthorityLevel = "operational";
   if (user.role === "Director" || user.role === "DirectorNonOpr") roleLevel = "director_group";
@@ -519,7 +706,9 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
     groupLevel = "seksi";
   }
 
-  return HIERARCHY_RANK[groupLevel] > HIERARCHY_RANK[roleLevel] ? groupLevel : roleLevel;
+  const finalLevel = HIERARCHY_RANK[groupLevel] > HIERARCHY_RANK[roleLevel] ? groupLevel : roleLevel;
+  _authorityMemoByUser.set(user, finalLevel);
+  return finalLevel;
 }
 
 /**
@@ -595,27 +784,26 @@ export function getTransitiveApproverSubordinateIds(
   });
   const queue: ManagedUser[] = seedIdentities.length > 0 ? [...seedIdentities] : [user];
   const visited = new Set<string>(queue.map((u) => u.employeeId.toLowerCase()));
+  const adj = getApproverAdjacencyForUsers(allUsers);
+  let head = 0;
 
-  while (queue.length > 0) {
-    const curr = queue.shift()!;
+  while (head < queue.length) {
+    const curr = queue[head++]!;
     const reg = (curr.regNo ?? "").trim().toLowerCase();
     const emp = curr.employeeId.trim().toLowerCase();
     const empNum = normEmpNum(curr.employeeId);
     const nm = curr.name.trim().toLowerCase();
-    for (const cand of allUsers) {
-      const candKey = cand.employeeId.toLowerCase();
-      if (visited.has(candKey)) continue;
-      const ap1 = (cand.regNoAp1 ?? "").trim().toLowerCase();
-      const ap2 = (cand.regNoAp2 ?? "").trim().toLowerCase();
-      const ap1Num = normEmpNum(ap1);
-      const ap2Num = normEmpNum(ap2);
-      const matchesAp = (ap: string, apNum: string) =>
-        Boolean(ap) &&
-        ((reg && ap === reg) ||
-          (emp && ap === emp) ||
-          (nm && ap === nm) ||
-          (empNum !== "" && apNum !== "" && apNum === empNum && /^(?:emp-?|e)\d+$/i.test(ap)));
-      if (matchesAp(ap1, ap1Num) || matchesAp(ap2, ap2Num)) {
+    const bucketList = [
+      reg ? adj.byReg.get(reg) : undefined,
+      emp ? adj.byEmp.get(emp) : undefined,
+      nm ? adj.byName.get(nm) : undefined,
+      empNum ? adj.byEmpNum.get(empNum) : undefined,
+    ];
+    for (const bucket of bucketList) {
+      if (!bucket) continue;
+      for (const cand of bucket) {
+        const candKey = cand.employeeId.toLowerCase();
+        if (visited.has(candKey)) continue;
         visited.add(candKey);
         transitiveSubIds.add(candKey);
         queue.push(cand);
@@ -642,6 +830,18 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   if (level === "admin" || level === "bod") {
     return allUsers;
   }
+  if (_authorizedSubsMemoEpoch !== _authComputedEpoch) {
+    _authorizedSubsMemoEpoch = _authComputedEpoch;
+    _authorizedSubsMemo = new WeakMap();
+  }
+  let perUsersMap = _authorizedSubsMemo.get(allUsers);
+  if (!perUsersMap) {
+    perUsersMap = new Map();
+    _authorizedSubsMemo.set(allUsers, perUsersMap);
+  }
+  const userMemoKey = `${user.employeeId.toLowerCase()}|${user.role}|${user.groupings ?? ""}|${user.company}|${user.division}|${user.department}|${user.bagian ?? ""}|${(user.managedUnits ?? []).join(",")}|${(user.checkerUnits ?? []).join(",")}`;
+  const cachedSubs = perUsersMap.get(userMemoKey);
+  if (cachedSubs) return cachedSubs;
 
   const myRank = HIERARCHY_RANK[level];
   const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
@@ -678,11 +878,12 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   const checkedDeptSet = new Set<string>(checkedDepts);
   const checkedBagianSet = new Set<string>(checkedBagians);
 
+  const isGroupOrGlobalTier = level === "director_group";
   const allowedUnits = new Set<string>(
     [
       user.company,
-      ...roleAllowedUnits,
-      ...calInvolvedUnits,
+      ...(isGroupOrGlobalTier ? roleAllowedUnits : []),
+      ...(isGroupOrGlobalTier ? calInvolvedUnits : []),
       ...(user.managedUnits ?? []),
       ...getEffectiveCheckerUnits(user),
     ]
@@ -712,11 +913,16 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     return matchesAp(myAp1) || matchesAp(myAp2);
   };
 
-  return allUsers.filter((target) => {
+  const filteredSubs = allUsers.filter((target) => {
     if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return true;
     if (isMyApprover(target)) return false;
-    // 1. Jika user adalah Approver (AP1 / AP2) dari karyawan tsb, otomatis terlihat tanpa batasan filter Unit/Divisi/Departemen/Bagian/Jabatan/Role
-    if (transitiveSubIds.has(target.employeeId.toLowerCase())) return true;
+    // 1. Jika user adalah Approver (AP1 / AP2) dari karyawan tsb:
+    //    untuk level berbatas Unit Usaha (seperti GM / vGM, Divisi, Dept, Bagian, dst.), tetap kunci visibilitas data
+    //    hanya di dalam Unit Usaha yang diizinkan (user.company + managedUnits + checkerUnits) agar tidak bocor lintas unit.
+    if (transitiveSubIds.has(target.employeeId.toLowerCase())) {
+      if (isGroupOrGlobalTier) return true;
+      return allowedUnits.has(normOrgName(target.company));
+    }
 
     const targetLevel = resolveUserAuthorityLevel(target);
     const targetRank = HIERARCHY_RANK[targetLevel];
@@ -736,7 +942,7 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
       const targetUnit = normOrgName(target.company);
       const unitMatched =
         checkedUnitSet.size > 0
-          ? checkedUnitSet.has(targetUnit) || roleAllowedUnits.some((u) => normOrgName(u) === targetUnit)
+          ? checkedUnitSet.has(targetUnit) || (isGroupOrGlobalTier && roleAllowedUnits.some((u) => normOrgName(u) === targetUnit))
           : level === "director_group"
             ? directorGroupUnits.has(targetUnit)
             : allowedUnits.has(targetUnit);
@@ -747,9 +953,10 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
       return true;
     }
 
-    // Jika Role memiliki cakupan Unit Usaha yang diceklis di Access Management,
-    // tetap patuhi batas hirarki role agar tidak membocorkan data atasan (BOD/Director/GM/dll.)
+    // Cakupan Unit Usaha berbasis Role hanya berlaku pada tier Direktur Group ke atas,
+    // sehingga Groupings seperti GM / vGM tidak pernah bocor keluar dari Unit Usahanya sendiri.
     if (
+      isGroupOrGlobalTier &&
       roleAllowedUnits.length > 0 &&
       roleAllowedUnits.some((u) => normOrgName(u) === normOrgName(target.company))
     ) {
@@ -794,6 +1001,8 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     // Hanya melihat dirinya sendiri dan karyawan yang berada di dalam rantai Reg No AP1 / Reg No AP2-nya (transitiveSubIds di atas).
     return false;
   });
+  perUsersMap.set(userMemoKey, filteredSubs);
+  return filteredSubs;
 }
 
 /**
@@ -1385,7 +1594,16 @@ export function deduplicateUsersByUnitAndRegNo(
 export function loadManagedUsers(): ManagedUser[] {
   try {
     const raw = safeGetLocalRaw(USERS_KEY);
-    if (!raw) return DEFAULT_MANAGED_USERS;
+    if (!raw) {
+      _cachedManagedUsersRaw = raw;
+      _cachedManagedUsersList = DEFAULT_MANAGED_USERS;
+      _cachedUsersByEmpUpper = new Map(DEFAULT_MANAGED_USERS.map((u) => [u.employeeId.toUpperCase(), u]));
+      return DEFAULT_MANAGED_USERS;
+    }
+    const activeRaw = safeGetLocalRaw(ACTIVE_USER_KEY);
+    if (_cachedManagedUsersList && _cachedManagedUsersRaw === raw && _cachedManagedUsersActiveRaw === activeRaw) {
+      return _cachedManagedUsersList;
+    }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_MANAGED_USERS;
     const { unique, removedDuplicates } = deduplicateUsersByUnitAndRegNo(parsed as ManagedUser[]);
@@ -1404,6 +1622,16 @@ export function loadManagedUsers(): ManagedUser[] {
         void syncToSupabase({ kind: "users-batch", users: unique });
       }
     }
+    const finalRaw = safeGetLocalRaw(USERS_KEY);
+    _cachedManagedUsersRaw = finalRaw;
+    _cachedManagedUsersActiveRaw = activeRaw;
+    _cachedManagedUsersList = unique;
+    const upperMap = new Map<string, ManagedUser>();
+    for (const u of unique) {
+      upperMap.set(u.employeeId.toUpperCase(), u);
+    }
+    _cachedUsersByEmpUpper = upperMap;
+    _authComputedEpoch++;
     return unique;
   } catch {
     return DEFAULT_MANAGED_USERS;
@@ -1459,9 +1687,8 @@ export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser
 
 export function loadUnitGroupRules(company: string, fallback: ManagedGroupRule[]): ManagedGroupRule[] {
   try {
-    const raw = safeGetLocalRaw(GROUP_RULES_BY_UNIT_KEY);
-    if (!raw) return fallback;
-    const map = JSON.parse(raw) as Record<string, ManagedGroupRule[]>;
+    const map = getCachedGroupRulesMap();
+    if (Object.keys(map).length === 0) return fallback;
     const canon = canonicalizeCompanyUnitName(company);
     return map[canon] ?? (canon === "PT RSUP ASD" ? map["ASD"] : undefined) ?? map[company] ?? fallback;
   } catch {
@@ -1491,11 +1718,18 @@ export function getActiveUser(): ManagedUser {
   const users = loadManagedUsers();
   try {
     const raw = safeGetLocalRaw(ACTIVE_USER_KEY);
+    const sig = `${_cachedManagedUsersRaw ?? ""}::${raw ?? ""}`;
+    if (_cachedActiveUserObj && _cachedActiveUserSig === sig) {
+      return _cachedActiveUserObj;
+    }
     if (raw) {
       const parsed = JSON.parse(raw) as ManagedUser;
-      const latest = users.find((u) => u.employeeId.toUpperCase() === parsed.employeeId.toUpperCase());
-      if (latest) return latest;
-      return normalizeManagedUserUnits(parsed);
+      const latest = _cachedUsersByEmpUpper.get(String(parsed.employeeId ?? "").toUpperCase()) ??
+        users.find((u) => u.employeeId.toUpperCase() === String(parsed.employeeId ?? "").toUpperCase());
+      const resolved = latest ?? normalizeManagedUserUnits(parsed);
+      _cachedActiveUserSig = sig;
+      _cachedActiveUserObj = resolved;
+      return resolved;
     }
   } catch {
     // fallback
@@ -1550,34 +1784,50 @@ function withDelegatedAllowedModules(user: ManagedUser, base: AppraisalModuleNam
 }
 
 export function resolveUserAllowedModules(user: ManagedUser): AppraisalModuleName[] {
+  getCachedGroupRulesMap();
+  if (_allowedModsMemoEpoch !== _authComputedEpoch) {
+    _allowedModsMemoEpoch = _authComputedEpoch;
+    _allowedModsMemoByUser = new WeakMap();
+  }
+  if (user.employeeId) {
+    const cached = _allowedModsMemoByUser.get(user);
+    if (cached) return cached;
+  }
   const effectiveGrouping = resolveEffectiveUserGrouping(user);
   const configuredGroups = loadAccessGroups();
   const isConfiguredInAccessMgmt = configuredGroups.some(
-    (g) => g.toLowerCase() === effectiveGrouping.toLowerCase(),
+    (g) => normGroupKey(g) === normGroupKey(effectiveGrouping),
   );
+  let result: AppraisalModuleName[] | null = null;
   try {
-    const raw = localStorage.getItem(GROUP_RULES_BY_UNIT_KEY);
-    if (raw) {
-      const map = JSON.parse(raw) as Record<string, ManagedGroupRule[]>;
-      const unitRules = map[user.company];
-      if (unitRules) {
-        const matched = unitRules.find(
-          (r) =>
-            r.position.toLowerCase() === user.position.toLowerCase() ||
-            r.group.toLowerCase() === effectiveGrouping.toLowerCase(),
-        );
-        if (matched && Array.isArray(matched.allowedModules)) {
-          return withDelegatedAllowedModules(user, matched.allowedModules);
-        }
+    const map = getCachedGroupRulesMap();
+    const unitRules = map[user.company];
+    if (unitRules) {
+      const posLower = user.position.toLowerCase();
+      const effNorm = normGroupKey(effectiveGrouping);
+      const matched = unitRules.find(
+        (r) =>
+          r.position.toLowerCase() === posLower ||
+          normGroupKey(r.group) === effNorm,
+      );
+      if (matched && Array.isArray(matched.allowedModules)) {
+        result = withDelegatedAllowedModules(user, matched.allowedModules);
       }
     }
   } catch {
     // fallback to grouping defaults
   }
-  if (isConfiguredInAccessMgmt) {
-    return withDelegatedAllowedModules(user, getGroupAllowedModules(effectiveGrouping));
+  if (!result) {
+    if (isConfiguredInAccessMgmt) {
+      result = withDelegatedAllowedModules(user, getGroupAllowedModules(effectiveGrouping));
+    } else {
+      result = withDelegatedAllowedModules(user, defaultAllowedModulesForGrouping(effectiveGrouping));
+    }
   }
-  return withDelegatedAllowedModules(user, defaultAllowedModulesForGrouping(effectiveGrouping));
+  if (user.employeeId) {
+    _allowedModsMemoByUser.set(user, result);
+  }
+  return result;
 }
 
 export function getAllowedApprovalTypesForUser(
@@ -1708,8 +1958,9 @@ export function getEffectiveLockedUnitsForUser(user: ManagedUser, allUsers = loa
   const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
   const extraManaged = (user.managedUnits ?? []).filter(Boolean);
   const checkerUnits = getEffectiveCheckerUnits(user);
+  const level = resolveUserAuthorityLevel(user);
 
-  if (isAdminOrHrIcfRole(user.role) || user.role === "BOD") {
+  if (level === "admin" || level === "bod") {
     if (roleAllowedUnits.length > 0) {
       return Array.from(new Set([...roleAllowedUnits, ...extraManaged]));
     }
@@ -1720,19 +1971,24 @@ export function getEffectiveLockedUnitsForUser(user: ManagedUser, allUsers = loa
     .map((u) => u.company)
     .filter(Boolean);
 
-  if (isDirectorRoleOrGrouping(user)) {
+  if (level === "director_group") {
     if (roleAllowedUnits.length > 0) {
       return Array.from(new Set([...roleAllowedUnits, ...extraManaged, ...checkerUnits, ...authorizedUnits]));
     }
     return Array.from(new Set([...getGroupCompaniesForUnit(user.company, extraManaged), ...checkerUnits, ...authorizedUnits]));
   }
 
-  if (authorizedUnits.length > 0 || checkerUnits.length > 0) {
-    return Array.from(new Set([...authorizedUnits, ...checkerUnits]));
+  // Untuk Level GM/vGM, Divisi, Departemen, Bagian, Seksi, dan Operasional:
+  // terkunci ketat pada Unit Usaha sendiri (+ managedUnits / checkerUnits eksplisit user tersebut).
+  const strictOwnUnits = Array.from(
+    new Set([user.company, ...extraManaged, ...checkerUnits].map((u) => canonicalizeCompanyUnitName(u)).filter(Boolean)),
+  );
+  if (strictOwnUnits.length > 0) {
+    return strictOwnUnits;
   }
 
-  if (roleAllowedUnits.length > 0) {
-    return Array.from(new Set([...roleAllowedUnits, ...extraManaged]));
+  if (authorizedUnits.length > 0 || checkerUnits.length > 0) {
+    return Array.from(new Set([...authorizedUnits, ...checkerUnits]));
   }
 
   return Array.from(new Set([user.company, ...extraManaged].filter(Boolean)));

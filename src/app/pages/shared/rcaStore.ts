@@ -68,9 +68,17 @@ export interface StoredRCASubmission {
   confirmedBy?: string;
 }
 
+let _cachedRcaRaw: string | null | undefined = undefined;
+let _cachedRcaAll: StoredRCASubmission[] = [];
+let _cachedRcaByNormEmp = new Map<string, StoredRCASubmission[]>();
+
 function loadAll(): StoredRCASubmission[] {
   try {
-    const raw = JSON.parse(safeGetLocalRaw(KEY) ?? "[]");
+    const rawStr = safeGetLocalRaw(KEY);
+    if (_cachedRcaRaw === rawStr) {
+      return _cachedRcaAll;
+    }
+    const raw = JSON.parse(rawStr ?? "[]");
     if (!Array.isArray(raw)) return [];
     const cleaned = (raw as StoredRCASubmission[]).filter(
       (r) => !DEMO_RCA_IDS.has(r.id) && !DEMO_RCA_KPIS.has(r.key),
@@ -78,6 +86,19 @@ function loadAll(): StoredRCASubmission[] {
     if (cleaned.length !== raw.length) {
       safeSetLocalJson(KEY, cleaned);
     }
+    const byEmp = new Map<string, StoredRCASubmission[]>();
+    for (const r of cleaned) {
+      if (!r?.employeeId) continue;
+      const nk = normalizeEmployeeId(r.employeeId);
+      if (nk) {
+        const list = byEmp.get(nk);
+        if (list) list.push(r);
+        else byEmp.set(nk, [r]);
+      }
+    }
+    _cachedRcaRaw = safeGetLocalRaw(KEY);
+    _cachedRcaAll = cleaned;
+    _cachedRcaByNormEmp = byEmp;
     return cleaned;
   } catch {
     return [];
@@ -203,11 +224,7 @@ export function loadRCASubmissions(employeeId?: string): StoredRCASubmission[] {
   const targetId = employeeId ?? getActiveUser().employeeId;
   if (!targetId) return all;
   const normId = normalizeEmployeeId(targetId);
-  return all.filter(
-    (r) =>
-      Boolean(r.employeeId) &&
-      (normalizeEmployeeId(r.employeeId) === normId || r.employeeId.toLowerCase() === targetId.toLowerCase()),
-  );
+  return _cachedRcaByNormEmp.get(normId) ?? [];
 }
 
 export function deleteRCASubmission(id: string): void {

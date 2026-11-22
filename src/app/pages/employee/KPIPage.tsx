@@ -4,12 +4,17 @@ import { useLocation, useNavigate } from "react-router";
 import { DatePickerID } from "../../components/DatePickerID";
 import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 import {
+  KPI_COLOR_BAND_OPTIONS,
+  computeKpiColorBandAchievementPct,
   formatComputedKpiNumber,
   getActiveMonthIndicesForPeriod,
+  isKnownKpiColorBandValue,
   isMonthBlockedForKpi,
   isPeriodicTrackingType,
+  normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
+  resolveKpiColorBandMeta,
   sanitizeKpiNumericInput,
 } from "../../utils/kpiNumberAndPeriod";
 import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info, RotateCcw } from "lucide-react";
@@ -176,36 +181,12 @@ export interface KPIItem {
 
 // ─── Color Indicator helpers (KPI Tracking) ───────────────────────────────────
 
-const KPI_COLOR_BANDS = [
-  { value: "95%-100%",  color: "#16a34a", bg: "#f0fdf4", border: "#86efac", dot: "#22c55e" },
-  { value: "≥80%-<95%", color: "#b45309", bg: "#fefce8", border: "#fde047", dot: "#eab308" },
-  { value: "<80%",      color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
-] as const;
+const KPI_COLOR_BANDS = KPI_COLOR_BAND_OPTIONS;
 
-const KPI_BASELINE_COLORS = [
-  { value: "Green",  color: "#16a34a", bg: "#f0fdf4", border: "#86efac", dot: "#22c55e" },
-  { value: "Yellow", color: "#b45309", bg: "#fefce8", border: "#fde047", dot: "#eab308" },
-  { value: "Red",    color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", dot: "#ef4444" },
-] as const;
-
-function kpiColorBandMeta(v: string) { return KPI_COLOR_BANDS.find((o) => o.value === v); }
-function kpiBaselineColorMeta(v: string) { return KPI_BASELINE_COLORS.find((o) => o.value === v); }
-
-function colorBandRank(v?: string): number {
-  const s = String(v ?? "").trim();
-  if (s === "95%-100%" || /^green$/i.test(s)) return 3;
-  if (s === "≥80%-<95%" || /^yellow$/i.test(s)) return 2;
-  if (s === "<80%" || /^red$/i.test(s)) return 1;
-  return 0;
-}
-
+function kpiColorBandMeta(v: string) { return resolveKpiColorBandMeta(v); }
+function kpiBaselineColorMeta(v: string) { return resolveKpiColorBandMeta(v); }
 function computeColorBandAchievementPct(actualBand: string, targetBand: string): number | null {
-  const actR = colorBandRank(actualBand);
-  if (actR === 0) return null;
-  const tgtR = colorBandRank(targetBand) || 3;
-  if (actR >= tgtR) return 100;
-  if (actR === 2) return 87.5;
-  return 70;
+  return computeKpiColorBandAchievementPct(actualBand, targetBand);
 }
 
 type CellKey = string; // `${kpiNo}__${subIdx}`
@@ -834,7 +815,11 @@ function deriveTrackingPeriodeLabel(satuan?: string, trackingPeriod?: string): s
 export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, unknown>>): KPIItem[] {
   return rows.map((r, idx) => {
     const rawMode = (r.indicatorMode as KPIItem["indicatorMode"]) ?? (r.colorIndicator ? "color" : "numeric");
-    const isColor = rawMode === "color" || Boolean(r.colorIndicator);
+    const isColor =
+      rawMode === "color" ||
+      Boolean(r.colorIndicator) ||
+      isKnownKpiColorBandValue(String(r.target2026 ?? "")) ||
+      isKnownKpiColorBandValue(String(r.baseline2025 ?? ""));
     const isRatio = rawMode === "ratio";
     const mt = (r.monthlyTargets && typeof r.monthlyTargets === "object" ? (r.monthlyTargets as Record<string, string>) : {});
     const firstRatioStr = String(r.target2026 ?? Object.values(mt).find(Boolean) ?? "6:1");
@@ -876,21 +861,62 @@ export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, u
   });
 }
 
+let _cachedKpiSettingByEmpRaw: string | null | undefined = undefined;
+let _cachedKpiSettingByEmpMap: Record<string, Array<Record<string, unknown>>> = {};
+let _cachedKpiSettingByLowerKey = new Map<string, Array<Record<string, unknown>>>();
+let _cachedMappedTrackingItemsByLowerKey = new Map<string, KPIItem[]>();
+let _cachedEvalKpiByNorm = new Map<string, { empRaw: string | null; setRaw: string | null; evalRes: EmployeeKPITrackingEvaluation }>();
+
+function getCachedKpiSettingByEmpStore() {
+  const rawSet = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
+  if (_cachedKpiSettingByEmpRaw === rawSet) {
+    return {
+      rawSet,
+      setMap: _cachedKpiSettingByEmpMap,
+      byLower: _cachedKpiSettingByLowerKey,
+      mappedCache: _cachedMappedTrackingItemsByLowerKey,
+    };
+  }
+  let setMap: Record<string, Array<Record<string, unknown>>> = {};
+  const byLower = new Map<string, Array<Record<string, unknown>>>();
+  if (rawSet) {
+    try {
+      const parsed = JSON.parse(rawSet);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        setMap = parsed as Record<string, Array<Record<string, unknown>>>;
+        for (const [k, v] of Object.entries(setMap)) {
+          if (Array.isArray(v) && v.length > 0) {
+            byLower.set(k.toLowerCase(), v);
+          }
+        }
+      }
+    } catch {
+      setMap = {};
+    }
+  }
+  _cachedKpiSettingByEmpRaw = rawSet;
+  _cachedKpiSettingByEmpMap = setMap;
+  _cachedKpiSettingByLowerKey = byLower;
+  _cachedMappedTrackingItemsByLowerKey = new Map();
+  _cachedEvalKpiByNorm = new Map();
+  return { rawSet, setMap, byLower, mappedCache: _cachedMappedTrackingItemsByLowerKey };
+}
+
 export function resolveEmployeeTrackingKpiItems(employeeId: string): KPIItem[] {
   try {
+    const { setMap, byLower, mappedCache } = getCachedKpiSettingByEmpStore();
+    if (byLower.size === 0) return [];
     const candidates = buildEmployeeIdMatchSet(employeeId);
     candidates.add(normalizeEmployeeId(employeeId));
-    const rawSet = localStorage.getItem("pa_kpi_setting_by_emp_v2");
-    const setMap = rawSet ? (JSON.parse(rawSet) as Record<string, Array<Record<string, unknown>>>) : {};
     for (const k of candidates) {
-      if (Array.isArray(setMap[k]) && setMap[k].length > 0) {
-        return mapStoredSettingRowsToTrackingItems(setMap[k]);
-      }
-    }
-    const lower = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
-    for (const [k, v] of Object.entries(setMap)) {
-      if (lower.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) {
-        return mapStoredSettingRowsToTrackingItems(v);
+      const kl = k.toLowerCase();
+      const cachedMapped = mappedCache.get(kl);
+      if (cachedMapped) return cachedMapped;
+      const rows = setMap[k] ?? byLower.get(kl);
+      if (Array.isArray(rows) && rows.length > 0) {
+        const mapped = mapStoredSettingRowsToTrackingItems(rows);
+        mappedCache.set(kl, mapped);
+        return mapped;
       }
     }
   } catch {
@@ -904,7 +930,7 @@ export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
     const activeUser = getActiveUser();
     const targetEmpId = employeeId ?? activeUser.employeeId;
     const normId = normalizeEmployeeId(targetEmpId);
-    const byEmpRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
+    const byEmpRaw = safeGetLocalRaw(`${KPI_STORE_KEY}_${normId}`);
     if (byEmpRaw) {
       const parsed = JSON.parse(byEmpRaw) as KPITrackingSnapshot;
       if (parsed && Array.isArray(parsed.months)) {
@@ -920,12 +946,39 @@ export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
 
 export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrackingEvaluation {
   const normId = normalizeEmployeeId(employeeId);
+  const { rawSet, setMap, byLower } = getCachedKpiSettingByEmpStore();
+  const byEmpRaw = safeGetLocalRaw(`${KPI_STORE_KEY}_${normId}`);
+  const cachedEval = _cachedEvalKpiByNorm.get(normId);
+  if (cachedEval && cachedEval.empRaw === byEmpRaw && cachedEval.setRaw === rawSet) {
+    return cachedEval.evalRes;
+  }
+
+  if (!byEmpRaw) {
+    const rawRows =
+      setMap[normId] ??
+      setMap[employeeId] ??
+      byLower.get(normId.toLowerCase()) ??
+      byLower.get(employeeId.toLowerCase());
+    const fastTotal = Array.isArray(rawRows) && rawRows.length > 0
+      ? rawRows.length
+      : resolveEmployeeTrackingKpiItems(employeeId).length;
+    const emptyRes: EmployeeKPITrackingEvaluation = {
+      months: [],
+      cellsMap: {},
+      trackedMonthsCount: 0,
+      isFullYearMonthsComplete: false,
+      ytdScore: 0,
+      hasAnyTrackingData: false,
+      totalKPI: fastTotal,
+      trackedKpiCount: 0,
+    };
+    _cachedEvalKpiByNorm.set(normId, { empRaw: byEmpRaw, setRaw: rawSet, evalRes: emptyRes });
+    return emptyRes;
+  }
+
   let snap: KPITrackingSnapshot = { months: [], cellsMap: {} };
   try {
-    const byEmpRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
-    if (byEmpRaw) {
-      snap = JSON.parse(byEmpRaw) as KPITrackingSnapshot;
-    }
+    snap = JSON.parse(byEmpRaw) as KPITrackingSnapshot;
   } catch {
     snap = { months: [], cellsMap: {} };
   }
@@ -959,9 +1012,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
 
   let totalKPI = empKpiList.length;
   try {
-    const rawSet = localStorage.getItem("pa_kpi_setting_by_emp_v2");
-    const setMap = rawSet ? (JSON.parse(rawSet) as Record<string, unknown[]>) : {};
-    const empSetItems = setMap[normId] ?? setMap[employeeId];
+    const empSetItems = setMap[normId] ?? setMap[employeeId] ?? byLower.get(normId.toLowerCase()) ?? byLower.get(employeeId.toLowerCase());
     if (Array.isArray(empSetItems) && empSetItems.length > 0) {
       totalKPI = empSetItems.length;
     }
@@ -982,7 +1033,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
   }
   const ytdScore = weightedSum > 0 ? Math.round(weightedSum * 10) / 10 : 0;
 
-  return {
+  const evalRes: EmployeeKPITrackingEvaluation = {
     months,
     cellsMap,
     trackedMonthsCount,
@@ -992,6 +1043,8 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
     totalKPI,
     trackedKpiCount,
   };
+  _cachedEvalKpiByNorm.set(normId, { empRaw: byEmpRaw, setRaw: rawSet, evalRes });
+  return evalRes;
 }
 
 // ─── SubRow definitions ───────────────────────────────────────────────────────
@@ -1694,7 +1747,7 @@ function AddMonthModal({
                                       return cm ? (
                                         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border" style={{ background: cm.bg, borderColor: cm.border, color: cm.color }}>
                                           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cm.dot }} />
-                                          {cv}
+                                          {cm.label}
                                         </span>
                                       ) : (
                                         <span className="font-semibold text-sky-800">{cv || "—"}</span>
@@ -1715,7 +1768,7 @@ function AddMonthModal({
                                 </label>
                                 {kpi.colorIndicator || kpi.indicatorMode === "color" ? (
                                   (() => {
-                                    const curBand = cells[ck(kpi.no, grp.actualIdx)] ?? "";
+                                    const curBand = normalizeKpiColorBandValue(cells[ck(kpi.no, grp.actualIdx)] ?? "");
                                     const cm = kpiColorBandMeta(curBand);
                                     return (
                                       <select
@@ -1726,9 +1779,9 @@ function AddMonthModal({
                                         }`}
                                         style={cm ? { background: cm.bg, borderColor: cm.border, color: cm.color } : undefined}
                                       >
-                                        <option value="">— Pilih Band Warna Aktual —</option>
+                                        <option value="">— Pilih Warna Aktual (Biru / Merah / Hitam) —</option>
                                         {KPI_COLOR_BANDS.map((o) => (
-                                          <option key={o.value} value={o.value}>{o.value}</option>
+                                          <option key={o.value} value={o.value}>{o.label}</option>
                                         ))}
                                       </select>
                                     );
@@ -2935,10 +2988,10 @@ function KPITable({
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-700 font-medium text-center" style={{ minWidth: 88 }}>
                   {kpi.indicatorMode === "ratio" ? (
                     <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">{kpi.baseline2025}</span>
-                  ) : kpi.colorIndicator ? (
+                  ) : (kpi.colorIndicator || isKnownKpiColorBandValue(kpi.baseline2025)) ? (
                     (() => { const m = kpiBaselineColorMeta(kpi.baseline2025); return m ? (
                       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border" style={{ background: m.bg, borderColor: m.border, color: m.color }}>
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: m.dot }} />{kpi.baseline2025}
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: m.dot }} />{m.label}
                       </span>
                     ) : <span>{kpi.baseline2025}</span>; })()
                   ) : kpi.baseline2025}
@@ -2946,10 +2999,10 @@ function KPITable({
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs font-bold text-[#1A284F] text-center" style={{ minWidth: 88 }}>
                   {kpi.indicatorMode === "ratio" ? (
                     <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">{kpi.target2026}</span>
-                  ) : kpi.colorIndicator ? (
+                  ) : (kpi.colorIndicator || isKnownKpiColorBandValue(kpi.target2026)) ? (
                     (() => { const m = kpiColorBandMeta(kpi.target2026); return m ? (
                       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border" style={{ background: m.bg, borderColor: m.border, color: m.color }}>
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: m.dot }} />{kpi.target2026}
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: m.dot }} />{m.label}
                       </span>
                     ) : <span>{kpi.target2026}</span>; })()
                   ) : kpi.target2026}
@@ -3032,14 +3085,14 @@ function KPITable({
                       const cm = kpiColorBandMeta(cv);
                       return cm ? (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold border" style={{ background: cm.bg, borderColor: cm.border, color: cm.color }}>
-                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: cm.dot }} />{cv}
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: cm.dot }} />{cm.label}
                         </span>
                       ) : <span className="text-gray-300 text-[11px]">—</span>;
                     })()
                   ) : kpi.colorIndicator && !isComputed ? (
                     /* Realisasi sub-row for color-indicator KPI: color select (only editable for last month) */
                     (() => {
-                      const cellVal = cells[m.id]?.[ck(kpi.no, si)] ?? "";
+                      const cellVal = normalizeKpiColorBandValue(cells[m.id]?.[ck(kpi.no, si)] ?? "");
                       const cm = kpiColorBandMeta(cellVal);
                       return isCellEditable ? (
                         <select
@@ -3048,15 +3101,15 @@ function KPITable({
                           className="w-full text-[10px] font-semibold border rounded-md px-0.5 py-1 outline-none cursor-pointer text-center"
                           style={{ borderColor: cm ? cm.border : "#e5e7eb", color: cm ? cm.color : "#9ca3af", background: cm ? cm.bg : "white" }}
                         >
-                          <option value="">—</option>
+                          <option value="">— Warna —</option>
                           {KPI_COLOR_BANDS.map((o) => (
-                            <option key={o.value} value={o.value}>{o.value}</option>
+                            <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                       ) : (
                         cm ? (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold border" style={{ background: cm.bg, borderColor: cm.border, color: cm.color }}>
-                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: cm.dot }} />{cellVal}
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: cm.dot }} />{cm.label}
                           </span>
                         ) : <span className="text-gray-300 text-[11px]">—</span>
                       );
@@ -6121,6 +6174,7 @@ export function toIdShortPeriode(monthLabel: string): string {
 export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCACandidate[] {
   const snap = loadKPITracking(employeeId);
   const monthsList = Array.isArray(snap.months) ? snap.months : [];
+  if (monthsList.length === 0) return [];
   const map = snap.cellsMap ?? {};
   const results: KPITrackingRCACandidate[] = [];
   const seen = new Set<string>();
@@ -6158,6 +6212,11 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
         } else if (spec.type === "ratio_score") {
           targetVal = getRaw(spec.negIdx) || kpi.monthlyTargets?.[m.label] || kpi.target2026;
           actualVal = getRaw(spec.posIdx);
+        } else if (spec.type === "color_band") {
+          const rawT = getRaw(spec.targetIdx) || resolveKpiMonthTarget(kpi, m.label) || kpi.target2026;
+          targetVal = normalizeKpiColorBandValue(rawT) || rawT;
+          const rawA = getRaw(spec.actualIdx);
+          actualVal = normalizeKpiColorBandValue(rawA) || rawA;
         }
         if (!targetVal) {
           const tIdx = kpi.subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));

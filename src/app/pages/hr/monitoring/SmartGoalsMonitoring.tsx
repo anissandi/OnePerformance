@@ -2,9 +2,10 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { Search, Lightbulb, CheckCircle2, AlertCircle, Clock, ChevronUp, ChevronDown, Eye, X, Filter, Users, Target, ListChecks, ShieldCheck, BarChart2, TrendingUp } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { EMPLOYEES, filterMonitoringByModuleAccess } from "./monitoringData";
 import { loadSubmittedGoals, loadCheckInEntries } from "../../shared/smartGoalsStore";
-import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 import { dateToSortableKey, normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -277,9 +278,16 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
   const [sortDir, setSortDir]             = useState<SortDir>("asc");
   const [viewRecord, setViewRecord]       = useState<{ empName: string; sg: SGRecord } | null>(null);
 
-  const baseEmployees = filterMonitoringByModuleAccess(
-    lockedUnits ? EMPLOYEES.filter(e => lockedUnits.includes(e.unit)) : EMPLOYEES,
-    "SMART Goals (Setting/Measurement)",
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const baseEmployees = useMemo(
+    () =>
+      filterMonitoringByModuleAccess(
+        lockedUnits ? EMPLOYEES.filter((e) => lockedUnits.includes(e.unit)) : EMPLOYEES,
+        "SMART Goals (Setting/Measurement)",
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lockedUnits?.join(","), tick],
   );
 
   // derive unique filter options
@@ -291,13 +299,9 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
 
   const buildLiveSG = (empId: string): SGRecord => {
     const normId = normalizeEmployeeId(empId);
-    const workflows = loadWorkflowRecords();
-    const wfSet = workflows.find(
-      (w) => w.year === "2026" && w.module === "SMART Goals" && w.phase === "setting" && (w.employeeId === normId || w.employeeId.toLowerCase() === empId.toLowerCase()),
-    );
-    const wfMeas = workflows.find(
-      (w) => w.year === "2026" && w.module === "SMART Goals" && w.phase === "measurement" && (w.employeeId === normId || w.employeeId.toLowerCase() === empId.toLowerCase()),
-    );
+    const empRecs = loadWorkflowRecordsByEmployeeMap().get(normId) ?? [];
+    const wfSet = empRecs.find((w) => w.year === "2026" && w.module === "SMART Goals" && w.phase === "setting");
+    const wfMeas = empRecs.find((w) => w.year === "2026" && w.module === "SMART Goals" && w.phase === "measurement");
     const submittedGoals = loadSubmittedGoals(empId);
     const checkIns = loadCheckInEntries(empId);
     const hasSettingRecord = Boolean(wfSet || (submittedGoals && submittedGoals.length > 0));
@@ -395,13 +399,18 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
     };
   };
 
-  const rows = useMemo(() => {
-    const base = baseEmployees.map(emp => ({
-      emp,
-      sg: buildLiveSG(emp.id),
-    }));
+  const allSGWithEmp = useMemo(
+    () =>
+      baseEmployees.map((emp) => ({
+        emp,
+        sg: buildLiveSG(emp.id),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [baseEmployees, tick],
+  );
 
-    const filtered = base.filter(({ emp, sg }) => {
+  const rows = useMemo(() => {
+    const filtered = allSGWithEmp.filter(({ emp, sg }) => {
       const q = search.toLowerCase();
       if (q && !emp.name.toLowerCase().includes(q) && !emp.id.toLowerCase().includes(q) && !emp.unit.toLowerCase().includes(q)) return false;
       if (unitFilter !== "All" && emp.unit !== unitFilter) return false;
@@ -436,7 +445,17 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
     });
 
     return filtered;
-  }, [baseEmployees, search, unitFilter, divisionFilter, deptFilter, positionFilter, settingStatusFilter, measureStatusFilter, sortKey, sortDir, tick]);
+  }, [allSGWithEmp, search, unitFilter, divisionFilter, deptFilter, positionFilter, settingStatusFilter, measureStatusFilter, sortKey, sortDir]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, unitFilter, divisionFilter, deptFilter, positionFilter, settingStatusFilter, measureStatusFilter]);
+
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
 
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -444,11 +463,6 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
   }
 
   // ─── Stats (over all baseEmployees, with rules applied) ─────────────────────
-  const allSGWithEmp = useMemo(() => baseEmployees.map(emp => ({
-    emp,
-    sg: buildLiveSG(emp.id),
-  })), [baseEmployees, tick]);
-
   const totalEmployees          = baseEmployees.length;
   const totalGoals              = allSGWithEmp.reduce((s, { sg }) => s + sg.totalGoals, 0);
   const totalActionPlans        = allSGWithEmp.reduce((s, { sg }) => s + sg.totalAPs, 0);
@@ -564,7 +578,8 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ emp, sg }, idx) => {
+              {pagedRows.map(({ emp, sg }, idx) => {
+                const globalIdx = (safePage - 1) * pageSize + idx;
                 // Rule 2: Draft → 0% for both metrics
                 const progressAPs   = getEffectiveProgressAPs(sg);
                 const goalsCompletion = getEffectiveGoalsCompletion(sg);
@@ -573,7 +588,7 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
 
                 return (
                   <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
-                    <td className="py-3 px-4 text-center text-xs text-gray-400 font-medium">{idx + 1}</td>
+                    <td className="py-3 px-4 text-center text-xs text-gray-400 font-medium">{globalIdx + 1}</td>
                     <td className="py-3 px-4 text-center">
                       <button onClick={() => setViewRecord({ empName: emp.name, sg })}
                         className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View Goals">
@@ -613,6 +628,14 @@ export function HRMonitoringSmartGoals({ lockedUnits }: { lockedUnits?: string[]
         {rows.length === 0 && (
           <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>
         )}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       {viewRecord && <ViewModal empName={viewRecord.empName} sg={viewRecord.sg} onClose={() => setViewRecord(null)} />}

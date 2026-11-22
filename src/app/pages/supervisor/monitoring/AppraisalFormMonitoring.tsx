@@ -1,10 +1,11 @@
 // @refresh reset
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, ClipboardList, CheckCircle2, AlertCircle, Clock, TrendingUp, Users } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
 import { loadAppraisalSelf, loadAllAppraisalApprovers } from "../../shared/appraisalFormStore";
-import { loadWorkflowRecords, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 import { useAppraisalRevision } from "../../shared/useAppraisalRevision";
 
 const TEAM_IDS = ["E002", "E011"];
@@ -70,7 +71,7 @@ function ScorePill({ score, label, asPercent = false }: { score: number; label: 
 
 export function SupervisorMonitoringAppraisalForm() {
   useAppraisalRevision();
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     const onRefresh = () => setTick((t) => t + 1);
     window.addEventListener("appraisal-updated", onRefresh);
@@ -85,17 +86,23 @@ export function SupervisorMonitoringAppraisalForm() {
     };
   }, []);
   const [search, setSearch] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const average = (values: number[]) => values.length ? values.reduce((sum, score) => sum + score, 0) / values.length : 0;
 
-  const allowedTeamEmployees = filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "Appraisals Form");
-  const workflows = loadWorkflowRecords();
-  const allRows = allowedTeamEmployees.map((emp) => {
-    const normId = normalizeEmployeeId(emp.id);
-    const self = loadAppraisalSelf(emp.id);
-    const approvers = loadAllAppraisalApprovers(emp.id);
-    const wfRec = workflows.find(
-      (w) => w.year === "2026" && w.module === "Appraisal Form" && w.phase === "measurement" && w.employeeId === normId,
-    );
+  const allowedTeamEmployees = useMemo(
+    () => filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "Appraisals Form"),
+    [tick],
+  );
+  const allRows = useMemo(() => {
+    const wfByEmp = loadWorkflowRecordsByEmployeeMap();
+    return allowedTeamEmployees.map((emp) => {
+      const normId = normalizeEmployeeId(emp.id);
+      const self = loadAppraisalSelf(emp.id);
+      const approvers = loadAllAppraisalApprovers(emp.id);
+      const wfRec = (wfByEmp.get(normId) ?? []).find(
+        (w) => w.year === "2026" && w.module === "Appraisal Form" && w.phase === "measurement",
+      );
     const first = approvers.find((entry) => entry.approverLevel === 1);
     const second = approvers.find((entry) => entry.approverLevel === 2);
     const selfValues = self
@@ -150,10 +157,22 @@ export function SupervisorMonitoringAppraisalForm() {
         "—",
     };
     return { emp, af };
-  });
-  const rows = allRows.filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase()));
-  const filteredAF = allRows.map((r) => r.af);
+    });
+  }, [allowedTeamEmployees, tick]);
+  const rows = useMemo(
+    () => allRows.filter(({ emp }) => !search || emp.name.toLowerCase().includes(search.toLowerCase())),
+    [allRows, search],
+  );
+  const filteredAF = useMemo(() => allRows.map((r) => r.af), [allRows]);
   const data = filteredAF;
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pagedRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage, pageSize],
+  );
 
   const selfDone  = filteredAF.filter((k) => k.selfAssessmentStatus === "Selesai").length;
   const supDone   = filteredAF.filter((k) => k.supervisorAssessmentStatus === "Selesai").length;
@@ -213,12 +232,13 @@ export function SupervisorMonitoringAppraisalForm() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.map(({ emp, af }, rowIdx) => {
+              {pagedRows.map(({ emp, af }, rowIdx) => {
+                const globalIdx = (safePage - 1) * pageSize + rowIdx;
                 const selfSt = ASSESS_STYLE[af.selfAssessmentStatus];
                 const supSt  = ASSESS_STYLE[af.supervisorAssessmentStatus];
                 return (
                   <tr key={emp.id} className={emp.isSelf ? "bg-indigo-50/70 hover:bg-indigo-100/60 transition-colors" : "hover:bg-gray-50/60 transition-colors"}>
-                    <td className="py-3.5 px-5 text-center text-xs font-semibold text-gray-400">{rowIdx + 1}</td>
+                    <td className="py-3.5 px-5 text-center text-xs font-semibold text-gray-400">{globalIdx + 1}</td>
                     <td className="py-3.5 px-5">
                       <span className="text-[11px] font-mono font-semibold text-[#1A284F] bg-[#1A284F]/8 px-1.5 py-0.5 rounded">{emp.id}</span>
                     </td>
@@ -265,6 +285,14 @@ export function SupervisorMonitoringAppraisalForm() {
           </table>
         </div>
         {rows.length === 0 && <div className="py-16 text-center text-gray-400 text-sm">No data matches the selected filter.</div>}
+        <TablePaginationBar
+          totalItems={rows.length}
+          currentPage={safePage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">

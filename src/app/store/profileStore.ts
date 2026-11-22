@@ -2,6 +2,7 @@ import { getActiveUser } from "./authStore";
 import {
   loadPersistedState,
   mergeKvMapRecord,
+  safeGetLocalRaw,
   savePersistedState,
   uploadEvidenceFileToSupabase,
 } from "../services/supabaseClient";
@@ -28,10 +29,24 @@ function normPhotoKey(employeeId: string): string {
   return String(employeeId ?? "").trim().toUpperCase();
 }
 
+let _cachedProfilePhotosRaw: string | null | undefined = undefined;
+let _cachedProfilePhotosMap: Record<string, string> = {};
+
+function readCachedProfilePhotosMap(): Record<string, string> {
+  const raw = safeGetLocalRaw(PROFILE_PHOTO_KEY);
+  if (_cachedProfilePhotosRaw === raw) {
+    return _cachedProfilePhotosMap;
+  }
+  const parsed = loadPersistedState<Record<string, string>>(PROFILE_PHOTO_KEY, {});
+  _cachedProfilePhotosRaw = raw;
+  _cachedProfilePhotosMap = parsed && typeof parsed === "object" ? parsed : {};
+  return _cachedProfilePhotosMap;
+}
+
 export function getUserProfilePhoto(employeeId?: string): string | undefined {
   const target = normPhotoKey(employeeId ?? getActiveUser().employeeId);
   if (!target) return undefined;
-  const map = loadPersistedState<Record<string, string>>(PROFILE_PHOTO_KEY, {});
+  const map = readCachedProfilePhotosMap();
   if (map[target]) return map[target];
   const ci = Object.entries(map).find(([k, v]) => k.trim().toUpperCase() === target && Boolean(v));
   return ci?.[1] || undefined;

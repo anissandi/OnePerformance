@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2, Layers, CheckCircle2, Edit2 } from "lucide-react";
-import { loadPersistedState, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
+import { loadPersistedState, safeGetLocalRaw, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
 
 export type BuiltinRole =
   | "Administrator"
@@ -133,6 +133,7 @@ export type BuiltinGroup =
   | "Ka./Wa.Ka.Bagian"
   | "Ka./Wa.Ka.Dept"
   | "Ka./Wa.Ka.Div ke atas"
+  | "GM / vGM"
   | "Direktur / Director";
 export type GroupName = BuiltinGroup | string;
 export type GroupAuthorityTier = "operational" | "seksi" | "bagian" | "department" | "division" | "gm_unit" | "director_group";
@@ -168,6 +169,7 @@ export const BUILTIN_GROUPS: BuiltinGroup[] = [
   "Ka./Wa.Ka.Bagian",
   "Ka./Wa.Ka.Dept",
   "Ka./Wa.Ka.Div ke atas",
+  "GM / vGM",
   "Direktur / Director",
 ];
 
@@ -222,8 +224,22 @@ export const BUILTIN_GROUP_DEFAULTS: Record<BuiltinGroup, AccessGroupConfig> = {
   },
   "Ka./Wa.Ka.Div ke atas": {
     name: "Ka./Wa.Ka.Div ke atas",
-    description: "Manager / Wakil Manager Divisi dan General Manager (GM).",
+    description: "Manager / Wakil Manager Divisi.",
     authorityLevel: "division",
+    allowedModules: [
+      "KPI (Setting/Measurement)",
+      "SMART Goals (Setting/Measurement)",
+      "Appraisals Form",
+      "Project Outside Job Scope",
+      "Managerial Skill",
+      "Inter-Departement Feedback",
+      "Management Interview",
+    ],
+  },
+  "GM / vGM": {
+    name: "GM / vGM",
+    description: "General Manager (GM) dan Vice General Manager (vGM) Unit Usaha. Melihat seluruh data sesuai Unit Usaha, Divisi, Departemen, Bagian & All Posisi di Unit Usahanya.",
+    authorityLevel: "gm_unit",
     allowedModules: [
       "KPI (Setting/Measurement)",
       "SMART Goals (Setting/Measurement)",
@@ -1534,8 +1550,22 @@ const ACCESS_ROLE_META_KEY = "pa_access_role_meta_v1";
 const ACCESS_GROUPS_KEY = "pa_access_groups_v1";
 const ACCESS_GROUP_CONFIGS_KEY = "pa_access_group_configs_v1";
 
-export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
-  const defaults: Record<Role, AccessRoleMetadata> = {
+let _cachedAccessRolesRaw: string | null | undefined = undefined;
+let _cachedAccessRoles: Role[] = [...BUILTIN_ROLES];
+let _cachedRoleMetaSig: string | undefined = undefined;
+let _cachedRoleMetaMap: Record<Role, AccessRoleMetadata> = {};
+let _cachedRolePermsSig: string | undefined = undefined;
+let _cachedRolePermsMap: Record<Role, RolePermissions> = {};
+let _cachedAccessGroupsRaw: string | null | undefined = undefined;
+let _cachedAccessGroups: GroupName[] = [...BUILTIN_GROUPS];
+let _cachedGroupConfigsSig: string | undefined = undefined;
+let _cachedGroupConfigsMap: Record<GroupName, AccessGroupConfig> = {};
+let _cachedGroupConfigsNormMap: Map<string, AccessGroupConfig> = new Map();
+
+const EMPTY_ROLE_META: AccessRoleMetadata = { excludeFromCalibrationHC: false, excludeFromVerification: false };
+
+function loadAccessRoleMetadataMapInternal(): Record<Role, AccessRoleMetadata> {
+  const defaults: Record<string, AccessRoleMetadata> = {
     "Administrator": { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "BOD":           { excludeFromCalibrationHC: true,  excludeFromVerification: true  },
     "Director":      { excludeFromCalibrationHC: true,  excludeFromVerification: true  },
@@ -1569,10 +1599,21 @@ export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
   return result;
 }
 
+export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
+  const sig = `${safeGetLocalRaw(ACCESS_ROLES_KEY) ?? ""}::${safeGetLocalRaw(ACCESS_ROLE_META_KEY) ?? ""}`;
+  if (_cachedRoleMetaSig === sig) {
+    return _cachedRoleMetaMap;
+  }
+  const result = loadAccessRoleMetadataMapInternal();
+  _cachedRoleMetaSig = sig;
+  _cachedRoleMetaMap = result;
+  return result;
+}
+
 export function getRoleMetadata(role: Role): AccessRoleMetadata {
-  if (!role) return { excludeFromCalibrationHC: false, excludeFromVerification: false };
+  if (!role) return EMPTY_ROLE_META;
   const map = loadAccessRoleMetadataMap();
-  return map[role] ?? { excludeFromCalibrationHC: false, excludeFromVerification: false };
+  return map[role] ?? EMPTY_ROLE_META;
 }
 function getAllExpandableIds(items: MenuItem[] = MENU_STRUCTURE): string[] {
   const ids: string[] = [];
@@ -1647,6 +1688,10 @@ function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
 }
 
 export function loadAccessRoles(): Role[] {
+  const raw = safeGetLocalRaw(ACCESS_ROLES_KEY);
+  if (_cachedAccessRolesRaw === raw) {
+    return _cachedAccessRoles;
+  }
   const saved = loadPersistedState<Role[]>(ACCESS_ROLES_KEY, [...BUILTIN_ROLES]);
   const merged: Role[] = [...BUILTIN_ROLES];
   if (Array.isArray(saved)) {
@@ -1656,10 +1701,16 @@ export function loadAccessRoles(): Role[] {
       }
     }
   }
+  _cachedAccessRolesRaw = raw;
+  _cachedAccessRoles = merged;
   return merged;
 }
 
 export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
+  const sig = `${safeGetLocalRaw(ACCESS_ROLES_KEY) ?? ""}::${safeGetLocalRaw(ACCESS_PERMS_KEY) ?? ""}`;
+  if (_cachedRolePermsSig === sig) {
+    return _cachedRolePermsMap;
+  }
   const defaults = buildDefaultPermissionsMap();
   const saved = loadPersistedState<Record<Role, RolePermissions>>(ACCESS_PERMS_KEY, {});
   const roles = loadAccessRoles();
@@ -1695,6 +1746,8 @@ export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
       if (!result[role].approvals_calibration_eoy?.view) result[role].approvals_calibration_eoy = { ...VA };
     }
   }
+  _cachedRolePermsSig = sig;
+  _cachedRolePermsMap = result;
   return result;
 }
 
@@ -1769,16 +1822,33 @@ export function updateMenuViewRolesFromMenuManagement(
   queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_UPDATED_EVENT)));
 }
 
+function normGroupLookupKey(val?: string | null): string {
+  return String(val ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\/\s*/g, "/")
+    .replace(/\s+/g, " ");
+}
+
 export function loadAccessGroups(): GroupName[] {
+  const raw = safeGetLocalRaw(ACCESS_GROUPS_KEY);
+  if (_cachedAccessGroupsRaw === raw) {
+    return _cachedAccessGroups;
+  }
   const saved = loadPersistedState<GroupName[]>(ACCESS_GROUPS_KEY, [...BUILTIN_GROUPS]);
   const merged: GroupName[] = [...BUILTIN_GROUPS];
+  const seenNorm = new Set(merged.map((m) => normGroupLookupKey(m)));
   if (Array.isArray(saved)) {
     for (const g of saved) {
-      if (g && typeof g === "string" && !merged.includes(g)) {
+      const nk = normGroupLookupKey(g);
+      if (g && typeof g === "string" && nk && !seenNorm.has(nk)) {
+        seenNorm.add(nk);
         merged.push(g);
       }
     }
   }
+  _cachedAccessGroupsRaw = raw;
+  _cachedAccessGroups = merged;
   return merged;
 }
 
@@ -1789,23 +1859,31 @@ function buildDefaultGroupConfigsMap(): Record<GroupName, AccessGroupConfig> {
     "Ka./Wa.Ka.Bagian":      deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Bagian"]),
     "Ka./Wa.Ka.Dept":        deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Dept"]),
     "Ka./Wa.Ka.Div ke atas": deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Div ke atas"]),
+    "GM / vGM":              deepClone(BUILTIN_GROUP_DEFAULTS["GM / vGM"]),
     "Direktur / Director":   deepClone(BUILTIN_GROUP_DEFAULTS["Direktur / Director"]),
   };
 }
 
 export function loadAccessGroupConfigs(): Record<GroupName, AccessGroupConfig> {
+  const sig = `${safeGetLocalRaw(ACCESS_GROUPS_KEY) ?? ""}::${safeGetLocalRaw(ACCESS_GROUP_CONFIGS_KEY) ?? ""}`;
+  if (_cachedGroupConfigsSig === sig) {
+    return _cachedGroupConfigsMap;
+  }
   const defaults = buildDefaultGroupConfigsMap();
   const saved = loadPersistedState<Record<GroupName, AccessGroupConfig>>(ACCESS_GROUP_CONFIGS_KEY, {});
   const groups = loadAccessGroups();
   const result: Record<GroupName, AccessGroupConfig> = {};
+  const normMap = new Map<string, AccessGroupConfig>();
+  const savedEntries = saved && typeof saved === "object" ? Object.entries(saved) : [];
 
   for (const g of groups) {
+    const gNorm = normGroupLookupKey(g);
     const base: AccessGroupConfig = defaults[g]
       ? deepClone(defaults[g])
       : {
           name: g,
           description: `Custom user grouping: ${g}`,
-          authorityLevel: "operational",
+          authorityLevel: gNorm === "gm/vgm" || gNorm === "level gm/vgm" ? "gm_unit" : "operational",
           allowedModules: [
             "KPI (Setting/Measurement)",
             "SMART Goals (Setting/Measurement)",
@@ -1813,7 +1891,9 @@ export function loadAccessGroupConfigs(): Record<GroupName, AccessGroupConfig> {
             "Project Outside Job Scope",
           ],
         };
-    const savedCfg = saved?.[g];
+    const savedCfg =
+      saved?.[g] ??
+      savedEntries.find(([k]) => normGroupLookupKey(k) === gNorm)?.[1];
     if (savedCfg && typeof savedCfg === "object") {
       result[g] = {
         ...base,
@@ -1828,7 +1908,13 @@ export function loadAccessGroupConfigs(): Record<GroupName, AccessGroupConfig> {
     } else {
       result[g] = base;
     }
+    if (gNorm && !normMap.has(gNorm)) {
+      normMap.set(gNorm, result[g]);
+    }
   }
+  _cachedGroupConfigsSig = sig;
+  _cachedGroupConfigsMap = result;
+  _cachedGroupConfigsNormMap = normMap;
   return result;
 }
 
@@ -1837,11 +1923,15 @@ export function getGroupConfig(group: GroupName): AccessGroupConfig {
   const trimmed = (group ?? "").trim();
   const exact = map[trimmed];
   if (exact) return exact;
+  const gNorm = normGroupLookupKey(trimmed);
+  if ((gNorm === "gm/vgm" || gNorm === "level gm/vgm") && map["GM / vGM"]) {
+    return map["GM / vGM"];
+  }
   if (/^(direktur|director)$/i.test(trimmed) && map["Direktur / Director"]) {
     return map["Direktur / Director"];
   }
-  const ciKey = Object.keys(map).find((k) => k.toLowerCase() === trimmed.toLowerCase());
-  if (ciKey) return map[ciKey];
+  const byNorm = _cachedGroupConfigsNormMap.get(gNorm);
+  if (byNorm) return byNorm;
   return map["Operasional"] ?? BUILTIN_GROUP_DEFAULTS["Operasional"];
 }
 

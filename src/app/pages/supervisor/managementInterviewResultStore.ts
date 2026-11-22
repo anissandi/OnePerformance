@@ -1,6 +1,6 @@
 // Shared store: BOD Management Interview results visible to each interviewee (supervisor)
 
-import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
+import { loadPersistedState, safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 
 export const MI_CRITERIA: { id: number; label: string }[] = [
   { id: 1, label: "Kewajaran Hasil Kinerja" },
@@ -92,9 +92,16 @@ function buildSeededResult(employeeId: string): MIEmployeeResult {
 const MI_RESULTS_KEY = "pa_mi_results_by_emp_v1";
 const _results: Record<string, MIEmployeeResult> = loadPersistedState(MI_RESULTS_KEY, {});
 const _listeners: Array<() => void> = [];
+let _cachedMiResultsRaw: string | null | undefined = undefined;
+let _cachedMiResultsPersisted: Record<string, MIEmployeeResult> = {};
 
 export function getMIResult(employeeId: string): MIEmployeeResult {
-  const persisted = loadPersistedState<Record<string, MIEmployeeResult>>(MI_RESULTS_KEY, {});
+  const raw = safeGetLocalRaw(MI_RESULTS_KEY);
+  if (_cachedMiResultsRaw !== raw) {
+    _cachedMiResultsPersisted = loadPersistedState<Record<string, MIEmployeeResult>>(MI_RESULTS_KEY, {});
+    _cachedMiResultsRaw = raw;
+  }
+  const persisted = _cachedMiResultsPersisted;
   if (persisted[employeeId]) _results[employeeId] = persisted[employeeId];
   return _results[employeeId] ?? buildSeededResult(employeeId);
 }

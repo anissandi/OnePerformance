@@ -11,6 +11,7 @@ import { useRouteTab } from "../../utils/useRouteTab";
 import { getPenilai1ScoreAsPercent, subscribeScores } from "../supervisor/managementInterviewScoreStore";
 import { Save, Edit2, Building2, ChevronRight, ArrowLeft, CheckCircle2, Send, Clock, X, ChevronDown, ChevronUp, Lock, RotateCcw, Paperclip, Upload, MessageSquare, Eye, Check, Users, Target, Activity, Award } from "lucide-react";
 import { ANALYTICS_CARD_TONES, AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
+import { TablePaginationBar } from "../../components/TablePaginationBar";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Dot } from "recharts";
 import ExportImportButton from "../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../utils/excelUtils";
@@ -180,11 +181,30 @@ const SUPPORTING_TAG_THEMES: Record<string, { active: string; inactive: string }
 };
 
 
+let _cachedCalEmployees: Employee[] | null = null;
+let _cachedCalEmployeesAt = 0;
+if (typeof window !== "undefined") {
+  const invalidateCalEmpCache = () => {
+    _cachedCalEmployees = null;
+  };
+  window.addEventListener("appraisal-updated", invalidateCalEmpCache);
+  window.addEventListener("pa-auth-updated", invalidateCalEmpCache);
+  window.addEventListener("pa-db-hydrated", invalidateCalEmpCache);
+  window.addEventListener("pa-employees-imported", invalidateCalEmpCache);
+  window.addEventListener("pa-score-weights-updated", invalidateCalEmpCache);
+  window.addEventListener("pa-access-updated", invalidateCalEmpCache);
+  window.addEventListener("storage", invalidateCalEmpCache);
+}
+
 function buildLiveCalibrationEmployees(): Employee[] {
+  if (_cachedCalEmployees && Date.now() - _cachedCalEmployeesAt < 1500) {
+    return _cachedCalEmployees;
+  }
   const users = loadManagedUsers().filter((u) => u.status === "Active" && !isExcludedFromAppraisalCalibration(u));
   const liveEmps = getLiveTransactionalEmployees();
-  return users.map((u) => {
-    const live = liveEmps.find((e) => e.id.toLowerCase() === u.employeeId.toLowerCase());
+  const liveByEmpLower = new Map(liveEmps.map((e) => [e.id.toLowerCase(), e]));
+  const built = users.map((u) => {
+    const live = liveByEmpLower.get(u.employeeId.toLowerCase());
     const orgDivKey = (u.division || "Umum").trim();
     const orgDeptKey = (u.department || orgDivKey).trim();
     const orgBagKey = (u.bagian || orgDeptKey).trim();
@@ -240,6 +260,9 @@ function buildLiveCalibrationEmployees(): Employee[] {
       isCalibrationReady: live?.isCalibrationReady ?? false,
     };
   });
+  _cachedCalEmployees = built;
+  _cachedCalEmployeesAt = Date.now();
+  return built;
 }
 
 const ALL_EMPLOYEES: Employee[] = new Proxy([] as Employee[], {
@@ -352,10 +375,11 @@ function CollapsibleSection({ title, subtitle, defaultOpen = true, actions, chil
 
 // ─── Bell Curve Chart ─────────────────────────────────────────────────────────
 const ADJ_BELL_PALETTE = {
-  soy: "#0284C7", // Ocean Sky Blue
-  eoy: "#F59E0B", // Golden Amber
-  actual: "#10B981", // Emerald Green
-  calibrated: "#F43F5E", // Coral Rose (tanpa ungu)
+  soy: "#4A8AC8", // Medium Sky Blue (Band 3 pada palet referensi)
+  eoy: "#FAA950", // Warm Apricot Gold (Band 4 pada palet referensi)
+  eoyText: "#C97316", // Aksentuasi teks Apricot agar tajam di latar putih
+  actual: "#0A5598", // Classic Cobalt Blue (Band 2 pada palet referensi)
+  calibrated: "#232B69", // Deep Navy (Band 1 pada palet referensi)
 } as const;
 
 function BellCurveChart({
@@ -416,12 +440,23 @@ function BellCurveChart({
       }));
 
   const gradeColors: Record<string, string> = {
-    "A+": "#059669", A: "#0284C7", B: "#0D9488", C: "#F59E0B", D: "#F97316", E: "#E11D48",
+    "A+": "#232B69",
+    A: "#0A5598",
+    B: "#2B6FB0",
+    C: "#4A8AC8",
+    D: "#FAA950",
+    E: "#D97E24",
   };
 
   const seriesColorMap: Record<string, string> = {
     "Setting (SOY)": ADJ_BELL_PALETTE.soy,
     "Setting (EOY)": ADJ_BELL_PALETTE.eoy,
+    "Aktual": ADJ_BELL_PALETTE.actual,
+    "Kalibrasi (EOY)": ADJ_BELL_PALETTE.calibrated,
+  };
+  const seriesTextColorMap: Record<string, string> = {
+    "Setting (SOY)": "#3572B0",
+    "Setting (EOY)": ADJ_BELL_PALETTE.eoyText,
     "Aktual": ADJ_BELL_PALETTE.actual,
     "Kalibrasi (EOY)": ADJ_BELL_PALETTE.calibrated,
   };
@@ -452,13 +487,14 @@ function BellCurveChart({
               ? p.payload.actualHC
               : p.payload.calibratedHC;
           const dotColor = seriesColorMap[p.dataKey] ?? p.color ?? p.fill ?? p.stroke;
+          const valColor = seriesTextColorMap[p.dataKey] ?? dotColor;
           return (
             <div key={p.dataKey} className="flex justify-between gap-4 mt-1">
               <span className="text-gray-500 flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: dotColor }} />
                 {p.dataKey}
               </span>
-              <span className="font-bold" style={{ color: p.dataKey === "Kalibrasi (EOY)" && !hasCalibration ? "#94A3B8" : dotColor }}>
+              <span className="font-bold" style={{ color: p.dataKey === "Kalibrasi (EOY)" && !hasCalibration ? "#94A3B8" : valColor }}>
                 {p.dataKey === "Kalibrasi (EOY)" && !hasCalibration ? (
                   <span className="text-gray-400 font-normal">Belum dikalibrasi</span>
                 ) : (
@@ -485,7 +521,10 @@ function BellCurveChart({
         width={width}
         height={height}
         fill={fill}
-        fillOpacity={fillOpacity ?? 0.5}
+        fillOpacity={fillOpacity ?? 0.2}
+        stroke={fill}
+        strokeOpacity={0.32}
+        strokeWidth={1}
         rx={4}
         ry={4}
         style={{ transition: "height 380ms cubic-bezier(0.22, 1, 0.36, 1), y 380ms cubic-bezier(0.22, 1, 0.36, 1)" }}
@@ -549,18 +588,18 @@ function BellCurveChart({
               <CartesianGrid key="bc-grid" strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis key="bc-xaxis" dataKey="grade" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#374151", fontWeight: 600 }} dy={6} />
               <YAxis key="bc-yaxis" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#94A3B8" }} tickFormatter={v => `${v}%`} domain={[0, "auto"]} />
-              <Tooltip key="bc-tooltip" content={<CustomTooltip />} cursor={{ fill: "rgba(2,132,199,0.04)" }} />
+              <Tooltip key="bc-tooltip" content={<CustomTooltip />} cursor={{ fill: "rgba(10,85,152,0.04)" }} />
               <Legend
                 key="bc-legend"
                 payload={legendPayload}
                 iconSize={10}
                 formatter={(value) => <span className="text-xs text-gray-600 font-medium">{value}</span>}
               />
-              {/* Bars (+30% ukuran bar, kepekatan warna dikurangi 50% -> fillOpacity 0.5) */}
-              <Bar key="bc-bar-setting"     dataKey="Setting (SOY)"   name="Setting (SOY)"   fill={ADJ_BELL_PALETTE.soy}        fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={720} animationEasing="ease-out" legendType="none" />
-              <Bar key="bc-bar-setting-eoy" dataKey="Setting (EOY)"   name="Setting (EOY)"   fill={ADJ_BELL_PALETTE.eoy}        fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={780} animationEasing="ease-out" legendType="none" />
-              <Bar key="bc-bar-actual"      dataKey="Aktual"          name="Aktual"          fill={ADJ_BELL_PALETTE.actual}     fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={840} animationEasing="ease-out" legendType="none" />
-              <Bar key="bc-bar-cal"         dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill={ADJ_BELL_PALETTE.calibrated} fillOpacity={0.5} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={900} animationEasing="ease-out" legendType="none" />
+              {/* Bars (+30% ukuran bar, saturasi/kepekatan warna dikurangi 80% -> fillOpacity 0.2) */}
+              <Bar key="bc-bar-setting"     dataKey="Setting (SOY)"   name="Setting (SOY)"   fill={ADJ_BELL_PALETTE.soy}        fillOpacity={0.2} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={720} animationEasing="ease-out" legendType="none" />
+              <Bar key="bc-bar-setting-eoy" dataKey="Setting (EOY)"   name="Setting (EOY)"   fill={ADJ_BELL_PALETTE.eoy}        fillOpacity={0.2} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={780} animationEasing="ease-out" legendType="none" />
+              <Bar key="bc-bar-actual"      dataKey="Aktual"          name="Aktual"          fill={ADJ_BELL_PALETTE.actual}     fillOpacity={0.2} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={840} animationEasing="ease-out" legendType="none" />
+              <Bar key="bc-bar-cal"         dataKey="Kalibrasi (EOY)" name="Kalibrasi (EOY)" fill={ADJ_BELL_PALETTE.calibrated} fillOpacity={0.2} shape={<CustomBarShape />} isAnimationActive={true} animationDuration={900} animationEasing="ease-out" legendType="none" />
               {/* Lines */}
               <Line key="bc-line-setting"     type="monotone" dataKey="Setting (SOY)"   name="Setting (SOY)"   stroke={ADJ_BELL_PALETTE.soy}    strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingDot />}    activeDot={{ r: 6, fill: ADJ_BELL_PALETTE.soy }}    isAnimationActive={true} animationDuration={780} animationEasing="ease-out" legendType="none" />
               <Line key="bc-line-setting-eoy" type="monotone" dataKey="Setting (EOY)"   name="Setting (EOY)"   stroke={ADJ_BELL_PALETTE.eoy}    strokeWidth={2.5} strokeDasharray="6 3" dot={<SettingEoyDot />} activeDot={{ r: 6, fill: ADJ_BELL_PALETTE.eoy }}    isAnimationActive={true} animationDuration={840} animationEasing="ease-out" legendType="none" />
@@ -584,44 +623,44 @@ function BellCurveChart({
                 animate={{ opacity: 1, x: 0 }}
                 whileHover={{ x: -2 }}
                 transition={{ duration: 0.4, delay: 0.14 + di * 0.055, ease: [0.22, 1, 0.36, 1] }}
-                className="flex items-center gap-3 bg-gradient-to-r from-slate-50/90 via-white to-sky-50/30 rounded-xl px-3.5 py-2.5 border border-slate-200/85 transition-shadow hover:shadow-xs"
+                className="flex items-center gap-3 bg-gradient-to-r from-[#F6F9FC] via-white to-[#FEF8F1]/65 rounded-xl px-3.5 py-2.5 border border-[#DCE6F2] transition-shadow hover:shadow-xs"
               >
                 <span className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-xs"
                   style={{ background: color }}>{d.grade}</span>
                 <div className="flex-1 min-w-0">
                   <div className="grid grid-cols-4 gap-2 text-[11px] leading-snug">
                     <div>
-                      <span className="flex items-center gap-1 text-[10px] font-semibold text-sky-700">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7] shrink-0" />
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-[#3572B0]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#4A8AC8] shrink-0" />
                         Set. SOY
                       </span>
-                      <span className="font-bold text-[#0284C7] tabular-nums">{d["Setting (SOY)"]}%</span>
+                      <span className="font-bold text-[#3572B0] tabular-nums">{d["Setting (SOY)"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingHC} org)</span>
                     </div>
                     <div>
-                      <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-700">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] shrink-0" />
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-[#C97316]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#FAA950] shrink-0" />
                         Set. EOY
                       </span>
-                      <span className="font-bold text-[#D97706] tabular-nums">{d["Setting (EOY)"]}%</span>
+                      <span className="font-bold text-[#C97316] tabular-nums">{d["Setting (EOY)"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.settingEoyHC} org)</span>
                     </div>
                     <div>
-                      <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-700">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] shrink-0" />
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-[#0A5598]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#0A5598] shrink-0" />
                         Aktual
                       </span>
-                      <span className="font-bold text-[#059669] tabular-nums">{d["Aktual"]}%</span>
+                      <span className="font-bold text-[#0A5598] tabular-nums">{d["Aktual"]}%</span>
                       <span className="block text-[10px] text-gray-400 tabular-nums">({d.actualHC} org)</span>
                     </div>
                     <div>
-                      <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-700">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E] shrink-0" />
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-[#232B69]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#232B69] shrink-0" />
                         Kalibrasi
                       </span>
                       {hasCalibration ? (
                         <>
-                          <span className="font-bold text-[#E11D48] tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
+                          <span className="font-bold text-[#232B69] tabular-nums">{d["Kalibrasi (EOY)"]}%</span>
                           <span className="block text-[10px] text-gray-400 tabular-nums">
                             ({d.calibratedHC}{diffCalVsAct !== 0 ? ` · ${diffCalVsAct > 0 ? `+${diffCalVsAct}` : diffCalVsAct}` : ""})
                           </span>
@@ -636,7 +675,11 @@ function BellCurveChart({
                   </div>
                 </div>
                 <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-md tabular-nums ${
-                  diffEoy > 0 ? "bg-emerald-50 text-emerald-700" : diffEoy < 0 ? "bg-rose-50 text-rose-600" : "bg-gray-100 text-gray-500"
+                  diffEoy > 0
+                    ? "bg-[#4A8AC8]/15 text-[#0A5598] border border-[#4A8AC8]/30"
+                    : diffEoy < 0
+                    ? "bg-[#FAA950]/20 text-[#B8620E] border border-[#FAA950]/40"
+                    : "bg-slate-100 text-slate-500"
                 }`} title={hasCalibration ? "Selisih Kalibrasi (EOY) terhadap Setting (EOY)" : "Selisih Aktual terhadap Setting (EOY)"}>
                   {diffEoy > 0 ? `+${diffEoy}%` : diffEoy < 0 ? `${diffEoy}%` : "0%"}
                 </span>
@@ -1584,6 +1627,12 @@ function EmployeeAdjustmentSection({
     return typeof adj === "number" && Number.isFinite(adj) ? adj : getBase(emp);
   };
 
+  const [adjPage, setAdjPage] = useState(1);
+  const [adjPageSize, setAdjPageSize] = useState(25);
+  useEffect(() => {
+    setAdjPage(1);
+  }, [search, selDivisi, selDept, selBagian, selPosisi, selGrade, unitName]);
+
   const posisiOptions = useMemo(() => {
     const set = new Set<string>();
     unitEmployees.forEach((e) => {
@@ -1595,17 +1644,29 @@ function EmployeeAdjustmentSection({
     return Array.from(set).sort((a, b) => a.localeCompare(b, "id"));
   }, [unitEmployees, selDivisi, selDept, selBagian]);
 
-  const filtered = unitEmployees.filter(e => {
-    if (isYearEndInactive(e.employeeId)) return false;
-    const query = search.trim().toLowerCase();
-    if (query && !e.name.toLowerCase().includes(query) && !e.employeeId.toLowerCase().replace(/-/g, "").includes(query.replace(/-/g, ""))) return false;
-    if (selDivisi !== "__all__" && e.divisiId       !== selDivisi) return false;
-    if (selDept   !== "__all__" && e.departemenenId !== selDept)   return false;
-    if (selBagian !== "__all__" && e.bagianId       !== selBagian) return false;
-    if (selPosisi !== "__all__" && e.positionName   !== selPosisi) return false;
-    if (selGrade  !== "__all__" && gradeFromScore(getFinal(e), unitName || e.companyUnit).grade !== selGrade) return false;
-    return true;
-  });
+  const filtered = useMemo(
+    () =>
+      unitEmployees.filter((e) => {
+        if (isYearEndInactive(e.employeeId)) return false;
+        const query = search.trim().toLowerCase();
+        const queryClean = query.replace(/-/g, "");
+        if (
+          query &&
+          !e.name.toLowerCase().includes(query) &&
+          !e.employeeId.toLowerCase().replace(/-/g, "").includes(queryClean)
+        ) {
+          return false;
+        }
+        if (selDivisi !== "__all__" && e.divisiId !== selDivisi) return false;
+        if (selDept !== "__all__" && e.departemenenId !== selDept) return false;
+        if (selBagian !== "__all__" && e.bagianId !== selBagian) return false;
+        if (selPosisi !== "__all__" && e.positionName !== selPosisi) return false;
+        if (selGrade !== "__all__" && gradeFromScore(getFinal(e), unitName || e.companyUnit).grade !== selGrade) return false;
+        return true;
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [unitEmployees, search, selDivisi, selDept, selBagian, selPosisi, selGrade, adjustments, unitName],
+  );
 
   const adjustedCount = unitEmployees.filter(
     (e) => !isYearEndInactive(e.employeeId) && e.id in adjustments && Number.isFinite(adjustments[e.id]) && Math.abs(getFinal(e) - getBase(e)) > 0.0001,
@@ -1639,6 +1700,12 @@ function EmployeeAdjustmentSection({
       return sortDir === "asc" ? va - vb : vb - va;
     });
   }, [filtered, sortKey, sortDir, adjustments]);
+
+  const safeAdjPage = Math.min(adjPage, Math.max(1, Math.ceil(sorted.length / adjPageSize)));
+  const pagedSorted = useMemo(
+    () => sorted.slice((safeAdjPage - 1) * adjPageSize, safeAdjPage * adjPageSize),
+    [sorted, safeAdjPage, adjPageSize],
+  );
 
   const resetEmp = (id: string) => {
     setAdjustments(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -2151,7 +2218,8 @@ function EmployeeAdjustmentSection({
                   Tidak ada karyawan ditemukan. Coba ubah filter di atas.
                 </td>
               </tr>
-            ) : sorted.map((emp, idx) => {
+            ) : pagedSorted.map((emp, pageIdx) => {
+              const idx = (safeAdjPage - 1) * adjPageSize + pageIdx;
               const base      = getBase(emp);
               const final     = getFinal(emp);
               const hasAdj    = emp.id in adjustments && Number.isFinite(adjustments[emp.id]) && Math.abs(final - base) > 0.0001;
@@ -2477,6 +2545,14 @@ function EmployeeAdjustmentSection({
             })}
           </tbody>
         </table>
+        <TablePaginationBar
+          totalItems={sorted.length}
+          currentPage={safeAdjPage}
+          pageSize={adjPageSize}
+          onPageChange={setAdjPage}
+          onPageSizeChange={setAdjPageSize}
+          itemLabel="karyawan"
+        />
       </div>
 
       {/* Appraisal Detail Modal */}
@@ -2834,36 +2910,36 @@ function CalibrationPanel({
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
-                className="flex flex-wrap items-center gap-6 bg-slate-50/80 border border-slate-200/70 rounded-xl px-5 py-3"
+                className="flex flex-wrap items-center gap-6 bg-[#F6F9FC] border border-[#DCE6F2] rounded-xl px-5 py-3"
               >
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Legend:</p>
+                <p className="text-xs font-semibold text-[#232B69]/70 uppercase tracking-wide">Legend:</p>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.soy, opacity: 0.75 }} />
+                  <span className="w-4 h-3 rounded-sm inline-block border" style={{ backgroundColor: `${ADJ_BELL_PALETTE.soy}33`, borderColor: `${ADJ_BELL_PALETTE.soy}66` }} />
                   <svg width="18" height="10" className="shrink-0">
                     <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.soy} strokeWidth="2.5" strokeDasharray="5 3" />
                   </svg>
-                  <span className="text-xs text-gray-700 font-semibold">Setting (SOY)</span>
+                  <span className="text-xs text-[#232B69] font-semibold">Setting (SOY)</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.eoy, opacity: 0.75 }} />
+                  <span className="w-4 h-3 rounded-sm inline-block border" style={{ backgroundColor: `${ADJ_BELL_PALETTE.eoy}33`, borderColor: `${ADJ_BELL_PALETTE.eoy}66` }} />
                   <svg width="18" height="10" className="shrink-0">
                     <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.eoy} strokeWidth="2.5" strokeDasharray="5 3" />
                   </svg>
-                  <span className="text-xs text-gray-700 font-semibold">Setting (EOY)</span>
+                  <span className="text-xs text-[#232B69] font-semibold">Setting (EOY)</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.actual, opacity: 0.75 }} />
+                  <span className="w-4 h-3 rounded-sm inline-block border" style={{ backgroundColor: `${ADJ_BELL_PALETTE.actual}33`, borderColor: `${ADJ_BELL_PALETTE.actual}66` }} />
                   <svg width="18" height="10" className="shrink-0">
                     <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.actual} strokeWidth="2.5" />
                   </svg>
-                  <span className="text-xs text-gray-700 font-semibold">Aktual</span>
+                  <span className="text-xs text-[#232B69] font-semibold">Aktual</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: ADJ_BELL_PALETTE.calibrated, opacity: 0.75 }} />
+                  <span className="w-4 h-3 rounded-sm inline-block border" style={{ backgroundColor: `${ADJ_BELL_PALETTE.calibrated}33`, borderColor: `${ADJ_BELL_PALETTE.calibrated}66` }} />
                   <svg width="18" height="10" className="shrink-0">
                     <line x1="0" y1="5" x2="18" y2="5" stroke={ADJ_BELL_PALETTE.calibrated} strokeWidth="2.5" />
                   </svg>
-                  <span className="text-xs text-gray-700 font-semibold">Kalibrasi (EOY)</span>
+                  <span className="text-xs text-[#232B69] font-semibold">Kalibrasi (EOY)</span>
                 </div>
               </motion.div>
 

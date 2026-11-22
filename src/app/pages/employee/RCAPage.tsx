@@ -16,7 +16,9 @@ import { getKpiTrackingRcaCandidates, toIdShortPeriode } from "./KPIPage";
 import {
   Plus, X, Eye, Send, CheckCircle2, Trash2, ChevronDown,
   Clock, ArrowLeft, Info, FilePlus, Upload, FileText, Edit3, RotateCcw,
+  Calendar, Target, ListChecks, Percent,
 } from "lucide-react";
+import { AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1439,25 +1441,34 @@ function SummaryCards({ allRows }: { allRows: RCARow[] }) {
   const outstandingPct   = apCount > 0 ? Math.round((totalOutstanding / apCount) * 100) : 0;
   const totalClosed      = allRows.filter((r) => r.approvalStatus === "Closed").length;
 
-  const cards = [
-    { label: "Total Period",      value: totalPeriod,          unit: "period", color: "bg-[#1A284F]",  text: "text-white" },
-    { label: "Total KPI",         value: totalKPI,             unit: "KPI",    color: "bg-indigo-500", text: "text-white" },
-    { label: "Total APs",         value: apCount,              unit: "APs",    color: "bg-blue-500",   text: "text-white" },
-    { label: "Total Outstanding", value: totalOutstanding,     unit: "APs",    color: "bg-amber-500",  text: "text-white" },
-    { label: "Outstanding (%)",   value: `${outstandingPct}%`, unit: "",       color: "bg-orange-500", text: "text-white" },
-    { label: "Total RCA Closed",  value: totalClosed,          unit: "RCA",    color: "bg-green-600",  text: "text-white" },
-  ] as const;
+  const cards: Array<{
+    label: string;
+    value: React.ReactNode;
+    subtitle: string;
+    tone: AnalyticsCardTone;
+    icon: React.ReactNode;
+  }> = [
+    { label: "Total Period",      value: totalPeriod,          subtitle: "Periode tercatat",      tone: "navy",       icon: <Calendar className="w-4 h-4" /> },
+    { label: "Total KPI",         value: totalKPI,             subtitle: "Indikator KPI terkait", tone: "plum",       icon: <Target className="w-4 h-4" /> },
+    { label: "Total APs",         value: apCount,              subtitle: "Action plan aktif",     tone: "teal",       icon: <ListChecks className="w-4 h-4" /> },
+    { label: "Total Outstanding", value: totalOutstanding,     subtitle: "Action plan berjalan",  tone: "terracotta", icon: <Clock className="w-4 h-4" /> },
+    { label: "Outstanding (%)",   value: `${outstandingPct}%`, subtitle: "Proporsi outstanding",  tone: "rose",       icon: <Percent className="w-4 h-4" /> },
+    { label: "Total RCA Closed",  value: totalClosed,          subtitle: "RCA selesai ditutup",   tone: "emerald",    icon: <CheckCircle2 className="w-4 h-4" /> },
+  ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-      {cards.map(({ label, value, unit, color, text }) => (
-        <div key={label} className={`${color} rounded-xl px-4 py-4 flex flex-col gap-1 shadow-sm`}>
-          <p className={`text-[10px] font-semibold uppercase tracking-wider opacity-80 ${text}`}>{label}</p>
-          <div className="flex items-end gap-1.5 mt-1">
-            <span className={`text-2xl font-bold leading-none ${text}`}>{value}</span>
-            {unit && <span className={`text-[11px] font-medium opacity-70 pb-0.5 ${text}`}>{unit}</span>}
-          </div>
-        </div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5">
+      {cards.map((c, idx) => (
+        <AnalyticsStatCard
+          key={c.label}
+          title={c.label}
+          value={c.value}
+          subtitle={c.subtitle}
+          icon={c.icon}
+          tone={c.tone}
+          index={idx}
+          compact
+        />
       ))}
     </div>
   );
