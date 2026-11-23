@@ -126,6 +126,11 @@ function toPaUserRow(u, now, mode = "full") {
     : Array.isArray(u.managed_units)
       ? u.managed_units
       : [];
+  const rawKpiBizCheckerUnits = Array.isArray(u.kpiBusinessCheckerUnits)
+    ? u.kpiBusinessCheckerUnits
+    : Array.isArray(u.kpi_business_checker_units)
+      ? u.kpi_business_checker_units
+      : [];
   const rawCalRoleMap =
     u.calibrationRoleByUnit && typeof u.calibrationRoleByUnit === "object"
       ? u.calibrationRoleByUnit
@@ -156,6 +161,14 @@ function toPaUserRow(u, now, mode = "full") {
     ...extended,
     checker_units: Array.from(new Set(rawCheckerUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
     managed_units: Array.from(new Set(rawManagedUnits.map((x) => canonicalizeUnitName(x)).filter(Boolean))),
+    is_kpi_business_checker: Boolean(u.isKpiBusinessChecker ?? u.is_kpi_business_checker ?? false),
+    kpi_business_checker_units: Array.from(
+      new Set(
+        rawKpiBizCheckerUnits
+          .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeUnitName(x)))
+          .filter(Boolean),
+      ),
+    ),
     calibration_role_by_unit: normCalRoleMap,
     soy_calibration_role_by_unit: normSoyRoleMap,
     director_calibration_role: String(u.directorCalibrationRole ?? u.director_calibration_role ?? ""),

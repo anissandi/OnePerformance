@@ -7,6 +7,7 @@ import { loadLocalAuditLogs } from "../../../services/supabaseClient";
 import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw, AlertTriangle, UserCheck, Shield, Award, Briefcase } from "lucide-react";
 import {
   COMPANY_UNIT_LOCATIONS,
+  KPI_BUSINESS_GROUP_SCOPE_TOKEN,
   defaultAllowedModulesForGrouping,
   getActiveUser,
   getEffectiveCheckerUnits,
@@ -117,6 +118,12 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
             { label: "Multi-Bagian (Tambahan)", value: user.managedBagians?.length ? user.managedBagians.join(", ") : "—" },
             { label: "Role", value: <RoleBadge role={user.role} /> },
             { label: "Groupings", value: user.groupings },
+            {
+              label: "Checker KPI Business",
+              value: user.isKpiBusinessChecker
+                ? (user.kpiBusinessCheckerUnits?.length ? user.kpiBusinessCheckerUnits.join(", ") : "KPI Group & Semua Unit")
+                : "—",
+            },
             { label: "Status", value: <StatusBadge status={user.status} /> },
             { label: "Last Login", value: user.lastLogin || "—" },
           ].map(({ label, value }) => (
@@ -557,6 +564,27 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                   <strong>Approval Validate HR ICF</strong> (Role HR ICF memiliki hak akses setara Administrator)
                 </span>
               </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.isKpiBusinessChecker)}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      isKpiBusinessChecker: e.target.checked,
+                      kpiBusinessCheckerUnits: e.target.checked
+                        ? p.kpiBusinessCheckerUnits && p.kpiBusinessCheckerUnits.length > 0
+                          ? p.kpiBusinessCheckerUnits
+                          : [KPI_BUSINESS_GROUP_SCOPE_TOKEN, ...COMPANIES]
+                        : [],
+                    }))
+                  }
+                  className="rounded border-gray-300"
+                />
+                <span>
+                  <strong>Approval Check KPI Business (KPI Group &amp; KPI Unit)</strong> (Checker khusus sebelum masuk ke Approver — otomatis memunculkan submenu KPI Business di /approvals/settings/kpi)
+                </span>
+              </label>
             </div>
             {(form.isHrUnitChecker || form.role === "HR Unit") && (
               <div className="pt-2.5 border-t border-gray-200 space-y-1.5">
@@ -573,6 +601,24 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
                 />
                 <p className="text-[11px] text-gray-500">
                   Pilih satu atau lebih Company Unit yang dapat diperiksa (Check) dan dipantau di Analytics Dashboard oleh HR Checker ini.
+                </p>
+              </div>
+            )}
+            {Boolean(form.isKpiBusinessChecker) && (
+              <div className="pt-2.5 border-t border-gray-200 space-y-1.5">
+                <MultiCheckboxDropdown
+                  label="Cakupan KPI Business yang Di-Allow untuk Checker Khusus"
+                  options={[KPI_BUSINESS_GROUP_SCOPE_TOKEN, ...COMPANIES]}
+                  selected={
+                    form.kpiBusinessCheckerUnits && form.kpiBusinessCheckerUnits.length > 0
+                      ? form.kpiBusinessCheckerUnits
+                      : [KPI_BUSINESS_GROUP_SCOPE_TOKEN, ...COMPANIES]
+                  }
+                  onChange={(next) => setForm((p) => ({ ...p, kpiBusinessCheckerUnits: next }))}
+                  placeholder="— Pilih KPI Group / Unit Usaha —"
+                />
+                <p className="text-[11px] text-gray-500">
+                  User ini memiliki tombol <strong>Revision</strong> &amp; <strong>Checked</strong> pada menu <strong>/approvals/settings/kpi</strong>. Setelah menekan Checked, pengajuan otomatis diteruskan ke Approver selanjutnya.
                 </p>
               </div>
             )}
@@ -2458,6 +2504,14 @@ export function UserManagementPage() {
                       {(user.role === "HR ICF" || user.isHrIcfValidator) && (
                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-medium">
                           Validate HR ICF (= Admin)
+                        </span>
+                      )}
+                      {Boolean(user.isKpiBusinessChecker) && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.2 rounded bg-teal-100 text-teal-800 font-medium"
+                          title={(user.kpiBusinessCheckerUnits?.length ? user.kpiBusinessCheckerUnits : [KPI_BUSINESS_GROUP_SCOPE_TOKEN, ...COMPANIES]).join(", ")}
+                        >
+                          Checker KPI Business
                         </span>
                       )}
                       {(user.role === "Director" || user.directorCalibrationRole) && (

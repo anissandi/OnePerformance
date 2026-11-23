@@ -180,6 +180,16 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
     managed_units: Array.isArray(u.managedUnits)
       ? Array.from(new Set((u.managedUnits as unknown[]).map((x) => canonicalizeUnitName(x)).filter(Boolean)))
       : [],
+    is_kpi_business_checker: Boolean(u.isKpiBusinessChecker ?? false),
+    kpi_business_checker_units: Array.isArray(u.kpiBusinessCheckerUnits)
+      ? Array.from(
+          new Set(
+            (u.kpiBusinessCheckerUnits as unknown[])
+              .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeUnitName(x)))
+              .filter(Boolean),
+          ),
+        )
+      : [],
     calibration_role_by_unit:
       u.calibrationRoleByUnit && typeof u.calibrationRoleByUnit === "object"
         ? Object.fromEntries(
@@ -207,6 +217,8 @@ async function upsertPaUserSafe(client: SupabaseClient, u: Record<string, unknow
     const {
       checker_units: _cu,
       managed_units: _mu,
+      is_kpi_business_checker: _ikbc,
+      kpi_business_checker_units: _kbcu,
       calibration_role_by_unit: _cr,
       soy_calibration_role_by_unit: _scr,
       director_calibration_role: _dr,

@@ -38,8 +38,10 @@ import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import { getDelegatedModuleFlagsForUser } from "../store/delegationStore";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import {
+  canKpiBusinessCheckerHandleScope,
   canRoleAccessCalibrationApproval,
   canUserAccessApprovalsDelegation,
+  canUserAccessKpiBusinessChecker,
   hasExplicitSoyCalibrationRole,
   useAuthStore,
 } from "../store/authStore";
@@ -406,6 +408,11 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       canView("dashboard") || canView("dashboard_my") || canView("dashboard_approval");
     const onlyApprovalDashboard =
       !canView("dashboard_my") && canView("dashboard_approval");
+    const isKpiBizChecker = canUserAccessKpiBusinessChecker(activeUser);
+    const kpiBizDefaultSubpath =
+      isKpiBizChecker && !canKpiBusinessCheckerHandleScope(activeUser, "group") && canKpiBusinessCheckerHandleScope(activeUser, "unit")
+        ? "/approvals/settings/kpi/gm"
+        : "/approvals/settings/kpi";
 
     if (role === "hr" && !isStandardParticipantRole) {
       const list: NavTopLink[] = [];
@@ -448,8 +455,8 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       }
 
       const approvalSubs: NavSubLink[] = [
-        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-          ? [{ to: "/hr/approvals/settings/kpi/group", label: "KPI Business", icon: TrendingUp }]
+        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit") || isKpiBizChecker
+          ? [{ to: `/hr${kpiBizDefaultSubpath}`, label: "KPI Business", icon: TrendingUp }]
           : []),
         ...(canView("approvals_pa_setting") ? [{ to: "/hr/approvals/setting", label: "Performance Appraisal Setting", icon: SlidersHorizontal }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/hr/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
@@ -463,7 +470,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
           : []),
         ...(canView("approvals_open_lock") ? [{ to: "/hr/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
-      if ((canView("approvals") || hasSoyExplicitAccess) && approvalSubs.length > 0) {
+      if ((canView("approvals") || hasSoyExplicitAccess || isKpiBizChecker) && approvalSubs.length > 0) {
         list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
       }
 
@@ -563,8 +570,8 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       }
 
       const approvalSubs: NavSubLink[] = [
-        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-          ? [{ to: "/bod/approvals/settings/kpi/gm", label: "KPI Business", icon: TrendingUp }]
+        ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit") || isKpiBizChecker
+          ? [{ to: isKpiBizChecker ? `/bod${kpiBizDefaultSubpath}` : "/bod/approvals/settings/kpi/gm", label: "KPI Business", icon: TrendingUp }]
           : []),
         ...(canView("approvals_pa_setting") ? [{ to: "/bod/approvals/setting", label: "Performance Appraisal Setting", icon: SlidersHorizontal }] : []),
         ...(canView("approvals_pa_measurement") ? [{ to: "/bod/approvals/measurement", label: "Performance Appraisal Measurement", icon: Clock }] : []),
@@ -578,7 +585,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
           : []),
         ...(canView("approvals_open_lock") ? [{ to: "/bod/settings/open-lock", label: "Open Lock", icon: LockOpen }] : []),
       ];
-      if ((canView("approvals") || hasSoyExplicitAccess) && approvalSubs.length > 0) {
+      if ((canView("approvals") || hasSoyExplicitAccess || isKpiBizChecker) && approvalSubs.length > 0) {
         list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
       }
 
@@ -704,8 +711,8 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
     // Approvals (jika di-allow untuk GM / Supervisor / HR Unit / Employee)
     const approvalSubs: NavSubLink[] = [
-      ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit")
-        ? [{ to: `${prefix}/approvals/settings/kpi/group`, label: "KPI Business", icon: TrendingUp }]
+      ...(canView("approvals_kpi_business") || canView("approvals_kpi_business_group") || canView("approvals_kpi_business_unit") || isKpiBizChecker
+        ? [{ to: `${prefix}${kpiBizDefaultSubpath}`, label: "KPI Business", icon: TrendingUp }]
         : []),
       ...(canView("approvals_pa_setting") || Boolean(activeUser.isHrUnitChecker)
         ? [{ to: `${prefix}/approvals/setting`, label: "Performance Appraisal Setting", icon: SlidersHorizontal }]
@@ -723,7 +730,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
           : []),
       ...(canView("approvals_open_lock") ? [{ to: `${prefix}/settings/open-lock`, label: "Open Lock", icon: LockOpen }] : []),
     ];
-    if ((canView("approvals") || Boolean(activeUser.isHrUnitChecker) || hasSoyExplicitAccess) && approvalSubs.length > 0) {
+    if ((canView("approvals") || Boolean(activeUser.isHrUnitChecker) || hasSoyExplicitAccess || isKpiBizChecker) && approvalSubs.length > 0) {
       list.push({ label: "Approvals", icon: CheckSquare, subLinks: approvalSubs });
     }
 

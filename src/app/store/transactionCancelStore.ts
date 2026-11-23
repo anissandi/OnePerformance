@@ -104,12 +104,19 @@ export function listPendingTransactions(): PendingTransaction[] {
     });
   }
 
-  const bizStatus = readJson<Record<string, { submitted?: boolean; approved?: boolean; submittedDate?: string; submittedBy?: string }>>(
+  const bizStatus = readJson<Record<string, { submitted?: boolean; checked?: boolean; stage?: string; directorApproved?: boolean; approved?: boolean; submittedDate?: string; submittedBy?: string }>>(
     KPI_BUSINESS_STATUS_KEY,
     {},
   );
   for (const [scope, st] of Object.entries(bizStatus)) {
     if (!st?.submitted && !st?.approved) continue;
+    const statusLabel = st.approved
+      ? "Validated"
+      : st.directorApproved
+      ? "Approved by Director"
+      : st.stage === "pending_checker" || st.checked === false
+      ? "Pending Checker"
+      : "Checked · Pending Approval";
     out.push({
       id: `kpi-business::${scope}`,
       source: "kpi-business",
@@ -117,7 +124,7 @@ export function listPendingTransactions(): PendingTransaction[] {
       employeeName: st.submittedBy ?? "—",
       company: scope,
       moduleLabel: `KPI Business (${scope.startsWith("corporate-unit") || scope.includes("unit") ? "KPI Unit" : "KPI Group"})`,
-      status: st.approved ? "Validated" : "Pending Approval",
+      status: statusLabel,
       submittedDate: st.submittedDate ?? "—",
       resetTo: "Unsubmitted",
     });

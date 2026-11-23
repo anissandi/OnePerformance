@@ -10,6 +10,7 @@ import {
   type MasterKpiStore,
 } from "../../hr/settings/masterKpiStore";
 import {
+  findAllKpiBusinessCheckerUsers,
   getActiveUser,
   getGroupCompaniesForUnit,
   getGroupNameForUnit,
@@ -8312,7 +8313,12 @@ function buildKpiCopySources(owner: ManagedUser): { group: KpiCopySource; unit: 
 
 function readStoredBusinessKpiStatus(scopeKey: string): {
   submitted: boolean;
+  checked?: boolean;
+  checkedBy?: string;
+  directorApproved?: boolean;
+  directorApprovedBy?: string;
   approved: boolean;
+  validatedBy?: string;
   stage?: string;
   revisionNote?: string;
   revisionBy?: string;
@@ -8320,13 +8326,18 @@ function readStoredBusinessKpiStatus(scopeKey: string): {
   revisionDate?: string;
 } {
   try {
-    const raw = localStorage.getItem("pa_kpi_business_status_v1");
+    const raw = safeGetLocalRaw("pa_kpi_business_status_v1");
     const map = raw
       ? (JSON.parse(raw) as Record<
           string,
           {
             submitted?: boolean;
+            checked?: boolean;
+            checkedBy?: string;
+            directorApproved?: boolean;
+            directorApprovedBy?: string;
             approved?: boolean;
+            validatedBy?: string;
             stage?: string;
             revisionNote?: string;
             revisionBy?: string;
@@ -8338,7 +8349,12 @@ function readStoredBusinessKpiStatus(scopeKey: string): {
     const entry = map[scopeKey] ?? (scopeKey === "unit-PT RSUP ASD" ? map["unit-ASD"] : undefined);
     return {
       submitted: Boolean(entry?.submitted),
+      checked: entry?.checked,
+      checkedBy: entry?.checkedBy,
+      directorApproved: entry?.directorApproved,
+      directorApprovedBy: entry?.directorApprovedBy,
       approved: Boolean(entry?.approved),
+      validatedBy: entry?.validatedBy,
       stage: entry?.stage,
       revisionNote: entry?.revisionNote,
       revisionBy: entry?.revisionBy,
@@ -8928,9 +8944,10 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       const isUnitScope = effectiveScopeKey.startsWith("unit-") || effectiveScopeKey.startsWith("corporate-unit");
       const statusRecord = {
         submitted: true,
+        checked: false,
         directorApproved: false,
         approved: false,
-        stage: isUnitScope ? "pending_director" : "pending_validator",
+        stage: "pending_checker",
         companyUnit: effectiveOwner.company,
         submittedDate: todayStr,
         submittedBy: actorLabel,
@@ -8945,12 +8962,12 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         // ignore
       }
       void mergeKvMapRecord("pa_kpi_business_status_v1", effectiveScopeKey, statusRecord);
-      // Notifikasi ke Owner (GM / Director) & ke Approver (Director / HR ICF)
+      // Notifikasi ke Owner (GM / Director) & ke Checker Khusus KPI Business
       const allUsersPool = loadManagedUsers();
       pushEmployeeNotification({
         employeeIds: [effectiveOwner.employeeId],
         title: `Pengajuan ${isUnitScope ? `KPI (Unit) — ${effectiveOwner.company}` : "KPI (Group)"} Berhasil Disubmit`,
-        summary: `Pengajuan ${isUnitScope ? `KPI (Unit) ${effectiveOwner.company}` : "KPI (Group)"} Anda telah berhasil disubmit pada ${todayStr} dan sedang menunggu ${isUnitScope ? "persetujuan Director" : "validasi HR ICF"}.`,
+        summary: `Pengajuan ${isUnitScope ? `KPI (Unit) ${effectiveOwner.company}` : "KPI (Group)"} Anda telah berhasil disubmit pada ${todayStr} dan sedang menunggu pemeriksaan Checker KPI Business.`,
         category: "Approval",
         moduleName: "KPI",
         approvalStatus: "Submitted",
@@ -8958,43 +8975,28 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         ctaRoute: "/setting/kpi",
         senderName: actorLabel,
       });
-      if (isUnitScope) {
-        const groupUnits = getGroupCompaniesForUnit(effectiveOwner.company);
-        const directorIds = allUsersPool
-          .filter((u) => u.status === "Active" && isDirectorRoleOrGrouping(u) && groupUnits.includes(u.company))
-          .map((u) => u.employeeId);
-        if (directorIds.length > 0) {
-          pushEmployeeNotification({
-            employeeIds: directorIds,
-            title: `Pengajuan KPI (Unit) ${effectiveOwner.company} Menunggu Approval Director`,
-            summary: `${actorLabel} telah mensubmit KPI (Unit) untuk ${effectiveOwner.company}. Silakan review & Approve di menu Approvals → KPI Business.`,
-            category: "Approval",
-            moduleName: "KPI Business",
-            approvalStatus: "Pending",
-            ctaLabel: "Approve KPI (Unit)",
-            ctaRoute: "/bod/settings/kpi/gm",
-            senderName: actorLabel,
-            senderRole: effectiveOwner.role,
-          });
-        }
-      } else {
-        const hrIcfIds = allUsersPool
-          .filter((u) => u.status === "Active" && (u.role === "HR ICF" || Boolean(u.isHrIcfValidator) || u.role === "Administrator"))
-          .map((u) => u.employeeId);
-        if (hrIcfIds.length > 0) {
-          pushEmployeeNotification({
-            employeeIds: hrIcfIds,
-            title: `Pengajuan KPI (Group) Menunggu Validasi HR ICF`,
-            summary: `${actorLabel} telah mensubmit KPI (Group). Silakan review & Validate di menu Approvals → KPI Business.`,
-            category: "Approval",
-            moduleName: "KPI Business",
-            approvalStatus: "Pending",
-            ctaLabel: "Validate KPI (Group)",
-            ctaRoute: "/hr/settings/kpi/group",
-            senderName: actorLabel,
-            senderRole: effectiveOwner.role,
-          });
-        }
+      const checkerIds = findAllKpiBusinessCheckerUsers(
+        isUnitScope ? "unit" : "group",
+        effectiveOwner.company,
+        allUsersPool,
+      ).map((u) => u.employeeId);
+      if (checkerIds.length > 0) {
+        pushEmployeeNotification({
+          employeeIds: checkerIds,
+          title: isUnitScope
+            ? `Pengajuan KPI (Unit) ${effectiveOwner.company} Menunggu Pemeriksaan Checker`
+            : "Pengajuan KPI (Group) Menunggu Pemeriksaan Checker",
+          summary: isUnitScope
+            ? `${actorLabel} telah mensubmit KPI (Unit) untuk ${effectiveOwner.company}. Silakan periksa (Checked / Revision) di menu Approvals → KPI Business.`
+            : `${actorLabel} telah mensubmit KPI (Group). Silakan periksa (Checked / Revision) di menu Approvals → KPI Business.`,
+          category: "Approval",
+          moduleName: "KPI Business",
+          approvalStatus: "Pending",
+          ctaLabel: isUnitScope ? "Check KPI (Unit)" : "Check KPI (Group)",
+          ctaRoute: isUnitScope ? "/approvals/settings/kpi/gm" : "/approvals/settings/kpi/group",
+          senderName: actorLabel,
+          senderRole: effectiveOwner.role,
+        });
       }
       window.dispatchEvent(new Event("appraisal-updated"));
     } else {
@@ -9328,6 +9330,52 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           employeeId={effectiveOwner.employeeId}
         />
       )}
+      {isCorporate && (submitted || kpiApproved) && (() => {
+        const corpSt = readStoredBusinessKpiStatus(effectiveScopeKey);
+        const isUnitScope = effectiveScopeKey.startsWith("unit-") || effectiveScopeKey.startsWith("corporate-unit");
+        const isPendingChecker =
+          !corpSt.approved &&
+          !corpSt.directorApproved &&
+          (corpSt.stage === "pending_checker" || (corpSt.checked === false && corpSt.stage !== "revision"));
+        const isCheckedDone = !isPendingChecker && corpSt.stage !== "revision";
+        const isDirDone = Boolean(corpSt.directorApproved || corpSt.approved);
+        const isValDone = Boolean(corpSt.approved);
+        const steps = isUnitScope
+          ? [
+              { label: "Submitted", done: true, active: false },
+              { label: "Checker (Checked)", done: isCheckedDone, active: isPendingChecker, sub: corpSt.checkedBy },
+              { label: "Director (Approve)", done: isDirDone, active: isCheckedDone && !isDirDone, sub: corpSt.directorApprovedBy },
+              { label: "HR ICF (Validate)", done: isValDone, active: isDirDone && !isValDone, sub: corpSt.validatedBy },
+            ]
+          : [
+              { label: "Submitted", done: true, active: false },
+              { label: "Checker (Checked)", done: isCheckedDone, active: isPendingChecker, sub: corpSt.checkedBy },
+              { label: "HR ICF (Validate)", done: isValDone, active: isCheckedDone && !isValDone, sub: corpSt.validatedBy },
+            ];
+        return (
+          <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-2 flex-wrap shadow-2xs">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mr-1">Status Approval:</span>
+            {steps.map((st, idx) => (
+              <React.Fragment key={st.label}>
+                {idx > 0 && <span className="text-gray-300 text-xs font-bold">→</span>}
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                    st.done
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : st.active
+                      ? "bg-amber-50 text-amber-800 border-amber-300"
+                      : "bg-gray-50 text-gray-400 border-gray-200"
+                  }`}
+                >
+                  {st.done ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <span className={`w-2 h-2 rounded-full ${st.active ? "bg-amber-500 animate-pulse" : "bg-gray-300"}`} />}
+                  <span>{st.label}</span>
+                  {st.done && st.sub && <span className="text-[10px] opacity-80">({st.sub})</span>}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        );
+      })()}
       {isCorporate && !submitted && (() => {
         const corpSt = readStoredBusinessKpiStatus(effectiveScopeKey);
         if (corpSt.stage !== "revision") return null;

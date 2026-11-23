@@ -505,7 +505,7 @@ export function resolveModuleShortcutSubpath(
   if (isForApprover) {
     if (lower === "kpi setting") return "/approvals/setting/kpi";
     if (lower === "smart goals setting") return "/approvals/setting/smart-goals";
-    if (lower.includes("kpi business")) return "/settings/kpi";
+    if (lower.includes("kpi business")) return "/approvals/settings/kpi";
     if (lower === "kpi measurement") return "/approvals/measurement/kpi";
     if (lower === "smart measurement") return "/approvals/measurement/smart-goals";
     if (lower === "rca") return "/approvals/measurement/kpi";

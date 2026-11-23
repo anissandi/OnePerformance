@@ -187,19 +187,44 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
     }));
   }, [activeUser, allUsers, tick]);
 
-  // Task Approval KPI Business: KPI (Unit) untuk Director & HR ICF, KPI (Group) untuk HR ICF
+  // Task Approval KPI Business: Checker Khusus -> Director (untuk KPI Unit) -> HR ICF (Validate)
   const kpiBusinessItems = useMemo<PendingItem[]>(() => {
     const out: PendingItem[] = [];
-    const statusMap = loadPersistedState<Record<string, { submitted?: boolean; directorApproved?: boolean; approved?: boolean; companyUnit?: string; submittedDate?: string; submittedBy?: string }>>("pa_kpi_business_status_v1", {});
+    const statusMap = loadPersistedState<Record<string, { submitted?: boolean; checked?: boolean; stage?: string; directorApproved?: boolean; approved?: boolean; companyUnit?: string; submittedDate?: string; submittedBy?: string }>>("pa_kpi_business_status_v1", {});
     const isDir = isDirectorRoleOrGrouping(activeUser);
     const isVal = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
+    const isBizChecker = Boolean(activeUser.isKpiBusinessChecker);
+    const checkerScopes = (activeUser.kpiBusinessCheckerUnits ?? []).filter(Boolean);
     const dirUnits = isDir ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits) : [];
 
     for (const [scopeKey, st] of Object.entries(statusMap)) {
       if (!st?.submitted || st.approved) continue;
+      const awaitingChecker =
+        !st.directorApproved &&
+        (st.stage === "pending_checker" || (st.checked === false && st.stage !== "revision"));
       if (scopeKey.startsWith("unit-")) {
         const unitName = st.companyUnit || scopeKey.replace(/^unit-/, "");
-        if (isDir && !st.directorApproved && dirUnits.includes(unitName)) {
+        const canCheckThisUnit =
+          isBizChecker && (checkerScopes.length === 0 || checkerScopes.some((s) => s === unitName));
+        if (awaitingChecker) {
+          if (canCheckThisUnit) {
+            out.push({
+              id: `kpibiz-chk-${scopeKey}`,
+              employeeId: "-",
+              employeeName: `KPI (Unit) — ${unitName}`,
+              position: `Disubmit oleh ${st.submittedBy || "GM"}`,
+              unit: unitName,
+              division: "-",
+              module: "KPI" as Module,
+              phase: "setting" as const,
+              submissionType: "KPI Business — KPI (Unit)",
+              actionNeeded: "Check",
+              submittedDate: st.submittedDate || formatTodayDDMMYYYY(),
+              notes: `Pengajuan KPI (Unit) ${unitName} menunggu pemeriksaan (Checked) oleh Checker KPI Business.`,
+              urgent: false,
+            });
+          }
+        } else if (isDir && !st.directorApproved && dirUnits.includes(unitName)) {
           out.push({
             id: `kpibiz-dir-${scopeKey}`,
             employeeId: "-",
@@ -232,22 +257,45 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
             urgent: false,
           });
         }
-      } else if (scopeKey.startsWith("corporate-") && isVal) {
-        out.push({
-          id: `kpibiz-grp-${scopeKey}`,
-          employeeId: "-",
-          employeeName: "KPI (Group) — RSUP Group",
-          position: `Disubmit oleh ${st.submittedBy || "Director"}`,
-          unit: "PT RSUP (Industry)",
-          division: "-",
-          module: "KPI" as Module,
-          phase: "setting" as const,
-          submissionType: "KPI Business — KPI (Group)",
-          actionNeeded: "Review & Validate",
-          submittedDate: st.submittedDate || formatTodayDDMMYYYY(),
-          notes: "Pengajuan KPI (Group) menunggu validasi (Validate) HR ICF.",
-          urgent: false,
-        });
+      } else if (scopeKey.startsWith("corporate-")) {
+        const groupLabel = scopeKey.replace(/^corporate-/, "") || "RSUP Group";
+        const canCheckGroup =
+          isBizChecker && (checkerScopes.length === 0 || checkerScopes.includes("KPI Group"));
+        if (awaitingChecker) {
+          if (canCheckGroup) {
+            out.push({
+              id: `kpibiz-chk-${scopeKey}`,
+              employeeId: "-",
+              employeeName: `KPI (Group) — ${groupLabel}`,
+              position: `Disubmit oleh ${st.submittedBy || "Director"}`,
+              unit: st.companyUnit || "PT RSUP (Industry)",
+              division: "-",
+              module: "KPI" as Module,
+              phase: "setting" as const,
+              submissionType: "KPI Business — KPI (Group)",
+              actionNeeded: "Check",
+              submittedDate: st.submittedDate || formatTodayDDMMYYYY(),
+              notes: `Pengajuan KPI (Group) ${groupLabel} menunggu pemeriksaan (Checked) oleh Checker KPI Business.`,
+              urgent: false,
+            });
+          }
+        } else if (isVal) {
+          out.push({
+            id: `kpibiz-grp-${scopeKey}`,
+            employeeId: "-",
+            employeeName: `KPI (Group) — ${groupLabel}`,
+            position: `Checked · Penyusun: ${st.submittedBy || "Director"}`,
+            unit: st.companyUnit || "PT RSUP (Industry)",
+            division: "-",
+            module: "KPI" as Module,
+            phase: "setting" as const,
+            submissionType: "KPI Business — KPI (Group)",
+            actionNeeded: "Review & Validate",
+            submittedDate: st.submittedDate || formatTodayDDMMYYYY(),
+            notes: `Pengajuan KPI (Group) ${groupLabel} telah diperiksa Checker dan menunggu validasi (Validate) HR ICF.`,
+            urgent: false,
+          });
+        }
       }
     }
     return out;
@@ -693,16 +741,26 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
                   }`}>{item.actionNeeded}</span>
                   <button
                     onClick={() => {
+                      const curPortal = location.pathname.split("/").filter(Boolean)[0] || "supervisor";
+                      const portalPrefix =
+                        curPortal === "hr" || curPortal === "bod" || curPortal === "employee" || curPortal === "supervisor"
+                          ? `/${curPortal}`
+                          : "/supervisor";
+                      if (item.id.startsWith("kpibiz-chk-")) {
+                        const isUnit = item.id.includes("unit-");
+                        navigate(`${portalPrefix}/approvals/settings/kpi/${isUnit ? "gm" : "group"}`);
+                        return;
+                      }
                       if (item.id.startsWith("kpibiz-dir-")) {
-                        navigate("/bod/settings/kpi/gm");
+                        navigate(`${portalPrefix}/approvals/settings/kpi/gm`);
                         return;
                       }
                       if (item.id.startsWith("kpibiz-val-")) {
-                        navigate("/hr/settings/kpi/gm");
+                        navigate(`${portalPrefix}/approvals/settings/kpi/gm`);
                         return;
                       }
                       if (item.id.startsWith("kpibiz-grp-")) {
-                        navigate("/hr/settings/kpi/group");
+                        navigate(`${portalPrefix}/approvals/settings/kpi/group`);
                         return;
                       }
                       const rawRoute = item.id.startsWith("openlock-")
@@ -1365,7 +1423,10 @@ export function SupervisorDashboard() {
   const canViewMy =
     isMenuVisibleInMenuManagement("dashboard_my") && Boolean(rolePerms.dashboard_my?.view);
   const canViewApproval =
-    isMenuVisibleInMenuManagement("dashboard_approval") && Boolean(rolePerms.dashboard_approval?.view);
+    isMenuVisibleInMenuManagement("dashboard_approval") &&
+    (Boolean(rolePerms.dashboard_approval?.view) ||
+      Boolean(activeUser.isHrUnitChecker) ||
+      Boolean(activeUser.isKpiBusinessChecker));
 
   const portalPrefix = `/${location.pathname.split("/")[1] || "supervisor"}`;
   const defaultTab: DashTab = canViewMy ? "my" : canViewApproval ? "approval" : "my";
@@ -1400,15 +1461,26 @@ export function SupervisorDashboard() {
     for (const soyRec of Object.values(loadSoyApprovals())) {
       if (soyRec.status === "Pending" && resolveSoyRoleForUser(activeUser, soyRec.unitName, true)) return true;
     }
-    const bizMap = loadPersistedState<Record<string, { submitted?: boolean; directorApproved?: boolean; approved?: boolean; companyUnit?: string }>>("pa_kpi_business_status_v1", {});
+    const bizMap = loadPersistedState<Record<string, { submitted?: boolean; checked?: boolean; stage?: string; directorApproved?: boolean; approved?: boolean; companyUnit?: string }>>("pa_kpi_business_status_v1", {});
+    const isBizChecker = Boolean(activeUser.isKpiBusinessChecker);
+    const bizCheckerScopes = (activeUser.kpiBusinessCheckerUnits ?? []).filter(Boolean);
     for (const [sk, st] of Object.entries(bizMap)) {
       if (!st?.submitted || st.approved) continue;
+      const awaitingChk = !st.directorApproved && (st.stage === "pending_checker" || (st.checked === false && st.stage !== "revision"));
       if (sk.startsWith("unit-")) {
         const uName = st.companyUnit || sk.replace(/^unit-/, "");
+        if (awaitingChk) {
+          if (isBizChecker && (bizCheckerScopes.length === 0 || bizCheckerScopes.includes(uName))) return true;
+          continue;
+        }
         if (isDir && !st.directorApproved && getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits).includes(uName)) return true;
         if (isVal && st.directorApproved) return true;
-      } else if (sk.startsWith("corporate-") && isVal) {
-        return true;
+      } else if (sk.startsWith("corporate-")) {
+        if (awaitingChk) {
+          if (isBizChecker && (bizCheckerScopes.length === 0 || bizCheckerScopes.includes("KPI Group"))) return true;
+          continue;
+        }
+        if (isVal) return true;
       }
     }
     const checkerBypassIds = new Set(

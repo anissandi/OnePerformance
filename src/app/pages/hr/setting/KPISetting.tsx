@@ -1,19 +1,33 @@
 import React, { useState, useEffect } from "react";
 import { useRouteTab } from "../../../utils/useRouteTab";
-import { CheckCircle2, X, RotateCcw, Download, FileSearch, Copy, UserCheck, ShieldCheck, Layers } from "lucide-react";
+import { CheckCircle2, X, RotateCcw, Download, FileSearch, Copy, UserCheck, ShieldCheck, Layers, Paperclip, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { EXCEL_THEME, exportStyledXLSX, inferSystemCellStyle, type StyledExcelCell, type StyledExcelMerge } from "../../../utils/excelUtils";
-import { loadPersistedState, mergeKvMapRecord, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
+import {
+  fetchBusinessKpiLive,
+  loadPersistedState,
+  mergeKvMapRecord,
+  refreshKvKeysFromBackend,
+  safeSetLocalJson,
+  savePersistedState,
+  syncToSupabase,
+} from "../../../services/supabaseClient";
+import { EvidenceViewerModal } from "../../../components/EvidenceViewerModal";
 import { pushEmployeeNotification } from "../../../store/notificationStore";
 import { DualScrollTableContainer } from "../../../components/DualScrollTableContainer";
 import {
+  canKpiBusinessCheckerHandleScope,
+  canUserAccessKpiBusinessChecker,
   getActiveUser,
   getGroupCompaniesForUnit,
+  getGroupNameForUnit,
   isAdminOrHrIcfRole,
   isDirectorRoleOrGrouping,
   isSameCompanyUnit,
   loadManagedUsers,
   RSUP_GROUP_COMPANIES,
+  SAMBU_GROUP_COMPANIES,
+  useAuthStore,
 } from "../../../store/authStore";
 import {
   loadKpiValidationChecklist,
@@ -265,7 +279,7 @@ function RevisionModal({ onCancel, onConfirm }: { onCancel: () => void; onConfir
 // ─── KPI Table ────────────────────────────────────────────────────────────────
 
 
-type ApprovalStatus = "pending" | "director_approved" | "approved" | "revision";
+type ApprovalStatus = "pending_checker" | "pending" | "director_approved" | "approved" | "revision";
 
 // (KPISection preserved for reference — BusinessKPITable + HRSettingKPIPage handle the business tab)
 
@@ -584,26 +598,49 @@ const COMPANY_UNITS_BIZ = [
 
 const CURRENT_YEAR = 2026;
 const YEAR_OPTIONS = [2026];
+const BUSINESS_GROUPS = ["RSUP Group", "Sambu Group"] as const;
 
 export function HRSettingKPIPage() {
-  const activeUser = getActiveUser();
+  const { activeUser } = useAuthStore();
   const isDirector = isDirectorRoleOrGrouping(activeUser);
   const isValidator = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
+  const isKpiBizChecker = canUserAccessKpiBusinessChecker(activeUser);
+  const isPureChecker = isKpiBizChecker && !isDirector && !isValidator;
+  const canCheckerSeeGroupTab = !isPureChecker || canKpiBusinessCheckerHandleScope(activeUser, "group");
+  const canCheckerSeeUnitTab = !isPureChecker || COMPANY_UNITS_BIZ.some((u) => canKpiBusinessCheckerHandleScope(activeUser, "unit", u));
+  const allowedGroups = React.useMemo<Array<"RSUP Group" | "Sambu Group">>(() => {
+    if (isDirector && !isValidator && !isKpiBizChecker) {
+      return [getGroupNameForUnit(activeUser.company)];
+    }
+    return [...BUSINESS_GROUPS];
+  }, [isDirector, isValidator, isKpiBizChecker, activeUser.company]);
   const allowedUnits = React.useMemo(
     () =>
       isDirector
         ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
+        : isPureChecker
+        ? COMPANY_UNITS_BIZ.filter((u) => canKpiBusinessCheckerHandleScope(activeUser, "unit", u))
         : COMPANY_UNITS_BIZ,
-    [isDirector, activeUser.company, activeUser.managedUnits],
+    [isDirector, isPureChecker, activeUser],
   );
   const [items] = useState<KPISetting[]>(CORPORATE_KPI);
+  const [selectedGroup, setSelectedGroup] = useState<"RSUP Group" | "Sambu Group">(
+    () => allowedGroups[0] ?? getGroupNameForUnit(activeUser.company),
+  );
   const [companyUnit, setCompanyUnit] = useState(() => allowedUnits[0] ?? "PT RSUP (Industry)");
+  const [previewAttachment, setPreviewAttachment] = useState<{ name: string; url: string; mimeType?: string; size?: number } | null>(null);
   const [selectedYear, setSelectedYear] = useState(CURRENT_YEAR);
+  const defaultTab: "group" | "gm" = !canCheckerSeeGroupTab && canCheckerSeeUnitTab ? "gm" : isDirector && !isKpiBizChecker ? "gm" : "group";
   const [routeKpiTab, setKpiTab] = useRouteTab<"group" | "gm">(
     ["group", "gm"],
-    isDirector ? "gm" : "group",
+    defaultTab,
   );
-  const kpiTab: "group" | "gm" = routeKpiTab;
+  const kpiTab: "group" | "gm" =
+    routeKpiTab === "group" && !canCheckerSeeGroupTab && canCheckerSeeUnitTab
+      ? "gm"
+      : routeKpiTab === "gm" && !canCheckerSeeUnitTab && canCheckerSeeGroupTab
+      ? "group"
+      : routeKpiTab;
   const [checklist, setChecklist] = useState<KpiHierarchyValidationChecklist>(() =>
     loadKpiValidationChecklist(String(CURRENT_YEAR)),
   );
@@ -640,21 +677,63 @@ export function HRSettingKPIPage() {
   const [validationMap, setValidationMap] = useState<Record<string, ApprovalStatus>>({});
 
   useEffect(() => {
+    // Pastikan data KPI Business & Lampiran selalu terbaru dari Supabase sejak halaman dibuka
+    void Promise.all([
+      refreshKvKeysFromBackend([
+        "pa_kpi_business_status_v1",
+        "pa_kpi_business_by_scope_v1",
+        "pa_kpi_attachments_v1",
+      ]),
+      fetchBusinessKpiLive("corporate-RSUP Group"),
+      fetchBusinessKpiLive("corporate-Sambu Group"),
+    ]).finally(() => {
+      setBizRefreshTick((t) => t + 1);
+    });
+  }, [activeUser.employeeId]);
+
+  useEffect(() => {
+    if (kpiTab === "gm" && companyUnit) {
+      void fetchBusinessKpiLive(`unit-${companyUnit}`).finally(() => {
+        setBizRefreshTick((t) => t + 1);
+      });
+    }
+  }, [kpiTab, companyUnit]);
+
+  useEffect(() => {
     const onSync = () => {
       setChecklist(loadKpiValidationChecklist(String(selectedYear)));
       setBizRefreshTick((t) => t + 1);
     };
     window.addEventListener("pa-module-activation-updated", onSync);
     window.addEventListener("pa-db-hydrated", onSync);
+    window.addEventListener("pa-auth-updated", onSync);
     window.addEventListener("appraisal-updated", onSync);
     window.addEventListener("storage", onSync);
     return () => {
       window.removeEventListener("pa-module-activation-updated", onSync);
       window.removeEventListener("pa-db-hydrated", onSync);
+      window.removeEventListener("pa-auth-updated", onSync);
       window.removeEventListener("appraisal-updated", onSync);
       window.removeEventListener("storage", onSync);
     };
   }, [selectedYear]);
+
+  // Pilih otomatis Group yang sudah memiliki pengajuan bila Group awal belum ada pengajuan
+  const autoSelectedGroupRef = React.useRef(false);
+  useEffect(() => {
+    if (kpiTab !== "group") {
+      autoSelectedGroupRef.current = false;
+      return;
+    }
+    if (autoSelectedGroupRef.current) return;
+    autoSelectedGroupRef.current = true;
+    const bizStatus = loadPersistedState<Record<string, { submitted?: boolean }>>("pa_kpi_business_status_v1", {});
+    if (bizStatus[`corporate-${selectedGroup}`]?.submitted) return;
+    const firstSubGrp = allowedGroups.find((g) => Boolean(bizStatus[`corporate-${g}`]?.submitted));
+    if (firstSubGrp && firstSubGrp !== selectedGroup) {
+      setSelectedGroup(firstSubGrp);
+    }
+  }, [kpiTab, allowedGroups, selectedGroup]);
 
   // Jika di tab KPI (Unit) unit terpilih belum memiliki pengajuan tetapi unit lain sudah submit, arahkan otomatis ke unit tsb
   const autoSelectedUnitRef = React.useRef(false);
@@ -677,22 +756,50 @@ export function HRSettingKPIPage() {
     setCompanyUnit(unit);
     if (kpiTab !== "gm") setKpiTab("gm");
   };
-  const currentKey = `${kpiTab}::${companyUnit}`;
-  const scopeKey = kpiTab === "group" ? "corporate-RSUP Group" : `unit-${companyUnit}`;
-  const bizStatusMapLive = loadPersistedState<Record<string, { submitted?: boolean; directorApproved?: boolean; approved?: boolean; stage?: string; submittedBy?: string; submittedById?: string }>>("pa_kpi_business_status_v1", {});
+  const currentKey = `${kpiTab}::${kpiTab === "group" ? selectedGroup : companyUnit}`;
+  const scopeKey = kpiTab === "group" ? `corporate-${selectedGroup}` : `unit-${companyUnit}`;
+  const bizStatusMapLive = loadPersistedState<Record<string, {
+    submitted?: boolean;
+    checked?: boolean;
+    checkedBy?: string;
+    checkedDate?: string;
+    directorApproved?: boolean;
+    directorApprovedBy?: string;
+    approved?: boolean;
+    validatedBy?: string;
+    stage?: string;
+    submittedBy?: string;
+    submittedById?: string;
+  }>>("pa_kpi_business_status_v1", {});
   const bizItemsMapLive = loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_business_by_scope_v1", {});
   const currentScopeStatus = bizStatusMapLive[scopeKey];
   const submittedItems = bizItemsMapLive[scopeKey] ?? [];
+  const allAttachmentsMap = loadPersistedState<Record<string, Array<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt?: string }>>>("pa_kpi_attachments_v1", {});
+  const scopeAttachments = allAttachmentsMap[scopeKey] ?? [];
   const hasSubmittedData = Boolean(currentScopeStatus?.submitted && submittedItems.length > 0);
   const totalSubmittedBobot = submittedItems.reduce((sum, item) => sum + (parseFloat(String(item.bobot ?? "").replace("%", "")) || 0), 0);
   const formattedSubmittedBobot = Number.isInteger(totalSubmittedBobot) ? String(totalSubmittedBobot) : totalSubmittedBobot.toFixed(1);
+  const canCheckCurrentScope = canKpiBusinessCheckerHandleScope(
+    activeUser,
+    kpiTab === "group" ? "group" : "unit",
+    kpiTab === "gm" ? companyUnit : undefined,
+  );
+
+  const isPendingCheckerStage =
+    Boolean(currentScopeStatus?.submitted) &&
+    !currentScopeStatus?.approved &&
+    !currentScopeStatus?.directorApproved &&
+    (currentScopeStatus?.stage === "pending_checker" ||
+      (currentScopeStatus?.checked === false && currentScopeStatus?.stage !== "revision"));
 
   const approvalStatus: ApprovalStatus = currentScopeStatus?.approved
     ? "approved"
     : currentScopeStatus?.stage === "revision"
     ? "revision"
-    : currentScopeStatus?.directorApproved || currentScopeStatus?.stage === "pending_validator"
-    ? (kpiTab === "gm" ? "director_approved" : "pending")
+    : currentScopeStatus?.directorApproved || (kpiTab === "gm" && currentScopeStatus?.stage === "pending_validator")
+    ? "director_approved"
+    : isPendingCheckerStage
+    ? "pending_checker"
     : validationMap[currentKey] ?? "pending";
 
   const persistScopeStatus = (patch: Record<string, unknown>, auditAction: string, auditDesc: string) => {
@@ -721,6 +828,8 @@ export function HRSettingKPIPage() {
           ? "Revision"
           : mergedEntry.directorApproved
             ? "Approved by Director"
+            : mergedEntry.checked
+              ? "Checked by Checker"
             : "Submitted";
       void syncToSupabase({
         kind: "kpi-business",
@@ -732,7 +841,7 @@ export function HRSettingKPIPage() {
     }
   };
 
-  const [pendingAction, setPendingAction] = useState<"approve" | "revision" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"check" | "approve" | "revision" | null>(null);
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
@@ -744,11 +853,15 @@ export function HRSettingKPIPage() {
 
   const findOwnerAndValidators = () => {
     const users = loadManagedUsers();
+    const targetGroupUnits =
+      kpiTab === "group"
+        ? (selectedGroup === "Sambu Group" ? [...SAMBU_GROUP_COMPANIES] : [...RSUP_GROUP_COMPANIES])
+        : getGroupCompaniesForUnit(companyUnit);
     const gmIds = users
       .filter((u) => u.status === "Active" && u.role === "GM" && isSameCompanyUnit(u.company, companyUnit))
       .map((u) => u.employeeId);
     const dirIds = users
-      .filter((u) => u.status === "Active" && isDirectorRoleOrGrouping(u) && getGroupCompaniesForUnit(u.company).includes(companyUnit))
+      .filter((u) => u.status === "Active" && isDirectorRoleOrGrouping(u) && targetGroupUnits.some((gu) => isSameCompanyUnit(u.company, gu)))
       .map((u) => u.employeeId);
     const hrIcfIds = users
       .filter((u) => u.status === "Active" && (u.role === "HR ICF" || Boolean(u.isHrIcfValidator) || u.role === "Administrator"))
@@ -761,9 +874,79 @@ export function HRSettingKPIPage() {
     return { ownerIds, gmIds, dirIds, hrIcfIds };
   };
 
+  const handleCheckerChecked = () => {
+    const todayStr = formatTodayDDMMYYYY();
+    const nextStage = kpiTab === "group" ? "pending_validator" : "pending_director";
+    persistScopeStatus(
+      {
+        submitted: true,
+        checked: true,
+        checkedBy: activeUser.name,
+        checkedById: activeUser.employeeId,
+        checkedDate: todayStr,
+        directorApproved: false,
+        approved: false,
+        stage: nextStage,
+      },
+      "Approve",
+      `KPI Business Checker ${activeUser.name} checked ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`} -> forwarded to ${kpiTab === "group" ? "HR ICF Validate" : "Director Approve"}`,
+    );
+    const { ownerIds, dirIds, hrIcfIds } = findOwnerAndValidators();
+    if (ownerIds.length > 0) {
+      pushEmployeeNotification({
+        employeeIds: ownerIds,
+        title: `${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) — ${companyUnit}`} Telah Diperiksa (Checked)`,
+        summary: `Pengajuan ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`} telah diperiksa oleh Checker (${activeUser.name}) dan otomatis diteruskan ke ${kpiTab === "group" ? "HR ICF untuk tahap Validate" : "Director untuk tahap Approve"}.`,
+        category: "Approval",
+        moduleName: "KPI",
+        approvalStatus: "Checked",
+        ctaLabel: "Lihat KPI Setting",
+        ctaRoute: kpiTab === "group" ? "/setting/kpi/corporate" : "/setting/kpi/corporate-unit",
+        senderName: activeUser.name,
+        senderRole: "Checker KPI Business",
+      });
+    }
+    if (kpiTab === "gm") {
+      if (dirIds.length > 0) {
+        pushEmployeeNotification({
+          employeeIds: dirIds,
+          title: `KPI (Unit) ${companyUnit} Menunggu Approval Director`,
+          summary: `Checker (${activeUser.name}) telah memeriksa (Checked) KPI (Unit) ${companyUnit}. Silakan review & Approve di menu Approvals → KPI Business.`,
+          category: "Approval",
+          moduleName: "KPI Business",
+          approvalStatus: "Pending",
+          ctaLabel: "Approve KPI (Unit)",
+          ctaRoute: "/approvals/settings/kpi/gm",
+          senderName: activeUser.name,
+          senderRole: "Checker KPI Business",
+        });
+      }
+    } else if (hrIcfIds.length > 0) {
+      pushEmployeeNotification({
+        employeeIds: hrIcfIds,
+        title: "KPI (Group) Menunggu Validasi HR ICF",
+        summary: `Checker (${activeUser.name}) telah memeriksa (Checked) KPI (Group). Silakan review & Validate di menu Approvals → KPI Business.`,
+        category: "Approval",
+        moduleName: "KPI Business",
+        approvalStatus: "Pending",
+        ctaLabel: "Validate KPI (Group)",
+        ctaRoute: "/approvals/settings/kpi/group",
+        senderName: activeUser.name,
+        senderRole: "Checker KPI Business",
+      });
+    }
+    setPendingAction(null);
+    setSuccessMessage(
+      kpiTab === "group"
+        ? "KPI (Group) berhasil berstatus Checked dan otomatis diteruskan ke HR ICF untuk tahap Validate."
+        : `KPI (Unit) ${companyUnit} berhasil berstatus Checked dan otomatis diteruskan ke Director untuk tahap Approve.`,
+    );
+    setShowSuccess(true);
+  };
+
   const handleDirectorApprove = () => {
     persistScopeStatus(
-      { submitted: true, directorApproved: true, approved: false, stage: "pending_validator", directorApprovedBy: activeUser.name },
+      { submitted: true, checked: true, directorApproved: true, approved: false, stage: "pending_validator", directorApprovedBy: activeUser.name },
       "Approve",
       `Director ${activeUser.name} approved KPI (Unit) for ${companyUnit} -> awaiting HR ICF Validate`,
     );
@@ -791,7 +974,7 @@ export function HRSettingKPIPage() {
         moduleName: "KPI Business",
         approvalStatus: "Pending",
         ctaLabel: "Validate KPI (Unit)",
-        ctaRoute: "/hr/settings/kpi/gm",
+        ctaRoute: "/approvals/settings/kpi/gm",
         senderName: activeUser.name,
         senderRole: "Director",
       });
@@ -805,7 +988,7 @@ export function HRSettingKPIPage() {
 
   const handleValidate = () => {
     persistScopeStatus(
-      { submitted: true, directorApproved: true, approved: true, stage: "validated", validatedBy: activeUser.name },
+      { submitted: true, checked: true, directorApproved: true, approved: true, stage: "validated", validatedBy: activeUser.name },
       "Approve",
       `HR ICF ${activeUser.name} validated ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`} & auto-created in Measurement -> KPI Tracking`,
     );
@@ -839,13 +1022,13 @@ export function HRSettingKPIPage() {
   const handleCancelValidate = () => {
     if (isDirector) {
       persistScopeStatus(
-        { submitted: true, directorApproved: false, approved: false, stage: "pending_director" },
+        { submitted: true, checked: true, directorApproved: false, approved: false, stage: "pending_director" },
         "Update",
         `Director ${activeUser.name} cancelled approval for KPI (Unit) ${companyUnit}`,
       );
     } else {
       persistScopeStatus(
-        { submitted: true, directorApproved: kpiTab === "gm", approved: false, stage: "pending_validator" },
+        { submitted: true, checked: true, directorApproved: kpiTab === "gm", approved: false, stage: "pending_validator" },
         "Update",
         `HR ICF ${activeUser.name} cancelled validation for ${kpiTab === "group" ? "KPI (Group)" : `KPI (Unit) ${companyUnit}`}`,
       );
@@ -860,10 +1043,16 @@ export function HRSettingKPIPage() {
   };
 
   const handleRevision = (note: string) => {
-    const revRole = isDirector ? "Director" : "HR ICF Validator";
+    const revRole =
+      approvalStatus === "pending_checker" && canCheckCurrentScope
+        ? "Checker KPI Business"
+        : isDirector
+        ? "Director"
+        : "HR ICF Validator";
     persistScopeStatus(
       {
         submitted: false,
+        checked: false,
         directorApproved: false,
         approved: false,
         stage: "revision",
@@ -954,9 +1143,16 @@ export function HRSettingKPIPage() {
     if (approvalStatus === "approved") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Validated (HR ICF)</span>;
     if (approvalStatus === "director_approved") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Approved by Director · Pending HR ICF Validate</span>;
     if (approvalStatus === "revision") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-bold"><RotateCcw className="w-3.5 h-3.5" />Revision Requested</span>;
+    if (approvalStatus === "pending_checker") {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-100 text-teal-800 text-xs font-bold">
+          <ShieldCheck className="w-3.5 h-3.5" /> Pending Checker KPI Business
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-bold">
-        {kpiTab === "group" ? "Pending HR ICF Validate" : "Pending Director Approve"}
+        {kpiTab === "group" ? "Checked · Pending HR ICF Validate" : "Checked · Pending Director Approve"}
       </span>
     );
   };
@@ -996,7 +1192,9 @@ export function HRSettingKPIPage() {
 
       {/* Tab header */}
       <div className="flex gap-1 border-b border-gray-200">
-        {(["group", "gm"] as const).map((tab) => (
+        {(["group", "gm"] as const)
+          .filter((tab) => (tab === "group" ? canCheckerSeeGroupTab : canCheckerSeeUnitTab))
+          .map((tab) => (
           <button
             key={tab}
             onClick={() => setKpiTab(tab)}
@@ -1011,7 +1209,74 @@ export function HRSettingKPIPage() {
         ))}
       </div>
 
+      {/* Tahapan Alur Approval KPI Business */}
+      {hasSubmittedData && (
+        <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-2 flex-wrap shadow-2xs">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mr-1">Alur Approval:</span>
+          {(() => {
+            const isCheckedDone = approvalStatus !== "pending_checker" && approvalStatus !== "revision";
+            const isDirDone = approvalStatus === "director_approved" || approvalStatus === "approved";
+            const isValDone = approvalStatus === "approved";
+            const steps =
+              kpiTab === "group"
+                ? [
+                    { label: "Submitted", done: true, active: false, sub: currentScopeStatus?.submittedBy },
+                    { label: "Checker (Checked)", done: isCheckedDone, active: approvalStatus === "pending_checker", sub: currentScopeStatus?.checkedBy },
+                    { label: "HR ICF (Validate)", done: isValDone, active: approvalStatus === "pending", sub: currentScopeStatus?.validatedBy },
+                  ]
+                : [
+                    { label: "Submitted", done: true, active: false, sub: currentScopeStatus?.submittedBy },
+                    { label: "Checker (Checked)", done: isCheckedDone, active: approvalStatus === "pending_checker", sub: currentScopeStatus?.checkedBy },
+                    { label: "Director (Approve)", done: isDirDone, active: approvalStatus === "pending", sub: currentScopeStatus?.directorApprovedBy },
+                    { label: "HR ICF (Validate)", done: isValDone, active: approvalStatus === "director_approved", sub: currentScopeStatus?.validatedBy },
+                  ];
+            return steps.map((st, idx) => (
+              <React.Fragment key={st.label}>
+                {idx > 0 && <span className="text-gray-300 text-xs font-bold">→</span>}
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                    st.done
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : st.active
+                      ? "bg-amber-50 text-amber-800 border-amber-300"
+                      : "bg-gray-50 text-gray-400 border-gray-200"
+                  }`}
+                >
+                  {st.done ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <span className={`w-2 h-2 rounded-full ${st.active ? "bg-amber-500 animate-pulse" : "bg-gray-300"}`} />}
+                  <span>{st.label}</span>
+                  {st.done && st.sub && <span className="text-[10px] opacity-80">({st.sub})</span>}
+                </span>
+              </React.Fragment>
+            ));
+          })()}
+        </div>
+      )}
+
       <div className="flex flex-col gap-5">
+        {kpiTab === "group" && allowedGroups.length > 1 && (
+          <div className="flex items-center gap-2 flex-wrap bg-slate-50/70 border border-slate-200/80 rounded-xl px-3.5 py-2.5">
+            <span className="text-xs font-semibold text-slate-500 mr-1">Group:</span>
+            {allowedGroups.map((grp) => {
+              const isActiveGrp = selectedGroup === grp;
+              const hasSub = Boolean(bizStatusMapLive[`corporate-${grp}`]?.submitted);
+              return (
+                <button
+                  key={grp}
+                  type="button"
+                  onClick={() => setSelectedGroup(grp)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+                    isActiveGrp
+                      ? "bg-sky-100 text-[#1A284F] border-sky-300 shadow-xs"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-sky-50/70 hover:text-sky-800 hover:border-sky-200"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${hasSub ? "bg-emerald-500" : "bg-slate-300"}`} />
+                  <span>{grp}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {kpiTab === "gm" && (
           <div className="flex items-center gap-2 flex-wrap bg-slate-50/70 border border-slate-200/80 rounded-xl px-3.5 py-2.5">
             <span className="text-xs font-semibold text-slate-500 mr-1">Company Unit:</span>
@@ -1057,15 +1322,40 @@ export function HRSettingKPIPage() {
               <UserCheck className="w-3.5 h-3.5 text-blue-600" />
               <span className="font-semibold">Penyusun:</span>
               <span>
-                {kpiTab === "group"
-                  ? "Direktur Operasional — PT RSUP (Industry)"
+                {currentScopeStatus?.submittedBy
+                  ? currentScopeStatus.submittedBy
+                  : kpiTab === "group"
+                  ? `Direktur — ${selectedGroup}`
                   : `General Manager (GM) — ${companyUnit}`}
               </span>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
 
-            {!hasSubmittedData ? null : isDirector ? (
+            {!hasSubmittedData ? null : approvalStatus === "pending_checker" ? (
+              canCheckCurrentScope ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowRevisionModal(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 border-orange-400 text-orange-600 hover:bg-orange-50 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4" /> Revision
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingAction("check")}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 transition-colors shadow-sm cursor-pointer"
+                  >
+                    <ShieldCheck className="w-4 h-4" /> Checked
+                  </button>
+                </>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-teal-50 text-teal-800 border border-teal-200">
+                  <ShieldCheck className="w-4 h-4 text-teal-600" /> Menunggu Pemeriksaan Checker
+                </span>
+              )
+            ) : isPureChecker ? null : isDirector && kpiTab === "gm" ? (
               // Untuk Role Director pada tab KPI (Unit): bertindak sebagai Approver (bukan Validator)
               approvalStatus === "approved" ? null : approvalStatus === "director_approved" ? (
                 <button
@@ -1117,32 +1407,30 @@ export function HRSettingKPIPage() {
                 </>
               )
             )}
-            <button onClick={handleExport}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 transition-all">
-              <Download className="w-4 h-4" /> Download
-            </button>
+            {!isPureChecker && (
+              <button onClick={handleExport}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 transition-all">
+                <Download className="w-4 h-4" /> Download
+              </button>
+            )}
           </div>
         </div>
 
         {kpiTab === "group" && selectedYear === CURRENT_YEAR ? (() => {
-          const bizStatusMap = loadPersistedState<Record<string, { submitted?: boolean; approved?: boolean }>>("pa_kpi_business_status_v1", {});
-          const bizItemsMap = loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_business_by_scope_v1", {});
-          const groupSubmitted = Boolean(bizStatusMap["corporate-RSUP Group"]?.submitted);
-          const groupItems = bizItemsMap["corporate-RSUP Group"] ?? [];
+          const groupSubmitted = Boolean(currentScopeStatus?.submitted);
+          const groupItems = submittedItems;
           return groupSubmitted && groupItems.length > 0 ? (
             <BusinessKPITable items={groupItems} />
           ) : (
             <div className="flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 text-center px-6">
-              <p className="text-sm font-bold text-gray-500">Belum ada pengajuan KPI (Group)</p>
-              <p className="text-xs text-gray-400">Data KPI (Group) akan tampil di sini setelah Director melakukan Submit KPI (Group).</p>
+              <p className="text-sm font-bold text-gray-500">Belum ada pengajuan KPI (Group) — {selectedGroup}</p>
+              <p className="text-xs text-gray-400">Data KPI (Group) akan tampil di sini setelah Director melakukan Submit KPI (Group) untuk {selectedGroup}.</p>
             </div>
           );
-        })() : kpiTab === "gm" && isRsupGroupUnit && selectedYear === CURRENT_YEAR ? (() => {
-          const bizStatusMap = loadPersistedState<Record<string, { submitted?: boolean; approved?: boolean }>>("pa_kpi_business_status_v1", {});
-          const bizItemsMap = loadPersistedState<Record<string, KPISetting[]>>("pa_kpi_business_by_scope_v1", {});
-          const unitSubmitted = Boolean(bizStatusMap[`unit-${companyUnit}`]?.submitted);
-          const unitItems = bizItemsMap[`unit-${companyUnit}`] ?? [];
-          if (!canCreateOrEditKpiUnit) {
+        })() : kpiTab === "gm" && selectedYear === CURRENT_YEAR ? (() => {
+          const unitSubmitted = Boolean(currentScopeStatus?.submitted);
+          const unitItems = submittedItems;
+          if (!unitSubmitted && isRsupGroupUnit && !canCreateOrEditKpiUnit) {
             return (
               <div className="flex flex-col items-center justify-center gap-3 py-16 rounded-xl border border-amber-200 bg-amber-50/50 text-center px-6">
                 <p className="text-sm font-bold text-amber-900">
@@ -1177,7 +1465,95 @@ export function HRSettingKPIPage() {
             </div>
           </div>
         )}
+
+        {/* Lampiran KPI milik pengajuan KPI Group / KPI Unit */}
+        {hasSubmittedData && scopeAttachments.length > 0 && (
+          <div className="rounded-xl border border-sky-200/80 bg-sky-50/40 p-4 flex flex-col gap-2.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Paperclip className="w-4 h-4 text-sky-700" />
+              <span className="text-xs font-bold text-[#1A284F] uppercase tracking-wide">Lampiran KPI</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+                {scopeAttachments.length} file terlampir
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {scopeAttachments.map((att) => (
+                <div
+                  key={att.id}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-sky-200 text-xs text-gray-700 shadow-2xs"
+                >
+                  <Paperclip className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                  <span className="font-medium text-[#1A284F] truncate max-w-[240px]" title={att.name}>
+                    {att.name}
+                  </span>
+                  {att.url && (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewAttachment(att)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1A284F]/10 text-[#1A284F] hover:bg-[#1A284F] hover:text-white text-[10px] font-semibold transition-colors cursor-pointer"
+                    >
+                      <Eye className="w-3 h-3" /> Lihat
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      {pendingAction === "check" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 relative">
+            <button
+              type="button"
+              onClick={() => setPendingAction(null)}
+              className="absolute top-4 right-4 w-7 h-7 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+            >
+              <X className="w-4 h-4 text-gray-500" />
+            </button>
+            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-teal-50 mx-auto mb-5">
+              <ShieldCheck className="w-7 h-7 text-teal-600" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 text-center mb-1">
+              Konfirmasi Checked — {kpiTab === "group" ? "KPI (Group)" : "KPI (Unit)"}
+            </h3>
+            <p className="text-sm text-gray-500 text-center mb-1">
+              Anda akan menandai pengajuan <span className="font-semibold text-gray-800">{kpiTab === "group" ? "KPI (Group)" : "KPI (Unit)"}</span> sebagai <span className="font-semibold text-teal-700">Checked</span> untuk:
+            </p>
+            <p className="text-sm font-semibold text-[#1A284F] text-center mb-6">
+              {kpiTab === "group" ? selectedGroup : companyUnit} · {selectedYear}
+            </p>
+            <div className="flex items-start gap-3 px-4 py-3 bg-teal-50 border border-teal-200 rounded-xl mb-6">
+              <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-teal-900 leading-relaxed">
+                Setelah dikonfirmasi <span className="font-bold">Checked</span> oleh Checker, pengajuan ini akan otomatis diteruskan ke{" "}
+                {kpiTab === "group" ? (
+                  <><span className="font-bold">HR ICF</span> untuk tahap <span className="font-bold">Validate</span>.</>
+                ) : (
+                  <><span className="font-bold">Director</span> untuk tahap <span className="font-bold">Approve</span>.</>
+                )}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPendingAction(null)}
+                className="flex-1 py-2.5 rounded-full border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleCheckerChecked}
+                className="flex-1 py-2.5 rounded-full bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4" /> Ya, Checked
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingAction === "approve" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -1189,16 +1565,16 @@ export function HRSettingKPIPage() {
               <CheckCircle2 className="w-7 h-7 text-green-600" />
             </div>
             <h3 className="text-lg font-bold text-gray-900 text-center mb-1">
-              {isDirector ? "Approve KPI (Unit) Setting" : `Validate KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"} Setting`}
+              {isDirector && kpiTab === "gm" ? "Approve KPI (Unit) Setting" : `Validate KPI ${kpiTab === "group" ? "(Group)" : "(Unit)"} Setting`}
             </h3>
             <p className="text-sm text-gray-500 text-center mb-1">
-              You are about to {isDirector ? "approve" : "validate"} the <span className="font-semibold text-gray-800">{kpiTab === "group" ? "KPI (Group)" : "KPI (Unit)"}</span> setting for
+              You are about to {isDirector && kpiTab === "gm" ? "approve" : "validate"} the <span className="font-semibold text-gray-800">{kpiTab === "group" ? "KPI (Group)" : "KPI (Unit)"}</span> setting for
             </p>
             <p className="text-sm font-semibold text-[#1A284F] text-center mb-6">{companyUnit} · {selectedYear}</p>
             <div className="flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl mb-6">
               <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
               <p className="text-xs text-green-800">
-                {isDirector
+                {isDirector && kpiTab === "gm"
                   ? <>Setelah disetujui oleh Director (<span className="font-bold">Approved by Director</span>), KPI (Unit) ini akan diteruskan ke <span className="font-bold">HR ICF</span> untuk tahap <span className="font-bold">Validate</span>.</>
                   : <>Once validated by HR ICF, this KPI setting will be marked as <span className="font-bold">Validated</span> and auto-created in Measurement → KPI Tracking.</>}
               </p>
@@ -1208,12 +1584,12 @@ export function HRSettingKPIPage() {
                 Cancel
               </button>
               <button
-                onClick={isDirector ? handleDirectorApprove : handleValidate}
+                onClick={isDirector && kpiTab === "gm" ? handleDirectorApprove : handleValidate}
                 className={`flex-1 py-2.5 rounded-full text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${
-                  isDirector ? "bg-[#1A284F] hover:bg-[#243869]" : "bg-green-600 hover:bg-green-700"
+                  isDirector && kpiTab === "gm" ? "bg-[#1A284F] hover:bg-[#243869]" : "bg-green-600 hover:bg-green-700"
                 }`}
               >
-                <CheckCircle2 className="w-4 h-4" /> {isDirector ? "Confirm Approve" : "Confirm Validate"}
+                <CheckCircle2 className="w-4 h-4" /> {isDirector && kpiTab === "gm" ? "Confirm Approve" : "Confirm Validate"}
               </button>
             </div>
           </div>
@@ -1250,6 +1626,18 @@ export function HRSettingKPIPage() {
             </div>
           </div>
         </div>
+      )}
+      {previewAttachment && (
+        <EvidenceViewerModal
+          file={{
+            name: previewAttachment.name,
+            url: previewAttachment.url,
+            mimeType: previewAttachment.mimeType,
+            size: previewAttachment.size,
+          }}
+          subtitle="Lampiran KPI Business"
+          onClose={() => setPreviewAttachment(null)}
+        />
       )}
     </div>
   );

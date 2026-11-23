@@ -89,6 +89,10 @@ export interface ManagedUser {
   isHrIcfValidator?: boolean;
   /** Daftar Company Unit yang diizinkan untuk fungsi Checker HR Unit (Lintas Unit Usaha) */
   checkerUnits?: string[];
+  /** Setup oleh Administrator: menunjuk user khusus sebagai Checker KPI Business (KPI Group & KPI Unit) sebelum masuk ke Approver */
+  isKpiBusinessChecker?: boolean;
+  /** Cakupan yang di-allow untuk diperiksa oleh Checker Khusus KPI Business ("KPI Group" dan/atau nama Company Unit) */
+  kpiBusinessCheckerUnits?: string[];
   /** Peran khusus pada Calibration Approval: "approver" | "mengetahui" | "readonly" | "" */
   directorCalibrationRole?: CalibrationUnitRole;
   /** Mapping Peran Approval Calibration (EOY) per Company Unit ("approver" | "mengetahui" | "readonly" | "") */
@@ -175,6 +179,15 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
   const checkerUnits = Array.isArray(user.checkerUnits)
     ? Array.from(new Set(user.checkerUnits.map((x) => canonicalizeCompanyUnitName(x)).filter(Boolean)))
     : user.checkerUnits;
+  const kpiBusinessCheckerUnits = Array.isArray(user.kpiBusinessCheckerUnits)
+    ? Array.from(
+        new Set(
+          user.kpiBusinessCheckerUnits
+            .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeCompanyUnitName(x)))
+            .filter(Boolean),
+        ),
+      )
+    : user.kpiBusinessCheckerUnits;
   let calibrationRoleByUnit = user.calibrationRoleByUnit;
   if (calibrationRoleByUnit && typeof calibrationRoleByUnit === "object") {
     const nextCal: Record<string, CalibrationUnitRole> = {};
@@ -202,9 +215,47 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     regNoAp2,
     managedUnits,
     checkerUnits,
+    kpiBusinessCheckerUnits,
     calibrationRoleByUnit,
     soyCalibrationRoleByUnit,
   };
+}
+
+export const KPI_BUSINESS_GROUP_SCOPE_TOKEN = "KPI Group";
+
+/** Mengecek apakah user di-setup sebagai Checker Khusus KPI Business (KPI Group & KPI Unit). */
+export function canUserAccessKpiBusinessChecker(user?: ManagedUser | null): boolean {
+  return Boolean(user && user.isKpiBusinessChecker);
+}
+
+/** Mengecek apakah Checker Khusus KPI Business berwenang memeriksa `KPI Group` atau `KPI Unit` tertentu. */
+export function canKpiBusinessCheckerHandleScope(
+  viewer?: ManagedUser | null,
+  scopeType: "group" | "unit" = "group",
+  companyUnit?: string,
+): boolean {
+  if (!viewer || !viewer.isKpiBusinessChecker) return false;
+  const scopes = (viewer.kpiBusinessCheckerUnits ?? []).filter(Boolean);
+  // Jika daftar cakupan kosong, default di-allow untuk seluruh KPI Group & KPI Unit
+  if (scopes.length === 0) return true;
+  if (scopeType === "group") {
+    return scopes.includes(KPI_BUSINESS_GROUP_SCOPE_TOKEN);
+  }
+  if (!companyUnit) {
+    return scopes.some((s) => s !== KPI_BUSINESS_GROUP_SCOPE_TOKEN);
+  }
+  return scopes.some((s) => s !== KPI_BUSINESS_GROUP_SCOPE_TOKEN && isSameCompanyUnit(s, companyUnit));
+}
+
+/** Mengumpulkan seluruh user aktif yang ditunjuk sebagai Checker Khusus KPI Business untuk scope tsb. */
+export function findAllKpiBusinessCheckerUsers(
+  scopeType: "group" | "unit",
+  companyUnit?: string,
+  allUsers = loadManagedUsers(),
+): ManagedUser[] {
+  return allUsers.filter(
+    (u) => u.status === "Active" && canKpiBusinessCheckerHandleScope(u, scopeType, companyUnit),
+  );
 }
 
 /**
@@ -480,6 +531,7 @@ export function isAdminOrHrIcfRole(role: AppUserRole): boolean {
 }
 
 export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers()): boolean {
+  if (user.isKpiBusinessChecker) return true;
   if (
     isAdminOrHrIcfRole(user.role) ||
     user.role === "BOD" ||

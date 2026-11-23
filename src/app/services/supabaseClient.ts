@@ -206,11 +206,27 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
       managed_units: Array.isArray(u.managedUnits)
         ? Array.from(new Set((u.managedUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
         : [],
+      is_kpi_business_checker: Boolean(u.isKpiBusinessChecker ?? false),
+      kpi_business_checker_units: Array.isArray(u.kpiBusinessCheckerUnits)
+        ? Array.from(
+            new Set(
+              (u.kpiBusinessCheckerUnits as unknown[])
+                .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeDbCompanyUnit(x)))
+                .filter(Boolean),
+            ),
+          )
+        : [],
       updated_at: now,
     };
     ok = await restUpsert("pa_users", fullRow, "employee_id");
     if (!ok) {
-      const { checker_units: _cu, managed_units: _mu, ...legacyRow } = fullRow;
+      const {
+        checker_units: _cu,
+        managed_units: _mu,
+        is_kpi_business_checker: _ikbc,
+        kpi_business_checker_units: _kbcu,
+        ...legacyRow
+      } = fullRow;
       ok = await restUpsert("pa_users", legacyRow, "employee_id");
     }
     if (!ok) {
@@ -272,10 +288,32 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
         managed_units: Array.isArray(u.managedUnits)
           ? Array.from(new Set((u.managedUnits as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
           : [],
+        is_kpi_business_checker: Boolean(u.isKpiBusinessChecker ?? false),
+        kpi_business_checker_units: Array.isArray(u.kpiBusinessCheckerUnits)
+          ? Array.from(
+              new Set(
+                (u.kpiBusinessCheckerUnits as unknown[])
+                  .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeDbCompanyUnit(x)))
+                  .filter(Boolean),
+              ),
+            )
+          : [],
         updated_at: now,
         };
       });
       ok = await restUpsert("pa_users", fullRows, "employee_id");
+      if (!ok) {
+        const legacyBatchRows = fullRows.map(
+          ({
+            checker_units: _cu,
+            managed_units: _mu,
+            is_kpi_business_checker: _ikbc,
+            kpi_business_checker_units: _kbcu,
+            ...rest
+          }) => rest,
+        );
+        ok = await restUpsert("pa_users", legacyBatchRows, "employee_id");
+      }
       if (!ok) {
         const legacyRows = fullRows.map(({ checker_units: _cu, managed_units: _mu, ...rest }) => rest);
         ok = await restUpsert("pa_users", legacyRows, "employee_id");
@@ -2481,6 +2519,24 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
           : Array.isArray(dbU?.managed_units)
             ? Array.from(new Set((dbU.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
             : undefined,
+        isKpiBusinessChecker: Boolean(kvU.isKpiBusinessChecker ?? dbU?.is_kpi_business_checker ?? false),
+        kpiBusinessCheckerUnits: Array.isArray(kvU.kpiBusinessCheckerUnits)
+          ? Array.from(
+              new Set(
+                (kvU.kpiBusinessCheckerUnits as unknown[])
+                  .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeDbCompanyUnit(x)))
+                  .filter(Boolean),
+              ),
+            )
+          : Array.isArray(dbU?.kpi_business_checker_units)
+            ? Array.from(
+                new Set(
+                  (dbU.kpi_business_checker_units as unknown[])
+                    .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeDbCompanyUnit(x)))
+                    .filter(Boolean),
+                ),
+              )
+            : undefined,
         calibrationRoleByUnit:
           kvU.calibrationRoleByUnit && typeof kvU.calibrationRoleByUnit === "object"
             ? (kvU.calibrationRoleByUnit as Record<string, string>)
@@ -2528,6 +2584,16 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
               : undefined,
             managedUnits: Array.isArray(u.managed_units)
               ? Array.from(new Set((u.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+              : undefined,
+            isKpiBusinessChecker: Boolean(u.is_kpi_business_checker ?? false),
+            kpiBusinessCheckerUnits: Array.isArray(u.kpi_business_checker_units)
+              ? Array.from(
+                  new Set(
+                    (u.kpi_business_checker_units as unknown[])
+                      .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeDbCompanyUnit(x)))
+                      .filter(Boolean),
+                  ),
+                )
               : undefined,
             calibrationRoleByUnit:
               u.calibration_role_by_unit && typeof u.calibration_role_by_unit === "object"
@@ -2577,6 +2643,16 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
       : undefined,
     managedUnits: Array.isArray(u.managed_units)
       ? Array.from(new Set((u.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
+      : undefined,
+    isKpiBusinessChecker: Boolean(u.is_kpi_business_checker ?? false),
+    kpiBusinessCheckerUnits: Array.isArray(u.kpi_business_checker_units)
+      ? Array.from(
+          new Set(
+            (u.kpi_business_checker_units as unknown[])
+              .map((x) => (String(x ?? "").trim() === "KPI Group" ? "KPI Group" : canonicalizeDbCompanyUnit(x)))
+              .filter(Boolean),
+          ),
+        )
       : undefined,
     calibrationRoleByUnit:
       u.calibration_role_by_unit && typeof u.calibration_role_by_unit === "object"
