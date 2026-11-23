@@ -281,10 +281,26 @@ function MultiCheckboxDropdown({
 }
 
 // ─── Edit / Add Modal ──────────────────────────────────────────────────────────
-function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: { user: User | null; availableRoles: Role[]; availableGroups: string[]; onClose: () => void; onSave: (u: User) => void }) {
-  const isNew = !user || !user.name;
+function EditModal({
+  user,
+  originalUser,
+  mode,
+  availableRoles,
+  availableGroups,
+  onClose,
+  onSave,
+}: {
+  user: User | null;
+  originalUser?: User | null;
+  mode: "add" | "edit";
+  availableRoles: Role[];
+  availableGroups: string[];
+  onClose: () => void;
+  onSave: (u: User, originalUser?: User | null, mode?: "add" | "edit") => void;
+}) {
+  const isNew = mode === "add";
   const [form, setForm] = useState<User>(user ?? {
-    id: String(Date.now()), regNo: "", name: "", employeeId: "", position: "", company: COMPANIES[0],
+    id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, regNo: "", name: "", employeeId: "", position: "", company: COMPANIES[0],
     division: "", department: "", bagian: "", joinDate: "", telegramNo: "", grade: "Grade 5", role: "Employee",
     groupings: availableGroups[0] ?? GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "", regNoAp1: "", regNoAp2: "",
     isHrUnitChecker: false, isHrIcfValidator: false,
@@ -328,23 +344,45 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
   const [formError, setFormError] = useState("");
 
   const allExistingUsers = useMemo(() => loadManagedUsers(), []);
+  const isTargetOriginalUser = (candidate: User): boolean => {
+    if (isNew || !originalUser) return candidate.id === form.id;
+    if (candidate.id === originalUser.id && candidate.company === originalUser.company) return true;
+    const origReg = String(originalUser.regNo ?? "").trim().toLowerCase();
+    if (
+      origReg &&
+      candidate.company === originalUser.company &&
+      String(candidate.regNo ?? "").trim().toLowerCase() === origReg
+    ) {
+      return true;
+    }
+    const origEmp = String(originalUser.employeeId ?? "").trim().toLowerCase();
+    if (
+      origEmp &&
+      candidate.company === originalUser.company &&
+      String(candidate.employeeId ?? "").trim().toLowerCase() === origEmp &&
+      (!origReg || !String(candidate.regNo ?? "").trim())
+    ) {
+      return true;
+    }
+    return false;
+  };
   const sameUnitDupRegUser = useMemo(() => {
     const regClean = String(form.regNo ?? "").trim().toLowerCase();
     if (!regClean) return undefined;
     return allExistingUsers.find(
       (u) =>
-        u.id !== form.id &&
+        !isTargetOriginalUser(u) &&
         u.company === form.company &&
         String(u.regNo ?? "").trim().toLowerCase() === regClean,
     );
-  }, [allExistingUsers, form.id, form.company, form.regNo]);
+  }, [allExistingUsers, form.id, form.company, form.regNo, isNew, originalUser]);
   const dupEmpIdPeers = useMemo(() => {
     const empClean = String(form.employeeId ?? "").trim().toLowerCase();
     if (!empClean) return [];
     return allExistingUsers.filter(
-      (u) => u.id !== form.id && u.employeeId.trim().toLowerCase() === empClean,
+      (u) => !isTargetOriginalUser(u) && u.employeeId.trim().toLowerCase() === empClean,
     );
-  }, [allExistingUsers, form.id, form.employeeId]);
+  }, [allExistingUsers, form.id, form.employeeId, isNew, originalUser]);
 
   const setUnitCalRole = (unitName: string, val: CalRoleOption) => {
     setForm((p) => {
@@ -813,10 +851,20 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
           <button
             onClick={() => {
-              const effectiveRegNo = String(form.regNo || form.employeeId || "").trim();
+              const trimmedName = String(form.name ?? "").trim();
+              const trimmedEmpId = String(form.employeeId ?? "").trim();
+              if (!trimmedName) {
+                setFormError("Full Name wajib diisi.");
+                return;
+              }
+              if (!trimmedEmpId) {
+                setFormError("Employee ID wajib diisi.");
+                return;
+              }
+              const effectiveRegNo = String(form.regNo || trimmedEmpId || "").trim();
               const conflictReg = loadManagedUsers().find(
                 (u) =>
-                  u.id !== form.id &&
+                  !isTargetOriginalUser(u) &&
                   u.company === form.company &&
                   String(u.regNo || "").trim().toLowerCase() === effectiveRegNo.toLowerCase() &&
                   effectiveRegNo !== "",
@@ -830,10 +878,18 @@ function EditModal({ user, availableRoles, availableGroups, onClose, onSave }: {
               const ap = normalizeApproverPair(form.regNoAp1, form.regNoAp2);
               onSave({
                 ...form,
+                name: trimmedName,
+                employeeId: trimmedEmpId,
                 regNo: effectiveRegNo,
+                email: String(form.email ?? "").trim(),
+                telegramNo: String(form.telegramNo ?? "").trim(),
+                position: String(form.position ?? "").trim(),
+                division: String(form.division ?? "").trim(),
+                department: String(form.department ?? "").trim(),
+                bagian: String(form.bagian ?? "").trim(),
                 regNoAp1: ap.regNoAp1,
                 regNoAp2: ap.regNoAp2,
-              });
+              }, originalUser, mode);
               onClose();
             }}
             className="px-4 py-2 text-sm bg-[#1A284F] text-white rounded-lg hover:bg-[#2a3d6e] flex items-center gap-1.5">
@@ -2162,14 +2218,78 @@ export function UserManagementPage() {
     setCurrentPage(1);
   }
 
-  function handleSave(updated: User) {
-    setUsers(prev => {
-      const next = prev.some(u => u.id === updated.id)
-        ? prev.map(u => u.id === updated.id ? updated : u)
-        : [...prev, updated];
-      saveManagedUsers(next, updated);
-      return next;
-    });
+  function handleSave(updated: User, originalUser?: User | null, mode: "add" | "edit" = "edit") {
+    const currentList = loadManagedUsers();
+    if (mode === "edit" && originalUser) {
+      const origUnit = originalUser.company.trim().toLowerCase();
+      const origReg = String(originalUser.regNo ?? "").trim().toLowerCase();
+      const origEmp = String(originalUser.employeeId ?? "").trim().toLowerCase();
+      const idMatchCount = currentList.filter((u) => u.id === originalUser.id).length;
+
+      // Cari tepat index user yang sedang diedit (prioritaskan id unik + unit, lalu unit + regNo awal, lalu unit + employeeId awal)
+      let targetIdx = currentList.findIndex(
+        (u) =>
+          u.id === originalUser.id &&
+          u.company.trim().toLowerCase() === origUnit &&
+          (idMatchCount === 1 ||
+            (origReg && String(u.regNo ?? "").trim().toLowerCase() === origReg) ||
+            (origEmp && String(u.employeeId ?? "").trim().toLowerCase() === origEmp)),
+      );
+      if (targetIdx < 0 && origReg) {
+        targetIdx = currentList.findIndex(
+          (u) =>
+            u.company.trim().toLowerCase() === origUnit &&
+            String(u.regNo ?? "").trim().toLowerCase() === origReg,
+        );
+      }
+      if (targetIdx < 0 && origEmp) {
+        targetIdx = currentList.findIndex(
+          (u) =>
+            u.company.trim().toLowerCase() === origUnit &&
+            String(u.employeeId ?? "").trim().toLowerCase() === origEmp,
+        );
+      }
+      if (targetIdx < 0) {
+        targetIdx = currentList.findIndex((u) => u.id === originalUser.id);
+      }
+
+      const preservedId = targetIdx >= 0 ? currentList[targetIdx].id : originalUser.id || updated.id;
+      const finalUpdated: User = {
+        ...(targetIdx >= 0 ? currentList[targetIdx] : originalUser),
+        ...updated,
+        id: preservedId,
+      };
+
+      const nextList: User[] =
+        targetIdx >= 0
+          ? currentList
+              .map((u, idx) => (idx === targetIdx ? finalUpdated : u))
+              .filter((u, idx) => {
+                if (idx === targetIdx) return true;
+                // Bersihkan duplikat lama dari user yang sama pada unit yang sama apabila sebelumnya sempat tercatat ganda
+                if (u.company.trim().toLowerCase() !== origUnit) return true;
+                const uReg = String(u.regNo ?? "").trim().toLowerCase();
+                const uEmp = String(u.employeeId ?? "").trim().toLowerCase();
+                if (origReg && uReg === origReg) return false;
+                if (!origReg && origEmp && uEmp === origEmp) return false;
+                return true;
+              })
+          : [...currentList, finalUpdated];
+
+      saveManagedUsers(nextList, finalUpdated, undefined, originalUser);
+      setUsers(loadManagedUsers());
+      return;
+    }
+
+    const existingIds = new Set(currentList.map((u) => u.id));
+    const uniqueNewId =
+      updated.id && !existingIds.has(updated.id)
+        ? updated.id
+        : `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newUser: User = { ...updated, id: uniqueNewId };
+    const nextList = [...currentList, newUser];
+    saveManagedUsers(nextList, newUser);
+    setUsers(loadManagedUsers());
   }
 
   function handleDelete(id: string, reason: string) {
@@ -2565,7 +2685,9 @@ export function UserManagementPage() {
       {viewUser && <ViewModal user={viewUser} onClose={() => setViewUser(null)} />}
       {(editUser || addOpen) && (
         <EditModal
-          user={addOpen ? { id: String(Date.now()), name: "", employeeId: "", position: "", company: selectedCompany, division: "", department: "", grade: "", role: "Employee", groupings: accessGroups[0] ?? GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "" } : editUser}
+          mode={addOpen ? "add" : "edit"}
+          originalUser={addOpen ? null : editUser}
+          user={addOpen ? { id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: "", employeeId: "", position: "", company: selectedCompany, division: "", department: "", grade: "", role: "Employee", groupings: accessGroups[0] ?? GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "" } : editUser}
           availableRoles={accessRoles}
           availableGroups={accessGroups}
           onClose={() => { setEditUser(null); setAddOpen(false); }}

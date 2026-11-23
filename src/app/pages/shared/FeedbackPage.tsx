@@ -177,7 +177,10 @@ export function FeedbackPage({ tab }: { tab: Tab }) {
   const canForm = hasRolePermission(role, "feedback_form");
   const canFollowUp = hasRolePermission(role, "feedback_followup");
   const activeTab: Tab = tab === "follow-up" && !canFollowUp ? "form" : tab;
-  const base = location.pathname.replace(/\/feedback(\/.*)?$/, "");
+  const base = useMemo(() => {
+    const portalMatch = location.pathname.match(/^\/(hr|bod|supervisor|employee)(?=\/|$)/);
+    return portalMatch ? `/${portalMatch[1]}` : "";
+  }, [location.pathname]);
   const ownId = normalizeEmployeeId(activeUser.employeeId);
 
   const rows = useMemo(() => {

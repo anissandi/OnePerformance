@@ -410,16 +410,54 @@ mainAppRoutes.post("/sync", async (c) => {
 
     if (kind === "user-upsert" && body.user) {
       const u = body.user as Record<string, unknown>;
+      const prevEmpId = String(body.previousEmployeeId ?? "").trim();
+      const nextEmpId = String(u.employeeId ?? "").trim();
+      const prevComp = body.previousCompany ? canonicalizeUnitName(body.previousCompany) : "";
+      const prevRegLower = String(body.previousRegNo ?? "").trim().toLowerCase();
+      if (prevEmpId && prevEmpId !== nextEmpId) {
+        let delQuery = client.from("pa_users").delete().eq("employee_id", prevEmpId);
+        if (prevComp) delQuery = delQuery.eq("company", prevComp);
+        await delQuery;
+      }
       await upsertPaUserSafe(client, u, now);
       const existingUsers = await readSingleBackendKv(client, "pa_managed_users_v1");
       if (Array.isArray(existingUsers)) {
-        const empId = String(u.employeeId ?? "").toLowerCase();
-        const exists = existingUsers.some((item) => String((item as Record<string, unknown>)?.employeeId ?? "").toLowerCase() === empId);
-        const nextList = exists
-          ? existingUsers.map((item) =>
-              String((item as Record<string, unknown>)?.employeeId ?? "").toLowerCase() === empId ? { ...(item as object), ...u } : item,
-            )
-          : [...existingUsers, u];
+        const targetId = String(u.id ?? "").trim();
+        const targetUnit = canonicalizeUnitName(u.company ?? "").trim().toLowerCase();
+        const origUnit = (prevComp || canonicalizeUnitName(u.company ?? "")).trim().toLowerCase();
+        const prevEmpLower = prevEmpId.toLowerCase();
+        const nextEmpLower = nextEmpId.toLowerCase();
+        const nextRegLower = String(u.regNo ?? "").trim().toLowerCase();
+
+        const matchItem = (rawItem: unknown): boolean => {
+          const item = (rawItem ?? {}) as Record<string, unknown>;
+          const itemId = String(item.id ?? "").trim();
+          const itemUnit = canonicalizeUnitName(item.company ?? "").trim().toLowerCase();
+          const itemReg = String(item.regNo ?? "").trim().toLowerCase();
+          const itemEmp = String(item.employeeId ?? "").trim().toLowerCase();
+          if (targetId && itemId === targetId && itemUnit === origUnit) return true;
+          if (prevRegLower && itemUnit === origUnit && itemReg === prevRegLower) return true;
+          if (prevEmpLower && itemUnit === origUnit && itemEmp === prevEmpLower && (!prevRegLower || !itemReg)) return true;
+          if (nextRegLower && itemUnit === targetUnit && itemReg === nextRegLower) return true;
+          if ((!nextRegLower || !itemReg) && nextEmpLower && itemUnit === targetUnit && itemEmp === nextEmpLower) return true;
+          return false;
+        };
+
+        const firstIdx = existingUsers.findIndex(matchItem);
+        const nextList =
+          firstIdx >= 0
+            ? existingUsers
+                .map((item, idx) =>
+                  idx === firstIdx
+                    ? {
+                        ...(item as Record<string, unknown>),
+                        ...u,
+                        id: String(u.id || (item as Record<string, unknown>)?.id || ""),
+                      }
+                    : item,
+                )
+                .filter((item, idx) => idx === firstIdx || !matchItem(item))
+            : [...existingUsers, u];
         await writeBackendKv(client, "pa_managed_users_v1", nextList, now);
       }
     } else if (kind === "users-replace" && Array.isArray(body.users)) {

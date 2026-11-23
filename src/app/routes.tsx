@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Navigate, createBrowserRouter, useRouteError } from "react-router"
+import { Navigate, createBrowserRouter, useLocation, useRouteError } from "react-router"
 import { LoginPage } from "./pages/LoginPage"
 import { AppLayout } from "./components/Layout"
 import { AnalyticsDashboard } from "./pages/hr/AnalyticsDashboard"
@@ -138,6 +138,14 @@ function HREvidenceSmart() {
 }
 function HREvidenceInterview() {
   return <EvidencePage type="Management Interview" />
+}
+
+function HelpFeedbackMalformedRedirect() {
+  const loc = useLocation()
+  const portalMatch = loc.pathname.match(/^\/(hr|bod|supervisor|employee)(?=\/|$)/)
+  const prefix = portalMatch ? `/${portalMatch[1]}` : ""
+  const targetSub = /\/follow-up\/?$/i.test(loc.pathname) ? "follow-up" : "form"
+  return <Navigate to={`${prefix}/help-feedback/${targetSub}${loc.search}`} replace />
 }
 
 function RouteErrorFallback() {
@@ -298,6 +306,7 @@ export const router = createBrowserRouter([
       { path: "help-feedback", Component: FeedbackFormPage },
       { path: "help-feedback/form", Component: FeedbackFormPage },
       { path: "help-feedback/follow-up", Component: FeedbackFollowUpPage },
+      { path: "help-feedback/*", Component: HelpFeedbackMalformedRedirect },
       { path: "feedback", Component: FeedbackFormPage },
       { path: "feedback/form", Component: FeedbackFormPage },
       { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
@@ -464,6 +473,7 @@ export const router = createBrowserRouter([
       { path: "help-feedback", Component: FeedbackFormPage },
       { path: "help-feedback/form", Component: FeedbackFormPage },
       { path: "help-feedback/follow-up", Component: FeedbackFollowUpPage },
+      { path: "help-feedback/*", Component: HelpFeedbackMalformedRedirect },
       { path: "feedback", Component: FeedbackFormPage },
       { path: "feedback/form", Component: FeedbackFormPage },
       { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
@@ -596,6 +606,7 @@ export const router = createBrowserRouter([
       { path: "help-feedback", Component: FeedbackFormPage },
       { path: "help-feedback/form", Component: FeedbackFormPage },
       { path: "help-feedback/follow-up", Component: FeedbackFollowUpPage },
+      { path: "help-feedback/*", Component: HelpFeedbackMalformedRedirect },
       { path: "feedback", Component: FeedbackFormPage },
       { path: "feedback/form", Component: FeedbackFormPage },
       { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
@@ -752,6 +763,7 @@ export const router = createBrowserRouter([
       { path: "help-feedback", Component: FeedbackFormPage },
       { path: "help-feedback/form", Component: FeedbackFormPage },
       { path: "help-feedback/follow-up", Component: FeedbackFollowUpPage },
+      { path: "help-feedback/*", Component: HelpFeedbackMalformedRedirect },
       { path: "feedback", Component: FeedbackFormPage },
       { path: "feedback/form", Component: FeedbackFormPage },
       { path: "feedback/follow-up", Component: FeedbackFollowUpPage },
@@ -786,6 +798,17 @@ export const router = createBrowserRouter([
       { path: "notification-management/:tab", Component: NotificationManagementPage },
       { path: "notifications", Component: NotificationManagementPage },
       { path: "notifications/:tab", Component: NotificationManagementPage },
+    ],
+  },
+  {
+    path: "/help-feedback",
+    Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
+    children: [
+      { index: true, Component: FeedbackFormPage },
+      { path: "form", Component: FeedbackFormPage },
+      { path: "follow-up", Component: FeedbackFollowUpPage },
+      { path: "*", Component: HelpFeedbackMalformedRedirect },
     ],
   },
   {

@@ -1640,6 +1640,36 @@ export function deduplicateUsersByUnitAndRegNo(
       }
     }
   }
+
+  // Pastikan setiap user memiliki id unik non-kosong agar operasi Edit User di tabel tidak pernah menabrak id lain
+  const usedIds = new Set<string>();
+  if (preferredKeepId) {
+    const prefIdx = unique.findIndex((u) => u.id === preferredKeepId);
+    if (prefIdx >= 0) usedIds.add(preferredKeepId);
+  }
+  for (let i = 0; i < unique.length; i++) {
+    const item = unique[i];
+    const rawId = String(item.id ?? "").trim();
+    if (
+      rawId &&
+      (!usedIds.has(rawId) ||
+        (preferredKeepId && rawId === preferredKeepId && unique.findIndex((u) => u.id === preferredKeepId) === i))
+    ) {
+      usedIds.add(rawId);
+      continue;
+    }
+    const unitSlug = canonicalizeCompanyUnitName(item.company).replace(/[^a-zA-Z0-9]+/g, "").toLowerCase() || "unit";
+    const refSlug = String(item.regNo || item.employeeId || i + 1).replace(/[^a-zA-Z0-9_-]+/g, "");
+    let candidate = `usr-${unitSlug}-${refSlug}`;
+    let suffix = 1;
+    while (usedIds.has(candidate)) {
+      suffix++;
+      candidate = `usr-${unitSlug}-${refSlug}-${suffix}`;
+    }
+    usedIds.add(candidate);
+    unique[i] = { ...item, id: candidate };
+  }
+
   return { unique, removedDuplicates };
 }
 
@@ -1690,13 +1720,103 @@ export function loadManagedUsers(): ManagedUser[] {
   }
 }
 
-export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser, deletedId?: string): void {
+export function saveManagedUsers(
+  users: ManagedUser[],
+  changedUser?: ManagedUser,
+  deletedId?: string,
+  previousUser?: Pick<ManagedUser, "id" | "employeeId" | "regNo" | "company">,
+): void {
   try {
     const normalizedChanged = changedUser ? normalizeManagedUserUnits(changedUser) : undefined;
+    const prevUnitCanon = previousUser ? canonicalizeCompanyUnitName(previousUser.company).trim().toLowerCase() : "";
+    const prevRegLower = previousUser ? String(previousUser.regNo ?? "").trim().toLowerCase() : "";
+    const prevEmpTrimmed = previousUser ? String(previousUser.employeeId ?? "").trim() : "";
+    const prevEmpLower = prevEmpTrimmed.toLowerCase();
+
+    // Jika ini adalah operasi Edit User (previousUser tersedia), pastikan entri lama dari user yang sama tidak tertinggal ganda
+    if (normalizedChanged && previousUser) {
+      users = users.filter((u) => {
+        if (u.id === normalizedChanged.id) return true;
+        const uUnit = canonicalizeCompanyUnitName(u.company).trim().toLowerCase();
+        if (uUnit !== prevUnitCanon) return true;
+        const uReg = String(u.regNo ?? "").trim().toLowerCase();
+        const uEmp = String(u.employeeId ?? "").trim().toLowerCase();
+        if (prevRegLower && uReg === prevRegLower) return false;
+        if (!prevRegLower && prevEmpLower && uEmp === prevEmpLower) return false;
+        return true;
+      });
+    }
+
     const { unique, removedDuplicates } = deduplicateUsersByUnitAndRegNo(users, normalizedChanged?.id);
     users = unique;
     changedUser = normalizedChanged;
     savePersistedState(USERS_KEY, users);
+
+    let staleOldEmployeeIdToDelete: string | undefined;
+    if (changedUser && previousUser && prevEmpTrimmed && prevEmpTrimmed !== changedUser.employeeId.trim()) {
+      const stillUsedByAnotherUser = users.some(
+        (u) => u.id !== changedUser!.id && u.employeeId.trim() === prevEmpTrimmed,
+      );
+      if (!stillUsedByAnotherUser) {
+        staleOldEmployeeIdToDelete = prevEmpTrimmed;
+      }
+      // Migrasikan catatan password security apabila Employee ID berubah dan tidak dipakai rekan lintas unit lain
+      const oldUpper = prevEmpTrimmed.toUpperCase();
+      const newUpper = changedUser.employeeId.trim().toUpperCase();
+      const stillUsedUpper = users.some(
+        (u) => u.id !== changedUser!.id && u.employeeId.trim().toUpperCase() === oldUpper,
+      );
+      if (oldUpper && newUpper && oldUpper !== newUpper && !stillUsedUpper) {
+        try {
+          const rawSec = safeGetLocalRaw("pa_user_password_security_v1");
+          if (rawSec) {
+            const secMap = JSON.parse(rawSec) as Record<string, Record<string, unknown>>;
+            if (secMap && typeof secMap === "object" && secMap[oldUpper] && !secMap[newUpper]) {
+              secMap[newUpper] = { ...secMap[oldUpper], employeeId: changedUser.employeeId.trim() };
+              delete secMap[oldUpper];
+              savePersistedState("pa_user_password_security_v1", secMap);
+            }
+          }
+        } catch {
+          // ignore password map migration failure
+        }
+      }
+    }
+
+    // Sinkronkan juga activeUser & auth session jika user yang diedit adalah user yang sedang login
+    if (changedUser) {
+      try {
+        const rawActive = safeGetLocalRaw(ACTIVE_USER_KEY);
+        if (rawActive) {
+          const parsedActive = JSON.parse(rawActive) as ManagedUser;
+          const activeUnit = canonicalizeCompanyUnitName(parsedActive.company).trim().toLowerCase();
+          const activeReg = String(parsedActive.regNo ?? "").trim().toLowerCase();
+          const activeEmp = String(parsedActive.employeeId ?? "").trim().toLowerCase();
+          const changedUnit = canonicalizeCompanyUnitName(changedUser.company).trim().toLowerCase();
+          const isEditedActiveUser =
+            (parsedActive.id && parsedActive.id === changedUser.id) ||
+            (previousUser &&
+              activeUnit === prevUnitCanon &&
+              ((prevRegLower && activeReg === prevRegLower) || (prevEmpLower && activeEmp === prevEmpLower))) ||
+            (activeUnit === changedUnit &&
+              ((changedUser.regNo && activeReg === changedUser.regNo.trim().toLowerCase()) ||
+                activeEmp === changedUser.employeeId.trim().toLowerCase()));
+          if (isEditedActiveUser) {
+            safeSetLocalJson(ACTIVE_USER_KEY, changedUser);
+            const rawSess = safeGetLocalRaw(AUTH_SESSION_KEY);
+            if (rawSess) {
+              const sess = JSON.parse(rawSess) as AuthSessionState;
+              if (sess && sess.isAuthenticated && sess.employeeId !== changedUser.employeeId) {
+                safeSetLocalJson(AUTH_SESSION_KEY, { ...sess, employeeId: changedUser.employeeId });
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore active user sync failure
+      }
+    }
+
     if (removedDuplicates.length > 0) {
       const keptEmpIds = new Set(users.map((u) => u.employeeId.trim().toLowerCase()));
       for (const dup of removedDuplicates) {
@@ -1710,6 +1830,9 @@ export function saveManagedUsers(users: ManagedUser[], changedUser?: ManagedUser
       void syncToSupabase({
         kind: "user-upsert",
         user: changedUser,
+        previousEmployeeId: staleOldEmployeeIdToDelete,
+        previousRegNo: previousUser?.regNo ? String(previousUser.regNo).trim() : undefined,
+        previousCompany: previousUser?.company ? canonicalizeCompanyUnitName(previousUser.company) : undefined,
         audit: {
           userId: changedUser.employeeId,
           userName: changedUser.name,
@@ -1776,7 +1899,33 @@ export function getActiveUser(): ManagedUser {
     }
     if (raw) {
       const parsed = JSON.parse(raw) as ManagedUser;
-      const latest = _cachedUsersByEmpUpper.get(String(parsed.employeeId ?? "").toUpperCase()) ??
+      const parsedUnit = canonicalizeCompanyUnitName(parsed.company ?? "").trim().toLowerCase();
+      const parsedReg = String(parsed.regNo ?? "").trim().toLowerCase();
+      const latestByExactIdentity =
+        (parsed.id
+          ? users.find(
+              (u) =>
+                u.id === parsed.id &&
+                (!parsedUnit || canonicalizeCompanyUnitName(u.company).trim().toLowerCase() === parsedUnit),
+            )
+          : undefined) ??
+        (parsedUnit && parsedReg
+          ? users.find(
+              (u) =>
+                canonicalizeCompanyUnitName(u.company).trim().toLowerCase() === parsedUnit &&
+                String(u.regNo ?? "").trim().toLowerCase() === parsedReg,
+            )
+          : undefined) ??
+        (parsedUnit && parsed.employeeId
+          ? users.find(
+              (u) =>
+                canonicalizeCompanyUnitName(u.company).trim().toLowerCase() === parsedUnit &&
+                u.employeeId.toUpperCase() === String(parsed.employeeId ?? "").toUpperCase(),
+            )
+          : undefined);
+      const latest =
+        latestByExactIdentity ??
+        _cachedUsersByEmpUpper.get(String(parsed.employeeId ?? "").toUpperCase()) ??
         users.find((u) => u.employeeId.toUpperCase() === String(parsed.employeeId ?? "").toUpperCase());
       const resolved = latest ?? normalizeManagedUserUnits(parsed);
       _cachedActiveUserSig = sig;

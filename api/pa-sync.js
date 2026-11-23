@@ -336,6 +336,17 @@ export default async function handler(req, res) {
       }
 
       if (kind === "user-upsert" && body.user) {
+        const prevEmpId = String(body.previousEmployeeId ?? "").trim();
+        const nextEmpId = String(body.user.employeeId ?? body.user.employee_id ?? "").trim();
+        if (prevEmpId && prevEmpId !== nextEmpId) {
+          const prevComp = body.previousCompany ? canonicalizeUnitName(body.previousCompany) : "";
+          const compFilter = prevComp ? `&company=eq.${encodeURIComponent(prevComp)}` : "";
+          await pgRest(
+            cfg,
+            `pa_users?employee_id=eq.${encodeURIComponent(prevEmpId)}${compFilter}`,
+            { method: "DELETE" },
+          );
+        }
         const fullRow = toPaUserRow(body.user, now, "full");
         let up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
           method: "POST",

@@ -177,8 +177,28 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
   } else if (kind === "user-upsert" && payload.user) {
     const u = payload.user as Record<string, unknown>;
     const apPair = normalizeDbApproverPair(u.regNoAp1, u.regNoAp2);
+    const empIdTrimmed = String(u.employeeId ?? "").trim();
+    const prevEmpIdTrimmed = String(payload.previousEmployeeId ?? "").trim();
+    if (prevEmpIdTrimmed && prevEmpIdTrimmed !== empIdTrimmed) {
+      try {
+        const prevComp = payload.previousCompany ? canonicalizeDbCompanyUnit(payload.previousCompany) : "";
+        const compFilter = prevComp ? `&company=eq.${encodeURIComponent(prevComp)}` : "";
+        await fetch(
+          `${SUPABASE_REST_BASE}/pa_users?employee_id=eq.${encodeURIComponent(prevEmpIdTrimmed)}${compFilter}`,
+          {
+            method: "DELETE",
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            },
+          },
+        );
+      } catch {
+        // ignore cleanup failure on direct PostgREST
+      }
+    }
     const fullRow = {
-      employee_id: String(u.employeeId ?? ""),
+      employee_id: empIdTrimmed,
       no: String(u.no ?? ""),
       reg_no: String(u.regNo ?? ""),
       name: String(u.name ?? ""),
@@ -216,6 +236,25 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
             ),
           )
         : [],
+      calibration_role_by_unit:
+        u.calibrationRoleByUnit && typeof u.calibrationRoleByUnit === "object"
+          ? Object.fromEntries(
+              Object.entries(u.calibrationRoleByUnit as Record<string, unknown>).map(([k, v]) => [
+                canonicalizeDbCompanyUnit(k),
+                String(v ?? ""),
+              ]),
+            )
+          : {},
+      soy_calibration_role_by_unit:
+        u.soyCalibrationRoleByUnit && typeof u.soyCalibrationRoleByUnit === "object"
+          ? Object.fromEntries(
+              Object.entries(u.soyCalibrationRoleByUnit as Record<string, unknown>).map(([k, v]) => [
+                canonicalizeDbCompanyUnit(k),
+                String(v ?? ""),
+              ]),
+            )
+          : {},
+      director_calibration_role: String(u.directorCalibrationRole ?? ""),
       updated_at: now,
     };
     ok = await restUpsert("pa_users", fullRow, "employee_id");
@@ -225,6 +264,9 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
         managed_units: _mu,
         is_kpi_business_checker: _ikbc,
         kpi_business_checker_units: _kbcu,
+        calibration_role_by_unit: _crbu,
+        soy_calibration_role_by_unit: _scrbu,
+        director_calibration_role: _dcr,
         ...legacyRow
       } = fullRow;
       ok = await restUpsert("pa_users", legacyRow, "employee_id");
@@ -2486,27 +2528,37 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     const mergedFromKv = kvUsersList.map((kvU, idx) => {
       const empKey = String(kvU.employeeId ?? "").toLowerCase();
       const dbU = dbByEmp.get(empKey);
-      const apPair = normalizeDbApproverPair(kvU.regNoAp1 ?? dbU?.reg_no_ap1, kvU.regNoAp2 ?? dbU?.reg_no_ap2);
+      const hasKvAp = kvU.regNoAp1 !== undefined || kvU.regNoAp2 !== undefined;
+      const apPair = normalizeDbApproverPair(
+        hasKvAp ? kvU.regNoAp1 : dbU?.reg_no_ap1,
+        hasKvAp ? kvU.regNoAp2 : dbU?.reg_no_ap2,
+      );
       return {
         ...kvU,
         id: String(kvU.id || idx + 1),
-        no: String(kvU.no || dbU?.no || idx + 1),
-        regNo: String(kvU.regNo || dbU?.reg_no || `REG-${String(idx + 1).padStart(3, "0")}`),
-        name: String(kvU.name || dbU?.name || ""),
-        employeeId: String(kvU.employeeId || dbU?.employee_id || ""),
-        position: String(kvU.position || dbU?.position || ""),
+        no: kvU.no !== undefined && String(kvU.no) !== "" ? String(kvU.no) : String(dbU?.no || idx + 1),
+        regNo:
+          kvU.regNo !== undefined && String(kvU.regNo).trim() !== ""
+            ? String(kvU.regNo).trim()
+            : String(dbU?.reg_no || kvU.employeeId || `REG-${String(idx + 1).padStart(3, "0")}`),
+        name: kvU.name !== undefined ? String(kvU.name) : String(dbU?.name ?? ""),
+        employeeId:
+          kvU.employeeId !== undefined && String(kvU.employeeId).trim() !== ""
+            ? String(kvU.employeeId).trim()
+            : String(dbU?.employee_id ?? ""),
+        position: kvU.position !== undefined ? String(kvU.position) : String(dbU?.position ?? ""),
         company: canonicalizeDbCompanyUnit(kvU.company || dbU?.company || ""),
-        division: String(kvU.division || dbU?.division || ""),
-        department: String(kvU.department || dbU?.department || ""),
+        division: kvU.division !== undefined ? String(kvU.division) : String(dbU?.division ?? ""),
+        department: kvU.department !== undefined ? String(kvU.department) : String(dbU?.department ?? ""),
         bagian: String(kvU.bagian ?? dbU?.bagian ?? ""),
-        joinDate: String(kvU.joinDate || dbU?.join_date || ""),
-        telegramNo: String(kvU.telegramNo || dbU?.telegram_no || ""),
+        joinDate: kvU.joinDate !== undefined ? String(kvU.joinDate) : String(dbU?.join_date ?? ""),
+        telegramNo: kvU.telegramNo !== undefined ? String(kvU.telegramNo) : String(dbU?.telegram_no ?? ""),
         grade: String(kvU.grade || dbU?.grade || "Grade 5"),
-        role: String(kvU.role || dbU?.role || "Employee"),
+        role: kvU.role !== undefined ? String(kvU.role) : String(dbU?.role || "Employee"),
         groupings: String(kvU.groupings || dbU?.groupings || "Operasional"),
         status: String(kvU.status || dbU?.status || "Active"),
         lastLogin: String(dbU?.last_login || kvU.lastLogin || ""),
-        email: String(kvU.email || dbU?.email || ""),
+        email: kvU.email !== undefined ? String(kvU.email) : String(dbU?.email ?? ""),
         regNoAp1: apPair.regNoAp1,
         regNoAp2: apPair.regNoAp2,
         checkerUnits: Array.isArray(kvU.checkerUnits)
@@ -2553,13 +2605,34 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
       };
     });
     const seenIds = new Set(mergedFromKv.map((u) => u.employeeId.toLowerCase()));
+    const seenUnitRegNos = new Set(
+      mergedFromKv
+        .map((u) => {
+          const unit = canonicalizeDbCompanyUnit(u.company).trim().toLowerCase();
+          const reg = String(u.regNo ?? "").trim().toLowerCase();
+          return unit && reg ? `${unit}::${reg}` : "";
+        })
+        .filter(Boolean),
+    );
+    const staleDbOrphanEmpIds: string[] = [];
     const extraDbUsers = isCleanTrial
       ? []
       : users
-          .filter((u) => !seenIds.has(String(u.employee_id ?? "").toLowerCase()))
+          .filter((u) => {
+            const empLower = String(u.employee_id ?? "").trim().toLowerCase();
+            if (!empLower || seenIds.has(empLower)) return false;
+            const unitLower = canonicalizeDbCompanyUnit(u.company ?? "").trim().toLowerCase();
+            const regLower = String(u.reg_no ?? "").trim().toLowerCase();
+            if (unitLower && regLower && seenUnitRegNos.has(`${unitLower}::${regLower}`)) {
+              // Baris pa_users lama yang tersisa setelah Employee ID diedit pada Reg No & Unit yang sama
+              staleDbOrphanEmpIds.push(String(u.employee_id ?? "").trim());
+              return false;
+            }
+            return true;
+          })
           .map((u, idx) => ({
             ...normalizeDbApproverPair(u.reg_no_ap1, u.reg_no_ap2),
-            id: String(mergedFromKv.length + idx + 1),
+            id: `db-${String(u.employee_id ?? idx + 1)}-${idx}`,
             no: String(u.no || mergedFromKv.length + idx + 1),
             regNo: String(u.reg_no || `REG-${String(mergedFromKv.length + idx + 1).padStart(3, "0")}`),
             name: String(u.name ?? ""),
@@ -2608,6 +2681,30 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     const synced = [...mergedFromKv, ...extraDbUsers].filter(
       (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
     );
+    // Pastikan tidak ada id duplikat antar entri user hasil penggabungan
+    const usedSyncIds = new Set<string>();
+    for (let i = 0; i < synced.length; i++) {
+      const rawId = String(synced[i].id ?? "").trim();
+      if (rawId && !usedSyncIds.has(rawId)) {
+        usedSyncIds.add(rawId);
+      } else {
+        const unitSlug = canonicalizeDbCompanyUnit(synced[i].company).replace(/[^a-zA-Z0-9]+/g, "").toLowerCase() || "unit";
+        const refSlug = String(synced[i].regNo || synced[i].employeeId || i + 1).replace(/[^a-zA-Z0-9_-]+/g, "");
+        let cand = `usr-${unitSlug}-${refSlug}`;
+        let n = 1;
+        while (usedSyncIds.has(cand)) {
+          n++;
+          cand = `usr-${unitSlug}-${refSlug}-${n}`;
+        }
+        usedSyncIds.add(cand);
+        synced[i] = { ...synced[i], id: cand };
+      }
+    }
+    for (const orphanEmpId of staleDbOrphanEmpIds) {
+      if (orphanEmpId && !seenIds.has(orphanEmpId.toLowerCase())) {
+        void syncToSupabase({ kind: "user-delete", employeeId: orphanEmpId });
+      }
+    }
     safeSetLocalJson("pa_managed_users_v1", synced);
     if (hadLegacyAsdInDb) {
       void syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: synced });
@@ -2878,18 +2975,6 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         safeSetLocalJson("pa_managed_users_v1", preLocalUsers);
         await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: preLocalUsers });
         await syncToSupabase({ kind: "users-batch", users: preLocalUsers });
-      } else {
-        const remoteIds = new Set(currentKvUsers.map((u) => String(u.employeeId ?? "").toLowerCase()).filter(Boolean));
-        const missingOnRemote = preLocalUsers.filter((u) => {
-          const id = String(u.employeeId ?? "").toLowerCase();
-          return Boolean(id) && !remoteIds.has(id) && !archSet.has(id);
-        });
-        if (missingOnRemote.length > 0) {
-          const combined = [...currentKvUsers, ...missingOnRemote];
-          safeSetLocalJson("pa_managed_users_v1", combined);
-          await syncToSupabase({ kind: "kv-state", stateKey: "pa_managed_users_v1", stateValue: combined });
-          await syncToSupabase({ kind: "users-batch", users: combined });
-        }
       }
     }
     if (!seenBackendKvKeys.has("pa_unit_login_configs_v1") && preLocalLoginCfg && Object.keys(preLocalLoginCfg).length > 0) {
