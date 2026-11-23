@@ -19,8 +19,11 @@ import type { ApprovalRow, ReviewerRole } from "./ReviewDrawer"
 import {
   FOLLOW_UP_COLUMNS,
   FEEDBACK_INDICATORS,
+  MIN_FEEDBACK_SENTENCES,
+  countValidSentences,
   decideOwnerFollowUpResult,
   feedbackRowStatusFor,
+  hasMinFeedbackSentences,
   loadFeedbackSubmissions,
   requiredFollowUpRoles,
   saveFeedbackFollowUp,
@@ -556,7 +559,11 @@ export function FeedbackApprovalDrawer({
     readOnly ||
     !!submission?.followUps[reviewerRole]?.length ||
     awaitingFirstApprover
-  const complete = FOLLOW_UP_COLUMNS.every((column) => followUpItem[column]?.trim())
+  const complete = FOLLOW_UP_COLUMNS.every((column) =>
+    column === "Timeline Evaluasi"
+      ? Boolean(followUpItem[column]?.trim())
+      : hasMinFeedbackSentences(followUpItem[column]),
+  )
   const otherRole = reviewerRole === "approver1" ? "approver2" : "approver1"
   const lockedRowsToDisplay = locked && existingFollowUps?.length ? existingFollowUps : [followUpItem]
 
@@ -887,18 +894,36 @@ export function FeedbackApprovalDrawer({
                               }
                             />
                           ) : (
-                            <textarea
-                              required
-                              value={item[column]}
-                              placeholder={`Isi ${column.toLowerCase()} berdasarkan tabel summary feedback…`}
-                              onChange={(event) =>
-                                setFollowUpItem((prev) => ({
-                                  ...prev,
-                                  [column]: event.target.value,
-                                }))
-                              }
-                              className="block min-h-24 w-full rounded-xl border border-gray-200 bg-white p-3 font-normal text-slate-800 placeholder-slate-400 focus:border-[#1A284F] focus:outline-none focus:ring-2 focus:ring-[#1A284F]/15"
-                            />
+                            <>
+                              <textarea
+                                required
+                                value={item[column]}
+                                placeholder={`Isi ${column.toLowerCase()} berdasarkan tabel summary feedback (minimal ${MIN_FEEDBACK_SENTENCES} kalimat)…`}
+                                onChange={(event) =>
+                                  setFollowUpItem((prev) => ({
+                                    ...prev,
+                                    [column]: event.target.value,
+                                  }))
+                                }
+                                className="block min-h-28 w-full rounded-xl border border-gray-200 bg-white p-3 font-normal text-slate-800 placeholder-slate-400 focus:border-[#1A284F] focus:outline-none focus:ring-2 focus:ring-[#1A284F]/15"
+                              />
+                              {(() => {
+                                const sc = countValidSentences(item[column])
+                                const ok = sc >= MIN_FEEDBACK_SENTENCES
+                                const hasVal = Boolean(item[column]?.trim())
+                                return (
+                                  <p
+                                    className={`text-[11px] font-medium ${
+                                      ok ? "text-emerald-700" : hasVal ? "text-amber-700" : "text-slate-400"
+                                    }`}
+                                  >
+                                    {ok
+                                      ? `Minimal ${MIN_FEEDBACK_SENTENCES} kalimat terpenuhi (${sc} kalimat)`
+                                      : `Minimal input ${MIN_FEEDBACK_SENTENCES} kalimat (${sc}/${MIN_FEEDBACK_SENTENCES} kalimat)`}
+                                  </p>
+                                )
+                              })()}
+                            </>
                           )}
                         </div>
                       ))}
@@ -910,6 +935,11 @@ export function FeedbackApprovalDrawer({
                     <button
                       disabled={!complete}
                       onClick={() => setConfirm(true)}
+                      title={
+                        !complete
+                          ? `Lengkapi seluruh field teks minimal ${MIN_FEEDBACK_SENTENCES} kalimat dan pilih Timeline Evaluasi.`
+                          : "Submit Tindak Lanjut"
+                      }
                       className="rounded-xl bg-[#1A284F] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#131d3b] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                     >
                       Submit Tindak Lanjut

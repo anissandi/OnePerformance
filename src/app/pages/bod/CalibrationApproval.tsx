@@ -914,8 +914,8 @@ export function BODCalibrationApproval() {
 
   if (!canRoleAccessCalibrationApproval(activeUser.role)) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
-        <div className="max-w-3xl mx-auto rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center">
+      <div className="w-full">
+        <div className="w-full rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center">
           <ShieldAlert className="mx-auto mb-2 h-8 w-8 text-amber-600" />
           <p className="text-sm font-bold text-amber-900">Akses Halaman Terbatas</p>
           <p className="mt-1 text-xs text-amber-800">
@@ -927,8 +927,8 @@ export function BODCalibrationApproval() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="w-full">
+      <div className="w-full space-y-6">
 
         {/* ── Header ── */}
         <div className="flex items-start justify-between flex-wrap gap-3">

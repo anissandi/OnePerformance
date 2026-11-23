@@ -323,13 +323,22 @@ export interface GradeRange {
 
 /** Rentang grade default, sama dengan default Scores Setting. */
 export const DEFAULT_GRADE_RANGES: GradeRange[] = [
-  { id: "1", min: 90, max: 100, grade: "A+", label: "Outstanding" },
-  { id: "2", min: 80, max: 89, grade: "A", label: "Good" },
-  { id: "3", min: 70, max: 79, grade: "B", label: "Average" },
-  { id: "4", min: 60, max: 69, grade: "C", label: "Below Average" },
-  { id: "5", min: 50, max: 59, grade: "D", label: "Unsatisfactory" },
-  { id: "6", min: 0, max: 49, grade: "E", label: "Fail" },
+  { id: "1", min: 90, max: 100, grade: "A+", label: "Outstanding",    color: "#10B981" },
+  { id: "2", min: 80, max: 89,  grade: "A",  label: "Good",           color: "#3B82F6" },
+  { id: "3", min: 70, max: 79,  grade: "B",  label: "Average",        color: "#F59E0B" },
+  { id: "4", min: 60, max: 69,  grade: "C",  label: "Below Average",  color: "#EF4444" },
+  { id: "5", min: 50, max: 59,  grade: "D",  label: "Unsatisfactory", color: "#DC2626" },
+  { id: "6", min: 0,  max: 49,  grade: "E",  label: "Fail",           color: "#991B1B" },
 ];
+
+export const DEFAULT_GRADE_COLOR_BY_GRADE: Record<string, string> = {
+  "A+": "#10B981",
+  A: "#3B82F6",
+  B: "#F59E0B",
+  C: "#EF4444",
+  D: "#DC2626",
+  E: "#991B1B",
+};
 
 const gradeRangeCache = new Map<string, GradeRange[]>();
 
@@ -344,13 +353,32 @@ export function loadGradeRanges(companyName?: string): GradeRange[] {
   if (cached) return cached;
   const raw = company ? loadUnitScoreRanges<GradeRange[]>(company, DEFAULT_GRADE_RANGES) : DEFAULT_GRADE_RANGES;
   const cleaned = (Array.isArray(raw) ? raw : DEFAULT_GRADE_RANGES)
-    .map((r) => ({ ...r, min: Number(r.min), max: Number(r.max), grade: String(r.grade ?? "").trim() }))
+    .map((r) => {
+      const gradeStr = String(r.grade ?? "").trim();
+      return {
+        ...r,
+        min: Number(r.min),
+        max: Number(r.max),
+        grade: gradeStr,
+        color: r.color || DEFAULT_GRADE_COLOR_BY_GRADE[gradeStr] || "#6B7280",
+      };
+    })
     .filter((r) => r.grade && Number.isFinite(r.min));
   const list = cleaned.length > 0 ? cleaned : DEFAULT_GRADE_RANGES;
   const sorted = [...list].sort((a, b) => b.min - a.min);
   if (gradeRangeCache.size > 50) gradeRangeCache.clear();
   gradeRangeCache.set(cacheKey, sorted);
   return sorted;
+}
+
+/** Warna hex untuk suatu Grade sesuai konfigurasi Scoring / Grading di `/settings/scores-calibration`. */
+export function resolveGradeColorHex(grade?: string | null, companyName?: string): string | null {
+  const g = String(grade ?? "").trim();
+  if (!g || g === "N/A" || g === "—" || g === "-") return null;
+  const ranges = loadGradeRanges(companyName);
+  const exact = ranges.find((r) => r.grade.toLowerCase() === g.toLowerCase());
+  if (exact?.color) return exact.color;
+  return DEFAULT_GRADE_COLOR_BY_GRADE[g.toUpperCase()] ?? "#6B7280";
 }
 
 /** Grade untuk skor (0-100) berdasarkan rentang Scores Setting milik Unit Usaha. */
@@ -379,4 +407,7 @@ export function saveUnitScoreRanges<T>(companyName: string, ranges: T): void {
       description: `Updated score grading ranges for ${canon}`,
     },
   });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SCORE_WEIGHT_EVENT));
+  }
 }

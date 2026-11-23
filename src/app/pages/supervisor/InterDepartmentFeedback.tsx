@@ -24,15 +24,20 @@ import {
   FEEDBACK_ACTIVATION_EVENT,
   feedbackWindow,
   loadFeedbackActivation,
+  refreshFeedbackActivationFromBackend,
+  type FeedbackActivation,
 } from "../shared/feedbackActivationStore"
 import {
   FEEDBACK_INDICATORS,
   FOLLOW_UP_COLUMNS,
   MIN_FEEDBACK_GIVERS,
+  MIN_FEEDBACK_SENTENCES,
   OWNER_RESULT_STATUS_OPTIONS,
   buildOwnerResultTemplate,
+  countValidSentences,
   feedbackTasksFor,
   getFeedbackSubmission,
+  hasMinFeedbackSentences,
   isFeedbackFollowUpComplete,
   nominateFeedbackGivers,
   ownerResultMissingFields,
@@ -73,6 +78,27 @@ const personFromManagedUser = (user: ManagedUser): FeedbackPerson => ({
 })
 const inputClass =
   "w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-800 outline-none transition focus:border-[#1A284F] focus:ring-2 focus:ring-[#1A284F]/15 disabled:cursor-not-allowed disabled:bg-gray-50"
+
+function SentenceCountHint({ value }: { value?: string }) {
+  const count = countValidSentences(value)
+  const met = count >= MIN_FEEDBACK_SENTENCES
+  const hasText = Boolean(value?.trim())
+  return (
+    <p
+      className={`mt-1.5 text-[11px] font-medium normal-case tracking-normal ${
+        met
+          ? "text-emerald-700"
+          : hasText
+          ? "text-amber-700"
+          : "text-gray-400"
+      }`}
+    >
+      {met
+        ? `Minimal ${MIN_FEEDBACK_SENTENCES} kalimat terpenuhi (${count} kalimat)`
+        : `Minimal input ${MIN_FEEDBACK_SENTENCES} kalimat (${count}/${MIN_FEEDBACK_SENTENCES} kalimat)`}
+    </p>
+  )
+}
 
 function AnonymityBanner() {
   return (
@@ -145,12 +171,19 @@ export function InterDepartmentFeedback() {
   const refresh = () => setVersion((current) => current + 1)
 
   useEffect(() => {
-    // Selalu ambil status feedback terbaru dari backend (feedback baru, tindak lanjut approver, dll.)
-    void refreshFeedbackSubmissionsFromBackend()
-    const onFocus = () => void refreshFeedbackSubmissionsFromBackend()
+    // Selalu ambil status jadwal aktivasi & transaksi feedback terbaru dari backend sejak login awal
+    const syncLiveBackend = () => {
+      void refreshFeedbackActivationFromBackend("2026").then((fresh) => {
+        setActivation(fresh ?? loadFeedbackActivation("2026"))
+        refresh()
+      })
+      void refreshFeedbackSubmissionsFromBackend()
+    }
+    syncLiveBackend()
+    const onFocus = () => syncLiveBackend()
     window.addEventListener("focus", onFocus)
     return () => window.removeEventListener("focus", onFocus)
-  }, [])
+  }, [activeUser.employeeId])
 
   useEffect(() => {
     const update = () => {
@@ -158,6 +191,7 @@ export function InterDepartmentFeedback() {
       refresh()
     }
     window.addEventListener(FEEDBACK_ACTIVATION_EVENT, update)
+    window.addEventListener("pa-module-activation-updated", update)
     window.addEventListener("feedback-updated", update)
     window.addEventListener("appraisal-updated", update)
     window.addEventListener("pa-db-hydrated", update)
@@ -165,6 +199,7 @@ export function InterDepartmentFeedback() {
     window.addEventListener("storage", update)
     return () => {
       window.removeEventListener(FEEDBACK_ACTIVATION_EVENT, update)
+      window.removeEventListener("pa-module-activation-updated", update)
       window.removeEventListener("feedback-updated", update)
       window.removeEventListener("appraisal-updated", update)
       window.removeEventListener("pa-db-hydrated", update)
@@ -392,6 +427,7 @@ export function InterDepartmentFeedback() {
           divisions={divisions}
           departments={departments}
           enabled={status.receiving}
+          activation={activation}
           onUnit={(value) => {
             setUnit(value)
             setDivision("")
@@ -513,6 +549,7 @@ function NominationPanel({
   divisions,
   departments,
   enabled,
+  activation,
   onUnit,
   onDivision,
   onDepartment,
@@ -533,6 +570,7 @@ function NominationPanel({
   divisions: string[]
   departments: string[]
   enabled: boolean
+  activation: FeedbackActivation | null
   onUnit: (value: string) => void
   onDivision: (value: string) => void
   onDepartment: (value: string) => void
@@ -625,6 +663,19 @@ function NominationPanel({
             </p>
           </div>
         </div>
+        {!enabled && (
+          <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs text-amber-900">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-bold">Periode Pemilihan Pemberi Feedback Belum Aktif</p>
+              <p className="mt-0.5 text-amber-800">
+                {activation?.active && activation.startDate && activation.endDate
+                  ? `Jadwal aktif pada ${normalizeDateDDMMYYYY(activation.startDate)} s.d. ${normalizeDateDDMMYYYY(activation.endDate)} sesuai pengaturan Module Activation.`
+                  : "Modul Inter-Department Feedback saat ini belum diaktifkan pada Module Activation (/hr/modules)."}
+              </p>
+            </div>
+          </div>
+        )}
         <AnonymityBanner />
         <div className="mt-5 relative">
           <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -697,9 +748,10 @@ function NominationPanel({
                   </span>
                 ) : (
                   <button
+                    type="button"
                     disabled={!enabled}
                     onClick={() => onAdd(person)}
-                    className="rounded-lg border border-[#1A284F]/30 px-3 py-2 text-xs font-bold text-[#1A284F] disabled:opacity-40"
+                    className="rounded-lg border border-[#1A284F]/30 px-3 py-2 text-xs font-bold text-[#1A284F] hover:bg-[#1A284F] hover:text-white transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#1A284F]"
                   >
                     Pilih
                   </button>
@@ -1011,8 +1063,9 @@ function TaskInbox({
                     })
                   }
                   className={inputClass + " resize-none"}
-                  placeholder="Tuliskan feedback profesional dan spesifik..."
+                  placeholder={`Tuliskan feedback profesional dan spesifik (minimal ${MIN_FEEDBACK_SENTENCES} kalimat)...`}
                 />
+                <SentenceCountHint value={answers[indicator.key]} />
               </label>
             ))}
           </div>
@@ -1027,11 +1080,16 @@ function TaskInbox({
               disabled={
                 !enabled ||
                 FEEDBACK_INDICATORS.some(
-                  (indicator) => !answers[indicator.key]?.trim(),
+                  (indicator) => !hasMinFeedbackSentences(answers[indicator.key]),
                 )
               }
               onClick={() => setConfirmSend(true)}
               className="rounded-lg bg-[#1A284F] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+              title={
+                FEEDBACK_INDICATORS.some((indicator) => !hasMinFeedbackSentences(answers[indicator.key]))
+                  ? `Setiap indikator feedback wajib diisi minimal ${MIN_FEEDBACK_SENTENCES} kalimat.`
+                  : "Kirim Feedback Anonim"
+              }
             >
               Kirim Feedback Anonim
             </button>
@@ -1180,7 +1238,9 @@ function ReceivedPanel({
   const canSubmit = approvalOpen && readiness.ready
   const feedback = workflow.feedbacks[active]
   const feedbackComplete = (id: string) =>
-    FEEDBACK_INDICATORS.every((indicator) => summaries[summaryKey(id, indicator.key)]?.trim())
+    FEEDBACK_INDICATORS.every((indicator) =>
+      hasMinFeedbackSentences(summaries[summaryKey(id, indicator.key)]),
+    )
   const submitTooltip = submitted
     ? "Feedback & Summary sudah disubmit ke Approver."
     : !approvalOpen
@@ -1303,16 +1363,19 @@ function ReceivedPanel({
                             {summaries[key]}
                           </p>
                         ) : (
-                          <textarea
-                            rows={2}
-                            value={summaries[key] ?? ""}
-                            onChange={(event) => {
-                              setDirty(true)
-                              setSummaries({ ...summaries, [key]: event.target.value })
-                            }}
-                            className={inputClass + " mt-2 resize-none normal-case tracking-normal"}
-                            placeholder="Tuliskan ringkasan atau catatan pribadi atas feedback ini..."
-                          />
+                          <>
+                            <textarea
+                              rows={3}
+                              value={summaries[key] ?? ""}
+                              onChange={(event) => {
+                                setDirty(true)
+                                setSummaries({ ...summaries, [key]: event.target.value })
+                              }}
+                              className={inputClass + " mt-2 resize-none normal-case tracking-normal font-normal"}
+                              placeholder={`Tuliskan ringkasan atau catatan pribadi atas feedback ini (minimal ${MIN_FEEDBACK_SENTENCES} kalimat)...`}
+                            />
+                            <SentenceCountHint value={summaries[key]} />
+                          </>
                         )}
                       </label>
                     </div>

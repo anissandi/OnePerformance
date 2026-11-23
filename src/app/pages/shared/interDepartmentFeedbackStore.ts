@@ -63,6 +63,53 @@ export type FeedbackFollowUp = Record<typeof FOLLOW_UP_COLUMNS[number], string>
 
 /** Minimal jumlah pemberi feedback yang wajib dinominasikan (boleh lebih). */
 export const MIN_FEEDBACK_GIVERS = 3
+export const MIN_FEEDBACK_SENTENCES = 4
+
+/**
+ * Menghitung jumlah kalimat bermakna dalam sebuah input teks Bahasa Indonesia / Inggris.
+ * Melindungi singkatan umum (PT., Dr., dll.), angka desimal/ribuan (10.5), dan nomor urut (1. )
+ * agar tidak terhitung keliru sebagai pemisah kalimat.
+ */
+export function countValidSentences(rawText?: string | null): number {
+  const text = String(rawText ?? "").trim()
+  if (!text) return 0
+
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    // Lindungi titik di antara angka (mis. 95.5 atau 10.000)
+    .replace(/(\d)\.(\d)/g, "$1_DOT_$2")
+    // Lindungi titik penomoran awal baris/spasi seperti "1. Kalimat"
+    .replace(/(^|[\n\s])\d+\.(?=\s)/g, "$1")
+    // Lindungi singkatan umum Bahasa Indonesia agar tidak memotong kalimat
+    .replace(
+      /\b(pt|cv|tbk|dr|drs|ir|bpk|bp|ibu|sdr|sdri|no|tgl|hlm|hal|dll|dsb|dst|mis|yg|dgn|utk|tsb|a\.n|s\.d|u\.p)\.(?=\s)/gi,
+      "$1_DOT_",
+    )
+
+  const segments = normalized
+    .split(/(?:[.!?;]+(?:\s+|$)|\n+)/)
+    .map((seg) =>
+      seg
+        .replace(/_DOT_/g, ".")
+        .replace(/^[\s\-•*\d.)]+/, "")
+        .trim(),
+    )
+    .filter((seg) => {
+      if (!seg) return false
+      const words = seg.split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w))
+      const alphaChars = (seg.match(/[A-Za-z]/g) ?? []).length
+      return words.length >= 2 && alphaChars >= 5
+    })
+
+  return segments.length
+}
+
+export function hasMinFeedbackSentences(
+  rawText?: string | null,
+  minSentences = MIN_FEEDBACK_SENTENCES,
+): boolean {
+  return countValidSentences(rawText) >= minSentences
+}
 
 export const OWNER_RESULT_STATUS_OPTIONS = ["Open", "Closed", "Cancel"] as const
 export type OwnerResultStatus = (typeof OWNER_RESULT_STATUS_OPTIONS)[number]
@@ -439,6 +486,8 @@ export function submitNominatedFeedback(
 ) {
   if (FEEDBACK_INDICATORS.some((indicator) => !answers[indicator.key]?.trim()))
     throw new Error("Semua indikator feedback wajib diisi.")
+  if (FEEDBACK_INDICATORS.some((indicator) => !hasMinFeedbackSentences(answers[indicator.key])))
+    throw new Error(`Setiap indikator feedback wajib diisi minimal ${MIN_FEEDBACK_SENTENCES} kalimat.`)
   const submission = getFeedbackSubmission(recipientId)
   if (!submission) throw new Error("Permintaan feedback tidak ditemukan.")
   const normGiver = normalizeEmployeeId(giverId)
@@ -489,7 +538,9 @@ export function feedbacksMissingSummary(
   summaries: Record<string, string>,
 ): ReceivedFeedback[] {
   return submission.feedbacks.filter((feedback) =>
-    FEEDBACK_INDICATORS.some((indicator) => !summaries[summaryKey(feedback.id, indicator.key)]?.trim()),
+    FEEDBACK_INDICATORS.some(
+      (indicator) => !hasMinFeedbackSentences(summaries[summaryKey(feedback.id, indicator.key)]),
+    ),
   )
 }
 
@@ -506,7 +557,7 @@ export function summarySubmitReadiness(
   if (pending > 0) reasons.push(`Masih menunggu ${pending} dari ${total} feedback.`)
   const missing = feedbacksMissingSummary(submission, summaries)
   if (missing.length > 0)
-    reasons.push(`${missing.length} feedback belum lengkap Summary / Catatan Penerima-nya.`)
+    reasons.push(`${missing.length} feedback belum lengkap Summary / Catatan Penerima-nya (minimal ${MIN_FEEDBACK_SENTENCES} kalimat di setiap field).`)
   if (submission.summarySubmittedAt) reasons.push("Feedback & Summary sudah disubmit.")
   return { ready: reasons.length === 0, reasons }
 }
@@ -644,6 +695,14 @@ export function saveFeedbackFollowUp(
     rows.some((row) => FOLLOW_UP_COLUMNS.some((column) => !row[column]?.trim()))
   )
     throw new Error("Semua field tindak lanjut wajib diisi.")
+  if (
+    rows.some((row) =>
+      FOLLOW_UP_COLUMNS.some(
+        (column) => column !== "Timeline Evaluasi" && !hasMinFeedbackSentences(row[column]),
+      ),
+    )
+  )
+    throw new Error(`Setiap field teks Tindak Lanjut wajib diisi minimal ${MIN_FEEDBACK_SENTENCES} kalimat.`)
   if (submission.followUps[effectiveRole]?.length) throw new Error("Tindak lanjut sudah disubmit.")
   const todayStr = formatTodayDDMMYYYY()
   const approverName = actingApproverName || getActiveUser().name

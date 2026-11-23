@@ -1853,6 +1853,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       kpiSettings,
       kpiBusinesses,
       smartGoalRows,
+      moduleWindows,
       vercelData,
     ] = await Promise.all([
       restSelect("pa_users", "select=*&order=employee_id.asc"),
@@ -1875,6 +1876,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_kpi_settings", "select=*&order=updated_at.desc"),
       restSelect("pa_kpi_business", "select=*&order=updated_at.desc"),
       restSelect("pa_smart_goals", "select=*&order=updated_at.desc"),
+      restSelect("pa_module_windows", "select=*"),
       vercelPromise,
     ]);
 
@@ -1951,6 +1953,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       kpiSettings.length > 0 ||
       kpiBusinesses.length > 0 ||
       smartGoalRows.length > 0 ||
+      moduleWindows.length > 0 ||
       edgeOk ||
       vercelOk
     ) {
@@ -1982,6 +1985,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         kpiSettings: pick(kpiSettings, edgeData?.kpiSettings),
         kpiBusinesses: pick(kpiBusinesses, edgeData?.kpiBusinesses),
         smartGoalRows: pick(smartGoalRows, edgeData?.smartGoalRows),
+        moduleWindows: pick(moduleWindows, vercelData?.moduleWindows ?? edgeData?.moduleWindows),
       };
     }
 
@@ -2306,12 +2310,24 @@ export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
     "pa_managed_users_v1",
     "pa_archived_users_v1",
     "pa_trial_mode_clean_v1",
+    "feedback_activation_v1",
+    "pa_module_activation_2026",
+    "pa_access_groups_v1",
+    "pa_access_group_configs_v1",
+    "pa_access_roles_v1",
+    "pa_access_permissions_v3",
+    "pa_access_role_meta_v1",
+    "pa_group_rules_by_unit_v1",
   ];
-  const [kvOut, pgUsers, vercelResp] = await Promise.all([
+  const [kvOut, pgUsers, vercelResp, pgModuleWindows] = await Promise.all([
     refreshKvKeysFromBackend(keys),
     restSelect<Record<string, unknown>>("pa_users", "select=*&order=employee_id.asc"),
     callVercelSyncApi({ method: "GET" }, "?keys=pa_managed_users_v1"),
+    restSelect<Record<string, unknown>>("pa_module_windows", "select=*"),
   ]);
+  if (Array.isArray(pgModuleWindows) && pgModuleWindows.length > 0) {
+    applyModuleWindowsRowsToLocal(pgModuleWindows);
+  }
   const edgeResp =
     pgUsers.length > 0 || Boolean(vercelResp?.ok) || Array.isArray(kvOut.pa_managed_users_v1)
       ? null
@@ -2334,6 +2350,59 @@ export async function refreshLoginCriticalStateFromBackend(): Promise<void> {
     localUsersCount: synced.length,
   };
   window.dispatchEvent(new Event("pa-auth-updated"));
+  window.dispatchEvent(new Event("pa-access-updated"));
+  window.dispatchEvent(new Event("pa-module-activation-updated"));
+  window.dispatchEvent(new Event("feedback-activation-changed"));
+}
+
+function applyModuleWindowsRowsToLocal(rows: Array<Record<string, unknown>>): void {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  try {
+    let fbMap: Record<string, { active: boolean; startDate: string; endDate: string }> = {};
+    try {
+      fbMap = JSON.parse(safeGetLocalRaw("feedback_activation_v1") ?? "{}") ?? {};
+    } catch {
+      fbMap = {};
+    }
+    const byPeriodMod: Record<string, Record<string, unknown>> = {};
+    for (const r of rows) {
+      const modId = String(r.module_id ?? "").trim();
+      const period = String(r.period ?? "2026").trim() || "2026";
+      if (!modId) continue;
+      const active = Boolean(r.active);
+      const startDate = String(r.start_date ?? "");
+      const endDate = String(r.end_date ?? "");
+      const extra = r.extra && typeof r.extra === "object" ? (r.extra as Record<string, unknown>) : {};
+      if (!byPeriodMod[period]) {
+        try {
+          byPeriodMod[period] = JSON.parse(safeGetLocalRaw(`pa_module_activation_${period}`) ?? "{}") ?? {};
+        } catch {
+          byPeriodMod[period] = {};
+        }
+      }
+      if (!byPeriodMod[period][modId]) {
+        byPeriodMod[period][modId] = {
+          active,
+          startDate,
+          endDate,
+          ...extra,
+        };
+      }
+      if (modId === "inter-department-feedback" && !fbMap[period]) {
+        fbMap[period] = { active, startDate, endDate };
+      }
+    }
+    for (const [period, mapVal] of Object.entries(byPeriodMod)) {
+      if (Object.keys(mapVal).length > 0 && !safeGetLocalRaw(`pa_module_activation_${period}`)) {
+        safeSetLocalJson(`pa_module_activation_${period}`, mapVal);
+      }
+    }
+    if (Object.keys(fbMap).length > 0 && !safeGetLocalRaw("feedback_activation_v1")) {
+      safeSetLocalJson("feedback_activation_v1", fbMap);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -3291,6 +3360,11 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
       safeSetLocalJson("pa_kpi_attachments_v1", attMap);
     }
 
+    const moduleWindowsDb = data.moduleWindows as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(moduleWindowsDb) && moduleWindowsDb.length > 0) {
+      applyModuleWindowsRowsToLocal(moduleWindowsDb);
+    }
+
     _lastBackendStatus = {
       connected: true,
       supabaseHost: SUPABASE_URL.replace(/^https?:\/\//, ""),
@@ -3299,6 +3373,9 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     };
     window.dispatchEvent(new Event("pa-db-hydrated"));
     window.dispatchEvent(new Event("pa-auth-updated"));
+    window.dispatchEvent(new Event("pa-access-updated"));
+    window.dispatchEvent(new Event("pa-module-activation-updated"));
+    window.dispatchEvent(new Event("feedback-activation-changed"));
     window.dispatchEvent(new Event("appraisal-updated"));
     window.dispatchEvent(new Event("feedback-updated"));
     window.dispatchEvent(new Event("year-end-updated"));

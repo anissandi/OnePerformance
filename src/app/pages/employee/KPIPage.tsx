@@ -3146,9 +3146,9 @@ function KPITable({
 
                           const tagStyle = isFilled
                             ? status === "closed"
-                              ? { cls: "bg-green-100 text-green-700 hover:bg-green-200", dot: "bg-green-500", label: "RCA Closed — klik untuk lihat" }
-                              : { cls: "bg-amber-100 text-amber-700 hover:bg-amber-200", dot: "bg-amber-500", label: "RCA Outstanding — klik untuk lihat" }
-                            : { cls: "bg-red-100 text-red-600 hover:bg-red-200 animate-pulse", dot: "bg-red-500", label: "RCA belum diisi — klik untuk mengisi" };
+                              ? { cls: "bg-green-100 text-green-700 hover:bg-green-200", dot: "bg-green-500", label: "RCA sudah dibuat, status closed/selesai" }
+                              : { cls: "bg-amber-100 text-amber-700 hover:bg-amber-200", dot: "bg-amber-500", label: "RCA sudah dibuat, status open/onprogress" }
+                            : { cls: "bg-red-100 text-red-600 hover:bg-red-200 animate-pulse", dot: "bg-red-500", label: "RCA belum dibuat, wajib buat RCA" };
 
                           // Filled tag → view-only; unfilled tag → open create form
                           const handleTagClick = isFilled
@@ -3163,26 +3163,39 @@ function KPITable({
                               : "";
                           if (canInteract) {
                             return (
-                              <button
-                                onClick={handleTagClick}
-                                data-rca-missing={!isFilled ? "true" : undefined}
-                                className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${tagStyle.cls}${highlightCls}`}
-                                title={tagStyle.label}
-                              >
-                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tagStyle.dot}`} />
-                                RCA
-                              </button>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={handleTagClick}
+                                    data-rca-missing={!isFilled ? "true" : undefined}
+                                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-all cursor-pointer ${tagStyle.cls}${highlightCls}`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tagStyle.dot}`} />
+                                    RCA
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs bg-[#1A284F] text-white px-2.5 py-1.5 rounded-lg shadow-lg text-[11px] font-medium">
+                                  {tagStyle.label}
+                                </TooltipContent>
+                              </Tooltip>
                             );
                           }
                           return (
-                            <span
-                              data-rca-missing={!isFilled ? "true" : undefined}
-                              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${tagStyle.cls.replace(/ hover:\S+/g, "").replace(" animate-pulse", "")}${highlightCls}`}
-                              title={tagStyle.label}
-                            >
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tagStyle.dot}`} />
-                              RCA
-                            </span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span
+                                  data-rca-missing={!isFilled ? "true" : undefined}
+                                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-all cursor-default ${tagStyle.cls.replace(/ hover:\S+/g, "").replace(" animate-pulse", "")}${highlightCls}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tagStyle.dot}`} />
+                                  RCA
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs bg-[#1A284F] text-white px-2.5 py-1.5 rounded-lg shadow-lg text-[11px] font-medium">
+                                {tagStyle.label}
+                              </TooltipContent>
+                            </Tooltip>
                           );
                         }
                         return null;
@@ -3729,6 +3742,14 @@ function EvidenceUploadSection({
   const handleFiles = (raw: FileList | null) => {
     if (!raw || !selectedMonth) return;
     const rawArr = Array.from(raw);
+    const MAX_TOTAL_BYTES = 10 * 1024 * 1024;
+    const existingTotalBytes = files.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+    const incomingBytes = rawArr.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+    if (existingTotalBytes + incomingBytes > MAX_TOTAL_BYTES) {
+      toast.error("Total ukuran lampiran Evidence Documents melebihi batas maksimal 10 MB.");
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
     Promise.all(
       rawArr.map(
         async (f): Promise<EvidenceFile> => {
@@ -3841,6 +3862,9 @@ function EvidenceUploadSection({
 
         {open && (
           <div className="px-4 py-4 flex flex-col gap-3">
+            <p className="text-xs text-sky-800/90 bg-sky-50/60 border border-sky-100 rounded-lg px-3.5 py-2.5 leading-relaxed">
+              Lampirkan data pendukung berupa summary yang menjelaskan sumber nilai aktual KPI. Jika file dipisah per indikator, gunakan nama file sesuai nama indikator. Maksimal total lampiran 10 MB.
+            </p>
 
             {/* Upload area */}
             {editable && (
@@ -3867,7 +3891,7 @@ function EvidenceUploadSection({
                     </button>
                   </div>
                 )}
-                <p className="text-[10px] text-gray-400">PDF, PNG, JPG, Excel, Word · maks 20 MB</p>
+                <p className="text-[10px] text-gray-400">PDF, PNG, JPG, Excel, Word · maks total 10 MB</p>
               </div>
             )}
 

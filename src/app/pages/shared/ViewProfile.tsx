@@ -1,4 +1,4 @@
-import { resolveGradeForScore } from "./scoringWeightStore";
+import { resolveGradeColorHex, resolveGradeForScore } from "./scoringWeightStore";
 // @refresh reset
 import { getKpiMonthVisuals, lastFullyApprovedMonth, monthNameId } from "../../components/KpiMonthlyApprovalBar";
 import React, { useState, useMemo, useEffect, useRef } from "react";
@@ -47,29 +47,41 @@ const USER = SUPERVISOR_PROFILE;
 
 // ─── Grade helpers ─────────────────────────────────────────────────────────────
 
-function gradeColor(grade: string) {
-  switch (grade) {
-    case "A+":  return "bg-purple-100 text-purple-700";
-    case "A":   return "bg-emerald-100 text-emerald-700";
-    case "B":   return "bg-blue-100 text-blue-700";
-    case "C":   return "bg-yellow-100 text-yellow-700";
-    case "D":   return "bg-orange-100 text-orange-700";
-    case "E":   return "bg-red-100 text-red-700";
-    case "N/A": return "bg-gray-100 text-gray-400";
-    default:    return "bg-gray-100 text-gray-500";
+function getGradeBadgePresentation(grade: string, companyName?: string): {
+  className: string;
+  style?: React.CSSProperties;
+} {
+  const hex = resolveGradeColorHex(grade, companyName);
+  if (!hex) {
+    return { className: "bg-gray-100 text-gray-400" };
   }
+  return {
+    className: "text-white shadow-2xs",
+    style: { backgroundColor: hex },
+  };
 }
 
-function gradeBar(grade: string) {
-  switch (grade) {
-    case "A+": return "bg-teal-500";
-    case "A":  return "bg-emerald-500";
-    case "B":  return "bg-blue-500";
-    case "C":  return "bg-yellow-500";
-    case "D":  return "bg-orange-500";
-    case "E":  return "bg-red-500";
-    default:   return "bg-gray-300";
+function getGradeBarPresentation(grade: string, companyName?: string): {
+  className: string;
+  style?: React.CSSProperties;
+} {
+  const hex = resolveGradeColorHex(grade, companyName);
+  if (!hex) {
+    return { className: "bg-gray-300" };
   }
+  return {
+    className: "",
+    style: { backgroundColor: hex },
+  };
+}
+
+function formatPctVal(val: number, decimals?: number): string {
+  const n = Number.isFinite(val) ? val : 0;
+  if (typeof decimals === "number") {
+    return `${n.toFixed(decimals)}%`;
+  }
+  const rounded = Math.round(n * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`;
 }
 
 // ─── Module result types ───────────────────────────────────────────────────────
@@ -450,7 +462,7 @@ export function ViewProfile() {
       else if (m.module === "Project Outside Job Scope") score = liveEmp?.project.score ?? 0;
       else if (m.module === "Managerial Skill") score = liveEmp?.managerialSkill?.score ?? 0;
       else if (m.module === "Management Interview") score = liveEmp?.managementInterview?.score ?? 0;
-      const grade = score === 0 ? "N/A" : score >= 90 ? "A+" : score >= 80 ? "A" : score >= 70 ? "B" : score >= 60 ? "C" : score >= 50 ? "D" : "E";
+      const grade = score <= 0 ? "N/A" : resolveGradeForScore(score, activeUser.company);
       const isFullApproved = score > 0 || isModuleWorkflowDone(m.module);
       const status: ModuleStatus = isFullApproved ? "approved" : "pending";
       return { ...m, weight, score, grade, status, weightedScore: parseFloat(((score * weight) / 100).toFixed(2)) };
@@ -475,12 +487,15 @@ export function ViewProfile() {
   // For current year, derive display score/grade from live module scores
   function scoreToGrade(s: number) {
     if (s <= 0) return "N/A";
-    return resolveGradeForScore(s);
+    return resolveGradeForScore(s, activeUser.company);
   }
   const displayScore    = isCurrent ? (liveMe?.totalScore ?? parseFloat(totalWeighted.toFixed(1))) : yearData.score;
   const displayGrade    = isCurrent ? scoreToGrade(displayScore) : yearData.grade;
   const displayKPIScore = isCurrent ? (liveMe?.kpi.score ?? 0) : yearData.kpiScore;
   const displayKPIGrade = scoreToGrade(displayKPIScore ?? 0);
+  void displayKPIGrade;
+  const displayGradeBadge = getGradeBadgePresentation(displayGrade, activeUser.company);
+  const displayGradeHex   = resolveGradeColorHex(displayGrade, activeUser.company);
 
   // Rekapan komentar/note dari Approver 1 (AP1) & Approver 2 (AP2) sesuai modul yang disubmit
   // (TIDAK termasuk komentar dari HR Unit Checked & HR ICF Validated)
@@ -948,12 +963,15 @@ export function ViewProfile() {
                     {activeUser.position || USER.position}
                   </p>
                   <div className="flex items-center gap-2 mt-1.5">
-                    <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${gradeColor(displayGrade)}`}>
+                    <span
+                      className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${displayGradeBadge.className}`}
+                      style={displayGradeBadge.style}
+                    >
                       Grade {displayGrade}
                     </span>
                     <span className="text-xs text-gray-400">
                       {isCurrent ? "Current" : "Final"} Score:{" "}
-                      <span className="font-bold text-gray-700">{displayScore}%</span>
+                      <span className="font-bold text-gray-700">{formatPctVal(displayScore)}</span>
                     </span>
                     <span className="text-xs text-gray-300">·</span>
                     {isCurrent ? (
@@ -993,7 +1011,7 @@ export function ViewProfile() {
           <div className="flex items-start justify-between gap-2 relative z-10">
             <div>
               <p className="text-xs font-medium text-gray-500">{isCurrent ? "Current Score" : "Final Score"}</p>
-              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">{displayScore}%</p>
+              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5 tabular-nums">{formatPctVal(displayScore)}</p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-[#1E3A6E] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
               <Target className="w-5 h-5" />
@@ -1013,9 +1031,19 @@ export function ViewProfile() {
           <div className="flex items-start justify-between gap-2 relative z-10">
             <div>
               <p className="text-xs font-medium text-gray-500">{isCurrent ? "Current Grade" : "Final Grade"}</p>
-              <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5">{displayGrade}</p>
+              <div className="mt-1">
+                <span
+                  className={`inline-flex items-center justify-center px-3 py-0.5 rounded-lg text-xl font-extrabold leading-tight ${displayGradeBadge.className}`}
+                  style={displayGradeBadge.style}
+                >
+                  {displayGrade}
+                </span>
+              </div>
             </div>
-            <div className="w-10 h-10 rounded-xl bg-[#2D6A5B] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3">
+            <div
+              className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+              style={{ backgroundColor: displayGradeHex ?? "#2D6A5B" }}
+            >
               <ClipboardCheck className="w-5 h-5" />
             </div>
           </div>
@@ -1115,10 +1143,11 @@ export function ViewProfile() {
                   m.module === "Inter-Department Feedback" && m.weight <= 0;
                 const isIdfFullApproved =
                   m.module === "Inter-Department Feedback" && m.status === "approved";
-                const barClass =
+                const modBarPres =
                   isIdfFullApproved && isIdfUnweighted
-                    ? "bg-gray-600"
-                    : gradeBar(m.grade);
+                    ? { className: "bg-gray-600", style: undefined }
+                    : getGradeBarPresentation(m.grade, activeUser.company);
+                const modGradeBadge = getGradeBadgePresentation(m.grade, activeUser.company);
                 const barWidth =
                   isIdfFullApproved && isIdfUnweighted ? 100 : m.score;
                 const isKpiModule = m.module === "KPI";
@@ -1149,18 +1178,21 @@ export function ViewProfile() {
                     </div>
                     <div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
                       <div
-                        className={`${barClass} h-2.5 rounded-full transition-all`}
-                        style={{ width: `${barWidth}%` }}
+                        className={`${modBarPres.className} h-2.5 rounded-full transition-all`}
+                        style={{ width: `${barWidth}%`, ...(modBarPres.style ?? {}) }}
                       />
                     </div>
-                    <span className="text-xs font-bold text-gray-800 w-8 text-right">
-                      {isIdfUnweighted ? "—" : m.score}
+                    <span className="text-xs font-bold text-gray-800 w-12 text-right tabular-nums">
+                      {isIdfUnweighted ? "—" : formatPctVal(m.score)}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold w-10 text-center ${gradeColor(m.grade)}`}>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold w-10 text-center ${modGradeBadge.className}`}
+                      style={modGradeBadge.style}
+                    >
                       {m.grade}
                     </span>
-                    <span className="text-[10px] text-gray-400 w-16 text-right">
-                      ×{m.weight}% = <span className="font-semibold text-gray-600">{m.weightedScore.toFixed(1)}</span>
+                    <span className="text-[10px] text-gray-400 w-24 text-right tabular-nums">
+                      {isIdfUnweighted ? "—" : <>×{m.weight}% = <span className="font-semibold text-gray-600">{formatPctVal(m.weightedScore, 1)}</span></>}
                     </span>
                     {idfTooltip && (
                       <div
@@ -1186,8 +1218,13 @@ export function ViewProfile() {
                 )}
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-2xl font-bold text-[#1A284F]">{totalWeighted.toFixed(1)}</span>
-                <span className={`px-3 py-1 rounded-lg text-sm font-bold ${gradeColor(displayGrade)}`}>{displayGrade}</span>
+                <span className="text-2xl font-bold text-[#1A284F] tabular-nums">{formatPctVal(totalWeighted, 1)}</span>
+                <span
+                  className={`px-3 py-1 rounded-lg text-sm font-bold ${displayGradeBadge.className}`}
+                  style={displayGradeBadge.style}
+                >
+                  {displayGrade}
+                </span>
               </div>
             </div>
           </div>
@@ -1199,6 +1236,8 @@ export function ViewProfile() {
               {activeModules.map((m, idx) => {
                 const tones: AnalyticsCardTone[] = ["navy", "terracotta", "emerald", "plum", "teal", "slate", "rose"];
                 const tone = tones[idx % tones.length];
+                const isIdfUnweighted = m.module === "Inter-Department Feedback" && m.weight <= 0;
+                const cardGradeBadge = getGradeBadgePresentation(m.grade, activeUser.company);
                 return (
                   <AnalyticsStatCard
                     key={m.id}
@@ -1207,13 +1246,16 @@ export function ViewProfile() {
                     title={m.module}
                     value={
                       <span className="inline-flex items-center gap-2">
-                        <span>{m.score}</span>
-                        <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${gradeColor(m.grade)}`}>
+                        <span className="tabular-nums">{isIdfUnweighted ? "—" : formatPctVal(m.score)}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-xs font-bold ${cardGradeBadge.className}`}
+                          style={cardGradeBadge.style}
+                        >
                           {m.grade}
                         </span>
                       </span>
                     }
-                    subtitle={`Weight ${m.weight}% · Weighted ${m.weightedScore.toFixed(1)}`}
+                    subtitle={isIdfUnweighted ? "Tidak memiliki bobot nilai" : `Weight ${m.weight}% · Weighted ${formatPctVal(m.weightedScore, 1)}`}
                     icon={<m.icon className="w-4 h-4" />}
                   />
                 );
@@ -1284,6 +1326,9 @@ export function ViewProfile() {
           {/* Module result cards */}
           {activeModules.map((m, idx) => {
             const expanded = expandedModule === m.id;
+            const isIdfUnweighted = m.module === "Inter-Department Feedback" && m.weight <= 0;
+            const modBarPres = getGradeBarPresentation(m.grade, activeUser.company);
+            const modGradeBadge = getGradeBadgePresentation(m.grade, activeUser.company);
             return (
               <div key={m.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
                 <button
@@ -1305,23 +1350,35 @@ export function ViewProfile() {
                   </div>
 
                   {/* Score bar */}
-                  <div className="w-40 shrink-0 hidden md:block">
+                  <div className="w-44 shrink-0 hidden md:block">
                     <div className="flex items-center gap-2">
                       <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
-                        <div className={`${gradeBar(m.grade)} h-2 rounded-full`} style={{ width: `${m.score}%` }} />
+                        <div
+                          className={`${modBarPres.className} h-2 rounded-full`}
+                          style={{ width: `${m.score}%`, ...(modBarPres.style ?? {}) }}
+                        />
                       </div>
-                      <span className="text-xs font-bold text-gray-700 w-6">{m.score}</span>
+                      <span className="text-xs font-bold text-gray-700 w-11 text-right tabular-nums">
+                        {isIdfUnweighted ? "—" : formatPctVal(m.score)}
+                      </span>
                     </div>
                   </div>
 
                   {/* Weight */}
                   <div className="text-right shrink-0 hidden lg:block w-24">
                     <p className="text-[10px] text-gray-400">Weight {m.weight}%</p>
-                    <p className="text-xs font-semibold text-gray-600">+{m.weightedScore.toFixed(1)} pts</p>
+                    <p className="text-xs font-semibold text-gray-600 tabular-nums">
+                      {isIdfUnweighted ? "—" : `+${formatPctVal(m.weightedScore, 1)}`}
+                    </p>
                   </div>
 
                   {/* Grade badge */}
-                  <span className={`px-3 py-1.5 rounded-lg text-sm font-bold shrink-0 ${gradeColor(m.grade)}`}>{m.grade}</span>
+                  <span
+                    className={`px-3 py-1.5 rounded-lg text-sm font-bold shrink-0 ${modGradeBadge.className}`}
+                    style={modGradeBadge.style}
+                  >
+                    {m.grade}
+                  </span>
 
                   {/* Status + chevron */}
                   <div className="flex items-center gap-2 shrink-0">
@@ -1348,16 +1405,28 @@ export function ViewProfile() {
 
                         {m.subResults && (
                           <div className="mt-4 flex flex-col gap-2">
-                            {m.subResults.map(sub => (
-                              <div key={sub.label} className="flex items-center gap-3">
-                                <span className="text-xs text-gray-600 w-40 shrink-0">{sub.label}</span>
-                                <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                                  <div className={`${gradeBar(sub.grade)} h-1.5 rounded-full`} style={{ width: `${sub.score}%` }} />
+                            {m.subResults.map(sub => {
+                              const subBarPres = getGradeBarPresentation(sub.grade, activeUser.company);
+                              const subGradeBadge = getGradeBadgePresentation(sub.grade, activeUser.company);
+                              return (
+                                <div key={sub.label} className="flex items-center gap-3">
+                                  <span className="text-xs text-gray-600 w-40 shrink-0">{sub.label}</span>
+                                  <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                                    <div
+                                      className={`${subBarPres.className} h-1.5 rounded-full`}
+                                      style={{ width: `${sub.score}%`, ...(subBarPres.style ?? {}) }}
+                                    />
+                                  </div>
+                                  <span className="text-xs font-bold text-gray-700 w-11 text-right tabular-nums">{formatPctVal(sub.score)}</span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${subGradeBadge.className}`}
+                                    style={subGradeBadge.style}
+                                  >
+                                    {sub.grade}
+                                  </span>
                                 </div>
-                                <span className="text-xs font-bold text-gray-700 w-7 text-right">{sub.score}</span>
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${gradeColor(sub.grade)}`}>{sub.grade}</span>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -1366,15 +1435,20 @@ export function ViewProfile() {
                         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Score Summary</p>
                         <div className="bg-gray-50 rounded-xl p-4 flex flex-col gap-2">
                           {[
-                            ["Raw Score",       `${m.score} / 100`],
+                            ["Raw Score",       isIdfUnweighted ? "—" : formatPctVal(m.score)],
                             ["Grade",           m.grade],
                             ["Weight",          `${m.weight}%`],
-                            ["Weighted Score",  `${m.weightedScore.toFixed(1)} pts`],
+                            ["Weighted Score",  isIdfUnweighted ? "—" : formatPctVal(m.weightedScore, 1)],
                             ["Completed Date",  m.completedDate],
                           ].map(([label, value]) => (
                             <div key={label} className="flex items-center justify-between text-xs">
                               <span className="text-gray-500">{label}</span>
-                              <span className={`font-semibold ${label === "Grade" ? gradeColor(m.grade) + " px-2 py-0.5 rounded" : "text-gray-800"}`}>{value}</span>
+                              <span
+                                className={`font-semibold tabular-nums ${label === "Grade" ? `${modGradeBadge.className} px-2 py-0.5 rounded` : "text-gray-800"}`}
+                                style={label === "Grade" ? modGradeBadge.style : undefined}
+                              >
+                                {value}
+                              </span>
                             </div>
                           ))}
                         </div>
@@ -1400,8 +1474,13 @@ export function ViewProfile() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-3xl font-bold text-[#1A284F]">{totalWeighted.toFixed(1)}</span>
-              <span className={`px-4 py-2 rounded-xl text-lg font-black ${gradeColor(displayGrade)}`}>{displayGrade}</span>
+              <span className="text-3xl font-bold text-[#1A284F] tabular-nums">{formatPctVal(totalWeighted, 1)}</span>
+              <span
+                className={`px-4 py-2 rounded-xl text-lg font-black ${displayGradeBadge.className}`}
+                style={displayGradeBadge.style}
+              >
+                {displayGrade}
+              </span>
             </div>
           </div>
         </div>

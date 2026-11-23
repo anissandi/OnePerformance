@@ -184,9 +184,11 @@ export default async function handler(req, res) {
         pgRest(cfg, kvQuery),
         pgRest(cfg, "pa_users?select=*&order=employee_id.asc"),
       ]);
+      const mwRes = keysParam ? null : await pgRest(cfg, "pa_module_windows?select=*");
 
       const kvRows = kvRes.ok ? await kvRes.json() : [];
       const users = usersRes.ok ? await usersRes.json() : [];
+      const moduleWindows = mwRes && mwRes.ok ? await mwRes.json() : [];
       // Auto-migrate baris pa_users di database yang masih bernama "ASD" / "RSUP ASD" -> "PT RSUP ASD"
       if (Array.isArray(users) && users.some((u) => u && (u.company === "ASD" || u.company === "RSUP ASD"))) {
         const nowIso = new Date().toISOString();
@@ -231,6 +233,7 @@ export default async function handler(req, res) {
         kvStates: Array.isArray(kvRows) ? kvRows : [],
         kvMap,
         users: Array.isArray(users) ? users : [],
+        moduleWindows: Array.isArray(moduleWindows) ? moduleWindows : [],
       });
     }
 
@@ -849,6 +852,26 @@ export default async function handler(req, res) {
             approval_note: reqObj.approvalNote ?? null,
             rejected_at: reqObj.rejectedAt ?? null,
             decided_by: reqObj.decidedBy ?? null,
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "module-window" && body.window) {
+        const w = body.window;
+        const r = await pgRest(cfg, "pa_module_windows?on_conflict=unit_id,module_id,period", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            unit_id: String(w.unitId ?? "ALL"),
+            module_id: String(w.moduleId ?? ""),
+            period: String(w.period ?? "2026"),
+            active: Boolean(w.active),
+            start_date: String(w.startDate ?? ""),
+            end_date: String(w.endDate ?? ""),
+            extra: w.extra ?? {},
+            updated_by: w.updatedBy ?? null,
             updated_at: now,
           }),
         });

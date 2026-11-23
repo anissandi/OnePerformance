@@ -8456,6 +8456,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     }
     if (validFiles.length === 0) return;
 
+    const MAX_TOTAL_KPI_ATTACH_BYTES = 10 * 1024 * 1024;
+    const existingTotalBytes = kpiAttachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+    const incomingBytes = validFiles.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+    if (existingTotalBytes + incomingBytes > MAX_TOTAL_KPI_ATTACH_BYTES) {
+      toast.error("Total ukuran Lampiran KPI melebihi batas maksimal 10 MB.");
+      return;
+    }
+
     setUploadingAttachment(true);
     const key = isCorporate ? effectiveScopeKey : normalizeEmployeeId(effectiveOwner.employeeId);
     const added: Array<{ id: string; name: string; size: number; mimeType?: string; url: string; uploadedAt: string }> = [];
@@ -9711,7 +9719,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           )}
         </div>
         <p className="text-xs text-sky-800/90 leading-relaxed">
-          Silahkan tambahkan file lampiran KPI yang sudah di setujui oleh pimpinan (jika ada) atau file pendukung terkait perhitungan baseline dan target KPI (wajib). Lampiran ini sebagai referensi untuk tindak lanjut persetujuan atau revisi.
+          Lampirkan data pendukung berupa summary yang menjelaskan dasar penetapan baseline dan target KPI. Jika file dipisah per indikator, gunakan nama file sesuai nama indikator. Maksimal total lampiran 10 MB.
         </p>
         {kpiAttachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
