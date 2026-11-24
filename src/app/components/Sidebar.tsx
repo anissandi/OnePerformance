@@ -112,7 +112,7 @@ interface NavTopLink {
 }
 
 const hrLinks = [
-  { to: "/hr", icon: BarChart2, label: "Analytics Dashboard", exact: true },
+  { to: "/hr", icon: BarChart2, label: "Appraisal Analytics", exact: true },
   { to: "/hr/profile", icon: UserCog, label: "My Profile" },
   {
     label: "Approvals",
@@ -242,7 +242,7 @@ const supervisorLinks = [
 ];
 
 const bodLinks = [
-  { to: "/bod", icon: BarChart2, label: "Analytics Dashboard", exact: true },
+  { to: "/bod", icon: BarChart2, label: "Appraisal Analytics", exact: true },
   {
     label: "Approvals",
     icon: CheckSquare,
@@ -416,8 +416,11 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
     if (role === "hr" && !isStandardParticipantRole) {
       const list: NavTopLink[] = [];
-      if (canView("analytics")) {
-        list.push({ to: "/hr", icon: BarChart2, label: "Analytics Dashboard", exact: true });
+      const canViewAnalyticsMain = canView("analytics_appraisal") || canView("analytics");
+      const canViewExecSummary = canView("analytics_executive_summary");
+      if (canViewAnalyticsMain || canViewExecSummary) {
+        const dest = !canView("analytics_appraisal") && canViewExecSummary ? "/hr/analytics/executive-summary" : "/hr";
+        list.push({ to: dest, icon: BarChart2, label: "Appraisal Analytics", exact: dest === "/hr" });
       }
       if (canViewDashboard) {
         list.push({
@@ -530,8 +533,11 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
     if (role === "bod") {
       const list: NavTopLink[] = [];
-      if (canView("analytics")) {
-        list.push({ to: "/bod", icon: BarChart2, label: "Analytics Dashboard", exact: true });
+      const canViewAnalyticsMain = canView("analytics_appraisal") || canView("analytics");
+      const canViewExecSummary = canView("analytics_executive_summary");
+      if (canViewAnalyticsMain || canViewExecSummary) {
+        const dest = !canView("analytics_appraisal") && canViewExecSummary ? "/bod/analytics/executive-summary" : "/bod";
+        list.push({ to: dest, icon: BarChart2, label: "Appraisal Analytics", exact: dest === "/bod" });
       }
       if (canViewDashboard) {
         list.push({
@@ -645,13 +651,14 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
     const prefix = isEmployeePortal ? "/employee" : "/supervisor";
     const list: NavTopLink[] = [];
 
-    // 1. Analytics Dashboard selalu urutan pertama, dilanjutkan dengan Dashboard (untuk role yang diberi akses)
-    if (canView("analytics") || activeUser.isHrUnitChecker) {
+    // 1. Appraisal Analytics selalu urutan pertama, dilanjutkan dengan Dashboard (untuk role yang diberi akses)
+    if (canView("analytics") || canView("analytics_appraisal") || canView("analytics_executive_summary") || activeUser.isHrUnitChecker) {
+      const onlyExecTab = !canView("analytics_appraisal") && !canView("analytics") && !activeUser.isHrUnitChecker && canView("analytics_executive_summary");
       list.push({
-        to: `${prefix}/analytics`,
+        to: onlyExecTab ? `${prefix}/analytics/executive-summary` : `${prefix}/analytics`,
         icon: BarChart2,
-        label: "Analytics Dashboard",
-        exact: true,
+        label: "Appraisal Analytics",
+        exact: false,
       });
     }
     if (canViewDashboard) {
@@ -1081,21 +1088,32 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
                 setCollapsedTooltip(null);
               }}
               style={({ isActive }) =>
-                collapsed && !isActive ? { color: collapsedColor } : undefined
+                collapsed &&
+                !(
+                  isActive ||
+                  (link.label === "Appraisal Analytics" &&
+                    /^\/(hr|bod|supervisor|employee)\/(analytics|executive-summary)(\/|$)/.test(location.pathname))
+                )
+                  ? { color: collapsedColor }
+                  : undefined
               }
-              className={({ isActive }) => 
-                `${
+              className={({ isActive }) => {
+                const effectiveActive =
+                  isActive ||
+                  (link.label === "Appraisal Analytics" &&
+                    /^\/(hr|bod|supervisor|employee)\/(analytics|executive-summary)(\/|$)/.test(location.pathname));
+                return `${
                   collapsed
                     ? "w-11 h-11 justify-center"
                     : "px-4 py-3 gap-3"
                 } flex items-center rounded-xl text-sm font-medium transition-colors ${
-                  isActive 
+                  effectiveActive
                     ? "bg-[#1A284F] text-white shadow-sm" 
                     : collapsed
                       ? "hover:bg-gray-200/60"
                       : "text-slate-600 hover:text-slate-800 hover:bg-gray-200/60"
-                }`
-              }
+                }`;
+              }}
             >
               {link.icon && <link.icon className="w-5 h-5 shrink-0" />}
               {!collapsed && link.label}

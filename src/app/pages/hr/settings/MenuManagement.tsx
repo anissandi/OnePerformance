@@ -40,8 +40,28 @@ const ROLE_COLORS: Record<string, string> = {
 // Mirrors MENU_STRUCTURE from AccessManagement — same IDs, same hierarchy
 const INITIAL_MENUS: MenuItem[] = [
   {
-    id: "analytics", label: "Analytics Dashboard", path: "/hr; /bod", icon: "BarChart2",
+    id: "analytics", label: "Appraisal Analytics", path: "/hr; /bod", icon: "BarChart2",
     isVisible: true, order: 1, roles: HR_ROLES,
+    children: [
+      {
+        id: "analytics_appraisal",
+        label: "Appraisal Analytics",
+        path: "/analytics",
+        icon: "BarChart2",
+        isVisible: true,
+        order: 1,
+        roles: HR_ROLES,
+      },
+      {
+        id: "analytics_executive_summary",
+        label: "Executive Summary",
+        path: "/analytics/executive-summary",
+        icon: "TrendingUp",
+        isVisible: true,
+        order: 2,
+        roles: ["Administrator", "HR ICF", "BOD", "Director"] as Role[],
+      },
+    ],
   },
   {
     id: "dashboard", label: "Dashboard", path: "/supervisor; /employee", icon: "ListTodo",
@@ -421,6 +441,8 @@ function mergeWithInitialMenus(saved: MenuItem[]): MenuItem[] {
       const normalizedSavedLabel =
         def.id === "setting_notification" && s?.label === "Notification"
           ? "Notification Management"
+          : def.id === "analytics" && s?.label === "Analytics Dashboard"
+          ? "Appraisal Analytics"
           : s?.label;
       return {
         ...def,

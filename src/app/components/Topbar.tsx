@@ -60,7 +60,8 @@ const SUPERVISOR_ITEMS: SearchItem[] = [
 ];
 
 const HR_ITEMS: SearchItem[] = [
-  { label: "Dashboard", path: "/hr", category: "Main" },
+  { label: "Appraisal Analytics", path: "/hr", category: "Main" },
+  { label: "Executive Summary", path: "/hr/analytics/executive-summary", category: "Main" },
   { label: "Approvals", path: "/hr/approvals", category: "Main" },
   { label: "Module Activation", path: "/hr/modules", category: "Main" },
   { label: "Management Override", path: "/hr/override", category: "Main" },

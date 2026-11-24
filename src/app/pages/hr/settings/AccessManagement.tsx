@@ -291,7 +291,13 @@ export interface RolePermissions {
 export const ACCESS_UPDATED_EVENT = "pa-access-updated";
 
 export const MENU_STRUCTURE: MenuItem[] = [
-  { id: "analytics", label: "Analytics Dashboard" },
+  {
+    id: "analytics", label: "Appraisal Analytics",
+    children: [
+      { id: "analytics_appraisal",         label: "Appraisal Analytics" },
+      { id: "analytics_executive_summary", label: "Executive Summary" },
+    ],
+  },
   {
     id: "dashboard", label: "Dashboard",
     children: [
@@ -1124,11 +1130,17 @@ const DEFAULT_GM: RolePermissions = {
 // - Calibration Approval SOY/EOY: mengikuti hak akses Calibration Approval masing-masing role
 function applyNewMenuDefaults(role: BuiltinRole, perms: RolePermissions): RolePermissions {
   const isHrAdmin = role === "Administrator" || role === "HR ICF";
+  const isDefaultExecSummaryRole =
+    isHrAdmin || role === "BOD" || role === "Director" || role === "DirectorNonOpr";
   const isDefaultDelegationRole =
     isHrAdmin || role === "BOD" || role === "Director" || role === "DirectorNonOpr" || role === "GM" || role === "vGM" || role === "Coordinator";
   const calib = perms.approvals_calibration ?? N;
+  const baseAnalytics = perms.analytics ?? N;
   return {
     ...perms,
+    analytics_appraisal: perms.analytics_appraisal ?? baseAnalytics,
+    analytics_executive_summary:
+      perms.analytics_executive_summary ?? (isDefaultExecSummaryRole ? (isHrAdmin ? T : V) : N),
     feedback: perms.feedback ?? V,
     feedback_form: perms.feedback_form ?? VCE,
     feedback_followup: perms.feedback_followup ?? (isHrAdmin ? T : N),

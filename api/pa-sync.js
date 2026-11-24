@@ -198,10 +198,12 @@ export default async function handler(req, res) {
         pgRest(cfg, "pa_users?select=*&order=employee_id.asc"),
       ]);
       const mwRes = keysParam ? null : await pgRest(cfg, "pa_module_windows?select=*");
+      const catRes = keysParam ? null : await pgRest(cfg, "pa_master_catalogs?select=*");
 
       const kvRows = kvRes.ok ? await kvRes.json() : [];
       const users = usersRes.ok ? await usersRes.json() : [];
       const moduleWindows = mwRes && mwRes.ok ? await mwRes.json() : [];
+      const masterCatalogs = catRes && catRes.ok ? await catRes.json() : [];
       // Auto-migrate baris pa_users di database yang masih bernama "ASD" / "RSUP ASD" -> "PT RSUP ASD"
       if (Array.isArray(users) && users.some((u) => u && (u.company === "ASD" || u.company === "RSUP ASD"))) {
         const nowIso = new Date().toISOString();
@@ -247,6 +249,7 @@ export default async function handler(req, res) {
         kvMap,
         users: Array.isArray(users) ? users : [],
         moduleWindows: Array.isArray(moduleWindows) ? moduleWindows : [],
+        masterCatalogs: Array.isArray(masterCatalogs) ? masterCatalogs : [],
       });
     }
 
@@ -758,6 +761,31 @@ export default async function handler(req, res) {
           }),
         });
         return res.status(200).json({ ok: r.ok });
+      }
+
+      if (kind === "master-catalog" && body.catalogKey) {
+        const catalogKey = String(body.catalogKey);
+        const [catUp, kvUp] = await Promise.all([
+          pgRest(cfg, "pa_master_catalogs?on_conflict=catalog_key", {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({
+              catalog_key: catalogKey,
+              data: body.data ?? {},
+              updated_at: now,
+            }),
+          }),
+          pgRest(cfg, "pa_kv_state?on_conflict=state_key", {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({
+              state_key: catalogKey,
+              state_value: body.data ?? {},
+              updated_at: now,
+            }),
+          }),
+        ]);
+        return res.status(200).json({ ok: catUp.ok || kvUp.ok });
       }
 
       if (kind === "smart-goals") {

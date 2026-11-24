@@ -227,6 +227,8 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: AnalyticsDashboard },
       { path: "analytics", Component: AnalyticsDashboard },
+      { path: "analytics/:tab", Component: AnalyticsDashboard },
+      { path: "executive-summary", Component: AnalyticsDashboard },
       { path: "dashboard", Component: SupervisorDashboard },
       { path: "dashboard/my", Component: SupervisorDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
@@ -381,6 +383,8 @@ export const router = createBrowserRouter([
       { path: "dashboard/my", Component: SupervisorDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
       { path: "analytics", Component: AnalyticsDashboard },
+      { path: "analytics/:tab", Component: AnalyticsDashboard },
+      { path: "executive-summary", Component: AnalyticsDashboard },
       { path: "monitoring/kpi", Component: SupervisorMonitoringKPI },
       {
         path: "monitoring/smart-goals",
@@ -532,6 +536,8 @@ export const router = createBrowserRouter([
       { path: "dashboard/my", Component: StaffDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
       { path: "analytics", Component: AnalyticsDashboard },
+      { path: "analytics/:tab", Component: AnalyticsDashboard },
+      { path: "executive-summary", Component: AnalyticsDashboard },
       { path: "profile", Component: StaffViewProfile },
       { path: "profile/:tab", Component: StaffViewProfile },
       { path: "appraisal", Component: StaffMyPA },
@@ -657,6 +663,8 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: BODAnalyticsDashboard },
       { path: "analytics", Component: BODAnalyticsDashboard },
+      { path: "analytics/:tab", Component: BODAnalyticsDashboard },
+      { path: "executive-summary", Component: BODAnalyticsDashboard },
       { path: "dashboard", Component: SupervisorDashboard },
       { path: "dashboard/my", Component: SupervisorDashboard },
       { path: "dashboard/:tab", Component: SupervisorDashboard },
@@ -798,6 +806,9 @@ export const router = createBrowserRouter([
       { path: "notification-management/:tab", Component: NotificationManagementPage },
       { path: "notifications", Component: NotificationManagementPage },
       { path: "notifications/:tab", Component: NotificationManagementPage },
+      { path: "master/kpi", Component: MasterKPIPage },
+      { path: "master/kpi/:tab", Component: MasterKPIPage },
+      { path: "master/kpi/:tab/:subtab", Component: MasterKPIPage },
     ],
   },
   {

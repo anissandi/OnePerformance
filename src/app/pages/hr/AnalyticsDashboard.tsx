@@ -1,5 +1,6 @@
 // @refresh reset
 import { useState, useMemo, useEffect } from "react";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { motion } from "motion/react";
 import {
   Users,
@@ -65,7 +66,9 @@ import {
 import { loadWorkflowRecords, normalizeEmployeeId, type WorkflowRecord } from "../shared/appraisalWorkflowStore";
 import { buildLiveTimelineRowsFromActivation } from "./ModuleActivation";
 import { SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
-import { ACCESS_UPDATED_EVENT } from "./settings/AccessManagement";
+import { ACCESS_UPDATED_EVENT, hasRolePermission } from "./settings/AccessManagement";
+import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "./settings/MenuManagement";
+import { ExecutiveSummaryInfographics } from "../../components/ExecutiveSummaryInfographics";
 import { evaluateEmployeeKPITracking } from "../employee/KPIPage";
 import { isFeedbackFollowUpComplete, loadFeedbackSubmissions } from "../shared/interDepartmentFeedbackStore";
 import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
@@ -1560,10 +1563,70 @@ function FilterSelect({ label, options, value, onChange, highlight }: { label: s
 export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const { t } = useLanguage();
   const { lockedUnits: authLockedUnits } = useAuthStore();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const params = useParams<{ tab?: string }>();
   const [tick, setTick] = useState(0);
   const scopeUser = getActiveUserForScope();
   const isGlobalViewer = isAdminOrHrIcfRole(scopeUser.role) || scopeUser.role === "BOD";
   const isCheckerRole = !isGlobalViewer && Boolean(scopeUser.isHrUnitChecker || scopeUser.role === "HR Unit");
+
+  const portalPrefix = useMemo(() => {
+    const m = location.pathname.match(/^\/(hr|bod|supervisor|employee)(?=\/|$)/);
+    return m ? `/${m[1]}` : "/hr";
+  }, [location.pathname]);
+
+  const canViewAppraisalTab = useMemo(() => {
+    const r = scopeUser.role || "Employee";
+    return (
+      isMenuVisibleInMenuManagement("analytics") &&
+      isMenuVisibleInMenuManagement("analytics_appraisal") &&
+      (hasRolePermission(r, "analytics_appraisal", "view") ||
+        hasRolePermission(r, "analytics", "view") ||
+        Boolean(scopeUser.isHrUnitChecker))
+    );
+  }, [scopeUser.role, scopeUser.isHrUnitChecker, tick]);
+
+  const canViewExecutiveTab = useMemo(() => {
+    const r = scopeUser.role || "Employee";
+    return (
+      isMenuVisibleInMenuManagement("analytics") &&
+      isMenuVisibleInMenuManagement("analytics_executive_summary") &&
+      hasRolePermission(r, "analytics_executive_summary", "view")
+    );
+  }, [scopeUser.role, tick]);
+
+  const wantsExecByUrl =
+    params.tab === "executive-summary" || /\/executive-summary\/?$/i.test(location.pathname);
+  const activeAnalyticsTab: "appraisal" | "executive" =
+    wantsExecByUrl && canViewExecutiveTab
+      ? "executive"
+      : !canViewAppraisalTab && canViewExecutiveTab
+      ? "executive"
+      : "appraisal";
+
+  useEffect(() => {
+    if (wantsExecByUrl && !canViewExecutiveTab) {
+      const fallbackPath =
+        portalPrefix === "/hr" || portalPrefix === "/bod"
+          ? portalPrefix
+          : `${portalPrefix}/analytics`;
+      navigate(fallbackPath, { replace: true });
+    }
+  }, [wantsExecByUrl, canViewExecutiveTab, portalPrefix, navigate]);
+
+  const switchAnalyticsTab = (target: "appraisal" | "executive") => {
+    if (target === "executive") {
+      navigate(`${portalPrefix}/analytics/executive-summary`);
+    } else {
+      navigate(
+        portalPrefix === "/hr" || portalPrefix === "/bod"
+          ? portalPrefix
+          : `${portalPrefix}/analytics`,
+      );
+    }
+  };
+
   const checkerAllowedUnits = useMemo(
     () => (isCheckerRole ? getEffectiveCheckerUnits(scopeUser) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1664,6 +1727,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     window.addEventListener("feedback-activation-changed", onRefresh);
     window.addEventListener(SCORE_WEIGHT_EVENT, onRefresh);
     window.addEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+    window.addEventListener(MENU_UPDATED_EVENT, onRefresh);
     window.addEventListener("storage", onRefresh);
     return () => {
       window.removeEventListener("pa-auth-updated", onRefresh);
@@ -1674,6 +1738,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       window.removeEventListener("feedback-activation-changed", onRefresh);
       window.removeEventListener(SCORE_WEIGHT_EVENT, onRefresh);
       window.removeEventListener(ACCESS_UPDATED_EVENT, onRefresh);
+      window.removeEventListener(MENU_UPDATED_EVENT, onRefresh);
       window.removeEventListener("storage", onRefresh);
     };
   }, []);
@@ -1855,13 +1920,53 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     <div className="w-full flex flex-col gap-5">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-0.5">{t("Analytics Dashboard")}</h2>
-          <p className="text-sm text-gray-500">{t("Track completion status and download final appraisal scores")}</p>
+          <h2 className="text-2xl font-bold text-gray-900 mb-0.5">{t("Appraisal Analytics")}</h2>
+          <p className="text-sm text-gray-500">
+            {activeAnalyticsTab === "executive"
+              ? "Infografis pencapaian strategis KPI Business RSUP Group & Unit Usaha (Perspektif Eksekutif BOD)"
+              : t("Track completion status and download final appraisal scores")}
+          </p>
         </div>
+
+        {/* 2-Tab Switcher: Appraisal Analytics | Executive Summary */}
+        {canViewExecutiveTab && (
+          <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1 border border-slate-200/80 shadow-2xs">
+            {canViewAppraisalTab && (
+              <button
+                type="button"
+                onClick={() => switchAnalyticsTab("appraisal")}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  activeAnalyticsTab === "appraisal"
+                    ? "bg-[#1A284F] text-white shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                Appraisal Analytics
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => switchAnalyticsTab("executive")}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeAnalyticsTab === "executive"
+                  ? "bg-[#0A5598] text-white shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              Executive Summary
+            </button>
+          </div>
+        )}
       </div>
 
+      {activeAnalyticsTab === "executive" ? (
+        <ExecutiveSummaryInfographics lockedUnits={globalLockedUnits} />
+      ) : (
+        <>
       {/* ── Slim Sticky Filter Bar ─────────────────────────────────────────── */}
       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border border-gray-100 rounded-xl px-4 py-2.5 shadow-sm">
         <div
@@ -2186,6 +2291,8 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
         year={year}
         motionKey={refreshMotionKey}
       />
+        </>
+      )}
 
     </div>
   );

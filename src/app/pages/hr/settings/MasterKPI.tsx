@@ -12,6 +12,7 @@ import {
   Eye,
   Edit3,
   Layers,
+  BarChart3,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -40,10 +41,14 @@ import {
 } from "../../supervisor/setting/KPISetting";
 import ExportImportButton from "../../../components/ExportImportButton";
 import { exportXLSX, parseXLSX } from "../../../utils/excelUtils";
+import { MasterExecutiveSummaryTab } from "./MasterExecutiveSummaryTab";
+import { useAuthStore } from "../../../store/authStore";
+import { hasRolePermission } from "./AccessManagement";
+import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "./MenuManagement";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type MainMasterTab = "kpi-format" | "kpi-variable";
+type MainMasterTab = "kpi-format" | "executive-summary" | "kpi-variable";
 type FormatSubTab = "kpi-group" | "kpi-unit" | "kpi-personal";
 
 interface MasterItem { id: number; value: string; description?: string }
@@ -441,6 +446,35 @@ export function MasterKPIPage() {
   const params = useParams<{ tab?: string; subtab?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  const { activeUser } = useAuthStore();
+  const [, setPermTick] = useState(0);
+
+  useEffect(() => {
+    const onPermSync = () => setPermTick((t) => t + 1);
+    window.addEventListener("pa-access-updated", onPermSync);
+    window.addEventListener(MENU_UPDATED_EVENT, onPermSync);
+    return () => {
+      window.removeEventListener("pa-access-updated", onPermSync);
+      window.removeEventListener(MENU_UPDATED_EVENT, onPermSync);
+    };
+  }, []);
+
+  const canViewExecutiveSummary = useMemo(() => {
+    const r = activeUser.role || "Employee";
+    return (
+      isMenuVisibleInMenuManagement("analytics_executive_summary") &&
+      hasRolePermission(r, "analytics_executive_summary", "view")
+    );
+  }, [activeUser.role, activeUser.employeeId]);
+
+  const canEditMasterKpi = useMemo(() => {
+    const r = activeUser.role || "Employee";
+    return (
+      r === "Administrator" ||
+      r === "HR ICF" ||
+      hasRolePermission(r, "setting_master_kpi", "edit")
+    );
+  }, [activeUser.role]);
 
   const baseMasterPath = useMemo(() => {
     const idx = location.pathname.indexOf("/settings/master/kpi");
@@ -451,7 +485,11 @@ export function MasterKPIPage() {
   }, [location.pathname]);
 
   const activeMainTab: MainMasterTab =
-    params.tab === "kpi-variable" ? "kpi-variable" : "kpi-format";
+    params.tab === "kpi-variable"
+      ? "kpi-variable"
+      : params.tab === "executive-summary" && canViewExecutiveSummary
+      ? "executive-summary"
+      : "kpi-format";
   const activeSubTab: FormatSubTab =
     params.subtab === "kpi-unit"
       ? "kpi-unit"
@@ -465,12 +503,16 @@ export function MasterKPIPage() {
       navigate(`${baseMasterPath}/kpi-format/kpi-group`, { replace: true });
     } else if (params.tab === "kpi-format" && !params.subtab) {
       navigate(`${baseMasterPath}/kpi-format/kpi-group`, { replace: true });
+    } else if (params.tab === "executive-summary" && !canViewExecutiveSummary) {
+      navigate(`${baseMasterPath}/kpi-format/kpi-group`, { replace: true });
     }
-  }, [params.tab, params.subtab, baseMasterPath, navigate]);
+  }, [params.tab, params.subtab, baseMasterPath, navigate, canViewExecutiveSummary]);
 
   const handleMainTabChange = (nextTab: MainMasterTab) => {
     if (nextTab === "kpi-variable") {
       navigate(`${baseMasterPath}/kpi-variable`);
+    } else if (nextTab === "executive-summary") {
+      navigate(`${baseMasterPath}/executive-summary`);
     } else {
       navigate(`${baseMasterPath}/kpi-format/${activeSubTab}`);
     }
@@ -663,12 +705,16 @@ export function MasterKPIPage() {
           <span>Master</span><span className="mx-1">›</span>
           <span className="text-gray-500">KPI</span><span className="mx-1">›</span>
           <span className="font-medium text-gray-700">
-            {activeMainTab === "kpi-format" ? "KPI Format" : "KPI Variable"}
+            {activeMainTab === "kpi-format"
+              ? "KPI Format"
+              : activeMainTab === "executive-summary"
+              ? "Executive Summary"
+              : "KPI Variable"}
           </span>
         </div>
       </div>
 
-      {/* Main Tabs: KPI Format | KPI Variable */}
+      {/* Main Tabs: KPI Format | Executive Summary | KPI Variable */}
       <div className="flex w-fit gap-1 rounded-xl bg-gray-100 p-1">
         <button
           type="button"
@@ -682,6 +728,20 @@ export function MasterKPIPage() {
           <Table2 className="h-3.5 w-3.5" />
           KPI Format
         </button>
+        {canViewExecutiveSummary && (
+          <button
+            type="button"
+            onClick={() => handleMainTabChange("executive-summary")}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
+              activeMainTab === "executive-summary"
+                ? "bg-white text-[#1A284F] shadow-sm"
+                : "text-gray-500 hover:text-gray-800"
+            }`}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Executive Summary
+          </button>
+        )}
         <button
           type="button"
           onClick={() => handleMainTabChange("kpi-variable")}
@@ -1011,6 +1071,11 @@ export function MasterKPIPage() {
             />
           )}
         </div>
+      )}
+
+      {/* ══ TAB 2: EXECUTIVE SUMMARY (KPI Business: RSUP Group & Unit Usaha) ══ */}
+      {activeMainTab === "executive-summary" && canViewExecutiveSummary && (
+        <MasterExecutiveSummaryTab canEdit={canEditMasterKpi} />
       )}
 
       {/* ══ TAB 2: KPI VARIABLE (Sinkron penuh dengan Add New KPI Modal: Tab Section & Tab Sub Section) ══ */}

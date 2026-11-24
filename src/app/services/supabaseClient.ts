@@ -2041,7 +2041,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
         ok: true,
         users: finalUsers,
         kvStates: mergedKvStates,
-        masterCatalogs: pick(masterCatalogs, edgeData?.masterCatalogs),
+        masterCatalogs: pick(masterCatalogs, vercelData?.masterCatalogs ?? edgeData?.masterCatalogs),
         evidenceFiles: pick(evidenceFiles, edgeData?.evidenceFiles),
         auditTrail: pick(auditTrail, edgeData?.auditTrail),
         yearEndVerification:

@@ -25,6 +25,7 @@ const ID_DICT: Record<string, string> = {
 
   // ── Analytics Dashboard ────────────────────────────────────────────────────
   "Analytics Dashboard":                    "Dasbor Analitik",
+  "Appraisal Analytics":                    "Appraisal Analytics",
   "Track completion status and export final appraisal scores": "Pantau status penyelesaian dan ekspor skor penilaian akhir",
   "Track completion status and download final appraisal scores": "Pantau status penyelesaian dan unduh skor penilaian akhir",
   "Company Unit":                           "Unit Perusahaan",
