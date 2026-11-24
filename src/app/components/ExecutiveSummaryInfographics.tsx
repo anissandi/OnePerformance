@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import {
   Area,
+  Bar,
   CartesianGrid,
   ComposedChart,
   Legend,
@@ -516,29 +517,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
     achBandFilter,
   ]);
 
-  // ── 4. Data Baris Gabungan 1 Line: Trend Lintasan Unit Usaha + Diagnostic · Sumber Kehilangan Poin ──
-  const unitTrajectoryData = useMemo(() => {
-    const blocks: ExecSummaryReportBlock[] = unitTrendMode === "MTD" ? mtdReports : quarterReports;
-    const resolveEntityVal = (rep: ExecSummaryReportBlock, entId: string): number | null => {
-      if (selectedIndicatorId !== "ALL") {
-        const cell = rep.cells?.[selectedIndicatorId]?.[entId];
-        if (!cell || !cell.applicable) return null;
-        return parseExecPct(cell.ach);
-      }
-      return parseExecPct(rep.totals?.[entId]?.ach);
-    };
-    return blocks.map((rep) => {
-      const row: Record<string, string | number | null> = {
-        period: rep.shortLabel,
-        [groupEntity.id]: resolveEntityVal(rep, groupEntity.id),
-      };
-      for (const u of rsupUnitEntities) {
-        row[u.id] = resolveEntityVal(rep, u.id);
-      }
-      return row;
-    });
-  }, [unitTrendMode, mtdReports, quarterReports, selectedIndicatorId, groupEntity.id, rsupUnitEntities]);
-
+  // ── 4. Data Baris Gabungan 1 Line: Strategic Intelligence Suite (Kiri) + Diagnostic · Sumber Kehilangan Poin (Kanan) ──
   const gapAttributionData = useMemo(() => {
     const entitiesList =
       scopeFocus === "GROUP"
@@ -590,42 +569,54 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
     selectedIndicatorId,
   ]);
 
-  // ── 5. Drilldown Lintasan Historis (khusus sesuai filter Periode aktif) ──
-  const inspectedCellSeries = useMemo(() => {
+  // ── 5. Detail Sel Tabel Master KPI (Bobot, Actual, Achievement per kolom dari /settings/master/kpi/executive-summary) ──
+  const inspectedCellDetail = useMemo(() => {
     if (!inspectedCell) return null;
     const ind = store.indicators.find((i) => i.id === inspectedCell.indId);
     const ent = store.entities.find((e) => e.id === inspectedCell.entId);
     if (!ind || !ent) return null;
-    const timeline: ExecSummaryReportBlock[] =
-      horizon === "MTD"
-        ? mtdReports
-        : horizon === "Quarter"
-        ? quarterReports
-        : ytdReports;
-    const points = timeline
-      .map((rep) => {
-        const cell = rep.cells?.[ind.id]?.[ent.id];
-        if (!cell || !cell.applicable || !String(cell.ach ?? "").trim()) return null;
-        return {
-          label: rep.shortLabel,
-          ach: parseExecPct(cell.ach) ?? 0,
-          actual: parseExecPct(cell.actual) ?? 0,
-          bobot: parseExecPct(cell.bobot) ?? 0,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null);
+    const allCols = [groupEntity, ...rsupUnitEntities];
+    const selectedCellRaw = activeReport.cells?.[ind.id]?.[ent.id];
+    const selectedBand: AchColorBand =
+      selectedCellRaw && selectedCellRaw.applicable
+        ? classifyAchBand(selectedCellRaw.ach, true)
+        : "na";
+    const selectedBobotNum = parseExecPct(selectedCellRaw?.bobot) ?? 0;
+    const selectedActualNum = parseExecPct(selectedCellRaw?.actual) ?? 0;
+    const selectedGap = Math.max(0, Math.round((selectedBobotNum - selectedActualNum) * 100) / 100);
+
+    const columnsDetail = allCols.map((colEnt) => {
+      const c = activeReport.cells?.[ind.id]?.[colEnt.id];
+      const applicable = Boolean(c?.applicable);
+      const band: AchColorBand = applicable ? classifyAchBand(c?.ach, true) : "na";
+      const bNum = parseExecPct(c?.bobot) ?? 0;
+      const aNum = parseExecPct(c?.actual) ?? 0;
+      return {
+        entity: colEnt,
+        isSelectedCol: colEnt.id === ent.id,
+        applicable,
+        bobot: applicable ? c?.bobot || "0%" : "N/A",
+        actual: applicable ? c?.actual || "0%" : "N/A",
+        ach: applicable ? c?.ach || "0%" : "N/A",
+        gap: applicable ? Math.max(0, Math.round((bNum - aNum) * 100) / 100) : 0,
+        band,
+      };
+    });
+
     return {
       ind,
       ent,
-      points,
-      horizonLabel:
-        horizon === "MTD"
-          ? "Perbulan (MTD)"
-          : horizon === "Quarter"
-          ? "Quarter (Q1–Q4)"
-          : "Year-to-Date (YTD)",
+      reportTitle: activeReport.title,
+      reportShortLabel: activeReport.shortLabel,
+      selectedApplicable: Boolean(selectedCellRaw?.applicable),
+      selectedBobot: selectedCellRaw?.applicable ? selectedCellRaw.bobot || "0%" : "N/A",
+      selectedActual: selectedCellRaw?.applicable ? selectedCellRaw.actual || "0%" : "N/A",
+      selectedAch: selectedCellRaw?.applicable ? selectedCellRaw.ach || "0%" : "N/A",
+      selectedGap,
+      selectedBand,
+      columnsDetail,
     };
-  }, [inspectedCell, store.indicators, store.entities, horizon, mtdReports, quarterReports, ytdReports]);
+  }, [inspectedCell, store.indicators, store.entities, groupEntity, rsupUnitEntities, activeReport]);
 
   const hasActiveFilter =
     horizon !== "YTD" ||
@@ -754,6 +745,16 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
 
           <div className="flex items-center gap-2">
             <RsupGroupToggleTag />
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              title="Sambu Group belum aktif"
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold border border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed select-none"
+            >
+              <span className="w-2 h-2 rounded-full bg-slate-300 shrink-0" />
+              <span>+ Sambu Group</span>
+            </button>
             {hasActiveFilter && (
               <button
                 type="button"
@@ -770,7 +771,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                 className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-[#EAEFF9] text-[#2F5597] border border-[#DCE3F2] hover:bg-[#DCE5F7] transition-colors cursor-pointer"
               >
                 <SlidersHorizontal className="w-3 h-3" />
-                Kelola Data Master KPI
+                Database KPI Business
                 <ExternalLink className="w-2.5 h-2.5 opacity-70" />
               </button>
             )}
@@ -1144,7 +1145,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
 
           <div className="flex items-end justify-between gap-2 pt-2.5 border-t border-[#DCE3F2]/80 text-[11px] text-gray-500 font-medium relative z-10">
             <span>
-              Target Bobot: <strong className="text-[#111827]">100%</strong> · Defisit:{" "}
+              Target: <strong className="text-[#111827]">100%</strong> · Defisit:{" "}
               <strong style={{ color: "#B84A4A" }}>
                 -{formatExecPct(Math.max(0, 100 - groupActiveTotal.num), 1)}
               </strong>
@@ -1196,7 +1197,6 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
             {unitComparisonStatCards.map((item) => {
               const isSpot = spotlightUnitId === item.entity.id;
               const isGroupCard = item.entity.kind === "group";
-              const bMeta = ACHIEVEMENT_BADGE[item.band];
               return (
                 <button
                   key={item.entity.id}
@@ -1223,7 +1223,10 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                       <p className="text-xs font-medium text-gray-500 truncate" title={item.entity.name}>
                         {item.entity.shortName}
                       </p>
-                      <p className="text-2xl font-extrabold text-[#111827] leading-tight mt-0.5 tabular-nums">
+                      <p
+                        className="text-4xl sm:text-[42px] font-black leading-none mt-1.5 tabular-nums tracking-tight"
+                        style={{ color: item.spec.accentHex }}
+                      >
                         {item.achStr}
                       </p>
                     </div>
@@ -1235,13 +1238,11 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     </div>
                   </div>
                   <div className="flex items-end justify-between gap-2 mt-3 relative z-10">
-                    <div className="space-y-1 min-w-0">
-                      <span
-                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[9.5px] font-bold text-white"
-                        style={{ backgroundColor: bMeta.solid }}
-                      >
-                        {item.greenCount}H · {item.yellowCount}K · {item.redCount}M
-                      </span>
+                    <div className="min-w-0 text-[10.5px] text-gray-500 font-medium leading-tight">
+                      Target: <strong className="text-[#111827]">100%</strong> · Defisit:{" "}
+                      <strong style={{ color: "#B84A4A" }}>
+                        -{formatExecPct(Math.max(0, 100 - item.achNum), 1)}
+                      </strong>
                     </div>
                     <svg
                       className="w-13 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
@@ -1462,6 +1463,31 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                       formatter={(val: number) => [`${val}%`, undefined]}
                     />
                     <Legend wrapperStyle={{ fontSize: 10.5, paddingTop: 4 }} />
+                    {/* Point 2: Bar bayangan dengan saturasi/opasitas 20% di belakang line */}
+                    {showRsupGroupInUnits && (
+                      <Bar
+                        dataKey={groupEntity.id}
+                        fill="#2F5597"
+                        fillOpacity={0.2}
+                        radius={[4, 4, 0, 0]}
+                        legendType="none"
+                        tooltipType="none"
+                      />
+                    )}
+                    {rsupUnitEntities.map((u) => {
+                      const dimmed = spotlightUnitId !== "ALL" && spotlightUnitId !== u.id;
+                      return (
+                        <Bar
+                          key={`shadow-bar-${u.id}`}
+                          dataKey={u.id}
+                          fill={u.colorHex}
+                          fillOpacity={dimmed ? 0.06 : 0.2}
+                          radius={[4, 4, 0, 0]}
+                          legendType="none"
+                          tooltipType="none"
+                        />
+                      );
+                    })}
                     {showRsupGroupInUnits && (
                       <Area
                         type="monotone"
@@ -1649,99 +1675,263 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         </motion.section>
       )}
 
-      {/* ══ POINT 4 & POINT 5: 1-LINE MERGED ROW (Trend Lintasan Unit Usaha + Diagnostic · Sumber Kehilangan Poin; Balanced Scorecard Removed) ══ */}
+      {/* ══ POINT 5, 1, 6: 1-LINE ROW — STRATEGIC INTELLIGENCE SUITE (KIRI) + DIAGNOSTIC · SUMBER KEHILANGAN POIN (KANAN) ══ */}
       <motion.section
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, delay: 0.08 }}
         className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch"
       >
-        {/* Left 6 cols: Trend Lintasan Pencapaian Unit Usaha vs Benchmark RSUP Group */}
-        <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col justify-between">
-          <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+        {/* Left 7 cols: Strategic Intelligence Suite -> Table Per Indikator KPI Lintas Entitas + Detail Sel Master KPI */}
+        <div className="lg:col-span-7 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col justify-between space-y-3.5">
+          <div className="flex items-start justify-between gap-2 flex-wrap">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-[#248277] bg-[#E4F4F2] border border-[#BEE2DD] px-2 py-0.5 rounded-full">
-                Unit vs Benchmark Trajectory
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-[#248277] bg-[#E4F4F2] border border-[#BEE2DD] px-2 py-0.5 rounded-full">
+                <Gauge className="w-3 h-3" />
+                Strategic Intelligence Suite · {activeReport.shortLabel}
               </span>
-              <h4 className="text-sm font-bold text-[#111827] mt-1.5 flex items-center gap-1.5">
-                <Activity className="w-4 h-4 text-[#248277]" />
-                Trend Lintasan Pencapaian Unit Usaha vs Benchmark RSUP Group
-                {activeFilterIndicatorObj ? ` (${activeFilterIndicatorObj.shortLabel})` : ""}
+              <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                Table Per Indikator KPI Lintas Entitas
               </h4>
             </div>
-            <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
-              {(
-                [
-                  { id: "MTD" as const, label: "Trend Perbulan" },
-                  { id: "Quarter" as const, label: "Q1–Q4" },
-                ] as const
-              ).map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setUnitTrendMode(m.id)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-                    unitTrendMode === m.id
-                      ? "bg-white text-[#111827] shadow-2xs"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-1.5 text-[9.5px] font-bold flex-wrap">
+              <span className="px-2 py-0.5 rounded text-white" style={{ backgroundColor: "#2E8555" }}>
+                ≥95% Hijau
+              </span>
+              <span className="px-2 py-0.5 rounded text-white" style={{ backgroundColor: "#EA9942" }}>
+                80–&lt;95% Kuning
+              </span>
+              <span className="px-2 py-0.5 rounded text-white" style={{ backgroundColor: "#B84A4A" }}>
+                &lt;80% Merah
+              </span>
+              <span className="px-2 py-0.5 rounded text-white" style={{ backgroundColor: "#475569" }}>
+                N/A
+              </span>
             </div>
           </div>
 
-          <div className="h-[265px] w-full my-auto">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={unitTrajectoryData} margin={{ top: 10, right: 14, left: -14, bottom: 4 }}>
-                <defs>
-                  <linearGradient id="rsupGroupBenchFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#2F5597" stopOpacity={0.14} />
-                    <stop offset="95%" stopColor="#2F5597" stopOpacity={0.01} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                <XAxis dataKey="period" tick={{ fontSize: 10.5, fill: "#475569" }} axisLine={false} tickLine={false} />
-                <YAxis domain={[30, 108]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                <ReferenceLine y={95} stroke="#2E8555" strokeDasharray="4 4" />
-                <ReferenceLine y={80} stroke="#B84A4A" strokeDasharray="3 3" />
-                <Tooltip contentStyle={{ borderRadius: 12, borderColor: "#E2E8F0", fontSize: 12 }} />
-                <Legend wrapperStyle={{ fontSize: 10.5, paddingTop: 4 }} />
-                <Area
-                  type="monotone"
-                  dataKey={groupEntity.id}
-                  name={`${groupEntity.shortName} (Benchmark)`}
-                  fill="url(#rsupGroupBenchFill)"
-                  stroke="#2F5597"
-                  strokeWidth={2.5}
-                  strokeDasharray="6 4"
-                  connectNulls
-                />
-                {rsupUnitEntities.map((u) => {
-                  const dimmed = spotlightUnitId !== "ALL" && spotlightUnitId !== u.id;
-                  return (
-                    <Line
-                      key={u.id}
-                      type="monotone"
-                      dataKey={u.id}
-                      name={u.shortName}
-                      stroke={u.colorHex}
-                      strokeWidth={spotlightUnitId === u.id ? 3.2 : 2.2}
-                      strokeOpacity={dimmed ? 0.22 : 1}
-                      dot={{ r: spotlightUnitId === u.id ? 4.5 : 3 }}
-                      activeDot={{ r: 5.5 }}
-                      connectNulls
-                    />
-                  );
-                })}
-              </ComposedChart>
-            </ResponsiveContainer>
+          <div className="overflow-x-auto rounded-xl border border-slate-200 my-auto">
+            <table className="w-full border-collapse text-[11px] min-w-[600px]">
+              <thead>
+                <tr className="bg-[#2F5597] text-white">
+                  <th className="px-2.5 py-2 text-left font-bold">Indikator KPI</th>
+                  {[groupEntity, ...rsupUnitEntities].map((ent) => (
+                    <th key={ent.id} className="px-1.5 py-2 text-center font-bold whitespace-nowrap">
+                      {ent.shortName}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleIndicators.map((ind) => (
+                  <tr key={ind.id} className="border-t border-slate-100">
+                    <td className="px-2.5 py-1.5 font-semibold text-slate-800 bg-slate-50/60 leading-snug">
+                      {ind.label}
+                    </td>
+                    {[groupEntity, ...rsupUnitEntities].map((ent) => {
+                      const cell = activeReport.cells?.[ind.id]?.[ent.id];
+                      const isSelected =
+                        inspectedCell?.indId === ind.id && inspectedCell?.entId === ent.id;
+                      if (!cell || !cell.applicable) {
+                        return (
+                          <td
+                            key={`${ind.id}-${ent.id}`}
+                            onClick={() =>
+                              setInspectedCell((prev) =>
+                                prev?.indId === ind.id && prev?.entId === ent.id
+                                  ? null
+                                  : { indId: ind.id, entId: ent.id },
+                              )
+                            }
+                            className={`px-1.5 py-1.5 text-center text-white/85 text-[10px] font-semibold cursor-pointer ${
+                              isSelected ? "ring-2 ring-inset ring-white" : ""
+                            }`}
+                            style={{ backgroundColor: "#475569" }}
+                            title="Klik untuk melihat detail sel dari tabel Database KPI Business"
+                          >
+                            N/A
+                          </td>
+                        );
+                      }
+                      const band = classifyAchBand(cell.ach, true);
+                      const meta = ACHIEVEMENT_BADGE[band];
+                      const hiddenByFilter = achBandFilter !== "ALL" && band !== achBandFilter;
+                      return (
+                        <td key={`${ind.id}-${ent.id}`} className="p-1 text-center border-l border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setInspectedCell((prev) =>
+                                prev?.indId === ind.id && prev?.entId === ent.id
+                                  ? null
+                                  : { indId: ind.id, entId: ent.id },
+                              )
+                            }
+                            className={`w-full rounded-lg px-1.5 py-1 border transition-all cursor-pointer flex flex-col items-center ${
+                              isSelected ? "ring-2 ring-[#2F5597] scale-[1.03] shadow-xs" : "hover:brightness-97"
+                            } ${hiddenByFilter ? "opacity-25" : ""}`}
+                            style={{
+                              backgroundColor: meta.bg,
+                              color: meta.text,
+                              borderColor: meta.bg,
+                            }}
+                            title="Klik untuk melihat detail Bobot, Actual & Achievement per kolom"
+                          >
+                            <span className="text-[11px] font-extrabold tabular-nums">{cell.ach || "—"}</span>
+                            <span className="text-[8.5px] opacity-90 tabular-nums">
+                              {cell.actual || "0%"} / {cell.bobot || "0%"}
+                            </span>
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-slate-300 bg-slate-50 font-extrabold">
+                  <td className="px-2.5 py-2 text-[#111827]">
+                    Total Achievement ({activeReport.shortLabel})
+                  </td>
+                  {[groupEntity, ...rsupUnitEntities].map((ent) => {
+                    const tot = activeReport.totals?.[ent.id];
+                    const band: AchColorBand = classifyAchBand(tot?.ach, true, tot?.bandOverride);
+                    const meta = ACHIEVEMENT_BADGE[band];
+                    return (
+                      <td key={`hm-tot-${ent.id}`} className="p-1 text-center border-l border-slate-200">
+                        <div
+                          className="rounded-lg px-1.5 py-1 border text-[11px] font-extrabold tabular-nums"
+                          style={{
+                            backgroundColor: meta.bg,
+                            color: meta.text,
+                            borderColor: meta.bg,
+                          }}
+                        >
+                          {tot?.ach || "—"}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
           </div>
+
+          {/* Point 1: Detail Sel dari Tabel /settings/master/kpi/executive-summary (Bobot · Actual · Achievement per kolom) */}
+          <AnimatePresence>
+            {inspectedCellDetail && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="rounded-xl border border-[#C9DCF0] bg-[#EBF2FA]/55 p-3.5 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold text-[#111827]">
+                        Detail Indikator: <span className="text-[#2F5597]">{inspectedCellDetail.ind.label}</span>
+                      </p>
+                      <p className="text-[10.5px] text-slate-600 mt-0.5">
+                        Kolom Terpilih: <strong>{inspectedCellDetail.ent.name}</strong> ({inspectedCellDetail.reportTitle}) — Bobot:{" "}
+                        <strong>{inspectedCellDetail.selectedBobot}</strong> · Actual:{" "}
+                        <strong>{inspectedCellDetail.selectedActual}</strong> · Achievement:{" "}
+                        <span
+                          className="inline-flex px-1.5 py-0.2 rounded text-[10px] font-extrabold text-white"
+                          style={{ backgroundColor: ACHIEVEMENT_BADGE[inspectedCellDetail.selectedBand].solid }}
+                        >
+                          {inspectedCellDetail.selectedAch}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setInspectedCell(null)}
+                      className="p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-white cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Tabel rincian Bobot | Actual | Achievement dari masing-masing kolom sesuai /settings/master/kpi/executive-summary */}
+                  <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                    <table className="w-full border-collapse text-[10.5px] min-w-[540px]">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-700">
+                          {inspectedCellDetail.columnsDetail.map((col) => (
+                            <th
+                              key={`det-h-${col.entity.id}`}
+                              colSpan={3}
+                              onClick={() => setInspectedCell({ indId: inspectedCellDetail.ind.id, entId: col.entity.id })}
+                              className={`border border-slate-200 px-2 py-1.5 text-center font-bold whitespace-nowrap cursor-pointer transition-colors ${
+                                col.isSelectedCol
+                                  ? "bg-[#2F5597] text-white"
+                                  : "hover:bg-slate-200/70"
+                              }`}
+                            >
+                              {col.entity.shortName}
+                            </th>
+                          ))}
+                        </tr>
+                        <tr className="bg-slate-50 text-slate-500 font-semibold">
+                          {inspectedCellDetail.columnsDetail.map((col) => (
+                            <React.Fragment key={`det-sub-${col.entity.id}`}>
+                              <th className={`border border-slate-200 px-1.5 py-1 text-center ${col.isSelectedCol ? "bg-[#EAEFF9] text-[#2F5597]" : ""}`}>
+                                Bobot
+                              </th>
+                              <th className={`border border-slate-200 px-1.5 py-1 text-center ${col.isSelectedCol ? "bg-[#EAEFF9] text-[#2F5597]" : ""}`}>
+                                Actual
+                              </th>
+                              <th className={`border border-slate-200 px-1.5 py-1 text-center ${col.isSelectedCol ? "bg-[#EAEFF9] text-[#2F5597]" : ""}`}>
+                                Achievement
+                              </th>
+                            </React.Fragment>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          {inspectedCellDetail.columnsDetail.map((col) => {
+                            if (!col.applicable) {
+                              return (
+                                <td
+                                  key={`det-v-${col.entity.id}`}
+                                  colSpan={3}
+                                  className="border border-slate-300 text-center py-1.5 text-white font-semibold"
+                                  style={{ backgroundColor: "#475569" }}
+                                >
+                                  N/A
+                                </td>
+                              );
+                            }
+                            const bMeta = ACHIEVEMENT_BADGE[col.band];
+                            return (
+                              <React.Fragment key={`det-v-${col.entity.id}`}>
+                                <td className={`border border-slate-200 px-1.5 py-1.5 text-center tabular-nums ${col.isSelectedCol ? "bg-[#F6F8FD] font-bold text-[#111827]" : "text-slate-600"}`}>
+                                  {col.bobot}
+                                </td>
+                                <td className={`border border-slate-200 px-1.5 py-1.5 text-center tabular-nums ${col.isSelectedCol ? "bg-[#F6F8FD] font-bold text-[#111827]" : "text-slate-700 font-medium"}`}>
+                                  {col.actual}
+                                </td>
+                                <td
+                                  className="border border-slate-200 px-1.5 py-1.5 text-center font-extrabold tabular-nums text-white"
+                                  style={{ backgroundColor: bMeta.solid }}
+                                >
+                                  {col.ach}
+                                </td>
+                              </React.Fragment>
+                            );
+                          })}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
-        {/* Right 6 cols: Diagnostic · Sumber Kehilangan Poin (digabung menjadi 1 line) */}
-        <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col justify-between">
+        {/* Right 5 cols: Diagnostic · Sumber Kehilangan Poin (1 line dengan Strategic Intelligence Suite) */}
+        <div className="lg:col-span-5 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col justify-between">
           <div className="flex items-start justify-between gap-2 mb-3 flex-wrap">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-[#8C3131] bg-[#FBEAEA] border border-[#E8BFBF] px-2 py-0.5 rounded-full">
@@ -1815,206 +2005,6 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
               <span className="w-2.5 h-2.5 rounded-xs" style={{ backgroundColor: "#B84A4A" }} /> Defisit | Kritis
             </span>
           </div>
-        </div>
-      </motion.section>
-
-      {/* ══ STRATEGIC INTELLIGENCE SUITE (Interactive Risk & Achievement Matrix + Drilldown sesuai Periode) ══ */}
-      <motion.section
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.45, delay: 0.1 }}
-        className="space-y-4"
-      >
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#248277] text-white flex items-center justify-center shadow-xs">
-              <Gauge className="w-4 h-4" />
-            </div>
-            <h3 className="text-base font-bold text-[#111827]">
-              Strategic Intelligence Suite
-            </h3>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
-                Interactive Risk &amp; Achievement Matrix · {activeReport.shortLabel}
-              </span>
-              <h4 className="text-sm font-bold text-[#111827] mt-1.5">
-                Peta Kesehatan Strategis Lintas Entitas &amp; Indikator KPI (Klik Sel untuk Melihat Histori Trend)
-              </h4>
-            </div>
-            <div className="flex items-center gap-2 text-[10px] font-bold flex-wrap">
-              <span className="px-2.5 py-0.5 rounded text-white" style={{ backgroundColor: "#2E8555" }}>
-                ≥95% Hijau
-              </span>
-              <span className="px-2.5 py-0.5 rounded text-white" style={{ backgroundColor: "#EA9942" }}>
-                80–&lt;95% Kuning
-              </span>
-              <span className="px-2.5 py-0.5 rounded text-white" style={{ backgroundColor: "#B84A4A" }}>
-                &lt;80% Merah
-              </span>
-              <span className="px-2.5 py-0.5 rounded text-white" style={{ backgroundColor: "#475569" }}>
-                N/A
-              </span>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full border-collapse text-xs min-w-[780px]">
-              <thead>
-                <tr className="bg-[#2F5597] text-white">
-                  <th className="px-3.5 py-2.5 text-left font-bold">Indikator KPI</th>
-                  {[groupEntity, ...rsupUnitEntities].map((ent) => (
-                    <th key={ent.id} className="px-3 py-2.5 text-center font-bold whitespace-nowrap">
-                      {ent.shortName}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visibleIndicators.map((ind) => (
-                  <tr key={ind.id} className="border-t border-slate-100">
-                    <td className="px-3.5 py-2.5 font-semibold text-slate-800 bg-slate-50/60">
-                      {ind.label}
-                    </td>
-                    {[groupEntity, ...rsupUnitEntities].map((ent) => {
-                      const cell = activeReport.cells?.[ind.id]?.[ent.id];
-                      if (!cell || !cell.applicable) {
-                        return (
-                          <td
-                            key={`${ind.id}-${ent.id}`}
-                            className="px-2 py-2 text-center text-white/85 text-[10px] font-semibold"
-                            style={{ backgroundColor: "#475569" }}
-                          >
-                            N/A
-                          </td>
-                        );
-                      }
-                      const band = classifyAchBand(cell.ach, true);
-                      const meta = ACHIEVEMENT_BADGE[band];
-                      const isSelected =
-                        inspectedCell?.indId === ind.id && inspectedCell?.entId === ent.id;
-                      const hiddenByFilter = achBandFilter !== "ALL" && band !== achBandFilter;
-                      return (
-                        <td key={`${ind.id}-${ent.id}`} className="p-1.5 text-center border-l border-slate-100">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setInspectedCell((prev) =>
-                                prev?.indId === ind.id && prev?.entId === ent.id
-                                  ? null
-                                  : { indId: ind.id, entId: ent.id },
-                              )
-                            }
-                            className={`w-full rounded-lg px-2 py-1.5 border transition-all cursor-pointer flex flex-col items-center ${
-                              isSelected ? "ring-2 ring-[#2F5597] scale-[1.02] shadow-xs" : "hover:brightness-97"
-                            } ${hiddenByFilter ? "opacity-25" : ""}`}
-                            style={{
-                              backgroundColor: meta.bg,
-                              color: meta.text,
-                              borderColor: meta.bg,
-                            }}
-                            title="Klik untuk membuka grafik trend sesuai filter Periode aktif"
-                          >
-                            <span className="text-xs font-extrabold tabular-nums">{cell.ach || "—"}</span>
-                            <span className="text-[9px] opacity-90 tabular-nums">
-                              {cell.actual || "0%"} / {cell.bobot || "0%"}
-                            </span>
-                          </button>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-                <tr className="border-t-2 border-slate-300 bg-slate-50 font-extrabold">
-                  <td className="px-3.5 py-2.5 text-[#111827]">
-                    Total Achievement ({activeReport.shortLabel})
-                  </td>
-                  {[groupEntity, ...rsupUnitEntities].map((ent) => {
-                    const tot = activeReport.totals?.[ent.id];
-                    const band: AchColorBand = classifyAchBand(tot?.ach, true, tot?.bandOverride);
-                    const meta = ACHIEVEMENT_BADGE[band];
-                    return (
-                      <td key={`hm-tot-${ent.id}`} className="p-1.5 text-center border-l border-slate-200">
-                        <div
-                          className="rounded-lg px-2 py-1.5 border text-xs font-extrabold tabular-nums"
-                          style={{
-                            backgroundColor: meta.bg,
-                            color: meta.text,
-                            borderColor: meta.bg,
-                          }}
-                        >
-                          {tot?.ach || "—"}
-                        </div>
-                      </td>
-                    );
-                  })}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <AnimatePresence>
-            {inspectedCellSeries && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="rounded-xl border border-[#BEE2DD] bg-[#E4F4F2]/45 p-4 space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-bold text-[#111827]">
-                        Drilldown Lintasan Historis: {inspectedCellSeries.ent.name} —{" "}
-                        <span className="text-[#248277]">{inspectedCellSeries.ind.label}</span>
-                      </p>
-                      <p className="text-[11px] text-slate-600">
-                        Menampilkan khusus sesuai filter Periode aktif: <strong>{inspectedCellSeries.horizonLabel}</strong>
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setInspectedCell(null)}
-                      className="p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-white cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="h-[175px] w-full bg-white rounded-xl border border-[#BEE2DD] p-2.5">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={inspectedCellSeries.points} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="drillLineFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#248277" stopOpacity={0.24} />
-                            <stop offset="95%" stopColor="#248277" stopOpacity={0.02} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#475569" }} axisLine={false} tickLine={false} />
-                        <YAxis domain={[0, 110]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                        <ReferenceLine y={95} stroke="#2E8555" strokeDasharray="4 4" />
-                        <ReferenceLine y={80} stroke="#B84A4A" strokeDasharray="3 3" />
-                        <Tooltip contentStyle={{ borderRadius: 10, fontSize: 11 }} />
-                        <Area
-                          type="monotone"
-                          dataKey="ach"
-                          name="Achievement (%)"
-                          fill="url(#drillLineFill)"
-                          stroke="#248277"
-                          strokeWidth={2.5}
-                          dot={{ r: 4, fill: "#248277" }}
-                        />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
       </motion.section>
     </div>
