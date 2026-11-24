@@ -13,7 +13,7 @@ import {
 export const MASTER_EXEC_SUMMARY_KEY = "master_kpi_executive_summary_v1";
 export const MASTER_EXEC_SUMMARY_UPDATED_EVENT = "pa-master-exec-summary-updated";
 
-export type ExecSummaryPeriodType = "FY" | "YTD" | "Quarter" | "MTD";
+export type ExecSummaryPeriodType = "YTD" | "Quarter" | "MTD";
 export type AchColorBand = "green" | "yellow" | "red" | "na";
 
 export interface ExecSummaryEntityDef {
@@ -68,7 +68,19 @@ export interface MasterExecutiveSummaryStore {
   updatedAt?: string;
 }
 
-// Palet profesional eksekutif TANPA warna ungu/violet
+// Palet tema resmi terlampir (#3E3E3E, #FF7864, #FFE770, #167267 + Navy #1E3A6E) — TANPA warna ungu & pink
+export const EXEC_THEME_PALETTE = {
+  charcoal: "#3E3E3E",
+  coralRed: "#FF7864",
+  sunYellow: "#FFE770",
+  pineGreen: "#167267",
+  navyCard: "#1E3A6E",
+  seaTeal: "#2A8C80",
+  warmGold: "#D4A72C",
+  terracotta: "#E0634E",
+  steelSlate: "#4E5D6C",
+} as const;
+
 export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
   {
     id: "rsup-group",
@@ -76,7 +88,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP Group",
     kind: "group",
     groupName: "RSUP Group",
-    colorHex: "#1A284F", // Deep Executive Navy
+    colorHex: "#3E3E3E",
   },
   {
     id: "rsup-ind",
@@ -84,7 +96,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP Industry",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#0A5598", // Cobalt Blue
+    colorHex: "#167267",
   },
   {
     id: "rsup-pkb",
@@ -92,7 +104,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP Perkebunan",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#059669", // Emerald Forest
+    colorHex: "#2A8C80",
   },
   {
     id: "rsup-asd",
@@ -100,7 +112,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP ASD",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#0D9488", // Ocean Teal
+    colorHex: "#1E3A6E",
   },
   {
     id: "rsup-ghs",
@@ -108,7 +120,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "PT GHS",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#D97706", // Warm Amber Gold
+    colorHex: "#D4A72C",
   },
   {
     id: "rsup-rstm",
@@ -116,7 +128,32 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "PT RSTM",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#0284C7", // Sky Steel Blue
+    colorHex: "#FF7864",
+  },
+  // Unit Usaha Sambu Group (siap diisi aktual pada Master KPI -> Executive Summary & ditampilkan via tag Sambu Group)
+  {
+    id: "ps-jkt",
+    name: "PT Pulau Sambu (Jakarta)",
+    shortName: "PS Jakarta",
+    kind: "unit",
+    groupName: "Sambu Group",
+    colorHex: "#236477",
+  },
+  {
+    id: "ps-gtg",
+    name: "PT Pulau Sambu (Guntung)",
+    shortName: "PS Guntung",
+    kind: "unit",
+    groupName: "Sambu Group",
+    colorHex: "#3D8361",
+  },
+  {
+    id: "ps-ken",
+    name: "PT Pulau Sambu (Kuala Enok)",
+    shortName: "PS Kuala Enok",
+    kind: "unit",
+    groupName: "Sambu Group",
+    colorHex: "#C97A40",
   },
 ];
 
@@ -414,7 +451,26 @@ export function loadMasterExecutiveSummary(): MasterExecutiveSummaryStore {
         Array.isArray(parsed.indicators) &&
         parsed.indicators.length > 0
       ) {
-        return parsed as MasterExecutiveSummaryStore;
+        // Pastikan seluruh entitas standar (termasuk Sambu Group) & warna tema terbaru tersinkron, serta hapus laporan FY lama jika ada
+        const defColorById = new Map(DEFAULT_EXEC_ENTITIES.map((e) => [e.id, e]));
+        const mergedEntities: ExecSummaryEntityDef[] = parsed.entities.map((e) => {
+          const def = defColorById.get(e.id);
+          return def ? { ...e, colorHex: def.colorHex, groupName: def.groupName, shortName: def.shortName } : e;
+        });
+        const seenIds = new Set(mergedEntities.map((e) => e.id));
+        for (const defEnt of DEFAULT_EXEC_ENTITIES) {
+          if (!seenIds.has(defEnt.id)) mergedEntities.push({ ...defEnt });
+        }
+        const validReports = (parsed.reports as ExecSummaryReportBlock[]).filter(
+          (r) => (r.periodType as string) !== "FY",
+        );
+        return {
+          cycleYear: parsed.cycleYear || "2026",
+          entities: mergedEntities,
+          indicators: parsed.indicators,
+          reports: validReports.length > 0 ? validReports : cloneStore(INITIAL_EXEC_SUMMARY_STORE.reports),
+          updatedAt: parsed.updatedAt,
+        };
       }
     }
   } catch {
@@ -489,81 +545,4 @@ export async function refreshMasterExecutiveSummaryFromBackend(): Promise<Master
     // ignore network failure
   }
   return loadMasterExecutiveSummary();
-}
-
-/**
- * Mengambil blok laporan "Setahun (FY)".
- * - Jika admin sudah menambahkan blok `periodType === "FY"` di Master KPI, gunakan blok tersebut secara langsung.
- * - Jika belum ada blok `FY` eksplisit, hitung konsolidasi tahunan otomatis dari rata-rata seluruh Quarter aktif (Q1–Q4) / YTD.
- */
-export function resolveAnnualSummaryReport(store: MasterExecutiveSummaryStore): {
-  report: ExecSummaryReportBlock;
-  isSynthesizedFromQuarters: boolean;
-} {
-  const explicitFy = store.reports.find((r) => r.periodType === "FY");
-  if (explicitFy) {
-    return { report: explicitFy, isSynthesizedFromQuarters: false };
-  }
-  const quarters = store.reports
-    .filter((r) => r.periodType === "Quarter")
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-  const sourceBlocks = quarters.length > 0 ? quarters : store.reports.filter((r) => r.periodType === "YTD");
-  if (sourceBlocks.length === 0) {
-    return {
-      report: store.reports[0] ?? INITIAL_EXEC_SUMMARY_STORE.reports[0],
-      isSynthesizedFromQuarters: true,
-    };
-  }
-
-  const cells: Record<string, Record<string, ExecSummaryMetricCell>> = {};
-  for (const ind of store.indicators) {
-    cells[ind.id] = {};
-    for (const ent of store.entities) {
-      const samples = sourceBlocks
-        .map((b) => b.cells?.[ind.id]?.[ent.id])
-        .filter((cell): cell is ExecSummaryMetricCell => Boolean(cell && cell.applicable));
-      if (samples.length === 0) {
-        cells[ind.id][ent.id] = { ...NA_CELL };
-        continue;
-      }
-      const bobotVals = samples.map((s) => parseExecPct(s.bobot)).filter((v): v is number => v !== null);
-      const actualVals = samples.map((s) => parseExecPct(s.actual)).filter((v): v is number => v !== null);
-      const achVals = samples.map((s) => parseExecPct(s.ach)).filter((v): v is number => v !== null);
-      const avgBobot = bobotVals.length > 0 ? bobotVals.reduce((a, b) => a + b, 0) / bobotVals.length : 0;
-      const avgActual = actualVals.length > 0 ? actualVals.reduce((a, b) => a + b, 0) / actualVals.length : 0;
-      const avgAch = achVals.length > 0 ? achVals.reduce((a, b) => a + b, 0) / achVals.length : 0;
-      cells[ind.id][ent.id] = {
-        applicable: true,
-        bobot: formatExecPct(avgBobot, 0),
-        actual: formatExecPct(avgActual, 1),
-        ach: formatExecPct(avgAch, 1),
-      };
-    }
-  }
-
-  const totals: Record<string, ExecSummaryEntityTotal> = {};
-  for (const ent of store.entities) {
-    const totVals = sourceBlocks
-      .map((b) => parseExecPct(b.totals?.[ent.id]?.ach))
-      .filter((v): v is number => v !== null);
-    const avgTot = totVals.length > 0 ? totVals.reduce((a, b) => a + b, 0) / totVals.length : 0;
-    totals[ent.id] = {
-      bobot: "100%",
-      ach: formatExecPct(avgTot, 1),
-    };
-  }
-
-  return {
-    report: {
-      id: `fy-${store.cycleYear}-consolidated`,
-      title: `Full Year Summary ${store.cycleYear} (Konsolidasi Q1–Q4)`,
-      shortLabel: `Tahun ${store.cycleYear}`,
-      periodType: "FY",
-      sortOrder: 99,
-      totalLabel: `Total ${store.cycleYear}`,
-      cells,
-      totals,
-    },
-    isSynthesizedFromQuarters: true,
-  };
 }

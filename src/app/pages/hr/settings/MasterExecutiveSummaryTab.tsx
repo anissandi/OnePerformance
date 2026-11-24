@@ -31,17 +31,18 @@ import {
 } from "./masterExecutiveSummaryStore";
 
 const ACH_CELL_STYLE: Record<AchColorBand, { bg: string; text: string; border: string; label: string }> = {
-  green:  { bg: "#86efac", text: "#064e3b", border: "#4ade80", label: "HIJAU (95%–100%+)" },
-  yellow: { bg: "#fef08a", text: "#713f12", border: "#facc15", label: "KUNING (≥80% – <95%)" },
-  red:    { bg: "#fca5a5", text: "#7f1d1d", border: "#f87171", label: "MERAH (<80%)" },
-  na:     { bg: "#0f172a", text: "#94a3b8", border: "#1e293b", label: "N/A" },
+  green:  { bg: "#167267", text: "#FFFFFF", border: "#125E55", label: "HIJAU (95%–100%+)" },
+  yellow: { bg: "#FFE770", text: "#3E3E3E", border: "#E8CE4D", label: "KUNING (≥80% – <95%)" },
+  red:    { bg: "#FF7864", text: "#FFFFFF", border: "#E5624E", label: "MERAH (<80%)" },
+  na:     { bg: "#3E3E3E", text: "#D4D4D4", border: "#2B2B2B", label: "N/A" },
 };
 
-type FilterTag = "ALL" | "YTD" | "Quarter" | "MTD" | "FY";
+type FilterTag = "ALL" | "YTD" | "Quarter" | "MTD";
 
 export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolean }) {
   const [store, setStore] = useState<MasterExecutiveSummaryStore>(() => loadMasterExecutiveSummary());
   const [filterTag, setFilterTag] = useState<FilterTag>("ALL");
+  const [showSambuColumns, setShowSambuColumns] = useState<boolean>(false);
   const [previewMode, setPreviewMode] = useState<boolean>(false);
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [draftBlock, setDraftBlock] = useState<ExecSummaryReportBlock | null>(null);
@@ -91,13 +92,17 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
       YTD: 0,
       Quarter: 0,
       MTD: 0,
-      FY: 0,
     };
     for (const r of store.reports) {
       counts[r.periodType] = (counts[r.periodType] ?? 0) + 1;
     }
     return counts;
   }, [store.reports]);
+
+  const displayedEntities = useMemo(
+    () => store.entities.filter((e) => showSambuColumns || e.groupName !== "Sambu Group"),
+    [store.entities, showSambuColumns],
+  );
 
   const startEditReport = (block: ExecSummaryReportBlock) => {
     setEditingReportId(block.id);
@@ -372,7 +377,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
         if (!title || !indName) continue;
         const pTypeRaw = String(typeCol >= 0 ? r[typeCol] ?? "MTD" : "MTD").trim();
         const pType: ExecSummaryPeriodType =
-          pTypeRaw === "FY" || pTypeRaw === "YTD" || pTypeRaw === "Quarter" ? pTypeRaw : "MTD";
+          pTypeRaw === "YTD" || pTypeRaw === "Quarter" ? pTypeRaw : "MTD";
         const shortLbl = String(shortCol >= 0 ? r[shortCol] ?? title : title).trim();
         const sortOrd = Number(sortCol >= 0 ? r[sortCol] : 1) || 1;
 
@@ -445,32 +450,26 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
     {
       id: "ALL",
       label: `Semua Laporan (${countsByType.ALL})`,
-      toneActive: "bg-[#1A284F] text-white border-[#1A284F] shadow-xs",
+      toneActive: "bg-[#3E3E3E] text-white border-[#3E3E3E] shadow-xs",
       toneIdle: "bg-slate-100/90 text-slate-700 border-slate-200 hover:bg-slate-200/70",
     },
     {
       id: "YTD",
       label: `YTD (${countsByType.YTD})`,
-      toneActive: "bg-teal-700 text-white border-teal-700 shadow-xs",
-      toneIdle: "bg-teal-50/90 text-teal-800 border-teal-200 hover:bg-teal-100/80",
+      toneActive: "bg-[#167267] text-white border-[#167267] shadow-xs",
+      toneIdle: "bg-[#E6F3F1] text-[#167267] border-[#B8DDD8] hover:bg-[#D5ECE8]",
     },
     {
       id: "Quarter",
       label: `Quarter Q1–Q4 (${countsByType.Quarter})`,
-      toneActive: "bg-amber-600 text-white border-amber-600 shadow-xs",
-      toneIdle: "bg-amber-50/90 text-amber-800 border-amber-200 hover:bg-amber-100/80",
+      toneActive: "bg-[#FFE770] text-[#3E3E3E] border-[#E5CA45] shadow-xs",
+      toneIdle: "bg-[#FFFBEB] text-[#6B5300] border-[#F5DF7B] hover:bg-[#FFF5C0]",
     },
     {
       id: "MTD",
       label: `Perbulan / MTD (${countsByType.MTD})`,
-      toneActive: "bg-sky-700 text-white border-sky-700 shadow-xs",
-      toneIdle: "bg-sky-50/90 text-sky-800 border-sky-200 hover:bg-sky-100/80",
-    },
-    {
-      id: "FY",
-      label: `Setahun / FY (${countsByType.FY})`,
-      toneActive: "bg-emerald-700 text-white border-emerald-700 shadow-xs",
-      toneIdle: "bg-emerald-50/90 text-emerald-800 border-emerald-200 hover:bg-emerald-100/80",
+      toneActive: "bg-[#FF7864] text-white border-[#FF7864] shadow-xs",
+      toneIdle: "bg-[#FFF2EF] text-[#9E3424] border-[#FFC8BF] hover:bg-[#FFE4DF]",
     },
   ];
 
@@ -557,24 +556,32 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => setShowSambuColumns((v) => !v)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                showSambuColumns
+                  ? "bg-[#1E3A6E] text-white border-[#1E3A6E] shadow-xs"
+                  : "bg-[#EAEFF9] text-[#1E3A6E] border-[#DCE3F2] hover:bg-[#DCE5F7]"
+              }`}
+            >
+              {showSambuColumns ? "Sembunyikan Kolom Sambu Group" : "+ Tampilkan Kolom Sambu Group"}
+            </button>
           </div>
 
           {/* Legenda Resmi PEWARNAAN ACH */}
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
-            <span className="font-bold text-slate-500 uppercase tracking-wider">Pewarnaan ACH:</span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold border border-emerald-300 bg-emerald-100 text-emerald-900">
-              <span className="w-2 h-2 rounded-full bg-emerald-600" />
+            <span className="font-bold text-slate-500 uppercase tracking-wider">Pewarnaan Achievement:</span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#167267" }}>
               95%–100%+ Hijau
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold border border-amber-300 bg-amber-100 text-amber-900">
-              <span className="w-2 h-2 rounded-full bg-amber-500" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-[#3E3E3E] border border-[#E8CE4D]" style={{ backgroundColor: "#FFE770" }}>
               ≥80% – &lt;95% Kuning
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold border border-rose-300 bg-rose-100 text-rose-900">
-              <span className="w-2 h-2 rounded-full bg-rose-600" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#FF7864" }}>
               &lt;80% Merah
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold border border-slate-700 bg-slate-900 text-slate-200">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#3E3E3E" }}>
               N/A (Tidak Berlaku)
             </span>
           </div>
@@ -589,7 +596,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
             Belum ada tabel laporan untuk kategori <strong>{filterTag}</strong>.
           </p>
           <p className="text-xs text-slate-400">
-            Klik tombol &ldquo;Tambah Periode Laporan&rdquo; di kanan atas apabila ingin menambahkan tabel {filterTag} secara eksplisit (untuk kategori Setahun/FY, dashboard otomatis mengonsolidasi Q1–Q4 bila belum ada tabel FY khusus).
+            Klik tombol &ldquo;Tambah Periode Laporan&rdquo; di kanan atas apabila ingin menambahkan tabel laporan {filterTag} baru.
           </p>
         </div>
       ) : (
@@ -623,8 +630,6 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                         ? "bg-teal-50 text-teal-800 border-teal-200"
                         : activeBlock.periodType === "Quarter"
                         ? "bg-amber-50 text-amber-800 border-amber-200"
-                        : activeBlock.periodType === "FY"
-                        ? "bg-emerald-50 text-emerald-800 border-emerald-200"
                         : "bg-sky-50 text-sky-800 border-sky-200"
                     }`}
                   >
@@ -664,7 +669,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                           type="button"
                           onClick={() => handleDeleteReport(report)}
                           title="Hapus periode laporan ini"
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-[#FF7864] hover:bg-[#FFF2EF] transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -683,7 +688,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                       <th className="border border-slate-300 px-3 py-2 text-center font-bold text-[#1A284F] min-w-[250px] sticky left-0 z-10 bg-slate-50">
                         {activeBlock.title}
                       </th>
-                      {store.entities.map((ent) => (
+                      {displayedEntities.map((ent) => (
                         <th
                           key={ent.id}
                           colSpan={3}
@@ -703,20 +708,20 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                       ))}
                     </tr>
                     {/* Row 2: Sub-headers Indikator | Bobot | Actual | ACH */}
-                    <tr className="bg-[#0A5598] text-white">
-                      <th className="border border-[#08447a] px-3 py-2 text-center font-bold sticky left-0 z-10 bg-[#0A5598]">
+                    <tr className="bg-[#167267] text-white">
+                      <th className="border border-[#125E55] px-3 py-2 text-center font-bold sticky left-0 z-10 bg-[#167267]">
                         Indikator
                       </th>
-                      {store.entities.map((ent) => (
+                      {displayedEntities.map((ent) => (
                         <React.Fragment key={`sub-${ent.id}`}>
-                          <th className="border border-[#08447a] px-2 py-1.5 text-center font-bold w-[62px]">
+                          <th className="border border-[#125E55] px-2 py-1.5 text-center font-bold w-[62px]">
                             Bobot
                           </th>
-                          <th className="border border-[#08447a] px-2 py-1.5 text-center font-bold w-[62px]">
+                          <th className="border border-[#125E55] px-2 py-1.5 text-center font-bold w-[62px]">
                             Actual
                           </th>
-                          <th className="border border-[#08447a] px-2 py-1.5 text-center font-bold w-[68px]">
-                            ACH
+                          <th className="border border-[#125E55] px-2 py-1.5 text-center font-bold w-[92px]">
+                            Achievement
                           </th>
                         </React.Fragment>
                       ))}
@@ -728,9 +733,10 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                         <td className="border border-slate-300 px-3 py-2 font-medium text-slate-800 sticky left-0 z-10 bg-inherit">
                           {ind.label}
                         </td>
-                        {store.entities.map((ent) => {
-                          const cell = activeBlock.cells?.[ind.id]?.[ent.id] ?? {
-                            applicable: false,
+                        {displayedEntities.map((ent) => {
+                          const rawCell = activeBlock.cells?.[ind.id]?.[ent.id];
+                          const cell = rawCell ?? {
+                            applicable: ent.groupName === "Sambu Group",
                             bobot: "",
                             actual: "",
                             ach: "",
@@ -740,7 +746,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                               <td
                                 key={`${ind.id}-${ent.id}-na`}
                                 colSpan={3}
-                                className="border border-slate-700 bg-slate-950 text-center py-1.5 px-1"
+                                className="border border-[#2B2B2B] bg-[#3E3E3E] text-center py-1.5 px-1"
                               >
                                 {isEditingThis ? (
                                   <button
@@ -827,16 +833,16 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
 
                     {/* Total Row */}
                     <tr className="font-bold">
-                      <td className="border border-[#08447a] bg-[#0A5598] text-white px-3 py-2 text-center sticky left-0 z-10">
+                      <td className="border border-[#125E55] bg-[#167267] text-white px-3 py-2 text-center sticky left-0 z-10">
                         {activeBlock.totalLabel || "Total"}
                       </td>
-                      {store.entities.map((ent) => {
-                        const tot = activeBlock.totals?.[ent.id] ?? { bobot: "100%", ach: "0%" };
+                      {displayedEntities.map((ent) => {
+                        const tot = activeBlock.totals?.[ent.id] ?? { bobot: ent.groupName === "Sambu Group" ? "—" : "100%", ach: "" };
                         const totBand = classifyAchBand(tot.ach, true, tot.bandOverride);
                         const totStyle = ACH_CELL_STYLE[totBand];
                         return (
                           <React.Fragment key={`tot-${ent.id}`}>
-                            <td className="border border-[#08447a] bg-[#0A5598] text-white px-2 py-2 text-center tabular-nums">
+                            <td className="border border-[#125E55] bg-[#167267] text-white px-2 py-2 text-center tabular-nums">
                               {tot.bobot || "100%"}
                             </td>
                             <td
@@ -852,7 +858,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                                   className="w-20 text-center text-xs font-extrabold border border-black/20 rounded px-1.5 py-0.5 bg-white/90 text-slate-900 outline-none"
                                 />
                               ) : (
-                                tot.ach
+                                tot.ach || "—"
                               )}
                             </td>
                           </React.Fragment>
@@ -878,7 +884,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
               <div>
                 <h3 className="text-sm font-bold">Tambah Periode Laporan Executive Summary</h3>
                 <p className="text-[11px] text-white/75 mt-0.5">
-                  Tambahkan blok laporan Bulanan (MTD), Quarter, YTD, atau Setahun (FY)
+                  Tambahkan blok laporan Bulanan (MTD), Quarter (Q1–Q4), atau Year-to-Date (YTD)
                 </p>
               </div>
               <button
@@ -901,16 +907,14 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                         ...prev,
                         periodType: p,
                         title:
-                          p === "FY"
-                            ? "Full Year Report (Jan-Dec'26)"
-                            : p === "YTD"
+                          p === "YTD"
                             ? "YTD Report (Jan-Nov'26)"
                             : p === "Quarter"
                             ? "Q4 Report (Oct-Dec'26)"
                             : "MTD Report (Nov'26)",
                         shortLabel:
-                          p === "FY" ? "Tahun 2026" : p === "YTD" ? "YTD (Jan–Nov'26)" : p === "Quarter" ? "Q4'26" : "Nov'26",
-                        sortOrder: p === "FY" ? 1 : p === "MTD" ? 11 : 4,
+                          p === "YTD" ? "YTD (Jan–Nov'26)" : p === "Quarter" ? "Q4'26" : "Nov'26",
+                        sortOrder: p === "MTD" ? 11 : 4,
                       }));
                     }}
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-[#1A284F]"
@@ -918,7 +922,6 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                     <option value="MTD">Perbulan (MTD)</option>
                     <option value="Quarter">Quarter (Q1–Q4)</option>
                     <option value="YTD">Year-to-Date (YTD)</option>
-                    <option value="FY">Setahun Penuh (FY)</option>
                   </select>
                 </div>
                 <div>
@@ -1021,7 +1024,7 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                   cancelEditReport();
                   toast.success("Data Executive Summary dikembalikan ke baseline resmi.");
                 }}
-                className="px-4 py-2 rounded-lg text-xs font-semibold bg-rose-600 text-white hover:bg-rose-700"
+                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#FF7864] text-white hover:opacity-90"
               >
                 Ya, Reset Baseline
               </button>

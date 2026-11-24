@@ -1,29 +1,24 @@
+// @refresh reset
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Activity,
-  AlertTriangle,
-  ArrowUpRight,
-  ArrowDownRight,
   Award,
-  BarChart3,
   Building2,
   Calendar,
-  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Compass,
   ExternalLink,
   Filter,
-  Flame,
   Gauge,
+  Info,
   Layers,
   LineChart as LineChartIcon,
   RotateCcw,
-  ShieldAlert,
   SlidersHorizontal,
-  Sparkles,
   Target,
-  TrendingUp,
   X,
 } from "lucide-react";
 import {
@@ -48,13 +43,13 @@ import {
   YAxis,
 } from "recharts";
 import {
+  EXEC_THEME_PALETTE,
   MASTER_EXEC_SUMMARY_UPDATED_EVENT,
   classifyAchBand,
   formatExecPct,
   loadMasterExecutiveSummary,
   parseExecPct,
   refreshMasterExecutiveSummaryFromBackend,
-  resolveAnnualSummaryReport,
   type AchColorBand,
   type ExecSummaryEntityDef,
   type ExecSummaryReportBlock,
@@ -63,124 +58,169 @@ import {
 import { isSameCompanyUnit, useAuthStore } from "../store/authStore";
 import { hasRolePermission } from "../pages/hr/settings/AccessManagement";
 
-// Palet ketat TANPA warna ungu/violet/fuchsia
-const PALETTE = {
-  navy: "#1A284F",
-  cobalt: "#0A5598",
-  sky: "#0284C7",
-  teal: "#0D9488",
-  emerald: "#059669",
-  emeraldBright: "#10B981",
-  amber: "#D97706",
-  amberBright: "#F59E0B",
-  rose: "#E11D48",
-  slate: "#475569",
+// Palet ketat sesuai gambar lampiran (#3E3E3E, #FF7864, #FFE770, #167267) + Navy #1E3A6E — TANPA warna ungu & pink
+const THEME = EXEC_THEME_PALETTE;
+
+const INDICATOR_COLORS: Record<string, string> = {
+  "ind-k3l": "#167267", // Pine Teal Green
+  "ind-fin": "#1E3A6E", // Deep Slate Navy
+  "ind-prd": "#FF7864", // Warm Coral Terracotta
+  "ind-emp": "#2A8C80", // Sea Teal
+  "ind-prt": "#D4A72C", // Warm Ochre Gold (pendamping #FFE770 agar kontras garis tajam)
+  "ind-reg": "#3E3E3E", // Charcoal Dark
 };
 
-const PILLAR_COLORS: Record<string, string> = {
-  "ind-k3l": "#0D9488", // Ocean Teal
-  "ind-fin": "#0A5598", // Cobalt Blue
-  "ind-prd": "#D97706", // Warm Amber
-  "ind-emp": "#059669", // Emerald Forest
-  "ind-prt": "#0284C7", // Sky Steel
-  "ind-reg": "#1A284F", // Deep Navy
+const BALANCED_SCORECARD_DESCRIPTIONS: Record<
+  string,
+  { perspective: string; summary: string; strategicRole: string }
+> = {
+  "ind-k3l": {
+    perspective: "Internal Process · HSE & Sustainability",
+    summary:
+      "Mengukur efektivitas pengendalian keselamatan kerja (Zero Fatality & LTI), pencegahan kebakaran/karhutla, kepatuhan PROPER lingkungan, serta reduksi emisi GRK.",
+    strategicRole:
+      "Fondasi lisensi operasional (license to operate) yang menjaga keberlangsungan pabrik dan perkebunan dari risiko penghentian operasi maupun sanksi lingkungan.",
+  },
+  "ind-fin": {
+    perspective: "Financial · Profitability & Cost Leadership",
+    summary:
+      "Mencerminkan pencapaian Net Profit, EBITDA, ROA, serta efisiensi biaya produksi & overhead (HPP Kelapa/Nanas/Bibit, Cost Utility, dan Cost Meat Preparation).",
+    strategicRole:
+      "Indikator bobot terbesar yang menentukan kesehatan arus kas, margin grup, serta kapasitas pendanaan belanja modal (CAPEX).",
+  },
+  "ind-prd": {
+    perspective: "Internal Process · Operational Throughput & Yield",
+    summary:
+      "Mengukur volume olah dan panen bahan baku (Coconut & Pineapple Process/Production), rendemen efisiensi produk utama (White Meat, Coconut Water, Santan), serta program replanting & pemupukan.",
+    strategicRole:
+      "Penggerak langsung utilisasi kapasitas pabrik dan ketersediaan pasokan bahan baku jangka panjang lintas kebun dan industri.",
+  },
+  "ind-emp": {
+    perspective: "Learning & Growth · Human Capital Excellence",
+    summary:
+      "Mengevaluasi retensi talenta (pengendalian Employee Turnover), tingkat keterikatan karyawan (Engagement Score), pemenuhan batch Management Trainee, serta realisasi jam pelatihan.",
+    strategicRole:
+      "Menjamin kesiapan kompetensi kepemimpinan dan stabilitas tenaga kerja operasional untuk menopang target produksi.",
+  },
+  "ind-prt": {
+    perspective: "Customer & Stakeholder · Market Trust",
+    summary:
+      "Mengukur kepuasan dan kepercayaan mitra/pelanggan melalui pengendalian komplain & insiden kualitas, keberlanjutan sertifikasi pihak ketiga (ISO/standar global), program CSR berdampak bisnis, dan reputasi media.",
+    strategicRole:
+      "Menjaga reputasi merek dan akses pasar ekspor maupun kemitraan strategis jangka panjang.",
+  },
+  "ind-reg": {
+    perspective: "Governance · Legal & Permit Readiness",
+    summary:
+      "Memantau ketepatan penyelesaian perizinan lahan & operasional strategis seperti proses HGU, IUP, serta kepatuhan sertifikasi alat dan keselamatan kerja (SIA/SIO/SILO).",
+    strategicRole:
+      "Mitigasi risiko hukum dan kepastian legalitas aset perkebunan maupun fasilitas industri.",
+  },
 };
 
-const BAND_BADGE: Record<
+const ACHIEVEMENT_BADGE: Record<
   AchColorBand,
-  { bg: string; text: string; border: string; dot: string; solid: string; label: string }
+  { bg: string; softBg: string; text: string; softText: string; border: string; solid: string; label: string }
 > = {
   green: {
-    bg: "#ECFDF5",
-    text: "#065F46",
-    border: "#A7F3D0",
-    dot: "#10B981",
-    solid: "#10B981",
-    label: "On-Track (≥95%)",
+    bg: "#167267",
+    softBg: "#E6F3F1",
+    text: "#FFFFFF",
+    softText: "#0F524A",
+    border: "#B2DBD5",
+    solid: "#167267",
+    label: "Hijau (≥95%)",
   },
   yellow: {
-    bg: "#FFFBEB",
-    text: "#92400E",
-    border: "#FDE68A",
-    dot: "#F59E0B",
-    solid: "#F59E0B",
-    label: "Watchlist (80–<95%)",
+    bg: "#FFE770",
+    softBg: "#FFFBEB",
+    text: "#3E3E3E",
+    softText: "#6B5300",
+    border: "#F0D558",
+    solid: "#FFE770",
+    label: "Kuning (80–<95%)",
   },
   red: {
-    bg: "#FFF1F2",
-    text: "#9F1239",
-    border: "#FECDD3",
-    dot: "#E11D48",
-    solid: "#E11D48",
-    label: "Kritis (<80%)",
+    bg: "#FF7864",
+    softBg: "#FFF2EF",
+    text: "#FFFFFF",
+    softText: "#9E3424",
+    border: "#FFC7BE",
+    solid: "#FF7864",
+    label: "Merah (<80%)",
   },
   na: {
-    bg: "#F1F5F9",
-    text: "#64748B",
-    border: "#CBD5E1",
-    dot: "#94A3B8",
-    solid: "#94A3B8",
+    bg: "#3E3E3E",
+    softBg: "#EFEFEF",
+    text: "#FFFFFF",
+    softText: "#3E3E3E",
+    border: "#CFCFCF",
+    solid: "#3E3E3E",
     label: "N/A",
   },
 };
 
-type HorizonMode = "FY" | "YTD" | "Quarter" | "MTD";
+type HorizonMode = "YTD" | "Quarter" | "MTD";
 type ScopeFocus = "ALL" | "GROUP" | "UNITS";
-type TrendGranularity = "MTD" | "Quarter" | "Horizon";
-type UnitMetricView = "ach" | "actual_vs_target";
+type TrendGranularity = "MTD" | "Quarter";
+type UnitMetricView = "actual_vs_target" | "ach";
+type RootFilterKey = "periode" | "fokus" | "indikator" | null;
+type FokusChildKey = "ALL" | "GROUP" | "RSUP_UNITS" | "SAMBU_UNITS";
 
-function AnimatedRadialGauge({
+function LightCardRadialGauge({
   value,
   band,
-  subtitle,
 }: {
   value: number;
   band: AchColorBand;
-  subtitle: string;
 }) {
   const clamped = Math.max(0, Math.min(100, value));
-  const radius = 56;
+  const radius = 46;
   const circumference = 2 * Math.PI * radius;
   const strokeColor =
-    band === "green" ? PALETTE.emeraldBright : band === "yellow" ? PALETTE.amberBright : PALETTE.rose;
+    band === "green"
+      ? THEME.pineGreen
+      : band === "yellow"
+      ? "#E0BE28"
+      : THEME.coralRed;
 
   return (
-    <div className="relative w-36 h-36 flex items-center justify-center shrink-0">
-      <svg className="w-full h-full -rotate-90" viewBox="0 0 136 136">
+    <div className="relative w-28 h-28 flex items-center justify-center shrink-0">
+      <svg className="w-full h-full -rotate-90" viewBox="0 0 112 112">
         <circle
-          cx="68"
-          cy="68"
+          cx="56"
+          cy="56"
           r={radius}
           fill="none"
-          stroke="rgba(255,255,255,0.14)"
-          strokeWidth="11"
+          stroke="#DCE3F2"
+          strokeWidth="10"
         />
         <motion.circle
-          cx="68"
-          cy="68"
+          cx="56"
+          cy="56"
           r={radius}
           fill="none"
           stroke={strokeColor}
-          strokeWidth="11"
+          strokeWidth="10"
           strokeLinecap="round"
           strokeDasharray={circumference}
           initial={{ strokeDashoffset: circumference }}
           animate={{ strokeDashoffset: circumference * (1 - clamped / 100) }}
-          transition={{ duration: 0.9, ease: "easeOut" }}
+          transition={{ duration: 0.85, ease: "easeOut" }}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
         <motion.span
           key={value}
-          initial={{ opacity: 0, scale: 0.9 }}
+          initial={{ opacity: 0, scale: 0.92 }}
           animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.35 }}
-          className="text-2xl font-extrabold text-white tabular-nums tracking-tight"
+          transition={{ duration: 0.3 }}
+          className="text-xl font-extrabold text-[#111827] tabular-nums tracking-tight"
         >
           {formatExecPct(value, 1)}
         </motion.span>
-        <span className="text-[10px] font-semibold text-sky-200/90 uppercase tracking-wider mt-0.5">
-          {subtitle}
+        <span className="text-[9px] font-bold text-[#1E3A6E] uppercase tracking-wider mt-0.5">
+          Achievement
         </span>
       </div>
     </div>
@@ -192,20 +232,29 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
   const { activeUser, portalPath } = useAuthStore();
   const [store, setStore] = useState<MasterExecutiveSummaryStore>(() => loadMasterExecutiveSummary());
 
-  // Soft Filter States
+  // ── Progressive 3-Level Filter State (Induk -> Anak -> Cucu dalam 1 baris utama) ──
+  const [openRootFilter, setOpenRootFilter] = useState<RootFilterKey>(null);
+  const [fokusChildBranch, setFokusChildBranch] = useState<FokusChildKey>("ALL");
+  const [indikatorShowGrandchild, setIndikatorShowGrandchild] = useState<boolean>(false);
+
+  // Filter Fungsional
   const [horizon, setHorizon] = useState<HorizonMode>("YTD");
   const [selectedReportId, setSelectedReportId] = useState<string>("ytd-jan-oct-26");
   const [scopeFocus, setScopeFocus] = useState<ScopeFocus>("ALL");
   const [spotlightUnitId, setSpotlightUnitId] = useState<string>("ALL");
-  const [selectedPillarId, setSelectedPillarId] = useState<string>("ALL");
+  const [showSambuGroup, setShowSambuGroup] = useState<boolean>(false);
+  const [selectedIndicatorId, setSelectedIndicatorId] = useState<string>("ALL");
   const [achBandFilter, setAchBandFilter] = useState<"ALL" | "green" | "yellow" | "red">("ALL");
 
   // Interactive Chart Mode States
   const [groupTrendMode, setGroupTrendMode] = useState<TrendGranularity>("MTD");
   const [unitTrendMode, setUnitTrendMode] = useState<TrendGranularity>("MTD");
-  const [unitMetricView, setUnitMetricView] = useState<UnitMetricView>("ach");
-  const [pillarSpotlightForUnits, setPillarSpotlightForUnits] = useState<string>("ind-fin");
+  // Point 8: Komparasi per Indikator card auto memunculkan tab Aktual vs Target (Bobot)
+  const [unitMetricView, setUnitMetricView] = useState<UnitMetricView>("actual_vs_target");
+  const [indicatorSpotlightForUnits, setIndicatorSpotlightForUnits] = useState<string>("ind-fin");
   const [inspectedCell, setInspectedCell] = useState<{ indId: string; entId: string } | null>(null);
+  // Point 15: Indikator yang disorot kursor pada Balanced Scorecard
+  const [hoveredBscIndId, setHoveredBscIndId] = useState<string>("ind-fin");
 
   useEffect(() => {
     void refreshMasterExecutiveSummaryFromBackend().then((latest) => {
@@ -227,20 +276,32 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
     return r === "Administrator" || r === "HR ICF" || hasRolePermission(r, "setting_master_kpi", "view");
   }, [activeUser.role]);
 
-  // Filter entitas sesuai lockedUnits bila user memiliki pembatasan unit
   const groupEntity = useMemo(
     () => store.entities.find((e) => e.kind === "group") ?? store.entities[0],
     [store.entities],
   );
-  const unitEntities = useMemo(() => {
-    const allUnits = store.entities.filter((e) => e.kind === "unit");
-    if (!lockedUnits || lockedUnits.length === 0) return allUnits;
-    const matched = allUnits.filter((u) => lockedUnits.some((lu) => isSameCompanyUnit(lu, u.name)));
-    return matched.length > 0 ? matched : allUnits;
+
+  const rsupUnitEntities = useMemo(() => {
+    const list = store.entities.filter((e) => e.kind === "unit" && e.groupName === "RSUP Group");
+    if (!lockedUnits || lockedUnits.length === 0) return list;
+    const matched = list.filter((u) => lockedUnits.some((lu) => isSameCompanyUnit(lu, u.name)));
+    return matched.length > 0 ? matched : list;
   }, [store.entities, lockedUnits]);
 
-  // Kelompok laporan per Horizon
-  const annualResolved = useMemo(() => resolveAnnualSummaryReport(store), [store]);
+  const sambuUnitEntities = useMemo(() => {
+    const list = store.entities.filter((e) => e.kind === "unit" && e.groupName === "Sambu Group");
+    if (!lockedUnits || lockedUnits.length === 0) return list;
+    const matched = list.filter((u) => lockedUnits.some((lu) => isSameCompanyUnit(lu, u.name)));
+    return matched.length > 0 ? matched : list;
+  }, [store.entities, lockedUnits]);
+
+  // Point 7: Auto memunculkan semua unit usaha RSUP Group, dan Sambu Group muncul jika tag Sambu Group diaktifkan
+  const activeUnitEntities = useMemo(
+    () => (showSambuGroup ? [...rsupUnitEntities, ...sambuUnitEntities] : rsupUnitEntities),
+    [rsupUnitEntities, sambuUnitEntities, showSambuGroup],
+  );
+
+  // Kelompok laporan per Horizon (YTD, Quarter, MTD — tanpa Setahun/FY sesuai Point 5)
   const ytdReports = useMemo(
     () => [...store.reports.filter((r) => r.periodType === "YTD")].sort((a, b) => b.sortOrder - a.sortOrder),
     [store.reports],
@@ -254,11 +315,8 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
     [store.reports],
   );
 
-  // Pastikan selectedReportId selalu valid ketika horizon berubah
   useEffect(() => {
-    if (horizon === "FY") {
-      setSelectedReportId(annualResolved.report.id);
-    } else if (horizon === "YTD") {
+    if (horizon === "YTD") {
       if (!ytdReports.some((r) => r.id === selectedReportId)) {
         setSelectedReportId(ytdReports[0]?.id ?? "");
       }
@@ -271,27 +329,29 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         setSelectedReportId(mtdReports[mtdReports.length - 1]?.id ?? "");
       }
     }
-  }, [horizon, annualResolved.report.id, ytdReports, quarterReports, mtdReports, selectedReportId]);
+  }, [horizon, ytdReports, quarterReports, mtdReports, selectedReportId]);
 
   const activeReport: ExecSummaryReportBlock = useMemo(() => {
-    if (horizon === "FY") return annualResolved.report;
     const found = store.reports.find((r) => r.id === selectedReportId);
     if (found) return found;
-    return ytdReports[0] ?? store.reports[0] ?? annualResolved.report;
-  }, [horizon, annualResolved.report, store.reports, selectedReportId, ytdReports]);
+    return ytdReports[0] ?? store.reports[0];
+  }, [store.reports, selectedReportId, ytdReports]);
 
-  const latestYtdReport = ytdReports[0] ?? annualResolved.report;
+  const latestYtdReport = ytdReports[0] ?? activeReport;
   const latestMtdReport = mtdReports[mtdReports.length - 1] ?? activeReport;
-  const prevMtdReport = mtdReports.length >= 2 ? mtdReports[mtdReports.length - 2] : null;
   const latestQuarterReport = quarterReports[quarterReports.length - 1] ?? activeReport;
 
-  // Filter indikator sesuai tag pilar yang dipilih
   const visibleIndicators = useMemo(() => {
-    if (selectedPillarId === "ALL") return store.indicators;
-    return store.indicators.filter((i) => i.id === selectedPillarId);
-  }, [store.indicators, selectedPillarId]);
+    if (selectedIndicatorId === "ALL") return store.indicators;
+    return store.indicators.filter((i) => i.id === selectedIndicatorId);
+  }, [store.indicators, selectedIndicatorId]);
 
-  // ── 1. Data Hero & Ranking Unit Usaha pada Horizon Aktif ──
+  const activeFilterIndicatorObj = useMemo(
+    () => (selectedIndicatorId !== "ALL" ? store.indicators.find((i) => i.id === selectedIndicatorId) : undefined),
+    [store.indicators, selectedIndicatorId],
+  );
+
+  // ── 1. Data Executive Summary RSUP Group (Point 3 & 17) & Perbandingan Unit Usaha (Point 4 & 7) ──
   const groupActiveTotal = useMemo(() => {
     const raw = activeReport.totals?.[groupEntity.id];
     const num = parseExecPct(raw?.ach) ?? 0;
@@ -300,39 +360,39 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
   }, [activeReport, groupEntity.id]);
 
   const groupHorizonSnapshot = useMemo(() => {
-    const fyNum = parseExecPct(annualResolved.report.totals?.[groupEntity.id]?.ach) ?? 0;
     const ytdNum = parseExecPct(latestYtdReport.totals?.[groupEntity.id]?.ach) ?? 0;
     const qNum = parseExecPct(latestQuarterReport.totals?.[groupEntity.id]?.ach) ?? 0;
     const mNum = parseExecPct(latestMtdReport.totals?.[groupEntity.id]?.ach) ?? 0;
-    const prevMNum = prevMtdReport ? parseExecPct(prevMtdReport.totals?.[groupEntity.id]?.ach) : null;
     return {
-      fy: fyNum,
       ytd: ytdNum,
       quarter: qNum,
       quarterLabel: latestQuarterReport.shortLabel,
       mtd: mNum,
       mtdLabel: latestMtdReport.shortLabel,
-      mtdDelta: prevMNum !== null ? Math.round((mNum - prevMNum) * 10) / 10 : null,
     };
-  }, [annualResolved.report, latestYtdReport, latestQuarterReport, latestMtdReport, prevMtdReport, groupEntity.id]);
+  }, [latestYtdReport, latestQuarterReport, latestMtdReport, groupEntity.id]);
 
-  const rankedUnits = useMemo(() => {
-    return unitEntities
+  const unitComparisonCards = useMemo(() => {
+    return activeUnitEntities
       .map((ent) => {
         const tot = activeReport.totals?.[ent.id];
-        const achNum = parseExecPct(tot?.ach) ?? 0;
-        const band = classifyAchBand(tot?.ach, true, tot?.bandOverride);
-        // Hitung momentum Q1 -> Q4 (atau Mei -> Okt)
+        const parsedAch = parseExecPct(tot?.ach);
+        const hasData = parsedAch !== null && String(tot?.ach ?? "").trim() !== "";
+        const achNum = parsedAch ?? 0;
+        const band: AchColorBand = hasData ? classifyAchBand(tot?.ach, true, tot?.bandOverride) : "na";
         const q1 = quarterReports[0] ? parseExecPct(quarterReports[0].totals?.[ent.id]?.ach) : null;
-        const qLast = quarterReports.length > 1 ? parseExecPct(quarterReports[quarterReports.length - 1].totals?.[ent.id]?.ach) : null;
-        const qDelta = q1 !== null && qLast !== null ? Math.round((qLast - q1) * 10) / 10 : null;
+        const qLast =
+          quarterReports.length > 1
+            ? parseExecPct(quarterReports[quarterReports.length - 1].totals?.[ent.id]?.ach)
+            : null;
+        const qDelta = hasData && q1 !== null && qLast !== null ? Math.round((qLast - q1) * 10) / 10 : null;
 
         let greenCount = 0;
         let yellowCount = 0;
         let redCount = 0;
         for (const ind of store.indicators) {
           const cell = activeReport.cells?.[ind.id]?.[ent.id];
-          if (!cell || !cell.applicable) continue;
+          if (!cell || !cell.applicable || !String(cell.ach ?? "").trim()) continue;
           const b = classifyAchBand(cell.ach, true);
           if (b === "green") greenCount++;
           else if (b === "yellow") yellowCount++;
@@ -340,8 +400,9 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         }
         return {
           entity: ent,
+          hasData,
           achNum,
-          achStr: tot?.ach || formatExecPct(achNum, 1),
+          achStr: hasData ? tot?.ach || formatExecPct(achNum, 1) : "—",
           band,
           qDelta,
           greenCount,
@@ -349,32 +410,36 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
           redCount,
         };
       })
-      .filter((item) => achBandFilter === "ALL" || item.band === achBandFilter)
-      .sort((a, b) => b.achNum - a.achNum);
-  }, [unitEntities, activeReport, quarterReports, store.indicators, achBandFilter]);
+      .filter((item) => achBandFilter === "ALL" || !item.hasData || item.band === achBandFilter);
+  }, [activeUnitEntities, activeReport, quarterReports, store.indicators, achBandFilter]);
 
-  // ── 2. Data Perspektif RSUP Group ──
+  // ── 2. Data Perspektif RSUP Group (tanpa Setahun) ──
   const rsupGroupMultiHorizonData = useMemo(() => {
-    const items: Array<{ label: string; category: string; ach: number; target: number; band: AchColorBand }> = [];
+    const items: Array<{ label: string; category: string; ach: number; band: AchColorBand }> = [];
     const pushPoint = (label: string, category: string, rep: ExecSummaryReportBlock) => {
-      const tot = rep.totals?.[groupEntity.id];
-      const ach = parseExecPct(tot?.ach) ?? 0;
+      const valStr =
+        selectedIndicatorId !== "ALL"
+          ? rep.cells?.[selectedIndicatorId]?.[groupEntity.id]?.ach
+          : rep.totals?.[groupEntity.id]?.ach;
+      const ach = parseExecPct(valStr) ?? 0;
       items.push({
         label,
         category,
         ach,
-        target: 100,
-        band: classifyAchBand(tot?.ach, true, tot?.bandOverride),
+        band: classifyAchBand(
+          valStr,
+          true,
+          selectedIndicatorId === "ALL" ? rep.totals?.[groupEntity.id]?.bandOverride : undefined,
+        ),
       });
     };
-    pushPoint("Tahun '26", "Setahun", annualResolved.report);
     if (latestYtdReport) pushPoint("YTD Okt'26", "YTD", latestYtdReport);
     quarterReports.forEach((q) => pushPoint(q.shortLabel, "Quarter", q));
     mtdReports.forEach((m) => pushPoint(m.shortLabel, "Perbulan", m));
     return items;
-  }, [annualResolved.report, latestYtdReport, quarterReports, mtdReports, groupEntity.id]);
+  }, [latestYtdReport, quarterReports, mtdReports, groupEntity.id, selectedIndicatorId]);
 
-  const rsupGroupPillarBreakdown = useMemo(() => {
+  const rsupGroupIndicatorBreakdown = useMemo(() => {
     return visibleIndicators
       .map((ind) => {
         const cell = activeReport.cells?.[ind.id]?.[groupEntity.id];
@@ -397,23 +462,17 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
           actualStr: cell.actual,
           pointGap,
           band,
-          color: PILLAR_COLORS[ind.id] ?? PALETTE.cobalt,
+          color: INDICATOR_COLORS[ind.id] ?? THEME.pineGreen,
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
   }, [visibleIndicators, activeReport, groupEntity.id, achBandFilter]);
 
-  const rsupGroupPillarTrendData = useMemo(() => {
-    const blocks: ExecSummaryReportBlock[] =
-      groupTrendMode === "MTD"
-        ? mtdReports
-        : groupTrendMode === "Quarter"
-        ? quarterReports
-        : [...quarterReports, ...(latestYtdReport ? [latestYtdReport] : []), annualResolved.report];
+  const rsupGroupIndicatorTrendData = useMemo(() => {
+    const blocks: ExecSummaryReportBlock[] = groupTrendMode === "MTD" ? mtdReports : quarterReports;
     return blocks.map((rep) => {
       const row: Record<string, string | number> = {
         period: rep.shortLabel,
-        totalAch: parseExecPct(rep.totals?.[groupEntity.id]?.ach) ?? 0,
       };
       for (const ind of store.indicators) {
         const cell = rep.cells?.[ind.id]?.[groupEntity.id];
@@ -423,50 +482,46 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
       }
       return row;
     });
-  }, [groupTrendMode, mtdReports, quarterReports, latestYtdReport, annualResolved.report, store.indicators, groupEntity.id]);
+  }, [groupTrendMode, mtdReports, quarterReports, store.indicators, groupEntity.id]);
 
-  // ── 3. Data Perbandingan Antar Unit Usaha ──
-  const unitHorizonComparisonData = useMemo(() => {
-    return unitEntities
+  // ── 3. Data Summary Perbandingan Antar Unit Usaha (Point 7, 8, 9) ──
+
+  // Point 7: Perbandingan Achievement Unit Usaha dari Perspektif 6 Indikator (auto tampilkan semua unit usaha)
+  const unitSixIndicatorsData = useMemo(() => {
+    return activeUnitEntities
       .filter((u) => spotlightUnitId === "ALL" || u.id === spotlightUnitId)
-      .map((u) => ({
-        id: u.id,
-        unit: u.shortName,
-        fullName: u.name,
-        color: u.colorHex,
-        Setahun: parseExecPct(annualResolved.report.totals?.[u.id]?.ach) ?? 0,
-        YTD: parseExecPct(latestYtdReport.totals?.[u.id]?.ach) ?? 0,
-        Quarter: parseExecPct(
-          (horizon === "Quarter" ? activeReport : latestQuarterReport).totals?.[u.id]?.ach,
-        ) ?? 0,
-        Perbulan: parseExecPct(
-          (horizon === "MTD" ? activeReport : latestMtdReport).totals?.[u.id]?.ach,
-        ) ?? 0,
-      }));
-  }, [
-    unitEntities,
-    spotlightUnitId,
-    annualResolved.report,
-    latestYtdReport,
-    latestQuarterReport,
-    latestMtdReport,
-    horizon,
-    activeReport,
-  ]);
+      .map((u) => {
+        const row: Record<string, string | number> = {
+          id: u.id,
+          unit: u.shortName,
+          fullName: u.name,
+          groupName: u.groupName,
+        };
+        for (const ind of store.indicators) {
+          const cell = activeReport.cells?.[ind.id]?.[u.id];
+          row[ind.id] = cell && cell.applicable ? parseExecPct(cell.ach) ?? 0 : 0;
+        }
+        return row;
+      });
+  }, [activeUnitEntities, spotlightUnitId, store.indicators, activeReport]);
 
-  const unitBySelectedPillarData = useMemo(() => {
+  // Point 8: Komparasi per Indikator (auto memunculkan Aktual vs Target Bobot)
+  const unitBySelectedIndicatorData = useMemo(() => {
     const targetInd =
-      store.indicators.find((i) => i.id === (selectedPillarId !== "ALL" ? selectedPillarId : pillarSpotlightForUnits)) ??
-      store.indicators[0];
-    const rows = [groupEntity, ...unitEntities]
+      store.indicators.find(
+        (i) => i.id === (selectedIndicatorId !== "ALL" ? selectedIndicatorId : indicatorSpotlightForUnits),
+      ) ?? store.indicators[0];
+    const rows = [groupEntity, ...activeUnitEntities]
       .filter((e) => spotlightUnitId === "ALL" || e.id === spotlightUnitId || e.kind === "group")
       .map((ent) => {
         const cell = activeReport.cells?.[targetInd.id]?.[ent.id];
-        const applicable = Boolean(cell?.applicable);
+        const isSambuUnfilled = ent.groupName === "Sambu Group" && !cell;
+        const applicable = isSambuUnfilled ? true : Boolean(cell?.applicable);
         const bobot = applicable ? parseExecPct(cell?.bobot) ?? 0 : 0;
         const actual = applicable ? parseExecPct(cell?.actual) ?? 0 : 0;
         const ach = applicable ? parseExecPct(cell?.ach) ?? 0 : 0;
-        const band = classifyAchBand(cell?.ach, applicable);
+        const band: AchColorBand =
+          cell && String(cell.ach ?? "").trim() ? classifyAchBand(cell.ach, applicable) : "na";
         return {
           id: ent.id,
           entity: ent.shortName,
@@ -476,60 +531,66 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
           bobot,
           actual,
           ach,
-          gap: Math.max(0, Math.round((bobot - actual) * 100) / 100),
           band,
           color: ent.colorHex,
         };
       })
-      .filter((r) => r.applicable && (achBandFilter === "ALL" || r.band === achBandFilter));
+      .filter((r) => r.applicable && (achBandFilter === "ALL" || r.band === "na" || r.band === achBandFilter));
     return { indicator: targetInd, rows };
   }, [
     store.indicators,
-    selectedPillarId,
-    pillarSpotlightForUnits,
+    selectedIndicatorId,
+    indicatorSpotlightForUnits,
     groupEntity,
-    unitEntities,
+    activeUnitEntities,
     spotlightUnitId,
     activeReport,
     achBandFilter,
   ]);
 
+  // Point 9: Trend Lintasan Pencapaian Unit Usaha vs Benchmark RSUP Group (MTD | Q1–Q4, dinamis mengikuti filter Indikator KPI)
   const unitTrajectoryData = useMemo(() => {
-    const blocks: ExecSummaryReportBlock[] =
-      unitTrendMode === "MTD"
-        ? mtdReports
-        : unitTrendMode === "Quarter"
-        ? quarterReports
-        : [...quarterReports, ...(latestYtdReport ? [latestYtdReport] : []), annualResolved.report];
+    const blocks: ExecSummaryReportBlock[] = unitTrendMode === "MTD" ? mtdReports : quarterReports;
+    const resolveEntityVal = (rep: ExecSummaryReportBlock, entId: string): number | null => {
+      if (selectedIndicatorId !== "ALL") {
+        const cell = rep.cells?.[selectedIndicatorId]?.[entId];
+        if (!cell || !cell.applicable) return null;
+        return parseExecPct(cell.ach);
+      }
+      return parseExecPct(rep.totals?.[entId]?.ach);
+    };
     return blocks.map((rep) => {
-      const row: Record<string, string | number> = {
+      const row: Record<string, string | number | null> = {
         period: rep.shortLabel,
-        [groupEntity.id]: parseExecPct(rep.totals?.[groupEntity.id]?.ach) ?? 0,
+        [groupEntity.id]: resolveEntityVal(rep, groupEntity.id),
       };
-      for (const u of unitEntities) {
-        row[u.id] = parseExecPct(rep.totals?.[u.id]?.ach) ?? 0;
+      for (const u of activeUnitEntities) {
+        row[u.id] = resolveEntityVal(rep, u.id);
       }
       return row;
     });
-  }, [unitTrendMode, mtdReports, quarterReports, latestYtdReport, annualResolved.report, groupEntity, unitEntities]);
+  }, [unitTrendMode, mtdReports, quarterReports, selectedIndicatorId, groupEntity.id, activeUnitEntities]);
 
-  // ── 4. Data BOD Strategic Intelligence Suite (Saran Perspektif BOD) ──
+  // ── 4. Data Strategic Intelligence Suite (Points 10, 11, 12, 13, 14, 15) ──
 
-  // 4A. Weighted Gap-to-100% Attribution (Pareto Defisit Poin Bobot per Entitas)
+  // Point 14: Defisit Poin Menuju 100% (Unit Usaha + RSUP Group sesuai scopeFocus)
   const gapAttributionData = useMemo(() => {
     const entitiesList =
       scopeFocus === "GROUP"
         ? [groupEntity]
         : scopeFocus === "UNITS"
-        ? unitEntities
-        : [groupEntity, ...unitEntities];
+        ? activeUnitEntities
+        : [groupEntity, ...activeUnitEntities];
     return entitiesList
       .filter((e) => spotlightUnitId === "ALL" || e.id === spotlightUnitId || e.kind === "group")
       .map((ent) => {
-        const totAch = parseExecPct(activeReport.totals?.[ent.id]?.ach) ?? 0;
-        const losses: Array<{ indId: string; label: string; loss: number; ach: number; color: string }> = [];
+        const rawTot = activeReport.totals?.[ent.id]?.ach;
+        const hasData = parseExecPct(rawTot) !== null && String(rawTot ?? "").trim() !== "";
+        const totAch = parseExecPct(rawTot) ?? 0;
+        const losses: Array<{ indId: string; label: string; loss: number; ach: number }> = [];
         let totalLoss = 0;
         for (const ind of store.indicators) {
+          if (selectedIndicatorId !== "ALL" && ind.id !== selectedIndicatorId) continue;
           const cell = activeReport.cells?.[ind.id]?.[ent.id];
           if (!cell || !cell.applicable) continue;
           const b = parseExecPct(cell.bobot) ?? 0;
@@ -541,7 +602,6 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
               label: ind.shortLabel,
               loss,
               ach: parseExecPct(cell.ach) ?? 0,
-              color: PILLAR_COLORS[ind.id] ?? PALETTE.amber,
             });
             totalLoss += loss;
           }
@@ -549,82 +609,95 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         losses.sort((a, b) => b.loss - a.loss);
         return {
           entity: ent,
+          hasData,
           achieved: totAch,
           totalLoss: Math.round(totalLoss * 10) / 10,
           losses,
           topDrag: losses[0] ?? null,
         };
       });
-  }, [scopeFocus, groupEntity, unitEntities, spotlightUnitId, activeReport, store.indicators]);
+  }, [scopeFocus, groupEntity, activeUnitEntities, spotlightUnitId, activeReport, store.indicators, selectedIndicatorId]);
 
-  // 4B. Balanced Scorecard Radar (RSUP Group vs Top Unit vs Spotlight/Watch Unit)
+  // Point 15: Balanced Scorecard Radar + Penjelasan Indikator yang disorot kursor
   const radarComparison = useMemo(() => {
+    const rsupScoredUnits = unitComparisonCards.filter((u) => u.hasData);
     const focusUnit: ExecSummaryEntityDef | undefined =
       spotlightUnitId !== "ALL"
-        ? unitEntities.find((u) => u.id === spotlightUnitId)
-        : rankedUnits[0]?.entity ?? unitEntities[0];
+        ? activeUnitEntities.find((u) => u.id === spotlightUnitId)
+        : rsupScoredUnits[0]?.entity ?? activeUnitEntities[0];
     const watchUnit: ExecSummaryEntityDef | undefined =
       spotlightUnitId !== "ALL"
-        ? rankedUnits[0]?.entity?.id !== spotlightUnitId
-          ? rankedUnits[0]?.entity
-          : rankedUnits[rankedUnits.length - 1]?.entity
-        : rankedUnits[rankedUnits.length - 1]?.entity;
+        ? rsupScoredUnits[0]?.entity?.id !== spotlightUnitId
+          ? rsupScoredUnits[0]?.entity
+          : rsupScoredUnits[rsupScoredUnits.length - 1]?.entity
+        : rsupScoredUnits[rsupScoredUnits.length - 1]?.entity;
 
     const data = store.indicators.map((ind) => {
       const gCell = activeReport.cells?.[ind.id]?.[groupEntity.id];
       const fCell = focusUnit ? activeReport.cells?.[ind.id]?.[focusUnit.id] : undefined;
       const wCell = watchUnit ? activeReport.cells?.[ind.id]?.[watchUnit.id] : undefined;
       return {
-        pillar: ind.shortLabel,
+        indId: ind.id,
+        indicator: ind.shortLabel,
+        fullIndicator: ind.label,
         groupVal: gCell?.applicable ? Math.min(105, parseExecPct(gCell.ach) ?? 0) : 0,
         focusVal: fCell?.applicable ? Math.min(105, parseExecPct(fCell.ach) ?? 0) : 0,
         watchVal: wCell?.applicable ? Math.min(105, parseExecPct(wCell.ach) ?? 0) : 0,
       };
     });
     return { focusUnit, watchUnit, data };
-  }, [store.indicators, activeReport, groupEntity.id, spotlightUnitId, unitEntities, rankedUnits]);
+  }, [store.indicators, activeReport, groupEntity.id, spotlightUnitId, activeUnitEntities, unitComparisonCards]);
 
-  // 4C. Consistency & Momentum Index (Stabilitas Bulanan & Akselerasi Q1->Q4)
-  const consistencyMatrix = useMemo(() => {
-    return [groupEntity, ...unitEntities].map((ent) => {
-      const mVals = mtdReports
-        .map((m) => parseExecPct(m.totals?.[ent.id]?.ach))
-        .filter((v): v is number => v !== null);
-      const mean = mVals.length > 0 ? mVals.reduce((a, b) => a + b, 0) / mVals.length : 0;
-      const variance =
-        mVals.length > 1
-          ? mVals.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / mVals.length
-          : 0;
-      const stdDev = Math.round(Math.sqrt(variance) * 10) / 10;
-      const minMtd = mVals.length > 0 ? Math.min(...mVals) : 0;
-      const maxMtd = mVals.length > 0 ? Math.max(...mVals) : 0;
-      const qFirst = quarterReports[0] ? parseExecPct(quarterReports[0].totals?.[ent.id]?.ach) : null;
-      const qLast = quarterReports.length > 0 ? parseExecPct(quarterReports[quarterReports.length - 1].totals?.[ent.id]?.ach) : null;
-      const qMomentum = qFirst !== null && qLast !== null ? Math.round((qLast - qFirst) * 10) / 10 : 0;
-      const stabilityScore = Math.max(0, Math.min(100, Math.round(100 - stdDev * 4)));
+  const activeBscInd = useMemo(() => {
+    const targetId = selectedIndicatorId !== "ALL" ? selectedIndicatorId : hoveredBscIndId;
+    return store.indicators.find((i) => i.id === targetId) ?? store.indicators[0];
+  }, [store.indicators, selectedIndicatorId, hoveredBscIndId]);
+
+  const activeBscExplanation = useMemo(() => {
+    const meta = BALANCED_SCORECARD_DESCRIPTIONS[activeBscInd.id] ?? {
+      perspective: "Strategic Balanced Scorecard",
+      summary: `Pengukuran pencapaian indikator strategis ${activeBscInd.label}.`,
+      strategicRole: "Menjaga keselarasan target bisnis lintas Group dan Unit Usaha.",
+    };
+    const entitiesToCompare = [
+      groupEntity,
+      ...(radarComparison.focusUnit ? [radarComparison.focusUnit] : []),
+      ...(radarComparison.watchUnit && radarComparison.watchUnit.id !== radarComparison.focusUnit?.id
+        ? [radarComparison.watchUnit]
+        : []),
+    ];
+    const metrics = entitiesToCompare.map((ent) => {
+      const cell = activeReport.cells?.[activeBscInd.id]?.[ent.id];
+      const applicable = Boolean(cell?.applicable);
+      const band = applicable && cell?.ach ? classifyAchBand(cell.ach, true) : "na";
       return {
         entity: ent,
-        meanMtd: Math.round(mean * 10) / 10,
-        stdDev,
-        minMtd,
-        maxMtd,
-        qMomentum,
-        stabilityScore,
+        applicable,
+        bobot: applicable ? cell?.bobot || "—" : "N/A",
+        actual: applicable ? cell?.actual || "—" : "N/A",
+        ach: applicable ? cell?.ach || "—" : "N/A",
+        band,
       };
     });
-  }, [groupEntity, unitEntities, mtdReports, quarterReports]);
+    return { ind: activeBscInd, meta, metrics };
+  }, [activeBscInd, groupEntity, radarComparison.focusUnit, radarComparison.watchUnit, activeReport]);
 
-  // 4D. Cell Drilldown Sparkline (saat sel Heatmap diklik)
+  // Point 12: Drilldown Lintasan Historis HANYA memunculkan sesuai filter Periode aktif (tidak menggabungkan)
   const inspectedCellSeries = useMemo(() => {
     if (!inspectedCell) return null;
     const ind = store.indicators.find((i) => i.id === inspectedCell.indId);
     const ent = store.entities.find((e) => e.id === inspectedCell.entId);
     if (!ind || !ent) return null;
-    const timeline = [...quarterReports, ...mtdReports, ...(latestYtdReport ? [latestYtdReport] : []), annualResolved.report];
+    const timeline: ExecSummaryReportBlock[] =
+      horizon === "MTD"
+        ? mtdReports
+        : horizon === "Quarter"
+        ? quarterReports
+        : ytdReports;
     const points = timeline
       .map((rep) => {
         const cell = rep.cells?.[ind.id]?.[ent.id];
-        if (!cell || !cell.applicable) return null;
+        if (!cell || !cell.applicable || !String(cell.ach ?? "").trim()) return null;
         return {
           label: rep.shortLabel,
           type: rep.periodType,
@@ -634,170 +707,165 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
-    return { ind, ent, points };
-  }, [inspectedCell, store.indicators, store.entities, quarterReports, mtdReports, latestYtdReport, annualResolved.report]);
-
-  // 4E. Automated BOD Executive Takeaways (100% dihitung live dari store)
-  const executiveTakeaways = useMemo(() => {
-    const topUnit = rankedUnits[0];
-    const bestMomentum = [...consistencyMatrix]
-      .filter((x) => x.entity.kind === "unit")
-      .sort((a, b) => b.qMomentum - a.qMomentum)[0];
-
-    const criticalCells: Array<{ entName: string; indName: string; ach: number; loss: number }> = [];
-    for (const ent of unitEntities) {
-      for (const ind of store.indicators) {
-        const cell = activeReport.cells?.[ind.id]?.[ent.id];
-        if (!cell || !cell.applicable) continue;
-        const ach = parseExecPct(cell.ach) ?? 0;
-        const b = parseExecPct(cell.bobot) ?? 0;
-        const a = parseExecPct(cell.actual) ?? 0;
-        if (ach < 80) {
-          criticalCells.push({
-            entName: ent.shortName,
-            indName: ind.shortLabel,
-            ach,
-            loss: Math.max(0, Math.round((b - a) * 10) / 10),
-          });
-        }
-      }
-    }
-    criticalCells.sort((a, b) => a.ach - b.ach || b.loss - a.loss);
-
-    const groupGapObj = gapAttributionData.find((g) => g.entity.id === groupEntity.id);
     return {
-      topUnit,
-      bestMomentum,
-      criticalCells: criticalCells.slice(0, 3),
-      totalCriticalCount: criticalCells.length,
-      groupTopDrag: groupGapObj?.topDrag ?? null,
-      groupTotalLoss: groupGapObj?.totalLoss ?? 0,
+      ind,
+      ent,
+      points,
+      horizonLabel:
+        horizon === "MTD"
+          ? "Perbulan (MTD)"
+          : horizon === "Quarter"
+          ? "Quarter (Q1–Q4)"
+          : "Year-to-Date (YTD)",
     };
-  }, [rankedUnits, consistencyMatrix, unitEntities, store.indicators, activeReport, gapAttributionData, groupEntity.id]);
+  }, [inspectedCell, store.indicators, store.entities, horizon, mtdReports, quarterReports, ytdReports]);
 
-  const hasActiveSoftFilter =
+  const hasActiveFilter =
     horizon !== "YTD" ||
     scopeFocus !== "ALL" ||
     spotlightUnitId !== "ALL" ||
-    selectedPillarId !== "ALL" ||
-    achBandFilter !== "ALL";
+    selectedIndicatorId !== "ALL" ||
+    achBandFilter !== "ALL" ||
+    showSambuGroup;
 
   const resetFilters = () => {
     setHorizon("YTD");
     setSelectedReportId(ytdReports[0]?.id ?? "");
     setScopeFocus("ALL");
     setSpotlightUnitId("ALL");
-    setSelectedPillarId("ALL");
+    setShowSambuGroup(false);
+    setSelectedIndicatorId("ALL");
     setAchBandFilter("ALL");
+    setOpenRootFilter(null);
   };
 
   const masterExecPath = `${portalPath || "/hr"}/settings/master/kpi/executive-summary`;
 
+  const SambuToggleTag = ({ compact = false }: { compact?: boolean }) => (
+    <button
+      type="button"
+      onClick={() => setShowSambuGroup((prev) => !prev)}
+      title="Klik untuk menampilkan atau menyembunyikan kartu & grafik Unit Usaha Sambu Group"
+      className={`inline-flex items-center gap-1.5 rounded-full font-bold border transition-all cursor-pointer select-none ${
+        compact ? "px-2.5 py-0.5 text-[10px]" : "px-3 py-1 text-[11px]"
+      } ${
+        showSambuGroup
+          ? "bg-[#167267] text-white border-[#167267] shadow-2xs"
+          : "bg-[#FFFBEB] text-[#3E3E3E] border-[#E8CE4D] hover:bg-[#FFE770]/60"
+      }`}
+    >
+      <span
+        className="w-2 h-2 rounded-full shrink-0"
+        style={{ backgroundColor: showSambuGroup ? "#FFE770" : "#167267" }}
+      />
+      <span>{showSambuGroup ? "Sambu Group: Aktif (3 Unit)" : "+ Sambu Group"}</span>
+    </button>
+  );
+
+  // Ringkasan label pada 3 tombol induk filter
+  const periodeSummaryLabel =
+    horizon === "YTD"
+      ? activeReport.shortLabel
+      : `${horizon === "Quarter" ? "Quarter" : "Perbulan"} · ${activeReport.shortLabel}`;
+  const fokusSummaryLabel =
+    spotlightUnitId !== "ALL"
+      ? store.entities.find((e) => e.id === spotlightUnitId)?.shortName ?? "Unit"
+      : scopeFocus === "GROUP"
+      ? "Khusus RSUP Group"
+      : scopeFocus === "UNITS"
+      ? showSambuGroup
+        ? "Semua Unit (RSUP + Sambu)"
+        : "Unit Usaha RSUP"
+      : showSambuGroup
+      ? "Semua (RSUP + Sambu)"
+      : "RSUP Group & Unit";
+  const indikatorSummaryLabel =
+    (activeFilterIndicatorObj ? activeFilterIndicatorObj.shortLabel : "Semua 6 Indikator") +
+    (achBandFilter !== "ALL"
+      ? ` · ${achBandFilter === "green" ? "Hijau" : achBandFilter === "yellow" ? "Kuning" : "Merah"}`
+      : "");
+
   return (
     <div className="w-full space-y-5">
-      {/* ══ STICKY SOFT-COLORED FILTER TAG BAR (Requirement #5) ══ */}
-      <div className="sticky top-0 z-20 rounded-2xl border border-slate-200/90 bg-white/95 backdrop-blur-md px-4 py-3.5 shadow-sm space-y-2.5">
-        {/* Baris 1: Horizon Waktu + Sub-Periode + Link Sumber Data */}
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-1">
-              <Calendar className="w-3.5 h-3.5 text-teal-600" />
-              Periode:
-            </span>
-            {(
-              [
-                {
-                  id: "FY" as const,
-                  label: `Setahun (${store.cycleYear})`,
-                  idle: "bg-emerald-50/90 text-emerald-800 border-emerald-200 hover:bg-emerald-100/80",
-                  active: "bg-emerald-700 text-white border-emerald-700 shadow-xs",
-                },
-                {
-                  id: "YTD" as const,
-                  label: "YTD (Jan–Okt'26)",
-                  idle: "bg-teal-50/90 text-teal-800 border-teal-200 hover:bg-teal-100/80",
-                  active: "bg-teal-700 text-white border-teal-700 shadow-xs",
-                },
-                {
-                  id: "Quarter" as const,
-                  label: "Quarter (Q1–Q4)",
-                  idle: "bg-amber-50/90 text-amber-800 border-amber-200 hover:bg-amber-100/80",
-                  active: "bg-amber-600 text-white border-amber-600 shadow-xs",
-                },
-                {
-                  id: "MTD" as const,
-                  label: "Perbulan (MTD)",
-                  idle: "bg-sky-50/90 text-sky-800 border-sky-200 hover:bg-sky-100/80",
-                  active: "bg-sky-700 text-white border-sky-700 shadow-xs",
-                },
-              ] as const
-            ).map((h) => (
-              <button
-                key={h.id}
-                type="button"
-                onClick={() => setHorizon(h.id)}
-                className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
-                  horizon === h.id ? h.active : h.idle
+      {/* ══ POINT 18: 1-ROW ROOT FILTER BAR (Periode · Fokus · Indikator KPI) -> ANAK TAG -> CUCU TAG ══ */}
+      <div className="sticky top-0 z-20 rounded-2xl border border-slate-200/90 bg-white/95 backdrop-blur-md px-4 py-3 shadow-sm space-y-2.5">
+        {/* Baris Utama Tunggal */}
+        <div className="flex items-center justify-between gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Root Tag 1: PERIODE */}
+            <button
+              type="button"
+              onClick={() => setOpenRootFilter((p) => (p === "periode" ? null : "periode"))}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                openRootFilter === "periode"
+                  ? "bg-[#167267] text-white border-[#167267] shadow-xs"
+                  : "bg-[#E6F3F1] text-[#167267] border-[#B2DBD5] hover:bg-[#D5ECE8]"
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5 shrink-0" />
+              <span>Periode: {periodeSummaryLabel}</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                  openRootFilter === "periode" ? "rotate-180" : ""
                 }`}
-              >
-                {h.label}
-              </button>
-            ))}
+              />
+            </button>
 
-            {/* Contextual Sub-pills untuk Quarter / MTD / YTD */}
-            {horizon === "Quarter" && quarterReports.length > 0 && (
-              <div className="flex items-center gap-1 pl-2 ml-1 border-l border-slate-200">
-                {quarterReports.map((q) => (
-                  <button
-                    key={q.id}
-                    type="button"
-                    onClick={() => setSelectedReportId(q.id)}
-                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
-                      activeReport.id === q.id
-                        ? "bg-[#1A284F] text-white border-[#1A284F]"
-                        : "bg-amber-50/60 text-amber-900 border-amber-200/80 hover:bg-amber-100"
-                    }`}
-                  >
-                    {q.shortLabel}
-                  </button>
-                ))}
-              </div>
-            )}
-            {horizon === "MTD" && mtdReports.length > 0 && (
-              <div className="flex items-center gap-1 pl-2 ml-1 border-l border-slate-200 flex-wrap">
-                {mtdReports.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setSelectedReportId(m.id)}
-                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
-                      activeReport.id === m.id
-                        ? "bg-[#1A284F] text-white border-[#1A284F]"
-                        : "bg-sky-50/60 text-sky-900 border-sky-200/80 hover:bg-sky-100"
-                    }`}
-                  >
-                    {m.shortLabel}
-                  </button>
-                ))}
-              </div>
-            )}
+            {/* Root Tag 2: FOKUS */}
+            <button
+              type="button"
+              onClick={() => setOpenRootFilter((p) => (p === "fokus" ? null : "fokus"))}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                openRootFilter === "fokus"
+                  ? "bg-[#3E3E3E] text-white border-[#3E3E3E] shadow-xs"
+                  : "bg-[#FFFBEB] text-[#3E3E3E] border-[#E8CE4D] hover:bg-[#FFE770]/55"
+              }`}
+            >
+              <Filter className="w-3.5 h-3.5 shrink-0" />
+              <span>Fokus: {fokusSummaryLabel}</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                  openRootFilter === "fokus" ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+
+            {/* Root Tag 3: INDIKATOR KPI */}
+            <button
+              type="button"
+              onClick={() => setOpenRootFilter((p) => (p === "indikator" ? null : "indikator"))}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                openRootFilter === "indikator"
+                  ? "bg-[#FF7864] text-white border-[#FF7864] shadow-xs"
+                  : "bg-[#FFF2EF] text-[#9E3424] border-[#FFC7BE] hover:bg-[#FFE3DE]"
+              }`}
+            >
+              <Target className="w-3.5 h-3.5 shrink-0" />
+              <span>Indikator KPI: {indikatorSummaryLabel}</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                  openRootFilter === "indikator" ? "rotate-180" : ""
+                }`}
+              />
+            </button>
           </div>
 
           <div className="flex items-center gap-2">
-            {hasActiveSoftFilter && (
+            <SambuToggleTag />
+            {hasActiveFilter && (
               <button
                 type="button"
                 onClick={resetFilters}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors cursor-pointer"
               >
-                <RotateCcw className="w-3 h-3" /> Reset Tag
+                <RotateCcw className="w-3 h-3" /> Reset
               </button>
             )}
             {canManageMasterKpi && (
               <button
                 type="button"
                 onClick={() => navigate(masterExecPath)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-[#1A284F]/6 text-[#1A284F] border border-[#1A284F]/15 hover:bg-[#1A284F]/12 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-[#EAEFF9] text-[#1E3A6E] border border-[#DCE3F2] hover:bg-[#DCE5F7] transition-colors cursor-pointer"
               >
                 <SlidersHorizontal className="w-3 h-3" />
                 Kelola Data Master KPI
@@ -807,208 +875,369 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
           </div>
         </div>
 
-        {/* Baris 2: Soft Filter Tags — Fokus Entitas, Spotlight Unit, Pilar KPI & Status ACH */}
-        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 flex-wrap">
-          {/* Perspektif & Unit Spotlight Tags */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-0.5">
-              <Filter className="w-3 h-3 text-sky-600" />
-              Fokus:
-            </span>
-            {(
-              [
-                { id: "ALL" as const, label: "RSUP Group & Unit" },
-                { id: "GROUP" as const, label: "Khusus RSUP Group" },
-                { id: "UNITS" as const, label: "Perbandingan Unit Usaha" },
-              ] as const
-            ).map((sc) => (
-              <button
-                key={sc.id}
-                type="button"
-                onClick={() => setScopeFocus(sc.id)}
-                className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
-                  scopeFocus === sc.id
-                    ? "bg-[#1A284F] text-white border-[#1A284F]"
-                    : "bg-slate-100/80 text-slate-600 border-slate-200 hover:bg-slate-200/70"
-                }`}
-              >
-                {sc.label}
-              </button>
-            ))}
+        {/* Panel Anak Tag & Cucu Tag (muncul lembut saat Root Tag diklik) */}
+        <AnimatePresence initial={false}>
+          {openRootFilter === "periode" && (
+            <motion.div
+              key="drawer-periode"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.22 }}
+              className="overflow-hidden"
+            >
+              <div className="pt-2 border-t border-slate-100 space-y-2">
+                {/* Anak Tag Periode */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#167267] mr-1">
+                    Kategori Periode:
+                  </span>
+                  {(
+                    [
+                      { id: "YTD" as const, label: "YTD (Jan–Okt'26)" },
+                      { id: "Quarter" as const, label: "Quarter (Q1–Q4)" },
+                      { id: "MTD" as const, label: "Perbulan (MTD)" },
+                    ] as const
+                  ).map((child) => (
+                    <button
+                      key={child.id}
+                      type="button"
+                      onClick={() => setHorizon(child.id)}
+                      className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                        horizon === child.id
+                          ? "bg-[#167267] text-white border-[#167267]"
+                          : "bg-[#E6F3F1]/75 text-[#167267] border-[#B2DBD5] hover:bg-[#E6F3F1]"
+                      }`}
+                    >
+                      <span>{child.label}</span>
+                      {child.id !== "YTD" && <ChevronRight className="w-3 h-3 opacity-75" />}
+                    </button>
+                  ))}
+                </div>
 
-            <span className="text-slate-200 mx-0.5">|</span>
-            {unitEntities.map((u) => {
-              const isSpot = spotlightUnitId === u.id;
-              return (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => setSpotlightUnitId((prev) => (prev === u.id ? "ALL" : u.id))}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
-                    isSpot
-                      ? "text-white shadow-2xs"
-                      : "bg-sky-50/60 text-slate-700 border-slate-200/90 hover:bg-sky-100/60"
-                  }`}
-                  style={
-                    isSpot
-                      ? { backgroundColor: u.colorHex, borderColor: u.colorHex }
-                      : undefined
-                  }
-                >
-                  <span
-                    className="w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{ backgroundColor: isSpot ? "#ffffff" : u.colorHex }}
-                  />
-                  {u.shortName}
-                </button>
-              );
-            })}
-          </div>
+                {/* Cucu Tag Periode (muncul saat Quarter atau Perbulan dipilih, atau bila ada >1 YTD) */}
+                {(horizon === "Quarter" || horizon === "MTD" || ytdReports.length > 1) && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-1.5 pl-3 border-l-2 border-[#167267]/40 flex-wrap"
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">
+                      Pilih {horizon === "Quarter" ? "Kuartal" : horizon === "MTD" ? "Bulan" : "YTD"}:
+                    </span>
+                    {(horizon === "Quarter" ? quarterReports : horizon === "MTD" ? mtdReports : ytdReports).map((rep) => (
+                      <button
+                        key={rep.id}
+                        type="button"
+                        onClick={() => setSelectedReportId(rep.id)}
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
+                          activeReport.id === rep.id
+                            ? "bg-[#FFE770] text-[#3E3E3E] border-[#E5CA45] shadow-2xs"
+                            : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-[#FFFBEB]"
+                        }`}
+                      >
+                        {rep.shortLabel}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </div>
+            </motion.div>
+          )}
 
-          {/* Status ACH Soft Filter Tags */}
-          <div className="flex items-center gap-1 flex-wrap">
-            {(
-              [
-                {
-                  id: "ALL" as const,
-                  label: "Semua ACH",
-                  idle: "bg-slate-50 text-slate-600 border-slate-200",
-                  active: "bg-slate-800 text-white border-slate-800",
-                },
-                {
-                  id: "green" as const,
-                  label: "Hijau ≥95%",
-                  idle: "bg-emerald-50/80 text-emerald-800 border-emerald-200",
-                  active: "bg-emerald-600 text-white border-emerald-600",
-                },
-                {
-                  id: "yellow" as const,
-                  label: "Kuning 80–<95%",
-                  idle: "bg-amber-50/80 text-amber-800 border-amber-200",
-                  active: "bg-amber-500 text-white border-amber-500",
-                },
-                {
-                  id: "red" as const,
-                  label: "Merah <80%",
-                  idle: "bg-rose-50/80 text-rose-800 border-rose-200",
-                  active: "bg-rose-600 text-white border-rose-600",
-                },
-              ] as const
-            ).map((st) => (
-              <button
-                key={st.id}
-                type="button"
-                onClick={() => setAchBandFilter(st.id)}
-                className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
-                  achBandFilter === st.id ? st.active : st.idle
-                }`}
-              >
-                {st.label}
-              </button>
-            ))}
-          </div>
-        </div>
+          {openRootFilter === "fokus" && (
+            <motion.div
+              key="drawer-fokus"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.22 }}
+              className="overflow-hidden"
+            >
+              <div className="pt-2 border-t border-slate-100 space-y-2">
+                {/* Anak Tag Fokus */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#3E3E3E] mr-1">
+                    Cakupan Fokus:
+                  </span>
+                  {(
+                    [
+                      {
+                        id: "ALL" as const,
+                        label: "RSUP Group & Unit Usaha",
+                        hasGrandchild: false,
+                        onSelect: () => {
+                          setFokusChildBranch("ALL");
+                          setScopeFocus("ALL");
+                          setSpotlightUnitId("ALL");
+                        },
+                      },
+                      {
+                        id: "GROUP" as const,
+                        label: "Khusus RSUP Group",
+                        hasGrandchild: false,
+                        onSelect: () => {
+                          setFokusChildBranch("GROUP");
+                          setScopeFocus("GROUP");
+                          setSpotlightUnitId("ALL");
+                        },
+                      },
+                      {
+                        id: "RSUP_UNITS" as const,
+                        label: "Unit Usaha RSUP Group",
+                        hasGrandchild: true,
+                        onSelect: () => {
+                          setFokusChildBranch("RSUP_UNITS");
+                          setScopeFocus("UNITS");
+                        },
+                      },
+                      {
+                        id: "SAMBU_UNITS" as const,
+                        label: "Unit Usaha Sambu Group",
+                        hasGrandchild: true,
+                        onSelect: () => {
+                          setFokusChildBranch("SAMBU_UNITS");
+                          setShowSambuGroup(true);
+                          setScopeFocus("UNITS");
+                        },
+                      },
+                    ] as const
+                  ).map((child) => (
+                    <button
+                      key={child.id}
+                      type="button"
+                      onClick={child.onSelect}
+                      className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                        fokusChildBranch === child.id
+                          ? "bg-[#3E3E3E] text-white border-[#3E3E3E]"
+                          : "bg-[#FFFBEB] text-[#3E3E3E] border-[#E8CE4D] hover:bg-[#FFE770]/60"
+                      }`}
+                    >
+                      <span>{child.label}</span>
+                      {child.hasGrandchild && <ChevronRight className="w-3 h-3 opacity-75" />}
+                    </button>
+                  ))}
+                </div>
 
-        {/* Baris 3: Soft Tags Pilar Indikator KPI Strategis */}
-        <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-100/80 flex-wrap">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">
-            Pilar KPI:
-          </span>
-          <button
-            type="button"
-            onClick={() => setSelectedPillarId("ALL")}
-            className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
-              selectedPillarId === "ALL"
-                ? "bg-teal-700 text-white border-teal-700"
-                : "bg-teal-50/60 text-teal-900 border-teal-200/80 hover:bg-teal-100/70"
-            }`}
-          >
-            Semua 6 Pilar
-          </button>
-          {store.indicators.map((ind) => {
-            const isAct = selectedPillarId === ind.id;
-            const pColor = PILLAR_COLORS[ind.id] ?? PALETTE.cobalt;
-            return (
-              <button
-                key={ind.id}
-                type="button"
-                onClick={() => {
-                  const next = selectedPillarId === ind.id ? "ALL" : ind.id;
-                  setSelectedPillarId(next);
-                  if (next !== "ALL") setPillarSpotlightForUnits(next);
-                }}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
-                  isAct
-                    ? "text-white shadow-2xs"
-                    : "bg-slate-50/90 text-slate-700 border-slate-200 hover:bg-slate-100"
-                }`}
-                style={isAct ? { backgroundColor: pColor, borderColor: pColor } : undefined}
-              >
-                <span
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{ backgroundColor: isAct ? "#fff" : pColor }}
-                />
-                {ind.shortLabel}
-              </button>
-            );
-          })}
-        </div>
+                {/* Cucu Tag Fokus: Daftar Unit Usaha RSUP atau Sambu */}
+                {(fokusChildBranch === "RSUP_UNITS" || fokusChildBranch === "SAMBU_UNITS") && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-1.5 pl-3 border-l-2 border-[#E5CA45] flex-wrap"
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">
+                      Spotlight Unit:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSpotlightUnitId("ALL")}
+                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
+                        spotlightUnitId === "ALL"
+                          ? "bg-[#167267] text-white border-[#167267]"
+                          : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-[#E6F3F1]"
+                      }`}
+                    >
+                      Semua Unit
+                    </button>
+                    {(fokusChildBranch === "RSUP_UNITS" ? rsupUnitEntities : sambuUnitEntities).map((u) => {
+                      const isSpot = spotlightUnitId === u.id;
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => setSpotlightUnitId((prev) => (prev === u.id ? "ALL" : u.id))}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
+                            isSpot
+                              ? "text-white shadow-2xs"
+                              : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                          }`}
+                          style={isSpot ? { backgroundColor: u.colorHex, borderColor: u.colorHex } : undefined}
+                        >
+                          <span
+                            className="w-1.5 h-1.5 rounded-full shrink-0"
+                            style={{ backgroundColor: isSpot ? "#FFFFFF" : u.colorHex }}
+                          />
+                          {u.shortName}
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {openRootFilter === "indikator" && (
+            <motion.div
+              key="drawer-indikator"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.22 }}
+              className="overflow-hidden"
+            >
+              <div className="pt-2 border-t border-slate-100 space-y-2">
+                {/* Anak Tag Indikator KPI */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#9E3424] mr-1">
+                    Pilih Indikator KPI:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedIndicatorId("ALL");
+                      setIndikatorShowGrandchild(true);
+                    }}
+                    className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                      selectedIndicatorId === "ALL"
+                        ? "bg-[#167267] text-white border-[#167267]"
+                        : "bg-[#E6F3F1] text-[#167267] border-[#B2DBD5]"
+                    }`}
+                  >
+                    <span>Semua 6 Indikator</span>
+                    <ChevronRight className="w-3 h-3 opacity-75" />
+                  </button>
+                  {store.indicators.map((ind) => {
+                    const isAct = selectedIndicatorId === ind.id;
+                    const cHex = INDICATOR_COLORS[ind.id] ?? THEME.pineGreen;
+                    return (
+                      <button
+                        key={ind.id}
+                        type="button"
+                        onClick={() => {
+                          const next = selectedIndicatorId === ind.id ? "ALL" : ind.id;
+                          setSelectedIndicatorId(next);
+                          if (next !== "ALL") {
+                            setIndicatorSpotlightForUnits(next);
+                            setHoveredBscIndId(next);
+                          }
+                          setIndikatorShowGrandchild(true);
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                          isAct
+                            ? "text-white shadow-2xs"
+                            : "bg-[#FFF2EF]/75 text-[#3E3E3E] border-[#FFC7BE] hover:bg-[#FFF2EF]"
+                        }`}
+                        style={isAct ? { backgroundColor: cHex, borderColor: cHex } : undefined}
+                      >
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: isAct ? "#FFFFFF" : cHex }}
+                        />
+                        <span>{ind.shortLabel}</span>
+                        <ChevronRight className="w-3 h-3 opacity-70" />
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Cucu Tag Indikator KPI: Status Achievement sesuai palet lampiran */}
+                {(indikatorShowGrandchild || achBandFilter !== "ALL") && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-1.5 pl-3 border-l-2 border-[#FF7864] flex-wrap"
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1">
+                      Status Achievement:
+                    </span>
+                    {(
+                      [
+                        {
+                          id: "ALL" as const,
+                          label: "Semua Achievement",
+                          bg: "#3E3E3E",
+                          text: "#FFFFFF",
+                          idle: "bg-slate-100 text-[#3E3E3E] border-slate-300",
+                        },
+                        {
+                          id: "green" as const,
+                          label: "Hijau ≥95%",
+                          bg: "#167267",
+                          text: "#FFFFFF",
+                          idle: "bg-[#E6F3F1] text-[#167267] border-[#B2DBD5]",
+                        },
+                        {
+                          id: "yellow" as const,
+                          label: "Kuning 80–<95%",
+                          bg: "#FFE770",
+                          text: "#3E3E3E",
+                          idle: "bg-[#FFFBEB] text-[#6B5300] border-[#E8CE4D]",
+                        },
+                        {
+                          id: "red" as const,
+                          label: "Merah <80%",
+                          bg: "#FF7864",
+                          text: "#FFFFFF",
+                          idle: "bg-[#FFF2EF] text-[#9E3424] border-[#FFC7BE]",
+                        },
+                      ] as const
+                    ).map((st) => {
+                      const act = achBandFilter === st.id;
+                      return (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => setAchBandFilter(st.id)}
+                          className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
+                            act ? "shadow-2xs" : st.idle
+                          }`}
+                          style={
+                            act
+                              ? { backgroundColor: st.bg, color: st.text, borderColor: st.bg }
+                              : undefined
+                          }
+                        >
+                          {st.label}
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* ══ HERO EXECUTIVE COMMAND STRIP: RSUP GROUP GAUGE + 5 UNIT SCORECARDS ══ */}
+      {/* ══ HERO ROW: EXECUTIVE SUMMARY RSUP GROUP (Point 3 & 17) + PERBANDINGAN UNIT USAHA (Point 4 & 7) ══ */}
       <motion.div
-        key={`hero-${activeReport.id}`}
+        key={`hero-${activeReport.id}-${showSambuGroup}`}
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: "easeOut" }}
         className="grid grid-cols-1 xl:grid-cols-12 gap-4"
       >
-        {/* Left 5 cols: RSUP Group Executive Pulse Card */}
-        <div
-          className="xl:col-span-5 rounded-2xl p-5 text-white shadow-md relative overflow-hidden flex flex-col justify-between"
-          style={{
-            background: "linear-gradient(135deg, #152243 0%, #1A284F 48%, #0A5598 100%)",
-          }}
-        >
+        {/* Point 3 & Point 17: Executive Boardroom Pulse Card — mengikuti desain Total Employees card di Appraisal Analytics */}
+        <div className="xl:col-span-5 group relative overflow-hidden bg-gradient-to-br from-[#EAEFF9] via-[#F6F8FD] to-white border border-[#DCE3F2] rounded-2xl p-5 flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg">
           <div
-            className="pointer-events-none absolute -right-12 -top-12 w-48 h-48 rounded-full opacity-15"
-            style={{ background: "radial-gradient(circle, #38BDF8 0%, transparent 70%)" }}
+            className="pointer-events-none absolute -right-6 -bottom-7 w-28 h-28 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+            style={{ backgroundColor: "#1E3A6E0D" }}
           />
+
           <div className="flex items-start justify-between gap-3 relative z-10">
-            <div>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/12 border border-white/15 text-[10px] font-bold uppercase tracking-wider text-sky-200">
-                <Compass className="w-3 h-3" />
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
                 Executive Boardroom Pulse · {activeReport.shortLabel}
-              </div>
-              <h3 className="text-lg font-extrabold text-white mt-2 leading-tight">
-                Konsolidasi {groupEntity.name}
-              </h3>
-              <p className="text-xs text-sky-100/80 mt-0.5">
-                {activeReport.title}
-                {horizon === "FY" && annualResolved.isSynthesizedFromQuarters ? " · Rata-rata Q1–Q4" : ""}
               </p>
+              <h3 className="text-lg font-extrabold text-[#111827] mt-1 leading-tight">
+                Executive Summary {groupEntity.name}
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">{activeReport.title}</p>
             </div>
-            <span
-              className="px-2.5 py-1 rounded-full text-[10px] font-extrabold border shrink-0"
-              style={{
-                backgroundColor: BAND_BADGE[groupActiveTotal.band].bg,
-                color: BAND_BADGE[groupActiveTotal.band].text,
-                borderColor: BAND_BADGE[groupActiveTotal.band].border,
-              }}
+            <div
+              className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+              style={{ backgroundColor: "#1E3A6E" }}
             >
-              {BAND_BADGE[groupActiveTotal.band].label}
-            </span>
+              <Compass className="w-5 h-5" />
+            </div>
           </div>
 
-          <div className="flex items-center gap-5 my-4 relative z-10">
-            <AnimatedRadialGauge
-              value={groupActiveTotal.num}
-              band={groupActiveTotal.band}
-              subtitle="Total ACH"
-            />
-            <div className="flex-1 grid grid-cols-2 gap-2">
+          <div className="flex items-center gap-4 my-4 relative z-10">
+            <LightCardRadialGauge value={groupActiveTotal.num} band={groupActiveTotal.band} />
+            <div className="flex-1 grid grid-cols-3 gap-2">
               {[
-                { lbl: `Setahun '${store.cycleYear.slice(-2)}`, val: groupHorizonSnapshot.fy, key: "FY" as const },
                 { lbl: "YTD (Jan–Okt)", val: groupHorizonSnapshot.ytd, key: "YTD" as const },
                 { lbl: `Quarter (${groupHorizonSnapshot.quarterLabel})`, val: groupHorizonSnapshot.quarter, key: "Quarter" as const },
                 { lbl: `Bulan (${groupHorizonSnapshot.mtdLabel})`, val: groupHorizonSnapshot.mtd, key: "MTD" as const },
@@ -1017,14 +1246,20 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                   key={hItem.lbl}
                   type="button"
                   onClick={() => setHorizon(hItem.key)}
-                  className={`text-left rounded-xl px-3 py-2 border transition-all cursor-pointer ${
+                  className={`text-left rounded-xl px-2.5 py-2 border transition-all cursor-pointer ${
                     horizon === hItem.key
-                      ? "bg-white/18 border-sky-300/60 shadow-xs"
-                      : "bg-white/7 border-white/10 hover:bg-white/12"
+                      ? "bg-[#1E3A6E] text-white border-[#1E3A6E] shadow-2xs"
+                      : "bg-white/85 text-[#111827] border-[#DCE3F2] hover:bg-white"
                   }`}
                 >
-                  <p className="text-[10px] text-sky-200/85 font-medium truncate">{hItem.lbl}</p>
-                  <p className="text-sm font-extrabold text-white tabular-nums mt-0.5">
+                  <p
+                    className={`text-[10px] font-medium truncate ${
+                      horizon === hItem.key ? "text-white/80" : "text-gray-500"
+                    }`}
+                  >
+                    {hItem.lbl}
+                  </p>
+                  <p className="text-sm font-extrabold tabular-nums mt-0.5">
                     {formatExecPct(hItem.val, 1)}
                   </p>
                 </button>
@@ -1032,54 +1267,64 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-2 pt-3 border-t border-white/12 text-[11px] text-sky-100/85 relative z-10 flex-wrap">
+          <div className="flex items-end justify-between gap-2 pt-3 border-t border-[#DCE3F2]/80 text-[11px] text-gray-500 font-medium relative z-10">
             <span>
-              Target Bobot Korporasi: <strong className="text-white">100%</strong> · Defisit ke 100%:{" "}
-              <strong className="text-amber-300">
+              Target Bobot: <strong className="text-[#111827]">100%</strong> · Defisit ke 100%:{" "}
+              <strong style={{ color: "#9E3424" }}>
                 -{formatExecPct(Math.max(0, 100 - groupActiveTotal.num), 1)}
               </strong>
             </span>
-            {groupHorizonSnapshot.mtdDelta !== null && (
-              <span className="inline-flex items-center gap-1 font-bold text-emerald-300">
-                {groupHorizonSnapshot.mtdDelta >= 0 ? (
-                  <ArrowUpRight className="w-3.5 h-3.5" />
-                ) : (
-                  <ArrowDownRight className="w-3.5 h-3.5 text-rose-300" />
-                )}
-                {groupHorizonSnapshot.mtdDelta >= 0 ? "+" : ""}
-                {groupHorizonSnapshot.mtdDelta}% MoM ({groupHorizonSnapshot.mtdLabel})
-              </span>
-            )}
+            <svg
+              className="w-14 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+              viewBox="0 0 64 24"
+              fill="none"
+            >
+              <path
+                d="M2 20L16 14L26 17L40 9L50 12L62 5"
+                stroke="#1E3A6E"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </div>
         </div>
 
-        {/* Right 7 cols: 5 Unit Usaha Interactive Ranked Scorecards (Click-to-Spotlight Gimmick) */}
+        {/* Point 4 & Point 7: Perbandingan Pencapaian Unit Usaha + Tag Sambu Group */}
         <div className="xl:col-span-7 rounded-2xl border border-slate-200/90 bg-white p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
             <div>
-              <h3 className="text-sm font-bold text-[#1A284F] flex items-center gap-1.5">
-                <Award className="w-4 h-4 text-amber-500" />
-                Peringkat Pencapaian Unit Usaha ({activeReport.shortLabel})
+              <h3 className="text-sm font-bold text-[#111827] flex items-center gap-1.5">
+                <Award className="w-4 h-4 text-[#167267]" />
+                Perbandingan Pencapaian Unit Usaha ({activeReport.shortLabel})
               </h3>
               <p className="text-[11px] text-slate-500">
                 Klik kartu unit usaha untuk menyalakan mode <strong>Spotlight</strong> lintas seluruh grafik
               </p>
             </div>
-            {spotlightUnitId !== "ALL" && (
-              <button
-                type="button"
-                onClick={() => setSpotlightUnitId("ALL")}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-800 border border-sky-200 hover:bg-sky-100 cursor-pointer"
-              >
-                <X className="w-3 h-3" /> Tampilkan Semua Unit
-              </button>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              <SambuToggleTag compact />
+              {spotlightUnitId !== "ALL" && (
+                <button
+                  type="button"
+                  onClick={() => setSpotlightUnitId("ALL")}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#E6F3F1] text-[#167267] border border-[#B2DBD5] hover:bg-[#D5ECE8] cursor-pointer"
+                >
+                  <X className="w-3 h-3" /> Semua Unit
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
-            {rankedUnits.map((item, idx) => {
+          <div
+            className={`grid grid-cols-1 sm:grid-cols-2 ${
+              showSambuGroup ? "lg:grid-cols-4" : "lg:grid-cols-5"
+            } gap-2.5 my-auto`}
+          >
+            {unitComparisonCards.map((item, idx) => {
               const isSpot = spotlightUnitId === item.entity.id;
-              const bMeta = BAND_BADGE[item.band];
+              const bMeta = ACHIEVEMENT_BADGE[item.band];
+              const isSambu = item.entity.groupName === "Sambu Group";
               return (
                 <motion.button
                   key={item.entity.id}
@@ -1091,7 +1336,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                   }
                   className={`text-left rounded-xl p-3 border transition-all cursor-pointer flex flex-col justify-between relative overflow-hidden ${
                     isSpot
-                      ? "ring-2 ring-[#0A5598] border-[#0A5598] bg-sky-50/40 shadow-sm"
+                      ? "ring-2 ring-[#167267] border-[#167267] bg-[#E6F3F1]/40 shadow-sm"
                       : spotlightUnitId !== "ALL"
                       ? "border-slate-200/70 bg-slate-50/40 opacity-65 hover:opacity-100"
                       : "border-slate-200/90 bg-gradient-to-b from-white to-slate-50/60 hover:border-slate-300 shadow-2xs"
@@ -1102,20 +1347,29 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     style={{ backgroundColor: item.entity.colorHex }}
                   />
                   <div className="flex items-center justify-between gap-1 mt-0.5">
-                    <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-100 text-slate-700">
-                      #{idx + 1}
+                    <span
+                      className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[9px] font-bold ${
+                        isSambu
+                          ? "bg-[#FFFBEB] text-[#6B5300] border border-[#E8CE4D]"
+                          : "bg-[#E6F3F1] text-[#167267]"
+                      }`}
+                    >
+                      {isSambu ? "Sambu" : "RSUP"}
                     </span>
                     <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: bMeta.dot }}
+                      className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
+                      style={{ backgroundColor: bMeta.solid }}
                       title={bMeta.label}
                     />
                   </div>
                   <div className="my-2">
-                    <p className="text-[11px] font-bold text-slate-700 leading-snug line-clamp-1" title={item.entity.name}>
+                    <p
+                      className="text-[11px] font-bold text-slate-700 leading-snug line-clamp-1"
+                      title={item.entity.name}
+                    >
                       {item.entity.shortName}
                     </p>
-                    <p className="text-xl font-extrabold text-[#1A284F] tabular-nums mt-0.5">
+                    <p className="text-xl font-extrabold text-[#111827] tabular-nums mt-0.5">
                       {item.achStr}
                     </p>
                   </div>
@@ -1123,27 +1377,40 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
                       <motion.div
                         initial={{ width: 0 }}
-                        animate={{ width: `${Math.min(100, item.achNum)}%` }}
-                        transition={{ duration: 0.7, delay: idx * 0.06 }}
+                        animate={{ width: `${item.hasData ? Math.min(100, item.achNum) : 0}%` }}
+                        transition={{ duration: 0.65, delay: idx * 0.04 }}
                         className="h-full rounded-full"
                         style={{ backgroundColor: bMeta.solid }}
                       />
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-slate-500">
-                      <span className="inline-flex items-center gap-1">
-                        <span className="font-bold text-emerald-700">{item.greenCount}H</span>·
-                        <span className="font-bold text-amber-700">{item.yellowCount}K</span>·
-                        <span className="font-bold text-rose-700">{item.redCount}M</span>
-                      </span>
-                      {item.qDelta !== null && (
-                        <span
-                          className={`font-bold ${
-                            item.qDelta >= 0 ? "text-emerald-700" : "text-rose-600"
-                          }`}
-                          title="Perubahan Q1 ke Q4"
-                        >
-                          {item.qDelta >= 0 ? `+${item.qDelta}%` : `${item.qDelta}%`}
-                        </span>
+                      {item.hasData ? (
+                        <>
+                          <span className="inline-flex items-center gap-1">
+                            <span className="font-bold" style={{ color: "#167267" }}>
+                              {item.greenCount}H
+                            </span>
+                            ·
+                            <span className="font-bold" style={{ color: "#947400" }}>
+                              {item.yellowCount}K
+                            </span>
+                            ·
+                            <span className="font-bold" style={{ color: "#D9533F" }}>
+                              {item.redCount}M
+                            </span>
+                          </span>
+                          {item.qDelta !== null && (
+                            <span
+                              className="font-bold"
+                              style={{ color: item.qDelta >= 0 ? "#167267" : "#D9533F" }}
+                              title="Perubahan Q1 ke Q4"
+                            >
+                              {item.qDelta >= 0 ? `+${item.qDelta}%` : `${item.qDelta}%`}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-[10px] italic text-slate-400">Belum diisi di Master KPI</span>
                       )}
                     </div>
                   </div>
@@ -1151,39 +1418,10 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
               );
             })}
           </div>
-
-          {/* Automated QuickBOD Callout Strip */}
-          <div className="mt-3 pt-2.5 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
-            <div className="flex items-center gap-2 rounded-lg bg-emerald-50/70 border border-emerald-200/70 px-2.5 py-1.5 text-emerald-900">
-              <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span className="truncate">
-                Top Unit: <strong>{executiveTakeaways.topUnit?.entity.shortName ?? "—"}</strong> (
-                <strong>{executiveTakeaways.topUnit?.achStr ?? "—"}</strong>)
-              </span>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg bg-sky-50/70 border border-sky-200/70 px-2.5 py-1.5 text-sky-900">
-              <TrendingUp className="w-3.5 h-3.5 text-sky-600 shrink-0" />
-              <span className="truncate">
-                Akselerasi Q1→Q4 Terbaik:{" "}
-                <strong>{executiveTakeaways.bestMomentum?.entity.shortName ?? "—"}</strong> (
-                <strong>
-                  {(executiveTakeaways.bestMomentum?.qMomentum ?? 0) >= 0 ? "+" : ""}
-                  {executiveTakeaways.bestMomentum?.qMomentum ?? 0}%
-                </strong>
-                )
-              </span>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg bg-rose-50/70 border border-rose-200/70 px-2.5 py-1.5 text-rose-900">
-              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span className="truncate">
-                Indikator Kritis (&lt;80%): <strong>{executiveTakeaways.totalCriticalCount} sel</strong> perlu atensi
-              </span>
-            </div>
-          </div>
         </div>
       </motion.div>
 
-      {/* ══ SECTION 1: PERSPEKTIF KONSOLIDASI RSUP GROUP (Requirement #6) ══ */}
+      {/* ══ SECTION 1: PERSPEKTIF KONSOLIDASI RSUP GROUP ══ */}
       {scopeFocus !== "UNITS" && (
         <motion.section
           initial={{ opacity: 0, y: 12 }}
@@ -1191,34 +1429,31 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
           transition={{ duration: 0.45 }}
           className="space-y-4"
         >
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-[#1A284F] text-white flex items-center justify-center shadow-xs">
-                <Layers className="w-4 h-4" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-[#1A284F]">
-                  Perspektif Konsolidasi {groupEntity.name}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Perbandingan Setahun, YTD, Quarter &amp; Perbulan · Aktual vs Target (Bobot) per Pilar KPI · Trend Lintas Waktu
-                </p>
-              </div>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-[#3E3E3E] text-white flex items-center justify-center shadow-xs">
+              <Layers className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-[#111827]">
+                Perspektif Konsolidasi {groupEntity.name}
+              </h3>
+              <p className="text-xs text-slate-500">
+                Perbandingan YTD, Quarter &amp; Perbulan · Aktual vs Target (Bobot) per Indikator KPI · Trend Lintas Waktu
+              </p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* Chart 1A: RSUP Group Summary Comparison Setahun, YTD, Quarter, Perbulan */}
+            {/* Chart 1A: RSUP Group Summary Comparison YTD, Quarter, Perbulan */}
             <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col">
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full">
-                    RSUP Group · Multi-Horizon
-                  </span>
-                  <h4 className="text-sm font-bold text-[#1A284F] mt-1.5">
-                    Summary Pencapaian RSUP Group: Setahun · YTD · Quarter · Perbulan
-                  </h4>
-                </div>
+              <div className="mb-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#167267] bg-[#E6F3F1] border border-[#B2DBD5] px-2 py-0.5 rounded-full">
+                  RSUP Group · Multi-Horizon
+                </span>
+                <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                  Summary Pencapaian RSUP Group: YTD · Quarter · Perbulan
+                  {activeFilterIndicatorObj ? ` (${activeFilterIndicatorObj.shortLabel})` : ""}
+                </h4>
               </div>
               <div className="h-[275px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -1226,93 +1461,79 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                     <XAxis
                       dataKey="label"
-                      tick={{ fontSize: 10, fill: "#475569" }}
+                      tick={{ fontSize: 10, fill: "#3E3E3E" }}
                       axisLine={false}
                       tickLine={false}
                       interval={0}
-                      angle={-22}
+                      angle={-20}
                       textAnchor="end"
-                      height={44}
+                      height={42}
                     />
-                    <YAxis
-                      domain={[65, 105]}
-                      tick={{ fontSize: 10, fill: "#64748B" }}
-                      axisLine={false}
-                      tickLine={false}
-                      unit="%"
-                    />
-                    <ReferenceLine y={95} stroke="#10B981" strokeDasharray="4 4" label={{ value: "Target Hijau 95%", position: "insideTopRight", fontSize: 9, fill: "#059669" }} />
-                    <ReferenceLine y={80} stroke="#E11D48" strokeDasharray="3 3" label={{ value: "Batas Kritis 80%", position: "insideBottomRight", fontSize: 9, fill: "#E11D48" }} />
+                    <YAxis domain={[60, 105]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
+                    <ReferenceLine y={95} stroke="#167267" strokeDasharray="4 4" label={{ value: "Hijau 95%", position: "insideTopRight", fontSize: 9, fill: "#167267" }} />
+                    <ReferenceLine y={80} stroke="#FF7864" strokeDasharray="3 3" label={{ value: "Batas Kritis 80%", position: "insideBottomRight", fontSize: 9, fill: "#D9533F" }} />
                     <Tooltip
                       content={({ active, payload }) => {
                         if (!active || !payload?.length) return null;
                         const d = payload[0].payload as (typeof rsupGroupMultiHorizonData)[number];
-                        const meta = BAND_BADGE[d.band];
+                        const meta = ACHIEVEMENT_BADGE[d.band];
                         return (
                           <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 shadow-lg text-xs space-y-1">
-                            <p className="font-bold text-[#1A284F]">{d.label} ({d.category})</p>
-                            <p className="font-semibold" style={{ color: meta.solid }}>
-                              Total ACH RSUP Group: {formatExecPct(d.ach, 1)}
+                            <p className="font-bold text-[#111827]">{d.label} ({d.category})</p>
+                            <p className="font-semibold" style={{ color: meta.softText }}>
+                              Achievement RSUP Group: {formatExecPct(d.ach, 1)}
                             </p>
-                            <p className="text-[10px] text-slate-500">Gap ke 100%: -{formatExecPct(100 - d.ach, 1)}</p>
+                            <p className="text-[10px] text-slate-500">Defisit ke 100%: -{formatExecPct(Math.max(0, 100 - d.ach), 1)}</p>
                           </div>
                         );
                       }}
                     />
-                    <Bar dataKey="ach" radius={[6, 6, 0, 0]} barSize={22} animationDuration={750}>
+                    <Bar dataKey="ach" radius={[6, 6, 0, 0]} barSize={24} animationDuration={750}>
                       {rsupGroupMultiHorizonData.map((entry, index) => (
                         <Cell
                           key={`grp-bar-${index}`}
-                          fill={
-                            entry.category === "Setahun"
-                              ? "#059669"
-                              : entry.category === "YTD"
-                              ? "#0D9488"
-                              : entry.category === "Quarter"
-                              ? "#D97706"
-                              : entry.band === "red"
-                              ? "#E11D48"
-                              : "#0A5598"
-                          }
-                          fillOpacity={0.86}
+                          fill={ACHIEVEMENT_BADGE[entry.band].solid}
                         />
                       ))}
                     </Bar>
                     <Line
                       type="monotone"
                       dataKey="ach"
-                      stroke="#1A284F"
-                      strokeWidth={2}
-                      dot={{ r: 3, fill: "#1A284F" }}
+                      stroke="#3E3E3E"
+                      strokeWidth={2.2}
+                      dot={{ r: 3.5, fill: "#3E3E3E" }}
                       activeDot={{ r: 5 }}
                     />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
-              <div className="flex items-center justify-center gap-4 pt-1 text-[10px] text-slate-500 flex-wrap">
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-xs bg-emerald-600" /> Setahun</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-xs bg-teal-600" /> YTD</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-xs bg-amber-600" /> Quarter</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-xs bg-[#0A5598]" /> Perbulan (MTD)</span>
+              <div className="flex items-center justify-center gap-4 pt-1 text-[10px] text-slate-600 flex-wrap">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-xs" style={{ backgroundColor: "#167267" }} /> Hijau ≥95%
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-xs border border-[#D4B830]" style={{ backgroundColor: "#FFE770" }} /> Kuning 80–&lt;95%
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-xs" style={{ backgroundColor: "#FF7864" }} /> Merah &lt;80%
+                </span>
               </div>
             </div>
 
-            {/* Chart 1B: RSUP Group Aktual vs Target (Bobot) & ACH per Indikator KPI */}
+            {/* Chart 1B: RSUP Group Aktual vs Target (Bobot) & Achievement per Indikator KPI */}
             <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col justify-between">
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-sky-800 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-full">
-                    Aktual vs Target Bobot &amp; ACH · {activeReport.shortLabel}
-                  </span>
-                  <h4 className="text-sm font-bold text-[#1A284F] mt-1.5">
-                    Pencapaian per Indikator KPI — {groupEntity.name}
-                  </h4>
-                </div>
+              <div className="mb-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#3E3E3E] bg-[#FFFBEB] border border-[#E8CE4D] px-2 py-0.5 rounded-full">
+                  Aktual vs Target Bobot &amp; Achievement · {activeReport.shortLabel}
+                </span>
+                <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                  Pencapaian per Indikator KPI — {groupEntity.name}
+                </h4>
               </div>
 
               <div className="space-y-3 my-auto">
-                {rsupGroupPillarBreakdown.map((item, idx) => {
-                  const bMeta = BAND_BADGE[item.band];
+                {rsupGroupIndicatorBreakdown.map((item, idx) => {
+                  const bMeta = ACHIEVEMENT_BADGE[item.band];
                   const fillRatio = item.bobot > 0 ? Math.min(100, (item.actual / item.bobot) * 100) : 0;
                   return (
                     <motion.div
@@ -1328,23 +1549,23 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                         </span>
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="text-[11px] text-slate-500 tabular-nums">
-                            Actual <strong className="text-[#1A284F]">{item.actualStr}</strong> / Bobot{" "}
+                            Actual <strong className="text-[#111827]">{item.actualStr}</strong> / Bobot{" "}
                             <strong>{item.bobotStr}</strong>
                           </span>
                           {item.pointGap > 0 && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 tabular-nums">
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#FFF2EF] text-[#9E3424] border border-[#FFC7BE] tabular-nums">
                               -{formatExecPct(item.pointGap, 1)} poin
                             </span>
                           )}
                           <span
-                            className="px-2 py-0.5 rounded-full text-[11px] font-extrabold border tabular-nums min-w-[52px] text-center"
+                            className="px-2 py-0.5 rounded-full text-[11px] font-extrabold border tabular-nums min-w-[82px] text-center"
                             style={{
                               backgroundColor: bMeta.bg,
                               color: bMeta.text,
-                              borderColor: bMeta.border,
+                              borderColor: bMeta.bg,
                             }}
                           >
-                            ACH {item.achStr}
+                            Achievement {item.achStr}
                           </span>
                         </div>
                       </div>
@@ -1364,24 +1585,23 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
             </div>
           </div>
 
-          {/* Chart 1C: Trend Multi-Indikator RSUP Group (Perbulan | Quarter | YTD & Tahun) */}
+          {/* Chart 1C: Trend Multi-Indikator RSUP Group (Perbulan | Q1–Q4) */}
           <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs">
             <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
               <div>
-                <h4 className="text-sm font-bold text-[#1A284F] flex items-center gap-1.5">
-                  <LineChartIcon className="w-4 h-4 text-[#0A5598]" />
-                  Trend Pencapaian (ACH %) per Indikator KPI — {groupEntity.name}
+                <h4 className="text-sm font-bold text-[#111827] flex items-center gap-1.5">
+                  <LineChartIcon className="w-4 h-4 text-[#167267]" />
+                  Trend Achievement (%) per Indikator KPI — {groupEntity.name}
                 </h4>
                 <p className="text-xs text-slate-500">
-                  Pergerakan capaian setiap pilar strategis RSUP Group dari waktu ke waktu
+                  Pergerakan capaian setiap Indikator KPI RSUP Group dari waktu ke waktu
                 </p>
               </div>
               <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
                 {(
                   [
                     { id: "MTD" as const, label: "Trend Perbulan" },
-                    { id: "Quarter" as const, label: "Trend Quarter" },
-                    { id: "Horizon" as const, label: "Q1–Q4 · YTD · Tahun" },
+                    { id: "Quarter" as const, label: "Q1–Q4" },
                   ] as const
                 ).map((m) => (
                   <button
@@ -1390,7 +1610,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     onClick={() => setGroupTrendMode(m.id)}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                       groupTrendMode === m.id
-                        ? "bg-white text-[#1A284F] shadow-2xs"
+                        ? "bg-white text-[#111827] shadow-2xs"
                         : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
@@ -1400,21 +1620,15 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
               </div>
             </div>
 
-            <div className="h-[270px] w-full">
+            <div className="h-[265px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={rsupGroupPillarTrendData} margin={{ top: 10, right: 18, left: -12, bottom: 4 }}>
+                <LineChart data={rsupGroupIndicatorTrendData} margin={{ top: 10, right: 18, left: -12, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                  <XAxis dataKey="period" tick={{ fontSize: 11, fill: "#475569" }} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="period" tick={{ fontSize: 11, fill: "#3E3E3E" }} axisLine={false} tickLine={false} />
                   <YAxis domain={[55, 105]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                  <ReferenceLine y={95} stroke="#10B981" strokeDasharray="4 4" />
-                  <ReferenceLine y={80} stroke="#E11D48" strokeDasharray="3 3" />
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: 12,
-                      borderColor: "#E2E8F0",
-                      fontSize: 12,
-                    }}
-                  />
+                  <ReferenceLine y={95} stroke="#167267" strokeDasharray="4 4" />
+                  <ReferenceLine y={80} stroke="#FF7864" strokeDasharray="3 3" />
+                  <Tooltip contentStyle={{ borderRadius: 12, borderColor: "#E2E8F0", fontSize: 12 }} />
                   <Legend wrapperStyle={{ fontSize: 11, paddingTop: 6 }} />
                   {visibleIndicators
                     .filter((ind) => ind.id !== "ind-reg")
@@ -1424,7 +1638,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                         type="monotone"
                         dataKey={ind.id}
                         name={ind.shortLabel}
-                        stroke={PILLAR_COLORS[ind.id] ?? PALETTE.cobalt}
+                        stroke={INDICATOR_COLORS[ind.id] ?? THEME.pineGreen}
                         strokeWidth={2.4}
                         dot={{ r: 3.5 }}
                         activeDot={{ r: 5.5 }}
@@ -1437,7 +1651,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         </motion.section>
       )}
 
-      {/* ══ SECTION 2: PERBANDINGAN ANTAR UNIT USAHA (Requirement #4) ══ */}
+      {/* ══ SECTION 2: SUMMARY PERBANDINGAN ANTAR UNIT USAHA (Points 7, 8, 9) ══ */}
       {scopeFocus !== "GROUP" && (
         <motion.section
           initial={{ opacity: 0, y: 12 }}
@@ -1447,102 +1661,113 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         >
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-[#0A5598] text-white flex items-center justify-center shadow-xs">
+              <div className="w-8 h-8 rounded-xl bg-[#167267] text-white flex items-center justify-center shadow-xs">
                 <Building2 className="w-4 h-4" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-[#1A284F]">
+                <h3 className="text-base font-bold text-[#111827]">
                   Summary Perbandingan Antar Unit Usaha
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Komparasi lintas Unit Usaha dalam Setahun, YTD, Quarter &amp; Perbulan · Aktual vs Target &amp; ACH per Pilar · Trend Lintasan Unit
+                  Perbandingan Achievement Unit Usaha dari Perspektif 6 Indikator · Aktual vs Target (Bobot) · Trend Lintasan Unit
                 </p>
               </div>
             </div>
+            <SambuToggleTag />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* Chart 2A: Summary Perbandingan Unit Usaha dalam Setahun, YTD, Quarter, Perbulan */}
+            {/* Point 7: Perbandingan Achievement Unit Usaha dari Perspektif 6 Indikator */}
             <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col">
-              <div className="mb-3">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                  Komparasi 4 Horizon Waktu
-                </span>
-                <h4 className="text-sm font-bold text-[#1A284F] mt-1.5">
-                  Perbandingan Total ACH per Unit Usaha: Setahun · YTD · Quarter · Perbulan
-                </h4>
+              <div className="flex items-start justify-between gap-2 mb-3 flex-wrap">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#167267] bg-[#E6F3F1] border border-[#B2DBD5] px-2 py-0.5 rounded-full">
+                    Perspektif 6 Indikator KPI · {activeReport.shortLabel}
+                  </span>
+                  <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                    Perbandingan Achievement Unit Usaha dari Perspektif 6 Indikator
+                  </h4>
+                </div>
+                <SambuToggleTag compact />
               </div>
-              <div className="h-[290px] w-full">
+              <div className="h-[295px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={unitHorizonComparisonData} margin={{ top: 10, right: 12, left: -14, bottom: 4 }} barGap={3}>
+                  <BarChart data={unitSixIndicatorsData} margin={{ top: 10, right: 12, left: -14, bottom: 4 }} barGap={2}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                    <XAxis dataKey="unit" tick={{ fontSize: 10.5, fill: "#334155", fontWeight: 600 }} axisLine={false} tickLine={false} />
-                    <YAxis domain={[60, 105]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                    <ReferenceLine y={95} stroke="#10B981" strokeDasharray="4 4" />
-                    <ReferenceLine y={80} stroke="#E11D48" strokeDasharray="3 3" />
+                    <XAxis dataKey="unit" tick={{ fontSize: 10, fill: "#3E3E3E", fontWeight: 600 }} axisLine={false} tickLine={false} interval={0} />
+                    <YAxis domain={[0, 110]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
+                    <ReferenceLine y={95} stroke="#167267" strokeDasharray="4 4" />
+                    <ReferenceLine y={80} stroke="#FF7864" strokeDasharray="3 3" />
                     <Tooltip
                       contentStyle={{ borderRadius: 12, borderColor: "#E2E8F0", fontSize: 12 }}
                       formatter={(val: number) => [`${val}%`, undefined]}
                     />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <Bar dataKey="Setahun" name={`Setahun '${store.cycleYear.slice(-2)}`} fill="#059669" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="YTD" name="YTD (Jan–Okt)" fill="#0D9488" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="Quarter" name={horizon === "Quarter" ? activeReport.shortLabel : latestQuarterReport.shortLabel} fill="#D97706" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="Perbulan" name={horizon === "MTD" ? activeReport.shortLabel : latestMtdReport.shortLabel} fill="#0A5598" radius={[4, 4, 0, 0]} />
+                    <Legend wrapperStyle={{ fontSize: 10.5 }} />
+                    {visibleIndicators.map((ind) => (
+                      <Bar
+                        key={ind.id}
+                        dataKey={ind.id}
+                        name={ind.shortLabel}
+                        fill={INDICATOR_COLORS[ind.id] ?? THEME.pineGreen}
+                        radius={[3, 3, 0, 0]}
+                      />
+                    ))}
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
 
-            {/* Chart 2B: Pencapaian per Indikator KPI (ACH % vs Aktual/Target Bobot) per Unit Usaha */}
+            {/* Point 8: Komparasi per Indikator card — auto memunculkan tab Aktual vs Target (Bobot) */}
             <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col">
               <div className="flex items-start justify-between gap-2 mb-2.5 flex-wrap">
                 <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#3E3E3E] bg-[#FFFBEB] border border-[#E8CE4D] px-2 py-0.5 rounded-full">
                     Komparasi per Indikator · {activeReport.shortLabel}
                   </span>
-                  <h4 className="text-sm font-bold text-[#1A284F] mt-1.5">
-                    {unitBySelectedPillarData.indicator.label}
+                  <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                    {unitBySelectedIndicatorData.indicator.label}
                   </h4>
                 </div>
-                <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setUnitMetricView("ach")}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
-                      unitMetricView === "ach"
-                        ? "bg-white text-[#1A284F] shadow-2xs"
-                        : "text-slate-600"
-                    }`}
-                  >
-                    Kolom ACH (%)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUnitMetricView("actual_vs_target")}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
-                      unitMetricView === "actual_vs_target"
-                        ? "bg-white text-[#1A284F] shadow-2xs"
-                        : "text-slate-600"
-                    }`}
-                  >
-                    Aktual vs Target (Bobot)
-                  </button>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <SambuToggleTag compact />
+                  <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setUnitMetricView("actual_vs_target")}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        unitMetricView === "actual_vs_target"
+                          ? "bg-white text-[#111827] shadow-2xs"
+                          : "text-slate-600"
+                      }`}
+                    >
+                      Aktual vs Target (Bobot)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUnitMetricView("ach")}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        unitMetricView === "ach"
+                          ? "bg-white text-[#111827] shadow-2xs"
+                          : "text-slate-600"
+                      }`}
+                    >
+                      Kolom Achievement (%)
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              {/* Quick Pillar Selector Pills */}
-              {selectedPillarId === "ALL" && (
+              {selectedIndicatorId === "ALL" && (
                 <div className="flex items-center gap-1 mb-2.5 flex-wrap">
                   {store.indicators.map((ind) => (
                     <button
                       key={ind.id}
                       type="button"
-                      onClick={() => setPillarSpotlightForUnits(ind.id)}
+                      onClick={() => setIndicatorSpotlightForUnits(ind.id)}
                       className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold border transition-all cursor-pointer ${
-                        pillarSpotlightForUnits === ind.id
-                          ? "bg-[#0A5598] text-white border-[#0A5598]"
-                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                        indicatorSpotlightForUnits === ind.id
+                          ? "bg-[#167267] text-white border-[#167267]"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-[#E6F3F1]"
                       }`}
                     >
                       {ind.shortLabel}
@@ -1553,21 +1778,36 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
 
               <div className="h-[245px] w-full mt-auto">
                 <ResponsiveContainer width="100%" height="100%">
-                  {unitMetricView === "ach" ? (
-                    <BarChart data={unitBySelectedPillarData.rows} margin={{ top: 8, right: 12, left: -14, bottom: 4 }}>
+                  {unitMetricView === "actual_vs_target" ? (
+                    <BarChart data={unitBySelectedIndicatorData.rows} margin={{ top: 8, right: 12, left: -14, bottom: 4 }} barGap={4}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                      <XAxis dataKey="entity" tick={{ fontSize: 10, fill: "#334155", fontWeight: 600 }} axisLine={false} tickLine={false} />
+                      <XAxis dataKey="entity" tick={{ fontSize: 10, fill: "#3E3E3E", fontWeight: 600 }} axisLine={false} tickLine={false} interval={0} />
+                      <YAxis tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
+                      <Tooltip
+                        contentStyle={{ borderRadius: 12, borderColor: "#E2E8F0", fontSize: 12 }}
+                        formatter={(val: number) => [`${val}%`, undefined]}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Bar dataKey="bobot" name="Target (Bobot %)" fill="#D6DCE5" radius={[5, 5, 0, 0]} barSize={20} />
+                      <Bar dataKey="actual" name="Aktual Kontribusi (%)" fill="#167267" radius={[5, 5, 0, 0]} barSize={20} />
+                    </BarChart>
+                  ) : (
+                    <BarChart data={unitBySelectedIndicatorData.rows} margin={{ top: 8, right: 12, left: -14, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                      <XAxis dataKey="entity" tick={{ fontSize: 10, fill: "#3E3E3E", fontWeight: 600 }} axisLine={false} tickLine={false} interval={0} />
                       <YAxis domain={[0, 110]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                      <ReferenceLine y={95} stroke="#10B981" strokeDasharray="4 4" />
-                      <ReferenceLine y={80} stroke="#E11D48" strokeDasharray="3 3" />
+                      <ReferenceLine y={95} stroke="#167267" strokeDasharray="4 4" />
+                      <ReferenceLine y={80} stroke="#FF7864" strokeDasharray="3 3" />
                       <Tooltip
                         content={({ active, payload }) => {
                           if (!active || !payload?.length) return null;
-                          const d = payload[0].payload as (typeof unitBySelectedPillarData.rows)[number];
+                          const d = payload[0].payload as (typeof unitBySelectedIndicatorData.rows)[number];
                           return (
                             <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 shadow-lg text-xs space-y-1">
-                              <p className="font-bold text-[#1A284F]">{d.fullName}</p>
-                              <p className="font-semibold text-emerald-700">ACH: {formatExecPct(d.ach, 1)}</p>
+                              <p className="font-bold text-[#111827]">{d.fullName}</p>
+                              <p className="font-semibold" style={{ color: "#167267" }}>
+                                Achievement: {formatExecPct(d.ach, 1)}
+                              </p>
                               <p className="text-slate-600">
                                 Actual: <strong>{d.actual}%</strong> dari Target Bobot <strong>{d.bobot}%</strong>
                               </p>
@@ -1575,28 +1815,14 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                           );
                         }}
                       />
-                      <Bar dataKey="ach" name="Achievement (ACH %)" radius={[6, 6, 0, 0]} barSize={32}>
-                        {unitBySelectedPillarData.rows.map((entry) => (
+                      <Bar dataKey="ach" name="Achievement (%)" radius={[6, 6, 0, 0]} barSize={30}>
+                        {unitBySelectedIndicatorData.rows.map((entry) => (
                           <Cell
                             key={entry.id}
-                            fill={BAND_BADGE[entry.band].solid}
-                            fillOpacity={entry.isGroup ? 0.95 : 0.82}
+                            fill={ACHIEVEMENT_BADGE[entry.band].solid}
                           />
                         ))}
                       </Bar>
-                    </BarChart>
-                  ) : (
-                    <BarChart data={unitBySelectedPillarData.rows} margin={{ top: 8, right: 12, left: -14, bottom: 4 }} barGap={4}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                      <XAxis dataKey="entity" tick={{ fontSize: 10, fill: "#334155", fontWeight: 600 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                      <Tooltip
-                        contentStyle={{ borderRadius: 12, borderColor: "#E2E8F0", fontSize: 12 }}
-                        formatter={(val: number) => [`${val}%`, undefined]}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 11 }} />
-                      <Bar dataKey="bobot" name="Target (Bobot %)" fill="#CBD5E1" radius={[5, 5, 0, 0]} barSize={22} />
-                      <Bar dataKey="actual" name="Aktual Kontribusi (%)" fill="#0A5598" radius={[5, 5, 0, 0]} barSize={22} />
                     </BarChart>
                   )}
                 </ResponsiveContainer>
@@ -1604,39 +1830,44 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
             </div>
           </div>
 
-          {/* Chart 2C: Trend Lintasan Total ACH Seluruh Unit Usaha (Perbulan | Quarter | YTD & Tahun) */}
+          {/* Point 9: Trend Lintasan Pencapaian Unit Usaha vs Benchmark RSUP Group (MTD | Q1–Q4, mengikuti filter Indikator KPI) */}
           <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs">
             <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
               <div>
-                <h4 className="text-sm font-bold text-[#1A284F] flex items-center gap-1.5">
-                  <Activity className="w-4 h-4 text-teal-600" />
+                <h4 className="text-sm font-bold text-[#111827] flex items-center gap-1.5">
+                  <Activity className="w-4 h-4 text-[#167267]" />
                   Trend Lintasan Pencapaian Unit Usaha vs Benchmark RSUP Group
+                  {activeFilterIndicatorObj ? ` — ${activeFilterIndicatorObj.label}` : ""}
                 </h4>
                 <p className="text-xs text-slate-500">
-                  Garis putus-putus menunjukkan benchmark konsolidasi RSUP Group terhadap masing-masing Unit Usaha
+                  {activeFilterIndicatorObj
+                    ? `Menampilkan trend Achievement khusus indikator "${activeFilterIndicatorObj.label}"`
+                    : "Menampilkan trend Total Achievement seluruh indikator (pilih filter Indikator KPI di atas untuk fokus ke satu indikator)"}
                 </p>
               </div>
-              <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
-                {(
-                  [
-                    { id: "MTD" as const, label: "Trend Perbulan" },
-                    { id: "Quarter" as const, label: "Trend Quarter" },
-                    { id: "Horizon" as const, label: "Q1–Q4 · YTD · Tahun" },
-                  ] as const
-                ).map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setUnitTrendMode(m.id)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                      unitTrendMode === m.id
-                        ? "bg-white text-[#1A284F] shadow-2xs"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2 flex-wrap">
+                <SambuToggleTag compact />
+                <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
+                  {(
+                    [
+                      { id: "MTD" as const, label: "Trend Perbulan" },
+                      { id: "Quarter" as const, label: "Q1–Q4" },
+                    ] as const
+                  ).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setUnitTrendMode(m.id)}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                        unitTrendMode === m.id
+                          ? "bg-white text-[#111827] shadow-2xs"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -1644,28 +1875,29 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={unitTrajectoryData} margin={{ top: 10, right: 18, left: -12, bottom: 4 }}>
                   <defs>
-                    <linearGradient id="rsupGroupBand" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#1A284F" stopOpacity={0.14} />
-                      <stop offset="95%" stopColor="#1A284F" stopOpacity={0.01} />
+                    <linearGradient id="rsupGroupThemeBand" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3E3E3E" stopOpacity={0.14} />
+                      <stop offset="95%" stopColor="#3E3E3E" stopOpacity={0.01} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                  <XAxis dataKey="period" tick={{ fontSize: 11, fill: "#475569" }} axisLine={false} tickLine={false} />
-                  <YAxis domain={[70, 102]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                  <ReferenceLine y={95} stroke="#10B981" strokeDasharray="4 4" />
-                  <ReferenceLine y={80} stroke="#E11D48" strokeDasharray="3 3" />
+                  <XAxis dataKey="period" tick={{ fontSize: 11, fill: "#3E3E3E" }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[30, 108]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
+                  <ReferenceLine y={95} stroke="#167267" strokeDasharray="4 4" />
+                  <ReferenceLine y={80} stroke="#FF7864" strokeDasharray="3 3" />
                   <Tooltip contentStyle={{ borderRadius: 12, borderColor: "#E2E8F0", fontSize: 12 }} />
                   <Legend wrapperStyle={{ fontSize: 11, paddingTop: 6 }} />
                   <Area
                     type="monotone"
                     dataKey={groupEntity.id}
                     name={`${groupEntity.shortName} (Benchmark)`}
-                    fill="url(#rsupGroupBand)"
-                    stroke="#1A284F"
+                    fill="url(#rsupGroupThemeBand)"
+                    stroke="#3E3E3E"
                     strokeWidth={2.5}
                     strokeDasharray="6 4"
+                    connectNulls
                   />
-                  {unitEntities.map((u) => {
+                  {activeUnitEntities.map((u) => {
                     const dimmed = spotlightUnitId !== "ALL" && spotlightUnitId !== u.id;
                     return (
                       <Line
@@ -1678,6 +1910,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                         strokeOpacity={dimmed ? 0.22 : 1}
                         dot={{ r: spotlightUnitId === u.id ? 4.5 : 3 }}
                         activeDot={{ r: 6 }}
+                        connectNulls
                       />
                     );
                   })}
@@ -1688,7 +1921,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
         </motion.section>
       )}
 
-      {/* ══ SECTION 3: REKOMENDASI INFOGRAFIS STRATEGIS PERSPEKTIF BOD (Requirement #4 & #6) ══ */}
+      {/* ══ SECTION 3: STRATEGIC INTELLIGENCE SUITE (Points 10, 11, 12, 13, 14, 15) ══ */}
       <motion.section
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -1697,44 +1930,52 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
       >
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-teal-700 text-white flex items-center justify-center shadow-xs">
+            <div className="w-8 h-8 rounded-xl bg-[#167267] text-white flex items-center justify-center shadow-xs">
               <Gauge className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-[#1A284F]">
-                BOD Strategic Intelligence Suite
+              {/* Point 10 & Point 11: Strategic Intelligence Suite tanpa subjudul Pareto... */}
+              <h3 className="text-base font-bold text-[#111827]">
+                Strategic Intelligence Suite
               </h3>
-              <p className="text-xs text-slate-500">
-                Matriks Risiko Strategis (Klik Sel untuk Drilldown Trend) · Pareto Defisit Poin Bobot · Keseimbangan &amp; Indeks Konsistensi Eksekusi
-              </p>
             </div>
           </div>
+          <SambuToggleTag />
         </div>
 
-        {/* 3A. Interactive Strategic ACH Heatmap Matrix + Cell Sparkline Inspector */}
+        {/* 3A. Interactive Risk & Achievement Heatmap Matrix + Cell Drilldown (Point 12) */}
         <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-[#1A284F] bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#3E3E3E] bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
                 Interactive Risk &amp; Achievement Matrix · {activeReport.shortLabel}
               </span>
-              <h4 className="text-sm font-bold text-[#1A284F] mt-1.5">
-                Peta Kesehatan Strategis Lintas Entitas &amp; Pilar KPI (Klik Sel untuk Melihat Histori Trend)
+              <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                Peta Kesehatan Strategis Lintas Entitas &amp; Indikator KPI (Klik Sel untuk Melihat Histori Trend)
               </h4>
             </div>
-            <div className="flex items-center gap-2 text-[10px] font-semibold">
-              <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300">≥95% Hijau</span>
-              <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">80–&lt;95% Kuning</span>
-              <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-900 border border-rose-300">&lt;80% Merah</span>
+            <div className="flex items-center gap-2 text-[10px] font-bold flex-wrap">
+              <span className="px-2.5 py-0.5 rounded text-white" style={{ backgroundColor: "#167267" }}>
+                ≥95% Hijau
+              </span>
+              <span className="px-2.5 py-0.5 rounded text-[#3E3E3E] border border-[#E8CE4D]" style={{ backgroundColor: "#FFE770" }}>
+                80–&lt;95% Kuning
+              </span>
+              <span className="px-2.5 py-0.5 rounded text-white" style={{ backgroundColor: "#FF7864" }}>
+                &lt;80% Merah
+              </span>
+              <span className="px-2.5 py-0.5 rounded text-white" style={{ backgroundColor: "#3E3E3E" }}>
+                N/A
+              </span>
             </div>
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="w-full border-collapse text-xs min-w-[780px]">
               <thead>
-                <tr className="bg-[#1A284F] text-white">
-                  <th className="px-3.5 py-2.5 text-left font-bold">Pilar Indikator KPI</th>
-                  {[groupEntity, ...unitEntities].map((ent) => (
+                <tr className="bg-[#3E3E3E] text-white">
+                  <th className="px-3.5 py-2.5 text-left font-bold">Indikator KPI</th>
+                  {[groupEntity, ...activeUnitEntities].map((ent) => (
                     <th key={ent.id} className="px-3 py-2.5 text-center font-bold whitespace-nowrap">
                       {ent.shortName}
                     </th>
@@ -1747,17 +1988,28 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     <td className="px-3.5 py-2.5 font-semibold text-slate-800 bg-slate-50/60">
                       {ind.label}
                     </td>
-                    {[groupEntity, ...unitEntities].map((ent) => {
+                    {[groupEntity, ...activeUnitEntities].map((ent) => {
                       const cell = activeReport.cells?.[ind.id]?.[ent.id];
-                      if (!cell || !cell.applicable) {
+                      if (!cell) {
                         return (
-                          <td key={`${ind.id}-${ent.id}`} className="px-2 py-2 text-center bg-slate-900 text-slate-400 text-[10px] font-semibold">
+                          <td key={`${ind.id}-${ent.id}`} className="px-2 py-2 text-center bg-slate-50 text-slate-400 text-[10px]">
+                            —
+                          </td>
+                        );
+                      }
+                      if (!cell.applicable) {
+                        return (
+                          <td
+                            key={`${ind.id}-${ent.id}`}
+                            className="px-2 py-2 text-center text-white/80 text-[10px] font-semibold"
+                            style={{ backgroundColor: "#3E3E3E" }}
+                          >
                             N/A
                           </td>
                         );
                       }
                       const band = classifyAchBand(cell.ach, true);
-                      const meta = BAND_BADGE[band];
+                      const meta = ACHIEVEMENT_BADGE[band];
                       const isSelected =
                         inspectedCell?.indId === ind.id && inspectedCell?.entId === ent.id;
                       const hiddenByFilter = achBandFilter !== "ALL" && band !== achBandFilter;
@@ -1773,18 +2025,18 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                               )
                             }
                             className={`w-full rounded-lg px-2 py-1.5 border transition-all cursor-pointer flex flex-col items-center ${
-                              isSelected ? "ring-2 ring-[#1A284F] scale-[1.02] shadow-xs" : "hover:brightness-97"
+                              isSelected ? "ring-2 ring-[#3E3E3E] scale-[1.02] shadow-xs" : "hover:brightness-97"
                             } ${hiddenByFilter ? "opacity-25" : ""}`}
                             style={{
                               backgroundColor: meta.bg,
                               color: meta.text,
-                              borderColor: meta.border,
+                              borderColor: meta.bg,
                             }}
-                            title="Klik untuk membuka grafik trend historis sel ini"
+                            title="Klik untuk membuka grafik trend sesuai filter Periode aktif"
                           >
-                            <span className="text-xs font-extrabold tabular-nums">{cell.ach}</span>
-                            <span className="text-[9px] opacity-80 tabular-nums">
-                              {cell.actual} / {cell.bobot}
+                            <span className="text-xs font-extrabold tabular-nums">{cell.ach || "—"}</span>
+                            <span className="text-[9px] opacity-90 tabular-nums">
+                              {cell.actual || "0%"} / {cell.bobot || "0%"}
                             </span>
                           </button>
                         </td>
@@ -1792,24 +2044,35 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     })}
                   </tr>
                 ))}
-                {/* Baris Total ACH */}
+                {/* Baris Total Achievement */}
                 <tr className="border-t-2 border-slate-300 bg-slate-50 font-extrabold">
-                  <td className="px-3.5 py-2.5 text-[#1A284F]">Total Pencapaian ({activeReport.shortLabel})</td>
-                  {[groupEntity, ...unitEntities].map((ent) => {
+                  <td className="px-3.5 py-2.5 text-[#111827]">
+                    Total Achievement ({activeReport.shortLabel})
+                  </td>
+                  {[groupEntity, ...activeUnitEntities].map((ent) => {
                     const tot = activeReport.totals?.[ent.id];
-                    const band = classifyAchBand(tot?.ach, true, tot?.bandOverride);
-                    const meta = BAND_BADGE[band];
+                    const hasVal = Boolean(tot?.ach && String(tot.ach).trim());
+                    const band: AchColorBand = hasVal ? classifyAchBand(tot?.ach, true, tot?.bandOverride) : "na";
+                    const meta = ACHIEVEMENT_BADGE[band];
                     return (
                       <td key={`hm-tot-${ent.id}`} className="p-1.5 text-center border-l border-slate-200">
                         <div
                           className="rounded-lg px-2 py-1.5 border text-xs font-extrabold tabular-nums"
-                          style={{
-                            backgroundColor: meta.bg,
-                            color: meta.text,
-                            borderColor: meta.border,
-                          }}
+                          style={
+                            hasVal
+                              ? {
+                                  backgroundColor: meta.bg,
+                                  color: meta.text,
+                                  borderColor: meta.bg,
+                                }
+                              : {
+                                  backgroundColor: "#F8FAFC",
+                                  color: "#94A3B8",
+                                  borderColor: "#E2E8F0",
+                                }
+                          }
                         >
-                          {tot?.ach || "—"}
+                          {hasVal ? tot?.ach : "—"}
                         </div>
                       </td>
                     );
@@ -1819,7 +2082,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
             </table>
           </div>
 
-          {/* Animated Drilldown Panel saat sel Heatmap diklik */}
+          {/* Point 12: Drilldown Lintasan Historis HANYA memunculkan sesuai filter Periode aktif */}
           <AnimatePresence>
             {inspectedCellSeries && (
               <motion.div
@@ -1828,36 +2091,36 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                 exit={{ opacity: 0, height: 0 }}
                 className="overflow-hidden"
               >
-                <div className="rounded-xl border border-sky-200 bg-sky-50/45 p-4 space-y-2.5">
+                <div className="rounded-xl border border-[#B2DBD5] bg-[#E6F3F1]/45 p-4 space-y-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="text-xs font-bold text-[#1A284F]">
+                      <p className="text-xs font-bold text-[#111827]">
                         Drilldown Lintasan Historis: {inspectedCellSeries.ent.name} —{" "}
-                        <span className="text-[#0A5598]">{inspectedCellSeries.ind.label}</span>
+                        <span className="text-[#167267]">{inspectedCellSeries.ind.label}</span>
                       </p>
-                      <p className="text-[11px] text-slate-500">
-                        Perbandingan Quarter (Q1–Q4), Perbulan (Mei–Okt&apos;26), YTD &amp; Setahun
+                      <p className="text-[11px] text-slate-600">
+                        Menampilkan khusus sesuai filter Periode aktif: <strong>{inspectedCellSeries.horizonLabel}</strong>
                       </p>
                     </div>
                     <button
                       type="button"
                       onClick={() => setInspectedCell(null)}
-                      className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-white cursor-pointer"
+                      className="p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-white cursor-pointer"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  <div className="h-[175px] w-full bg-white rounded-xl border border-sky-100 p-2.5">
+                  <div className="h-[175px] w-full bg-white rounded-xl border border-[#B2DBD5] p-2.5">
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={inspectedCellSeries.points} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#475569" }} axisLine={false} tickLine={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#3E3E3E" }} axisLine={false} tickLine={false} />
                         <YAxis domain={[0, 110]} tick={{ fontSize: 10, fill: "#64748B" }} axisLine={false} tickLine={false} unit="%" />
-                        <ReferenceLine y={95} stroke="#10B981" strokeDasharray="4 4" />
-                        <ReferenceLine y={80} stroke="#E11D48" strokeDasharray="3 3" />
+                        <ReferenceLine y={95} stroke="#167267" strokeDasharray="4 4" />
+                        <ReferenceLine y={80} stroke="#FF7864" strokeDasharray="3 3" />
                         <Tooltip contentStyle={{ borderRadius: 10, fontSize: 11 }} />
-                        <Bar dataKey="ach" name="ACH (%)" fill="#0A5598" fillOpacity={0.22} radius={[4, 4, 0, 0]} barSize={24} />
-                        <Line type="monotone" dataKey="ach" name="Trend ACH (%)" stroke="#0A5598" strokeWidth={2.5} dot={{ r: 3.5, fill: "#0A5598" }} />
+                        <Bar dataKey="ach" name="Achievement (%)" fill="#167267" fillOpacity={0.22} radius={[4, 4, 0, 0]} barSize={28} />
+                        <Line type="monotone" dataKey="ach" name="Trend Achievement (%)" stroke="#167267" strokeWidth={2.5} dot={{ r: 4, fill: "#167267" }} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
@@ -1867,26 +2130,29 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
           </AnimatePresence>
         </div>
 
-        {/* 3B & 3C: Pareto Defisit Poin Bobot + Balanced Scorecard Radar & Consistency Matrix */}
+        {/* 3B & 3C: Defisit Poin Menuju 100% (Point 14) + Balanced Scorecard dengan Hover Explanation (Point 14 & 15) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-          {/* 3B: Weighted Gap-to-100% Attribution */}
+          {/* Point 14: Diagnostic · Sumber Kehilangan Poin & Defisit Poin Menuju 100% */}
           <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col justify-between">
-            <div className="mb-3">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-rose-800 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
-                BOD Diagnostic · Sumber Kehilangan Poin Bobot
-              </span>
-              <h4 className="text-sm font-bold text-[#1A284F] mt-1.5">
-                Pareto Defisit Poin Menuju 100% ({activeReport.shortLabel})
-              </h4>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Mengidentifikasi pilar yang paling menggerus skor tertimbang di masing-masing entitas
-              </p>
+            <div className="flex items-start justify-between gap-2 mb-3 flex-wrap">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#9E3424] bg-[#FFF2EF] border border-[#FFC7BE] px-2 py-0.5 rounded-full">
+                  Diagnostic · Sumber Kehilangan Poin
+                </span>
+                <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                  Defisit Poin Menuju 100% ({activeReport.shortLabel})
+                </h4>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Mengidentifikasi Indikator yang paling menggerus skor tertimbang di masing-masing Unit Usaha
+                </p>
+              </div>
+              <SambuToggleTag compact />
             </div>
 
             <div className="space-y-3 my-auto">
               {gapAttributionData.map((row) => (
                 <div key={row.entity.id} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center justify-between text-xs gap-2">
                     <span className="font-bold text-slate-800 flex items-center gap-1.5">
                       <span
                         className="w-2 h-2 rounded-full shrink-0"
@@ -1894,86 +2160,106 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                       />
                       {row.entity.shortName}
                     </span>
-                    <span className="text-[11px] text-slate-500 tabular-nums">
-                      Tercapai <strong className="text-emerald-700">{row.achieved}%</strong> · Defisit{" "}
-                      <strong className="text-rose-700">-{row.totalLoss}%</strong>
-                      {row.topDrag ? (
-                        <span className="text-slate-400">
-                          {" "}
-                          (Utama: {row.topDrag.label} -{row.topDrag.loss}%)
-                        </span>
-                      ) : null}
-                    </span>
+                    {row.hasData ? (
+                      <span className="text-[11px] text-slate-500 tabular-nums text-right">
+                        Tercapai <strong style={{ color: "#167267" }}>{row.achieved}%</strong> · Defisit{" "}
+                        <strong style={{ color: "#D9533F" }}>-{row.totalLoss}%</strong>
+                        {row.topDrag ? (
+                          <span className="text-slate-400">
+                            {" "}
+                            (Utama: {row.topDrag.label} -{row.topDrag.loss}%)
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] italic text-slate-400">Belum diisi di Master KPI</span>
+                    )}
                   </div>
-                  {/* Stacked 100% Bar: Achieved + Loss segments */}
                   <div className="w-full h-3 rounded-full bg-slate-100 overflow-hidden flex">
-                    <div
-                      className="h-full bg-emerald-500 transition-all duration-500"
-                      style={{ width: `${Math.min(100, row.achieved)}%` }}
-                      title={`Skor Tercapai: ${row.achieved}%`}
-                    />
-                    {row.losses.map((seg) => (
-                      <div
-                        key={seg.indId}
-                        className="h-full border-l border-white/60 transition-all duration-500"
-                        style={{
-                          width: `${Math.min(100 - row.achieved, seg.loss)}%`,
-                          backgroundColor: seg.ach < 80 ? PALETTE.rose : PALETTE.amberBright,
-                        }}
-                        title={`Defisit ${seg.label}: -${seg.loss}% (ACH ${seg.ach}%)`}
-                      />
-                    ))}
+                    {row.hasData && (
+                      <>
+                        <div
+                          className="h-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(100, row.achieved)}%`,
+                            backgroundColor: "#167267",
+                          }}
+                          title={`Poin Tercapai: ${row.achieved}%`}
+                        />
+                        {row.losses.map((seg) => (
+                          <div
+                            key={seg.indId}
+                            className="h-full border-l border-white/70 transition-all duration-500"
+                            style={{
+                              width: `${Math.min(100 - row.achieved, seg.loss)}%`,
+                              backgroundColor: seg.ach < 80 ? "#FF7864" : "#FFE770",
+                            }}
+                            title={`Defisit ${seg.label}: -${seg.loss}% (Achievement ${seg.ach}%)`}
+                          />
+                        ))}
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
 
-            <div className="flex items-center gap-4 pt-3 mt-3 border-t border-slate-100 text-[10px] text-slate-500 flex-wrap">
-              <span className="inline-flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500" /> Poin Bobot Tercapai
+            <div className="flex items-center gap-4 pt-3 mt-3 border-t border-slate-100 text-[10px] text-slate-600 flex-wrap">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-xs" style={{ backgroundColor: "#167267" }} /> Poin Tercapai
               </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-xs bg-amber-500" /> Defisit dari Pilar Watchlist (80–94%)
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-xs border border-[#D4B830]" style={{ backgroundColor: "#FFE770" }} /> Defisit | Watchlist
               </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-xs bg-rose-600" /> Defisit dari Pilar Kritis (&lt;80%)
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-xs" style={{ backgroundColor: "#FF7864" }} /> Defisit | Kritis
               </span>
             </div>
           </div>
 
-          {/* 3C: Balanced Scorecard Radar + Execution Stability Table */}
+          {/* Point 14 & Point 15: Balanced Scorecard + Penjelasan Dinamis saat Kursor Menyorot Balanced Scorecard */}
           <div className="lg:col-span-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col justify-between">
             <div className="mb-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full">
-                Balanced Scorecard &amp; Indeks Stabilitas
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#167267] bg-[#E6F3F1] border border-[#B2DBD5] px-2 py-0.5 rounded-full">
+                Balanced Scorecard
               </span>
-              <h4 className="text-sm font-bold text-[#1A284F] mt-1.5">
-                Keseimbangan 6 Pilar KPI &amp; Konsistensi Eksekusi Bulanan
+              <h4 className="text-sm font-bold text-[#111827] mt-1.5">
+                Keseimbangan 6 Indikator KPI &amp; Konsistensi Eksekusi Bulanan
               </h4>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center my-auto">
-              <div className="sm:col-span-6 h-[225px]">
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5 items-center my-auto">
+              <div className="sm:col-span-6 h-[240px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <RadarChart data={radarComparison.data} outerRadius="70%">
-                    <PolarGrid stroke="#E2E8F0" />
-                    <PolarAngleAxis dataKey="pillar" tick={{ fontSize: 9.5, fill: "#334155" }} />
+                  <RadarChart
+                    data={radarComparison.data}
+                    outerRadius="68%"
+                    onMouseMove={(state: unknown) => {
+                      const st = state as { activePayload?: Array<{ payload?: { indId?: string } }> } | null;
+                      const hoveredId = st?.activePayload?.[0]?.payload?.indId;
+                      if (hoveredId && hoveredId !== hoveredBscIndId) {
+                        setHoveredBscIndId(hoveredId);
+                      }
+                    }}
+                  >
+                    <PolarGrid stroke="#DCE3F2" />
+                    <PolarAngleAxis dataKey="indicator" tick={{ fontSize: 9.5, fill: "#3E3E3E", fontWeight: 600 }} />
                     <PolarRadiusAxis angle={30} domain={[0, 105]} tick={{ fontSize: 8.5, fill: "#94A3B8" }} />
                     <Radar
                       name={groupEntity.shortName}
                       dataKey="groupVal"
-                      stroke="#1A284F"
-                      fill="#1A284F"
-                      fillOpacity={0.18}
+                      stroke="#3E3E3E"
+                      fill="#3E3E3E"
+                      fillOpacity={0.16}
                       strokeWidth={2}
                     />
                     {radarComparison.focusUnit && (
                       <Radar
                         name={radarComparison.focusUnit.shortName}
                         dataKey="focusVal"
-                        stroke="#059669"
-                        fill="#10B981"
-                        fillOpacity={0.2}
+                        stroke="#167267"
+                        fill="#167267"
+                        fillOpacity={0.22}
                         strokeWidth={2}
                       />
                     )}
@@ -1982,10 +2268,10 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                         <Radar
                           name={radarComparison.watchUnit.shortName}
                           dataKey="watchVal"
-                          stroke="#D97706"
-                          fill="#F59E0B"
-                          fillOpacity={0.14}
-                          strokeWidth={1.8}
+                          stroke="#FF7864"
+                          fill="#FF7864"
+                          fillOpacity={0.16}
+                          strokeWidth={2}
                         />
                       )}
                     <Legend wrapperStyle={{ fontSize: 10 }} />
@@ -1994,109 +2280,85 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                 </ResponsiveContainer>
               </div>
 
-              {/* Mini Table: Indeks Konsistensi & Momentum */}
-              <div className="sm:col-span-6 space-y-1.5">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  Stabilitas MTD (Mei–Okt) &amp; Momentum Q1→Q4
-                </p>
-                {consistencyMatrix.map((cRow) => (
-                  <div
-                    key={cRow.entity.id}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-1.5 text-[11px]"
-                  >
-                    <span className="font-semibold text-slate-700 truncate">
-                      {cRow.entity.shortName}
-                    </span>
-                    <div className="flex items-center gap-2 shrink-0 tabular-nums">
-                      <span className="text-slate-500" title={`Rentang MTD: ${cRow.minMtd}% – ${cRow.maxMtd}% (Deviasi ±${cRow.stdDev}%)`}>
-                        σ ±{cRow.stdDev}%
-                      </span>
-                      <span
-                        className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
-                          cRow.qMomentum > 0
-                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            : cRow.qMomentum < 0
-                            ? "bg-rose-50 text-rose-700 border border-rose-200"
-                            : "bg-slate-100 text-slate-600"
+              {/* Point 15: Penjelasan Dinamis dari Balanced Scorecard (mengikuti kursor pada grafik / indikator) */}
+              <div className="sm:col-span-6 rounded-xl border border-[#DCE3F2] bg-gradient-to-br from-[#F6F8FD] via-white to-[#E6F3F1]/30 p-3.5 space-y-2.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {store.indicators.map((ind) => {
+                    const isCur = activeBscExplanation.ind.id === ind.id;
+                    return (
+                      <button
+                        key={ind.id}
+                        type="button"
+                        onMouseEnter={() => setHoveredBscIndId(ind.id)}
+                        onClick={() => setHoveredBscIndId(ind.id)}
+                        className={`px-2 py-0.5 rounded-full text-[9.5px] font-bold border transition-all cursor-pointer ${
+                          isCur
+                            ? "bg-[#167267] text-white border-[#167267]"
+                            : "bg-white text-slate-600 border-slate-200 hover:border-[#167267]"
                         }`}
                       >
-                        {cRow.qMomentum >= 0 ? `+${cRow.qMomentum}%` : `${cRow.qMomentum}%`} QoQ
-                      </span>
-                    </div>
+                        {ind.shortLabel}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <motion.div
+                  key={activeBscExplanation.ind.id}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-2"
+                >
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-[#167267] flex items-center gap-1">
+                      <Info className="w-3 h-3 shrink-0" />
+                      {activeBscExplanation.meta.perspective}
+                    </p>
+                    <h5 className="text-xs font-extrabold text-[#111827] mt-0.5">
+                      {activeBscExplanation.ind.label}
+                    </h5>
                   </div>
-                ))}
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    {activeBscExplanation.meta.summary}
+                  </p>
+                  <p className="text-[10.5px] text-slate-500 italic leading-snug">
+                    Peran Strategis: {activeBscExplanation.meta.strategicRole}
+                  </p>
+
+                  {/* Ringkasan Achievement Indikator yang sedang disorot */}
+                  <div className="pt-1.5 border-t border-slate-200/80 space-y-1">
+                    {activeBscExplanation.metrics.map((m) => {
+                      const bMeta = ACHIEVEMENT_BADGE[m.band];
+                      return (
+                        <div
+                          key={m.entity.id}
+                          className="flex items-center justify-between text-[10.5px] gap-2"
+                        >
+                          <span className="font-semibold text-slate-700 truncate">
+                            {m.entity.shortName}
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0 tabular-nums">
+                            <span className="text-slate-400">
+                              {m.actual}/{m.bobot}
+                            </span>
+                            <span
+                              className="px-1.5 py-0.5 rounded font-bold text-[10px]"
+                              style={{
+                                backgroundColor: bMeta.bg,
+                                color: bMeta.text,
+                              }}
+                            >
+                              {m.ach}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </motion.div>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* 3D. Executive Actionable Recommendations for BOD */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50/80 via-white to-white p-4 shadow-2xs space-y-1.5">
-            <div className="flex items-center gap-2 text-emerald-800">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <h5 className="text-xs font-extrabold uppercase tracking-wide">
-                Benchmark &amp; Momentum Terbaik
-              </h5>
-            </div>
-            <p className="text-xs text-slate-700 leading-relaxed">
-              <strong>{executiveTakeaways.topUnit?.entity.name ?? "PT RSUP (Industry)"}</strong> memimpin capaian{" "}
-              {activeReport.shortLabel} sebesar <strong>{executiveTakeaways.topUnit?.achStr ?? "95%"}</strong>, sementara{" "}
-              <strong>{executiveTakeaways.bestMomentum?.entity.name ?? "PT RSTM"}</strong> mencatat pemulihan kuartalan terkuat (
-              <strong>
-                {(executiveTakeaways.bestMomentum?.qMomentum ?? 0) >= 0 ? "+" : ""}
-                {executiveTakeaways.bestMomentum?.qMomentum ?? 0}%
-              </strong>{" "}
-              dari Q1 ke Q4).
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-amber-200/80 bg-gradient-to-br from-amber-50/80 via-white to-white p-4 shadow-2xs space-y-1.5">
-            <div className="flex items-center gap-2 text-amber-900">
-              <Target className="w-4 h-4 text-amber-600 shrink-0" />
-              <h5 className="text-xs font-extrabold uppercase tracking-wide">
-                Faktor Pengungkit Skor RSUP Group
-              </h5>
-            </div>
-            <p className="text-xs text-slate-700 leading-relaxed">
-              {executiveTakeaways.groupTopDrag ? (
-                <>
-                  Dari total selisih <strong>-{executiveTakeaways.groupTotalLoss}%</strong> menuju 100% pada{" "}
-                  <strong>{groupEntity.name}</strong>, kontributor defisit terbesar berada pada pilar{" "}
-                  <strong>{executiveTakeaways.groupTopDrag.label}</strong> (kehilangan{" "}
-                  <strong>-{executiveTakeaways.groupTopDrag.loss}%</strong> poin bobot; ACH{" "}
-                  <strong>{executiveTakeaways.groupTopDrag.ach}%</strong>).
-                </>
-              ) : (
-                <>Seluruh pilar strategis RSUP Group berada pada target optimal pada periode ini.</>
-              )}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-rose-200/80 bg-gradient-to-br from-rose-50/80 via-white to-white p-4 shadow-2xs space-y-1.5">
-            <div className="flex items-center gap-2 text-rose-900">
-              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
-              <h5 className="text-xs font-extrabold uppercase tracking-wide">
-                Prioritas Intervensi BOD (ACH &lt;80%)
-              </h5>
-            </div>
-            <p className="text-xs text-slate-700 leading-relaxed">
-              {executiveTakeaways.criticalCells.length > 0 ? (
-                <>
-                  Fokus pengawalan RCA &amp; koreksi prioritas:{" "}
-                  {executiveTakeaways.criticalCells.map((cItem, idx) => (
-                    <span key={`${cItem.entName}-${cItem.indName}`}>
-                      {idx > 0 ? "; " : ""}
-                      <strong>{cItem.entName}</strong> pada <em>{cItem.indName}</em> (
-                      <strong className="text-rose-700">{cItem.ach}%</strong>)
-                    </span>
-                  ))}
-                  .
-                </>
-              ) : (
-                <>Tidak ada indikator berstatus Merah (&lt;80%) pada filter periode yang dipilih.</>
-              )}
-            </p>
           </div>
         </div>
       </motion.section>

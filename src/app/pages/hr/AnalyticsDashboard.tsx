@@ -1922,10 +1922,12 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-0.5">{t("Appraisal Analytics")}</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-0.5">
+            {activeAnalyticsTab === "executive" ? "Executive Summary" : t("Appraisal Analytics")}
+          </h2>
           <p className="text-sm text-gray-500">
             {activeAnalyticsTab === "executive"
-              ? "Infografis pencapaian strategis KPI Business RSUP Group & Unit Usaha (Perspektif Eksekutif BOD)"
+              ? "Infografis pencapaian strategis KPI Business RSUP Group"
               : t("Track completion status and download final appraisal scores")}
           </p>
         </div>
@@ -1952,7 +1954,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
               onClick={() => switchAnalyticsTab("executive")}
               className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 activeAnalyticsTab === "executive"
-                  ? "bg-[#0A5598] text-white shadow-xs"
+                  ? "bg-[#167267] text-white shadow-xs"
                   : "text-slate-600 hover:text-slate-900"
               }`}
             >
