@@ -31,10 +31,10 @@ import {
 } from "./masterExecutiveSummaryStore";
 
 const ACH_CELL_STYLE: Record<AchColorBand, { bg: string; text: string; border: string; label: string }> = {
-  green:  { bg: "#167267", text: "#FFFFFF", border: "#125E55", label: "HIJAU (95%–100%+)" },
-  yellow: { bg: "#FFE770", text: "#3E3E3E", border: "#E8CE4D", label: "KUNING (≥80% – <95%)" },
-  red:    { bg: "#FF7864", text: "#FFFFFF", border: "#E5624E", label: "MERAH (<80%)" },
-  na:     { bg: "#3E3E3E", text: "#D4D4D4", border: "#2B2B2B", label: "N/A" },
+  green:  { bg: "#2E8555", text: "#FFFFFF", border: "#256D46", label: "HIJAU (95%–100%+)" },
+  yellow: { bg: "#EA9942", text: "#FFFFFF", border: "#D4842E", label: "KUNING (≥80% – <95%)" },
+  red:    { bg: "#B84A4A", text: "#FFFFFF", border: "#9B3B3B", label: "MERAH (<80%)" },
+  na:     { bg: "#475569", text: "#E2E8F0", border: "#334155", label: "N/A" },
 };
 
 type FilterTag = "ALL" | "YTD" | "Quarter" | "MTD";
@@ -42,7 +42,6 @@ type FilterTag = "ALL" | "YTD" | "Quarter" | "MTD";
 export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolean }) {
   const [store, setStore] = useState<MasterExecutiveSummaryStore>(() => loadMasterExecutiveSummary());
   const [filterTag, setFilterTag] = useState<FilterTag>("ALL");
-  const [showSambuColumns, setShowSambuColumns] = useState<boolean>(false);
   const [previewMode, setPreviewMode] = useState<boolean>(false);
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [draftBlock, setDraftBlock] = useState<ExecSummaryReportBlock | null>(null);
@@ -100,8 +99,8 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
   }, [store.reports]);
 
   const displayedEntities = useMemo(
-    () => store.entities.filter((e) => showSambuColumns || e.groupName !== "Sambu Group"),
-    [store.entities, showSambuColumns],
+    () => store.entities.filter((e) => e.groupName !== "Sambu Group"),
+    [store.entities],
   );
 
   const startEditReport = (block: ExecSummaryReportBlock) => {
@@ -450,26 +449,26 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
     {
       id: "ALL",
       label: `Semua Laporan (${countsByType.ALL})`,
-      toneActive: "bg-[#3E3E3E] text-white border-[#3E3E3E] shadow-xs",
+      toneActive: "bg-[#2F5597] text-white border-[#2F5597] shadow-xs",
       toneIdle: "bg-slate-100/90 text-slate-700 border-slate-200 hover:bg-slate-200/70",
     },
     {
       id: "YTD",
       label: `YTD (${countsByType.YTD})`,
-      toneActive: "bg-[#167267] text-white border-[#167267] shadow-xs",
-      toneIdle: "bg-[#E6F3F1] text-[#167267] border-[#B8DDD8] hover:bg-[#D5ECE8]",
+      toneActive: "bg-[#248277] text-white border-[#248277] shadow-xs",
+      toneIdle: "bg-[#E6F3F1] text-[#248277] border-[#B8DDD8] hover:bg-[#D5ECE8]",
     },
     {
       id: "Quarter",
       label: `Quarter Q1–Q4 (${countsByType.Quarter})`,
-      toneActive: "bg-[#FFE770] text-[#3E3E3E] border-[#E5CA45] shadow-xs",
-      toneIdle: "bg-[#FFFBEB] text-[#6B5300] border-[#F5DF7B] hover:bg-[#FFF5C0]",
+      toneActive: "bg-[#EA9942] text-white border-[#EA9942] shadow-xs",
+      toneIdle: "bg-[#FDF3E7] text-[#9A5B13] border-[#F3CFA4] hover:bg-[#FAE6CE]",
     },
     {
       id: "MTD",
       label: `Perbulan / MTD (${countsByType.MTD})`,
-      toneActive: "bg-[#FF7864] text-white border-[#FF7864] shadow-xs",
-      toneIdle: "bg-[#FFF2EF] text-[#9E3424] border-[#FFC8BF] hover:bg-[#FFE4DF]",
+      toneActive: "bg-[#3B6EA8] text-white border-[#3B6EA8] shadow-xs",
+      toneIdle: "bg-[#EBF2FA] text-[#3B6EA8] border-[#C9DCF0] hover:bg-[#DCE8F6]",
     },
   ];
 
@@ -556,32 +555,21 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
                 </button>
               );
             })}
-            <button
-              type="button"
-              onClick={() => setShowSambuColumns((v) => !v)}
-              className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
-                showSambuColumns
-                  ? "bg-[#1E3A6E] text-white border-[#1E3A6E] shadow-xs"
-                  : "bg-[#EAEFF9] text-[#1E3A6E] border-[#DCE3F2] hover:bg-[#DCE5F7]"
-              }`}
-            >
-              {showSambuColumns ? "Sembunyikan Kolom Sambu Group" : "+ Tampilkan Kolom Sambu Group"}
-            </button>
           </div>
 
           {/* Legenda Resmi PEWARNAAN ACH */}
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
             <span className="font-bold text-slate-500 uppercase tracking-wider">Pewarnaan Achievement:</span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#167267" }}>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#2E8555" }}>
               95%–100%+ Hijau
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-[#3E3E3E] border border-[#E8CE4D]" style={{ backgroundColor: "#FFE770" }}>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#EA9942" }}>
               ≥80% – &lt;95% Kuning
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#FF7864" }}>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#B84A4A" }}>
               &lt;80% Merah
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#3E3E3E" }}>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-bold text-white" style={{ backgroundColor: "#475569" }}>
               N/A (Tidak Berlaku)
             </span>
           </div>

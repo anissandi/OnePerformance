@@ -68,17 +68,22 @@ export interface MasterExecutiveSummaryStore {
   updatedAt?: string;
 }
 
-// Palet tema resmi terlampir (#3E3E3E, #FF7864, #FFE770, #167267 + Navy #1E3A6E) — TANPA warna ungu & pink
+// Palet warna profesional dari ikon collapsed Sidebar (tanpa ungu & pink) + Kuning Telur #EA9942 untuk Achievement Kuning
 export const EXEC_THEME_PALETTE = {
-  charcoal: "#3E3E3E",
-  coralRed: "#FF7864",
-  sunYellow: "#FFE770",
-  pineGreen: "#167267",
-  navyCard: "#1E3A6E",
-  seaTeal: "#2A8C80",
-  warmGold: "#D4A72C",
-  terracotta: "#E0634E",
-  steelSlate: "#4E5D6C",
+  steelBlue: "#3B6EA8",
+  seafoamTeal: "#248277",
+  ochreAmber: "#C07A28",
+  mutedEmerald: "#2E8555",
+  crimsonBrick: "#B84A4A",
+  ceruleanSky: "#2378A6",
+  siennaOrange: "#C76332",
+  pacificCyan: "#1F8699",
+  oliveMoss: "#5B8731",
+  coolSlate: "#475569",
+  bronzeTaupe: "#85643A",
+  navyCobalt: "#2F5597",
+  sprucePetrol: "#1D6863",
+  eggYolkYellow: "#EA9942",
 } as const;
 
 export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
@@ -88,7 +93,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP Group",
     kind: "group",
     groupName: "RSUP Group",
-    colorHex: "#3E3E3E",
+    colorHex: "#2F5597", // Navy Cobalt
   },
   {
     id: "rsup-ind",
@@ -96,7 +101,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP Industry",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#167267",
+    colorHex: "#3B6EA8", // Soft Steel Blue
   },
   {
     id: "rsup-pkb",
@@ -104,7 +109,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP Perkebunan",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#2A8C80",
+    colorHex: "#2E8555", // Muted Emerald
   },
   {
     id: "rsup-asd",
@@ -112,7 +117,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "RSUP ASD",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#1E3A6E",
+    colorHex: "#248277", // Seafoam Teal
   },
   {
     id: "rsup-ghs",
@@ -120,7 +125,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "PT GHS",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#D4A72C",
+    colorHex: "#C07A28", // Warm Ochre Amber
   },
   {
     id: "rsup-rstm",
@@ -128,32 +133,7 @@ export const DEFAULT_EXEC_ENTITIES: ExecSummaryEntityDef[] = [
     shortName: "PT RSTM",
     kind: "unit",
     groupName: "RSUP Group",
-    colorHex: "#FF7864",
-  },
-  // Unit Usaha Sambu Group (siap diisi aktual pada Master KPI -> Executive Summary & ditampilkan via tag Sambu Group)
-  {
-    id: "ps-jkt",
-    name: "PT Pulau Sambu (Jakarta)",
-    shortName: "PS Jakarta",
-    kind: "unit",
-    groupName: "Sambu Group",
-    colorHex: "#236477",
-  },
-  {
-    id: "ps-gtg",
-    name: "PT Pulau Sambu (Guntung)",
-    shortName: "PS Guntung",
-    kind: "unit",
-    groupName: "Sambu Group",
-    colorHex: "#3D8361",
-  },
-  {
-    id: "ps-ken",
-    name: "PT Pulau Sambu (Kuala Enok)",
-    shortName: "PS Kuala Enok",
-    kind: "unit",
-    groupName: "Sambu Group",
-    colorHex: "#C97A40",
+    colorHex: "#1F8699", // Pacific Cyan
   },
 ];
 
@@ -451,12 +431,13 @@ export function loadMasterExecutiveSummary(): MasterExecutiveSummaryStore {
         Array.isArray(parsed.indicators) &&
         parsed.indicators.length > 0
       ) {
-        // Pastikan seluruh entitas standar (termasuk Sambu Group) & warna tema terbaru tersinkron, serta hapus laporan FY lama jika ada
         const defColorById = new Map(DEFAULT_EXEC_ENTITIES.map((e) => [e.id, e]));
-        const mergedEntities: ExecSummaryEntityDef[] = parsed.entities.map((e) => {
-          const def = defColorById.get(e.id);
-          return def ? { ...e, colorHex: def.colorHex, groupName: def.groupName, shortName: def.shortName } : e;
-        });
+        const mergedEntities: ExecSummaryEntityDef[] = parsed.entities
+          .filter((e) => e.groupName !== "Sambu Group")
+          .map((e) => {
+            const def = defColorById.get(e.id);
+            return def ? { ...e, colorHex: def.colorHex, groupName: def.groupName, shortName: def.shortName } : e;
+          });
         const seenIds = new Set(mergedEntities.map((e) => e.id));
         for (const defEnt of DEFAULT_EXEC_ENTITIES) {
           if (!seenIds.has(defEnt.id)) mergedEntities.push({ ...defEnt });
