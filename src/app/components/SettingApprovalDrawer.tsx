@@ -641,6 +641,9 @@ interface StoredOwnerKpiItem {
   detailFormula: string;
   keterangan?: string;
   trackingPeriod?: string;
+  periodicTargetBlock?: boolean;
+  blockedMonths?: number[];
+  monthlyTargets?: Record<string, string>;
   cascading?: string;
   _cascadeType?: string;
   colorIndicator?: boolean;
@@ -988,7 +991,19 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                         </td>
                         <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed">{kpi.detailFormula || "—"}</td>
                         <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed">{kpi.keterangan || "—"}</td>
-                        <td className="border border-gray-200 py-3 px-3 text-center text-xs text-gray-600">{derivePeriodeTrackingLabel(kpi.satuan, kpi.trackingPeriod)}</td>
+                        <td className="border border-gray-200 py-3 px-3 text-center text-xs text-gray-600">
+                          <div className="flex flex-col items-center gap-1">
+                            <span>{derivePeriodeTrackingLabel(kpi.satuan, kpi.trackingPeriod)}</span>
+                            {(() => {
+                              const badgeText = formatBlockedMonthsBadgeText(kpi);
+                              return badgeText ? (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[9px] font-semibold leading-tight" title={badgeText}>
+                                  {badgeText}
+                                </span>
+                              ) : null;
+                            })()}
+                          </div>
+                        </td>
                         {showCascadingCol && (
                           <td className="border border-gray-200 py-3 px-2 text-center">
                             {cascVal ? (
@@ -1285,6 +1300,7 @@ function ManSkillSettingContent() {
   );
 }
 import {
+  formatBlockedMonthsBadgeText,
   isKnownKpiColorBandValue,
   normalizeTrackingPeriod,
   resolveKpiColorBandMeta,

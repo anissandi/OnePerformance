@@ -59,16 +59,20 @@ import {
   KPI_COLOR_BAND_OPTIONS,
   STANDARD_TRACKING_PERIODS,
   applyAutoPercentInput,
+  formatBlockedMonthsBadgeText,
   formatComputedKpiNumber,
+  getActiveMonthIndicesForKpi,
   getActiveMonthIndicesForPeriod,
   isKnownKpiColorBandValue,
   isMonthBlockedForKpi,
   isPercentSatuan,
   isPeriodicTrackingType,
   kpiColorBandRank,
+  normalizeBlockedMonths,
   normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
+  resolveEffectiveBlockedMonthSet,
   resolveKpiColorBandMeta,
   sanitizeKpiNumericInput,
   syncPercentSuffixOnValue,
@@ -94,12 +98,14 @@ function baselineColorMeta(v: string) {
 function computeColorTarget2026(
   mt: Record<string, string>,
   formula: string,
-  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean },
+  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; blockedMonths?: number[] },
 ): string {
-  const activeIndices =
-    opts?.periodicTargetBlock && isPeriodicTrackingType(opts?.trackingPeriod)
-      ? getActiveMonthIndicesForPeriod(opts?.trackingPeriod)
-      : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const activeIndices = getActiveMonthIndicesForKpi({
+    trackingPeriod: opts?.trackingPeriod,
+    periodicTargetBlock: opts?.periodicTargetBlock,
+    blockedMonths: opts?.blockedMonths,
+    monthlyTargets: mt,
+  });
   const activeKeys = activeIndices.map((idx) => MONTHS_LIST[idx]).filter(Boolean);
   if (formula === "Nilai Akhir") {
     const lastKey = activeKeys[activeKeys.length - 1] ?? "Dec-26";
@@ -125,13 +131,15 @@ function computeColorTarget2026(
 function computeTarget2026(
   mt: Record<string, string>,
   formula: string,
-  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; baselineSample?: string; satuan?: string },
+  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; blockedMonths?: number[]; baselineSample?: string; satuan?: string },
 ): string {
   const forcePct = isPercentSatuan(opts?.satuan);
-  const activeIndices =
-    opts?.periodicTargetBlock && isPeriodicTrackingType(opts?.trackingPeriod)
-      ? getActiveMonthIndicesForPeriod(opts?.trackingPeriod)
-      : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const activeIndices = getActiveMonthIndicesForKpi({
+    trackingPeriod: opts?.trackingPeriod,
+    periodicTargetBlock: opts?.periodicTargetBlock,
+    blockedMonths: opts?.blockedMonths,
+    monthlyTargets: mt,
+  });
   const activeKeys = activeIndices.map((idx) => MONTHS_LIST[idx]).filter(Boolean);
   if (formula === "Nilai Akhir") {
     const lastKey = activeKeys[activeKeys.length - 1] ?? "Dec-26";
@@ -164,9 +172,20 @@ function parseRatioParts(val: string): { pos: number; neg: number } {
   return { pos: isNaN(pos) ? 0 : pos, neg: isNaN(neg) ? 0 : neg };
 }
 
-function computeRatioTarget2026(mt: Record<string, string>): string {
-  // Display mask: show the ratio chosen in Jan (auto-filled to all months)
-  const firstVal = MONTHS_LIST.map((k) => mt[k] ?? "").find((v) => v !== "");
+function computeRatioTarget2026(
+  mt: Record<string, string>,
+  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; blockedMonths?: number[] },
+): string {
+  const activeIndices = opts
+    ? getActiveMonthIndicesForKpi({
+        trackingPeriod: opts.trackingPeriod,
+        periodicTargetBlock: opts.periodicTargetBlock,
+        blockedMonths: opts.blockedMonths,
+        monthlyTargets: mt,
+      })
+    : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const activeKeys = activeIndices.map((idx) => MONTHS_LIST[idx]).filter(Boolean);
+  const firstVal = activeKeys.map((k) => mt[k] ?? "").find((v) => v !== "");
   return firstVal ?? "";
 }
 
@@ -217,6 +236,8 @@ export interface KPISetting {
   trackingPeriod?: string;
   /** Aktif jika tag "Tracking per {{tipe}}" diklik sehingga hanya bulan akhir periode yang aktif */
   periodicTargetBlock?: boolean;
+  /** Daftar indeks bulan (0 = Jan .. 11 = Dec) yang diblok via tag "Inactive" pada KPI Setting */
+  blockedMonths?: number[];
   coo?: string;
   gmVgmIndustry?: string;
   gmVgmPerkebunan?: string;
@@ -1860,11 +1881,12 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
       // Compute Target 2026 from the (possibly generated) monthly targets
       const mode = item.indicatorMode ?? "numeric";
       const computed =
-        mode === "color" ? computeColorTarget2026(mt, item.formula, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock }) :
-        mode === "ratio" ? computeRatioTarget2026(mt) :
+        mode === "color" ? computeColorTarget2026(mt, item.formula, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock, blockedMonths: item.blockedMonths }) :
+        mode === "ratio" ? computeRatioTarget2026(mt, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock, blockedMonths: item.blockedMonths }) :
         computeTarget2026(mt, item.formula, {
           trackingPeriod: item.trackingPeriod,
           periodicTargetBlock: item.periodicTargetBlock,
+          blockedMonths: item.blockedMonths,
           baselineSample: item.baseline2025,
           satuan: item.satuan,
         });
@@ -1897,11 +1919,12 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
             : val;
         const mt = { ...item.monthlyTargets, [month]: cleanVal };
         const t2026 =
-          mode === "color" ? computeColorTarget2026(mt, item.formula, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock }) :
-          mode === "ratio" ? computeRatioTarget2026(mt) :
+          mode === "color" ? computeColorTarget2026(mt, item.formula, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock, blockedMonths: item.blockedMonths }) :
+          mode === "ratio" ? computeRatioTarget2026(mt, { trackingPeriod: item.trackingPeriod, periodicTargetBlock: item.periodicTargetBlock, blockedMonths: item.blockedMonths }) :
           computeTarget2026(mt, item.formula, {
             trackingPeriod: item.trackingPeriod,
             periodicTargetBlock: item.periodicTargetBlock,
+            blockedMonths: item.blockedMonths,
             baselineSample: item.baseline2025,
             satuan: item.satuan,
           });
@@ -2522,7 +2545,9 @@ function MonthlyTargetTable({
   onChange,
   trackingPeriod,
   periodicTargetBlock = false,
+  blockedMonths,
   onTogglePeriodicBlock,
+  onBlockedMonthsChange,
   baselineSample,
   satuan,
   softOrangeHighlight = false,
@@ -2536,7 +2561,14 @@ function MonthlyTargetTable({
   onChange: (mt: Record<string, string>, computed2026: string) => void;
   trackingPeriod?: string;
   periodicTargetBlock?: boolean;
+  blockedMonths?: number[];
   onTogglePeriodicBlock?: (nextBlocked: boolean, nextMt: Record<string, string>, computed2026: string) => void;
+  onBlockedMonthsChange?: (
+    nextBlockedMonths: number[],
+    nextPeriodicBlock: boolean,
+    nextMt: Record<string, string>,
+    computed2026: string,
+  ) => void;
   baselineSample?: string;
   satuan?: string;
   softOrangeHighlight?: boolean;
@@ -2546,13 +2578,49 @@ function MonthlyTargetTable({
   const pctSatuan = isPercentSatuan(satuan);
   const normPeriod = normalizeTrackingPeriod(trackingPeriod);
   const isPeriodic = isPeriodicTrackingType(normPeriod);
-  const activeIndices =
-    isPeriodic && periodicTargetBlock
-      ? getActiveMonthIndicesForPeriod(normPeriod)
-      : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const blockedIdxSet = isPeriodic
+    ? resolveEffectiveBlockedMonthSet({
+        trackingPeriod: normPeriod,
+        periodicTargetBlock,
+        blockedMonths,
+        monthlyTargets,
+      })
+    : new Set<number>();
+  const activeIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !blockedIdxSet.has(i));
   const activeIdxSet = new Set<number>(activeIndices);
   const firstActiveIdx = activeIndices[0] ?? 0;
+  const lastActiveIdx = activeIndices[activeIndices.length - 1] ?? 11;
   const firstActiveKey = MONTHS_LIST[firstActiveIdx] ?? MONTHS_LIST[0];
+  const effectiveBlockedArr = Array.from(blockedIdxSet).sort((a, b) => a - b);
+  const presetBlockedArr = (() => {
+    if (!isPeriodic) return [] as number[];
+    const pSet = new Set(getActiveMonthIndicesForPeriod(normPeriod));
+    return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !pSet.has(i));
+  })();
+  const hasPresetPeriodRule = presetBlockedArr.length > 0 && presetBlockedArr.length < 12;
+  const matchesStandardPreset =
+    hasPresetPeriodRule &&
+    effectiveBlockedArr.length === presetBlockedArr.length &&
+    effectiveBlockedArr.every((v, idx) => v === presetBlockedArr[idx]);
+
+  const computeForTargets = (
+    mt: Record<string, string>,
+    nextBlockedList: number[],
+    nextPeriodicFlag: boolean,
+  ): string => {
+    const opts = {
+      trackingPeriod: normPeriod,
+      periodicTargetBlock: nextPeriodicFlag,
+      blockedMonths: nextBlockedList,
+    };
+    if (ratioMode) return computeRatioTarget2026(mt, opts);
+    if (colorMode) return computeColorTarget2026(mt, formula, opts);
+    return computeTarget2026(mt, formula, {
+      ...opts,
+      baselineSample,
+      satuan,
+    });
+  };
 
   const handleChange = (key: string, val: string) => {
     const prevCellVal = monthlyTargets[key] ?? "";
@@ -2570,46 +2638,56 @@ function MonthlyTargetTable({
           { ...monthlyTargets },
         )
       : { ...monthlyTargets, [key]: cleanVal };
-    const computed = ratioMode
-      ? computeRatioTarget2026(updated)
-      : colorMode
-      ? computeColorTarget2026(updated, formula, {
-          trackingPeriod: normPeriod,
-          periodicTargetBlock: isPeriodic && periodicTargetBlock,
-        })
-      : computeTarget2026(updated, formula, {
-          trackingPeriod: normPeriod,
-          periodicTargetBlock: isPeriodic && periodicTargetBlock,
-          baselineSample,
-          satuan,
-        });
+    const computed = computeForTargets(updated, effectiveBlockedArr, isPeriodic && matchesStandardPreset);
     onChange(updated, computed);
+  };
+
+  const handleToggleSingleMonthInactive = (monthIdx: number) => {
+    if (!isPeriodic) return;
+    const nextSet = new Set(blockedIdxSet);
+    if (nextSet.has(monthIdx)) {
+      nextSet.delete(monthIdx);
+    } else {
+      if (nextSet.size >= 11) {
+        toast.warning("Minimal 1 bulan harus tetap aktif untuk pengisian target dan tracking KPI.");
+        return;
+      }
+      nextSet.add(monthIdx);
+    }
+    const nextBlockedList = Array.from(nextSet).sort((a, b) => a - b);
+    const nextMatchesPreset =
+      hasPresetPeriodRule &&
+      nextBlockedList.length === presetBlockedArr.length &&
+      nextBlockedList.every((v, idx) => v === presetBlockedArr[idx]);
+    const cleanedMt: Record<string, string> = {};
+    MONTHS_LIST.forEach((mKey, idx) => {
+      cleanedMt[mKey] = nextSet.has(idx) ? "" : (monthlyTargets[mKey] ?? "");
+    });
+    const computed = computeForTargets(cleanedMt, nextBlockedList, nextMatchesPreset);
+    if (onBlockedMonthsChange) {
+      onBlockedMonthsChange(nextBlockedList, nextMatchesPreset, cleanedMt, computed);
+    } else if (onTogglePeriodicBlock) {
+      onTogglePeriodicBlock(nextBlockedList.length > 0, cleanedMt, computed);
+    } else {
+      onChange(cleanedMt, computed);
+    }
   };
 
   const handleTogglePeriodicTag = () => {
     if (!isPeriodic) return;
-    const nextBlocked = !periodicTargetBlock;
+    const nextBlocked = !matchesStandardPreset;
     const nextActiveSet = new Set<number>(
       nextBlocked ? getActiveMonthIndicesForPeriod(normPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     );
+    const nextBlockedList = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !nextActiveSet.has(i));
     const cleanedMt: Record<string, string> = {};
     MONTHS_LIST.forEach((mKey, idx) => {
       cleanedMt[mKey] = nextActiveSet.has(idx) ? (monthlyTargets[mKey] ?? "") : "";
     });
-    const computed = ratioMode
-      ? computeRatioTarget2026(cleanedMt)
-      : colorMode
-      ? computeColorTarget2026(cleanedMt, formula, {
-          trackingPeriod: normPeriod,
-          periodicTargetBlock: nextBlocked,
-        })
-      : computeTarget2026(cleanedMt, formula, {
-          trackingPeriod: normPeriod,
-          periodicTargetBlock: nextBlocked,
-          baselineSample,
-          satuan,
-        });
-    if (onTogglePeriodicBlock) {
+    const computed = computeForTargets(cleanedMt, nextBlockedList, nextBlocked);
+    if (onBlockedMonthsChange) {
+      onBlockedMonthsChange(nextBlockedList, nextBlocked, cleanedMt, computed);
+    } else if (onTogglePeriodicBlock) {
       onTogglePeriodicBlock(nextBlocked, cleanedMt, computed);
     } else {
       onChange(cleanedMt, computed);
@@ -2617,13 +2695,15 @@ function MonthlyTargetTable({
   };
 
   const firstActiveShort = MONTHS_SHORT[firstActiveIdx] ?? "Jan";
+  const lastActiveShort = MONTHS_SHORT[lastActiveIdx] ?? "Dec";
+  const hasAnyBlockedMonth = isPeriodic && blockedIdxSet.size > 0;
   const ruleHint = ratioMode
     ? `Pilih ${firstActiveShort} → auto isi bulan aktif`
     : colorMode
     ? `Pilih ${firstActiveShort} → auto isi bulan aktif`
-    : formula === "Jumlah"      ? `Target ${KPI_CYCLE_YEAR} = Sum (${isPeriodic && periodicTargetBlock ? `Bulan Aktif ${normPeriod}` : "Jan–Dec"})`
-    : formula === "Rata-Rata"   ? `Target ${KPI_CYCLE_YEAR} = Average (${isPeriodic && periodicTargetBlock ? `Bulan Aktif ${normPeriod}` : "Jan–Dec"})`
-    : formula === "Nilai Akhir" ? `Target ${KPI_CYCLE_YEAR} = December value`
+    : formula === "Jumlah"      ? `Target ${KPI_CYCLE_YEAR} = Sum (${hasAnyBlockedMonth ? `${activeIndices.length} Bulan Aktif` : "Jan–Dec"})`
+    : formula === "Rata-Rata"   ? `Target ${KPI_CYCLE_YEAR} = Average (${hasAnyBlockedMonth ? `${activeIndices.length} Bulan Aktif` : "Jan–Dec"})`
+    : formula === "Nilai Akhir" ? `Target ${KPI_CYCLE_YEAR} = ${lastActiveShort} value`
     : "";
   const hasAnyEmptyMonth = activeIndices.some((idx) => !(monthlyTargets[MONTHS_LIST[idx]] ?? "").trim());
 
@@ -2634,22 +2714,24 @@ function MonthlyTargetTable({
           <label className={`text-[11px] font-bold uppercase tracking-wide ${softYellowHighlight ? "text-amber-800" : softOrangeHighlight ? "text-orange-800" : "text-gray-500"}`}>Monthly Target</label>
           {isPeriodic && (
             <>
+              {hasPresetPeriodRule && (
               <button
                 type="button"
                 onClick={handleTogglePeriodicTag}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
-                  periodicTargetBlock
+                  matchesStandardPreset
                     ? "bg-teal-50 text-teal-800 border-teal-300 ring-2 ring-teal-100 shadow-2xs"
                     : "bg-sky-50/90 text-sky-700 border-sky-200 hover:bg-sky-100"
                 }`}
-                title={`Klik untuk ${periodicTargetBlock ? "membuka kembali semua bulan" : `mengaktifkan hanya bulan akhir setiap ${normPeriod}`}`}
+                title={`Klik untuk ${matchesStandardPreset ? "membuka kembali semua bulan" : `mengaktifkan hanya bulan akhir setiap ${normPeriod}`}`}
               >
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${periodicTargetBlock ? "bg-teal-600" : "bg-sky-500"}`} />
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${matchesStandardPreset ? "bg-teal-600" : "bg-sky-500"}`} />
                 <span>Tracking per {normPeriod}</span>
-                {periodicTargetBlock && <CheckCircle2 className="w-3 h-3 text-teal-600 shrink-0" />}
+                {matchesStandardPreset && <CheckCircle2 className="w-3 h-3 text-teal-600 shrink-0" />}
               </button>
+              )}
               <span className="text-[11px] text-slate-600 font-medium">
-                Pencapaian target berdasarkan hitungan setiap <strong className="text-[#1A284F]">{normPeriod}</strong> dalam satu tahun
+                Klik tag <strong className="text-rose-700">Inactive</strong> di atas kolom bulan untuk memblokir bulan yang tidak perlu diisi saat tracking (Aktual &amp; RCA otomatis nonaktif)
               </span>
             </>
           )}
@@ -2672,16 +2754,48 @@ function MonthlyTargetTable({
       <div className={`overflow-x-auto rounded-xl ${softYellowHighlight ? "border-2 border-yellow-300 bg-white" : softOrangeHighlight ? "border-2 border-orange-300 bg-white" : "border border-gray-200"}`}>
         <table className="border-collapse w-full text-xs" style={{ minWidth: 680 }}>
           <thead>
+            {isPeriodic && (
+              <tr className="bg-slate-50/90 border-b border-gray-200">
+                {MONTHS_SHORT.map((m, i) => {
+                  const isBlockedMonth = blockedIdxSet.has(i);
+                  return (
+                    <th key={`inactive-tag-${m}`} className="border border-gray-200 py-1.5 px-1 text-center">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSingleMonthInactive(i)}
+                        title={
+                          isBlockedMonth
+                            ? `Bulan ${m} diblok (Aktual & RCA tidak aktif saat tracking) — Klik lagi untuk membuka kembali`
+                            : `Klik untuk memblokir kolom bulan ${m} (Aktual & RCA tidak aktif saat tracking)`
+                        }
+                        className={`inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all cursor-pointer select-none ${
+                          isBlockedMonth
+                            ? "bg-rose-600 text-white border-rose-600 shadow-2xs ring-2 ring-rose-100 hover:bg-rose-700"
+                            : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300"
+                        }`}
+                      >
+                        {isBlockedMonth ? (
+                          <Lock className="w-2.5 h-2.5 shrink-0" />
+                        ) : (
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                        )}
+                        <span>Inactive</span>
+                      </button>
+                    </th>
+                  );
+                })}
+              </tr>
+            )}
             <tr className="bg-[#1A284F]/5">
               {MONTHS_SHORT.map((m, i) => {
-                const isBlockedMonth = isPeriodic && periodicTargetBlock && !activeIdxSet.has(i);
-                const isActivePeriodicMonth = isPeriodic && periodicTargetBlock && activeIdxSet.has(i);
+                const isBlockedMonth = isPeriodic && blockedIdxSet.has(i);
+                const isActivePeriodicMonth = isPeriodic && hasAnyBlockedMonth && activeIdxSet.has(i);
                 return (
                   <th
                     key={m}
                     className={`border border-gray-200 py-2 px-1 text-center font-bold text-[11px] ${
                       isBlockedMonth
-                        ? "bg-slate-100 text-slate-400"
+                        ? "bg-slate-100 text-slate-400 line-through"
                         : isActivePeriodicMonth
                         ? "bg-teal-50/80 text-teal-900"
                         : !colorMode && !ratioMode && i === 11
@@ -2702,10 +2816,10 @@ function MonthlyTargetTable({
           <tbody>
             <tr>
               {MONTHS_LIST.map((key, i) => {
-                const isBlockedMonth = isPeriodic && periodicTargetBlock && !activeIdxSet.has(i);
+                const isBlockedMonth = isPeriodic && blockedIdxSet.has(i);
                 if (isBlockedMonth) {
                   return (
-                    <td key={key} className="border border-gray-200 p-1 bg-slate-100/85 text-center select-none" title={`Bulan diblok — mengikuti periode ${normPeriod}`}>
+                    <td key={key} className="border border-gray-200 p-1 bg-slate-100/85 text-center select-none" title={`Bulan ${MONTHS_SHORT[i]} diblok (Inactive) — Aktual & RCA tidak aktif saat tracking`}>
                       <div className="w-full text-[10px] font-medium text-slate-400 border border-slate-200/80 bg-slate-100 rounded-md px-1 py-1.5 flex items-center justify-center gap-0.5 cursor-not-allowed">
                         <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
                         <span>Block</span>
@@ -2752,7 +2866,7 @@ function MonthlyTargetTable({
                 }
                 const cellVal = monthlyTargets[key] ?? "";
                 const isCellEmptyYellow = softYellowHighlight && !cellVal.trim();
-                const isActivePeriodicCell = isPeriodic && periodicTargetBlock && activeIdxSet.has(i);
+                const isActivePeriodicCell = isPeriodic && hasAnyBlockedMonth && activeIdxSet.has(i);
                 return (
                   <td key={key} className={`border border-gray-200 p-1 ${isCellEmptyYellow ? "bg-yellow-50/85" : isActivePeriodicCell ? "bg-teal-50/35" : i === 11 ? "bg-amber-50/40" : "bg-white"}`}>
                     <input
@@ -3255,6 +3369,7 @@ function adaptBusinessKpiToPersonalItem(src: KPISetting): KPISetting {
     indicatorMode: resolvedMode,
     trackingPeriod: normalizeTrackingPeriod(src.trackingPeriod, adaptedSatuan),
     periodicTargetBlock: src.periodicTargetBlock,
+    blockedMonths: src.blockedMonths ? [...normalizeBlockedMonths(src.blockedMonths)] : undefined,
     scope: "",
     coo: "",
     gmVgmIndustry: "",
@@ -3649,7 +3764,7 @@ export function AddKPIModal({
     perspektif: "Proses", kpi: "", satuan: "", formula: "Jumlah",
     bobot: "", definisi: "", source: "", baseline2025: "", target2026: "", polaritas: "Maximize",
     detailFormula: "", keterangan: "", monthlyTargets: {}, colorIndicator: false, indicatorMode: "numeric",
-    trackingPeriod: "Bulan", periodicTargetBlock: false,
+    trackingPeriod: "Bulan", periodicTargetBlock: false, blockedMonths: [] as number[],
   });
   const [bobotError, setBobotError] = useState<BobotViolation | null>(null);
   const [sectionCascadeType, setSectionCascadeType] = useState<string>("FC");
@@ -3665,6 +3780,7 @@ export function AddKPIModal({
       next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val, {
         trackingPeriod: p.trackingPeriod,
         periodicTargetBlock: p.periodicTargetBlock,
+        blockedMonths: p.blockedMonths,
         baselineSample: p.baseline2025,
         satuan: p.satuan,
       });
@@ -3676,25 +3792,37 @@ export function AddKPIModal({
     const nextPeriod = normalizeTrackingPeriod(nextPeriodRaw);
     setForm((p) => {
       const stillPeriodic = isPeriodicTrackingType(nextPeriod);
-      const nextBlock = stillPeriodic ? Boolean(p.periodicTargetBlock) : false;
-      const activeSet = new Set<number>(
-        nextBlock ? getActiveMonthIndicesForPeriod(nextPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-      );
+      const prevBlocked = stillPeriodic ? normalizeBlockedMonths(p.blockedMonths) : [];
+      const nextBlock = stillPeriodic && prevBlocked.length === 0 ? Boolean(p.periodicTargetBlock) : false;
+      const nextBlockedList = stillPeriodic
+        ? prevBlocked.length > 0
+          ? prevBlocked
+          : nextBlock
+          ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !getActiveMonthIndicesForPeriod(nextPeriod).includes(i))
+          : []
+        : [];
+      const blockedSet = new Set<number>(nextBlockedList);
       const nextMt: Record<string, string> = {};
       MONTHS_LIST.forEach((mKey, idx) => {
-        nextMt[mKey] = activeSet.has(idx) ? (p.monthlyTargets?.[mKey] ?? "") : "";
+        nextMt[mKey] = blockedSet.has(idx) ? "" : (p.monthlyTargets?.[mKey] ?? "");
       });
       const nextTarget =
         (p.indicatorMode ?? "numeric") === "ratio"
-          ? computeRatioTarget2026(nextMt)
+          ? computeRatioTarget2026(nextMt, {
+              trackingPeriod: nextPeriod,
+              periodicTargetBlock: nextBlock,
+              blockedMonths: nextBlockedList,
+            })
           : (p.indicatorMode ?? "numeric") === "color"
           ? computeColorTarget2026(nextMt, p.formula, {
               trackingPeriod: nextPeriod,
               periodicTargetBlock: nextBlock,
+              blockedMonths: nextBlockedList,
             })
           : computeTarget2026(nextMt, p.formula, {
               trackingPeriod: nextPeriod,
               periodicTargetBlock: nextBlock,
+              blockedMonths: nextBlockedList,
               baselineSample: p.baseline2025,
               satuan: p.satuan,
             });
@@ -3702,6 +3830,7 @@ export function AddKPIModal({
         ...p,
         trackingPeriod: nextPeriod,
         periodicTargetBlock: nextBlock,
+        blockedMonths: nextBlockedList,
         monthlyTargets: nextMt,
         target2026: nextTarget,
       };
@@ -3905,11 +4034,22 @@ export function AddKPIModal({
     if (!hideCascading && sectionCascadeType) onSectionCascade?.(form.section, sectionCascadeType);
     const derivedTracking = normalizeTrackingPeriod(form.trackingPeriod, form.satuan);
     const pinnedSectionBobot = `${formatPctNum(sectionLimit)}%`;
+    const effectiveBlocked = isPeriodicTrackingType(derivedTracking)
+      ? Array.from(
+          resolveEffectiveBlockedMonthSet({
+            trackingPeriod: derivedTracking,
+            periodicTargetBlock: form.periodicTargetBlock,
+            blockedMonths: form.blockedMonths,
+            monthlyTargets: form.monthlyTargets,
+          }),
+        ).sort((a, b) => a - b)
+      : [];
     onAdd({
       ...form,
       sectionBobot: pinnedSectionBobot,
       trackingPeriod: derivedTracking,
       periodicTargetBlock: isPeriodicTrackingType(derivedTracking) ? Boolean(form.periodicTargetBlock) : false,
+      blockedMonths: effectiveBlocked,
       id: `kpi-${Date.now()}`,
     });
     onClose();
@@ -4304,6 +4444,7 @@ export function AddKPIModal({
                     const nextTgt = computeTarget2026(nextMt, p.formula, {
                       trackingPeriod: p.trackingPeriod,
                       periodicTargetBlock: p.periodicTargetBlock,
+                      blockedMonths: p.blockedMonths,
                       baselineSample: p.baseline2025,
                       satuan: v,
                     });
@@ -4463,12 +4604,22 @@ export function AddKPIModal({
                 ratioMode={ratioMode}
                 trackingPeriod={form.trackingPeriod}
                 periodicTargetBlock={Boolean(form.periodicTargetBlock)}
+                blockedMonths={form.blockedMonths}
                 baselineSample={form.baseline2025}
                 satuan={form.satuan}
                 onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
                   setForm((p) => ({
                     ...p,
                     periodicTargetBlock: nextBlocked,
+                    monthlyTargets: nextMt,
+                    target2026: computed,
+                  }))
+                }
+                onBlockedMonthsChange={(nextBlockedMonths, nextPeriodicBlock, nextMt, computed) =>
+                  setForm((p) => ({
+                    ...p,
+                    blockedMonths: nextBlockedMonths,
+                    periodicTargetBlock: nextPeriodicBlock,
                     monthlyTargets: nextMt,
                     target2026: computed,
                   }))
@@ -4615,6 +4766,7 @@ export function AddKPIModal({
               copiedFromId: picked.id,
               trackingPeriod: normalizeTrackingPeriod(picked.trackingPeriod, picked.satuan || p.satuan),
               periodicTargetBlock: Boolean(picked.periodicTargetBlock),
+              blockedMonths: picked.blockedMonths ? normalizeBlockedMonths(picked.blockedMonths) : [],
             }));
           }}
           onClose={() => setShowLihatAtasan(false)}
@@ -4676,6 +4828,7 @@ export function AddKPIModal({
               copiedFromId: picked.id,
               trackingPeriod: normalizeTrackingPeriod(picked.trackingPeriod, picked.satuan || p.satuan),
               periodicTargetBlock: Boolean(picked.periodicTargetBlock),
+              blockedMonths: picked.blockedMonths ? normalizeBlockedMonths(picked.blockedMonths) : [],
             }));
           }}
           onClose={() => setShowLihatBusinessSource(null)}
@@ -4965,7 +5118,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
     perspektif: "", kpi: "", satuan: "", formula: "Jumlah",
     bobot: "", definisi: "", source: "", baseline2025: "", target2026: "", polaritas: "Maximize",
     detailFormula: "", keterangan: "", monthlyTargets: {}, colorIndicator: false, indicatorMode: "numeric" as IndicatorMode,
-    scope: "", trackingPeriod: "Bulan", periodicTargetBlock: false,
+    scope: "", trackingPeriod: "Bulan", periodicTargetBlock: false, blockedMonths: [] as number[],
     coo: "", gmVgmIndustry: "", gmVgmPerkebunan: "", gmAsd: "", gmRstm: "", gmGhs: "",
     cascadingMap: {},
   });
@@ -4979,6 +5132,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
       next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val, {
         trackingPeriod: p.trackingPeriod,
         periodicTargetBlock: p.periodicTargetBlock,
+        blockedMonths: p.blockedMonths,
         baselineSample: p.baseline2025,
         satuan: p.satuan,
       });
@@ -4990,25 +5144,37 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
     const nextPeriod = normalizeTrackingPeriod(nextPeriodRaw);
     setForm((p) => {
       const stillPeriodic = isPeriodicTrackingType(nextPeriod);
-      const nextBlock = stillPeriodic ? Boolean(p.periodicTargetBlock) : false;
-      const activeSet = new Set<number>(
-        nextBlock ? getActiveMonthIndicesForPeriod(nextPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-      );
+      const prevBlocked = stillPeriodic ? normalizeBlockedMonths(p.blockedMonths) : [];
+      const nextBlock = stillPeriodic && prevBlocked.length === 0 ? Boolean(p.periodicTargetBlock) : false;
+      const nextBlockedList = stillPeriodic
+        ? prevBlocked.length > 0
+          ? prevBlocked
+          : nextBlock
+          ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !getActiveMonthIndicesForPeriod(nextPeriod).includes(i))
+          : []
+        : [];
+      const blockedSet = new Set<number>(nextBlockedList);
       const nextMt: Record<string, string> = {};
       MONTHS_LIST.forEach((mKey, idx) => {
-        nextMt[mKey] = activeSet.has(idx) ? (p.monthlyTargets?.[mKey] ?? "") : "";
+        nextMt[mKey] = blockedSet.has(idx) ? "" : (p.monthlyTargets?.[mKey] ?? "");
       });
       const nextTarget =
         (p.indicatorMode ?? "numeric") === "ratio"
-          ? computeRatioTarget2026(nextMt)
+          ? computeRatioTarget2026(nextMt, {
+              trackingPeriod: nextPeriod,
+              periodicTargetBlock: nextBlock,
+              blockedMonths: nextBlockedList,
+            })
           : (p.indicatorMode ?? "numeric") === "color"
           ? computeColorTarget2026(nextMt, p.formula, {
               trackingPeriod: nextPeriod,
               periodicTargetBlock: nextBlock,
+              blockedMonths: nextBlockedList,
             })
           : computeTarget2026(nextMt, p.formula, {
               trackingPeriod: nextPeriod,
               periodicTargetBlock: nextBlock,
+              blockedMonths: nextBlockedList,
               baselineSample: p.baseline2025,
               satuan: p.satuan,
             });
@@ -5016,6 +5182,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
         ...p,
         trackingPeriod: nextPeriod,
         periodicTargetBlock: nextBlock,
+        blockedMonths: nextBlockedList,
         monthlyTargets: nextMt,
         target2026: nextTarget,
       };
@@ -5197,11 +5364,22 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
       return;
     }
     const derivedTracking = normalizeTrackingPeriod(form.trackingPeriod, form.satuan);
+    const effectiveCorpBlocked = isPeriodicTrackingType(derivedTracking)
+      ? Array.from(
+          resolveEffectiveBlockedMonthSet({
+            trackingPeriod: derivedTracking,
+            periodicTargetBlock: form.periodicTargetBlock,
+            blockedMonths: form.blockedMonths,
+            monthlyTargets: form.monthlyTargets,
+          }),
+        ).sort((a, b) => a - b)
+      : [];
     onAdd({
       ...form,
       sectionBobot: `${formatPctNum(sectionLimit)}%`,
       trackingPeriod: derivedTracking,
       periodicTargetBlock: isPeriodicTrackingType(derivedTracking) ? Boolean(form.periodicTargetBlock) : false,
+      blockedMonths: effectiveCorpBlocked,
       id: `corp-kpi-${Date.now()}`,
     });
     onClose();
@@ -5519,6 +5697,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                     const nextTgt = computeTarget2026(nextMt, p.formula, {
                       trackingPeriod: p.trackingPeriod,
                       periodicTargetBlock: p.periodicTargetBlock,
+                      blockedMonths: p.blockedMonths,
                       baselineSample: p.baseline2025,
                       satuan: v,
                     });
@@ -5686,12 +5865,22 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 ratioMode={ratioMode}
                 trackingPeriod={form.trackingPeriod}
                 periodicTargetBlock={Boolean(form.periodicTargetBlock)}
+                blockedMonths={form.blockedMonths}
                 baselineSample={form.baseline2025}
                 satuan={form.satuan}
                 onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
                   setForm((p) => ({
                     ...p,
                     periodicTargetBlock: nextBlocked,
+                    monthlyTargets: nextMt,
+                    target2026: computed,
+                  }))
+                }
+                onBlockedMonthsChange={(nextBlockedMonths, nextPeriodicBlock, nextMt, computed) =>
+                  setForm((p) => ({
+                    ...p,
+                    blockedMonths: nextBlockedMonths,
+                    periodicTargetBlock: nextPeriodicBlock,
                     monthlyTargets: nextMt,
                     target2026: computed,
                   }))
@@ -5824,6 +6013,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               ratioNegativeLabel: picked.ratioNegativeLabel,
               trackingPeriod: normalizeTrackingPeriod(picked.trackingPeriod, picked.satuan || p.satuan),
               periodicTargetBlock: Boolean(picked.periodicTargetBlock),
+              blockedMonths: picked.blockedMonths ? normalizeBlockedMonths(picked.blockedMonths) : [],
               copiedFromId: picked.id,
             }));
           }}
@@ -5866,6 +6056,9 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
     normalizeTrackingPeriod(item.trackingPeriod, item.satuan),
   );
   const [periodicTargetBlock, setPeriodicTargetBlock] = useState<boolean>(Boolean(item.periodicTargetBlock));
+  const [blockedMonths, setBlockedMonths] = useState<number[] | undefined>(() =>
+    Array.isArray(item.blockedMonths) ? normalizeBlockedMonths(item.blockedMonths) : undefined,
+  );
   const [monthlyTargets, setMonthlyTargets] = useState<Record<string, string>>(item.monthlyTargets ?? {});
   const [target2026, setTarget2026] = useState(item.target2026);
   const [baseline2025, setBaseline2025] = useState(item.baseline2025);
@@ -5902,6 +6095,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                       computeTarget2026(monthlyTargets, nextF, {
                         trackingPeriod,
                         periodicTargetBlock,
+                        blockedMonths,
                         baselineSample: baseline2025,
                         satuan: item.satuan,
                       }),
@@ -5938,29 +6132,42 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
               onChange={(e) => {
                 const nextPeriod = normalizeTrackingPeriod(e.target.value);
                 const stillPeriodic = isPeriodicTrackingType(nextPeriod);
-                const nextBlock = stillPeriodic ? periodicTargetBlock : false;
-                const activeSet = new Set<number>(
-                  nextBlock ? getActiveMonthIndicesForPeriod(nextPeriod) : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-                );
+                const prevBlockedArr = stillPeriodic && Array.isArray(blockedMonths) ? normalizeBlockedMonths(blockedMonths) : [];
+                const nextBlock = stillPeriodic && prevBlockedArr.length === 0 ? periodicTargetBlock : false;
+                const nextBlockedList = stillPeriodic
+                  ? prevBlockedArr.length > 0
+                    ? prevBlockedArr
+                    : nextBlock
+                    ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !getActiveMonthIndicesForPeriod(nextPeriod).includes(i))
+                    : []
+                  : [];
+                const blockedSet = new Set<number>(nextBlockedList);
                 const nextMt: Record<string, string> = {};
                 MONTHS_LIST.forEach((mKey, idx) => {
-                  nextMt[mKey] = activeSet.has(idx) ? (monthlyTargets[mKey] ?? "") : "";
+                  nextMt[mKey] = blockedSet.has(idx) ? "" : (monthlyTargets[mKey] ?? "");
                 });
                 const nextTgt = ratioMode
-                  ? computeRatioTarget2026(nextMt)
+                  ? computeRatioTarget2026(nextMt, {
+                      trackingPeriod: nextPeriod,
+                      periodicTargetBlock: nextBlock,
+                      blockedMonths: nextBlockedList,
+                    })
                   : colorMode
                   ? computeColorTarget2026(nextMt, formula, {
                       trackingPeriod: nextPeriod,
                       periodicTargetBlock: nextBlock,
+                      blockedMonths: nextBlockedList,
                     })
                   : computeTarget2026(nextMt, formula, {
                       trackingPeriod: nextPeriod,
                       periodicTargetBlock: nextBlock,
+                      blockedMonths: nextBlockedList,
                       baselineSample: baseline2025,
                       satuan: item.satuan,
                     });
                 setTrackingPeriod(nextPeriod);
                 setPeriodicTargetBlock(nextBlock);
+                setBlockedMonths(nextBlockedList);
                 setMonthlyTargets(nextMt);
                 setTarget2026(nextTgt);
               }}
@@ -5978,10 +6185,17 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             ratioMode={ratioMode}
             trackingPeriod={trackingPeriod}
             periodicTargetBlock={periodicTargetBlock}
+            blockedMonths={blockedMonths}
             baselineSample={baseline2025}
             satuan={item.satuan}
             onTogglePeriodicBlock={(nextBlocked, nextMt, computed) => {
               setPeriodicTargetBlock(nextBlocked);
+              setMonthlyTargets(nextMt);
+              setTarget2026(computed);
+            }}
+            onBlockedMonthsChange={(nextBlockedMonths, nextPeriodicBlock, nextMt, computed) => {
+              setBlockedMonths(nextBlockedMonths);
+              setPeriodicTargetBlock(nextPeriodicBlock);
               setMonthlyTargets(nextMt);
               setTarget2026(computed);
             }}
@@ -6011,6 +6225,16 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                 formula,
                 trackingPeriod: normalizeTrackingPeriod(trackingPeriod),
                 periodicTargetBlock: isPeriodicTrackingType(trackingPeriod) ? periodicTargetBlock : false,
+                blockedMonths: isPeriodicTrackingType(trackingPeriod)
+                  ? Array.from(
+                      resolveEffectiveBlockedMonthSet({
+                        trackingPeriod,
+                        periodicTargetBlock,
+                        blockedMonths,
+                        monthlyTargets,
+                      }),
+                    ).sort((a, b) => a - b)
+                  : [],
               });
               onClose();
             }}
@@ -6037,6 +6261,7 @@ function isKpiDraftDirty(draft: KPISetting | null, original: KPISetting | undefi
     if (String(draft[k] ?? "") !== String(original[k] ?? "")) return true;
   }
   if (Boolean(draft.periodicTargetBlock) !== Boolean(original.periodicTargetBlock)) return true;
+  if (JSON.stringify(normalizeBlockedMonths(draft.blockedMonths)) !== JSON.stringify(normalizeBlockedMonths(original.blockedMonths))) return true;
   if (JSON.stringify(draft.monthlyTargets ?? {}) !== JSON.stringify(original.monthlyTargets ?? {})) return true;
   if (JSON.stringify(draft.cascadingMap ?? {}) !== JSON.stringify(original.cascadingMap ?? {})) return true;
   return false;
@@ -6688,7 +6913,14 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
             {isEditing ? (
               <select
                 value={normalizeTrackingPeriod(row.trackingPeriod, row.satuan)}
-                onChange={(e) => setD({ trackingPeriod: e.target.value })}
+                onChange={(e) => {
+                  const nextP = normalizeTrackingPeriod(e.target.value);
+                  if (!isPeriodicTrackingType(nextP)) {
+                    setD({ trackingPeriod: nextP, periodicTargetBlock: false, blockedMonths: [] });
+                  } else {
+                    setD({ trackingPeriod: nextP });
+                  }
+                }}
                 className={ci + " text-center"}
               >
                 {tableTrackingPeriodOpts.map((tp) => (
@@ -6696,7 +6928,17 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                 ))}
               </select>
             ) : (
-              normalizeTrackingPeriod(item.trackingPeriod, item.satuan)
+              <div className="flex flex-col items-center gap-1">
+                <span>{normalizeTrackingPeriod(item.trackingPeriod, item.satuan)}</span>
+                {(() => {
+                  const badgeText = formatBlockedMonthsBadgeText(item);
+                  return badgeText ? (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[9px] font-semibold leading-tight" title={badgeText}>
+                      {badgeText}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
             )}
           </td>
           {/* CASCADING */}
@@ -7973,11 +8215,34 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                       {/* Tracking Period */}
                       <td className="border border-gray-200 py-2 px-1.5 text-center">
                         {isEditing && isFieldEditable("trackingPeriod")
-                          ? <select value={normalizeTrackingPeriod(row.trackingPeriod, row.satuan)} onChange={(e) => setDraftField({ trackingPeriod: e.target.value })} className={cellInput + " text-center"}>
+                          ? <select
+                              value={normalizeTrackingPeriod(row.trackingPeriod, row.satuan)}
+                              onChange={(e) => {
+                                const nextP = normalizeTrackingPeriod(e.target.value);
+                                if (!isPeriodicTrackingType(nextP)) {
+                                  setDraftField({ trackingPeriod: nextP, periodicTargetBlock: false, blockedMonths: [] });
+                                } else {
+                                  setDraftField({ trackingPeriod: nextP });
+                                }
+                              }}
+                              className={cellInput + " text-center"}
+                            >
                               <option value="">— Period —</option>
                               {(master.trackingPeriod.length ? master.trackingPeriod : TRACKING_PERIOD_OPTIONS).map((t) => <option key={t}>{t}</option>)}
                             </select>
-                          : <span className="text-[11px] text-gray-500">{normalizeTrackingPeriod(row.trackingPeriod, row.satuan) || "—"}</span>}
+                          : (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="text-[11px] text-gray-500">{normalizeTrackingPeriod(row.trackingPeriod, row.satuan) || "—"}</span>
+                              {(() => {
+                                const badgeText = formatBlockedMonthsBadgeText(row);
+                                return badgeText ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[9px] font-semibold leading-tight" title={badgeText}>
+                                    {badgeText}
+                                  </span>
+                                ) : null;
+                              })()}
+                            </div>
+                          )}
                       </td>
                       {/* Cascading columns — inverted: sub-columns = type (FC/PC/CC), cells = role names */}
                       {!previewMode && !hideCascading && (() => {
@@ -8273,6 +8538,8 @@ export function mapCopiedKpiRows(source: KPISetting[], target: KPISetting[], toP
       ratioNegativeLabel: src.ratioNegativeLabel,
       scope: "",
       trackingPeriod: src.trackingPeriod ?? "",
+      periodicTargetBlock: src.periodicTargetBlock,
+      blockedMonths: Array.isArray(src.blockedMonths) ? normalizeBlockedMonths(src.blockedMonths) : undefined,
       copiedFromId: src.id,
     };
     if (toPersonal) return base;

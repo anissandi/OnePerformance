@@ -35,7 +35,7 @@ import {
   type KpiHierarchyValidationChecklist,
 } from "../ModuleActivation";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
-import { isKnownKpiColorBandValue, resolveKpiColorBandMeta } from "../../../utils/kpiNumberAndPeriod";
+import { formatBlockedMonthsBadgeText, isKnownKpiColorBandValue, resolveKpiColorBandMeta } from "../../../utils/kpiNumberAndPeriod";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,6 +67,8 @@ interface KPISetting {
   // Corporate / Business fields
   scope?: string;
   trackingPeriod?: string;
+  periodicTargetBlock?: boolean;
+  blockedMonths?: number[];
   coo?: string;
   gmVgmIndustry?: string;
   gmVgmPerkebunan?: string;
@@ -423,7 +425,17 @@ function BusinessKPITable({ items }: { items: KPISetting[] }) {
                             : <span className="text-[11px] font-bold text-[#1A284F]">{item.target2026 || "—"}</span>}
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
-                          <span className="text-[11px] text-gray-500">{item.trackingPeriod || "—"}</span>
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-[11px] text-gray-500">{item.trackingPeriod || "—"}</span>
+                            {(() => {
+                              const badgeText = formatBlockedMonthsBadgeText(item);
+                              return badgeText ? (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[9px] font-semibold leading-tight" title={badgeText}>
+                                  {badgeText}
+                                </span>
+                              ) : null;
+                            })()}
+                          </div>
                         </td>
                         {CASC_TYPE_COLS.map(({ type, w, bg, border, color }) => {
                           const rolesForType = CASC_ROLE_FIELDS.filter(r => (item[r.key] as string) === type);
@@ -569,7 +581,17 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
                             : <span className="text-[11px] font-bold text-[#1A284F]">{item.target2026 || "—"}</span>}
                         </td>
                         <td className="border border-gray-200 py-2 px-1.5 text-center">
-                          <span className="text-[11px] text-gray-500">{item.trackingPeriod || "—"}</span>
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-[11px] text-gray-500">{item.trackingPeriod || "—"}</span>
+                            {(() => {
+                              const badgeText = formatBlockedMonthsBadgeText(item);
+                              return badgeText ? (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[9px] font-semibold leading-tight" title={badgeText}>
+                                  {badgeText}
+                                </span>
+                              ) : null;
+                            })()}
+                          </div>
                         </td>
                       </tr>
                     );

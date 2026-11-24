@@ -40,16 +40,10 @@ export function normalizeTrackingPeriod(raw?: string | null, fallbackSatuan?: st
   return "Bulan";
 }
 
-/** Apakah tipe Periode Tracking merupakan periode berkala non-bulanan yang memiliki tag "Tracking per {{tipe}}"? */
+/** Apakah tipe Periode Tracking merupakan periode selain "Bulan" (Triwulan, Semester, Quarter, Tahun, dsb.)? */
 export function isPeriodicTrackingType(period?: string | null): boolean {
   const norm = normalizeTrackingPeriod(period);
-  return (
-    norm === "Triwulan" ||
-    norm === "Quarter" ||
-    norm === "Semester" ||
-    norm === "Tahun" ||
-    norm === "Caturwulan"
-  );
+  return Boolean(norm && norm.toLowerCase() !== "bulan" && norm.toLowerCase() !== "bulanan");
 }
 
 /** Indeks bulan aktif (0 = Jan .. 11 = Dec) ketika fitur "Tracking per {{tipe}}" diaktifkan. */
@@ -85,33 +79,55 @@ export function getMonthIndexFromLabel(monthLabel?: string | null): number {
   return idIdx;
 }
 
-/**
- * Mengecek apakah suatu bulan pada KPI diblok (tidak aktif) berdasarkan Periode Tracking & toggle "Tracking per {{tipe}}".
- * - Jika `periodicTargetBlock === true`: hanya bulan akhir periode (mis. Mar, Jun, Sep, Dec untuk Triwulan) yang aktif.
- * - Jika `periodicTargetBlock === false`: seluruh bulan tetap aktif.
- * - Jika `periodicTargetBlock === undefined` (data lama): dianggap diblok bila Periode Tracking berkala DAN
- *   `monthlyTargets` hanya terisi pada bulan akhir periode (bulan non-akhir kosong semua).
- */
-export function isMonthBlockedForKpi(
-  kpi: {
-    trackingPeriod?: string;
-    satuan?: string;
-    periodicTargetBlock?: boolean;
-    monthlyTargets?: Record<string, string>;
-  },
-  monthLabelOrIdx: string | number,
-): boolean {
-  const normPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
-  if (!isPeriodicTrackingType(normPeriod)) return false;
-  const mIdx = typeof monthLabelOrIdx === "number" ? monthLabelOrIdx : getMonthIndexFromLabel(monthLabelOrIdx);
-  if (mIdx < 0 || mIdx > 11) return false;
-  const activeSet = new Set(getActiveMonthIndicesForPeriod(normPeriod));
+/** Normalisasi daftar bulan yang diblok (0 = Jan .. 11 = Dec, mendukung angka indeks maupun label bulan). */
+export function normalizeBlockedMonths(raw?: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<number>();
+  for (const item of raw) {
+    if (typeof item === "number" && Number.isInteger(item) && item >= 0 && item <= 11) {
+      out.add(item);
+    } else if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (/^\d+$/.test(trimmed)) {
+        const n = Number(trimmed);
+        if (n >= 0 && n <= 11) out.add(n);
+      } else {
+        const idx = getMonthIndexFromLabel(trimmed);
+        if (idx >= 0 && idx <= 11) out.add(idx);
+      }
+    }
+  }
+  return Array.from(out).sort((a, b) => a - b);
+}
 
+export interface KpiPeriodBlockSpec {
+  trackingPeriod?: string;
+  satuan?: string;
+  periodicTargetBlock?: boolean;
+  blockedMonths?: number[];
+  monthlyTargets?: Record<string, string>;
+}
+
+/**
+ * Menghasilkan himpunan indeks bulan (0..11) yang diblok ("Inactive") untuk suatu indikator KPI.
+ * - Jika Periode Tracking = "Bulan": tidak ada bulan yang diblok (Set kosong).
+ * - Jika `blockedMonths` didefinisikan sebagai array: gunakan daftar bulan diblok pilihan owner KPI tersebut.
+ * - Jika `blockedMonths` belum ada (kompatibilitas mundur): gunakan `periodicTargetBlock` / deteksi data lama.
+ */
+export function resolveEffectiveBlockedMonthSet(kpi: KpiPeriodBlockSpec): Set<number> {
+  const normPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
+  if (!isPeriodicTrackingType(normPeriod)) return new Set<number>();
+
+  if (Array.isArray(kpi.blockedMonths)) {
+    return new Set<number>(normalizeBlockedMonths(kpi.blockedMonths));
+  }
+
+  const activeSet = new Set(getActiveMonthIndicesForPeriod(normPeriod));
   if (kpi.periodicTargetBlock === true) {
-    return !activeSet.has(mIdx);
+    return new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !activeSet.has(i)));
   }
   if (kpi.periodicTargetBlock === false) {
-    return false;
+    return new Set<number>();
   }
 
   const mt = kpi.monthlyTargets;
@@ -126,10 +142,36 @@ export function isMonthBlockedForKpi(
       else hasNonActiveVal = true;
     }
     if (hasActiveVal && !hasNonActiveVal) {
-      return !activeSet.has(mIdx);
+      return new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !activeSet.has(i)));
     }
   }
-  return false;
+  return new Set<number>();
+}
+
+/** Daftar indeks bulan aktif (0..11) yang tidak diblok pada indikator KPI. */
+export function getActiveMonthIndicesForKpi(kpi: KpiPeriodBlockSpec): number[] {
+  const blocked = resolveEffectiveBlockedMonthSet(kpi);
+  return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !blocked.has(i));
+}
+
+/** Ringkasan pendek label bulan Inactive (mis. "Inactive: Jan, Feb, Apr") untuk tampilan tabel Setting / Approval. */
+export function formatBlockedMonthsBadgeText(kpi: KpiPeriodBlockSpec): string | null {
+  const blocked = Array.from(resolveEffectiveBlockedMonthSet(kpi)).sort((a, b) => a - b);
+  if (blocked.length === 0) return null;
+  const labels = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+  return `Inactive: ${blocked.map((i) => labels[i] ?? "").filter(Boolean).join(", ")}`;
+}
+
+/**
+ * Mengecek apakah suatu bulan pada KPI diblok (tag "Inactive" aktif / tidak perlu diinput saat tracking & RCA nonaktif).
+ */
+export function isMonthBlockedForKpi(
+  kpi: KpiPeriodBlockSpec,
+  monthLabelOrIdx: string | number,
+): boolean {
+  const mIdx = typeof monthLabelOrIdx === "number" ? monthLabelOrIdx : getMonthIndexFromLabel(monthLabelOrIdx);
+  if (mIdx < 0 || mIdx > 11) return false;
+  return resolveEffectiveBlockedMonthSet(kpi).has(mIdx);
 }
 
 /** Sanitasi input teks angka KPI agar mendukung angka, titik (.), koma (,), tanda minus (-), spasi, dan %. */

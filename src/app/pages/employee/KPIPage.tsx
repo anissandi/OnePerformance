@@ -7,10 +7,12 @@ import {
   KPI_COLOR_BAND_OPTIONS,
   computeKpiColorBandAchievementPct,
   formatComputedKpiNumber,
+  getActiveMonthIndicesForKpi,
   getActiveMonthIndicesForPeriod,
   isKnownKpiColorBandValue,
   isMonthBlockedForKpi,
   isPeriodicTrackingType,
+  normalizeBlockedMonths,
   normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
@@ -164,6 +166,7 @@ export interface KPIItem {
   sectionBobot?: string;
   trackingPeriod?: string;
   periodicTargetBlock?: boolean;
+  blockedMonths?: number[];
   subRows: SubRow[];
   /** Per-month target for simple KPIs (mapped to "Target" sub-row) */
   monthlyTargets?: Record<string, string>;
@@ -838,6 +841,7 @@ export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, u
       sectionBobot: r.sectionBobot ? String(r.sectionBobot) : undefined,
       trackingPeriod: normalizeTrackingPeriod(r.trackingPeriod ? String(r.trackingPeriod) : undefined, String(r.satuan ?? "")),
       periodicTargetBlock: typeof r.periodicTargetBlock === "boolean" ? r.periodicTargetBlock : undefined,
+      blockedMonths: Array.isArray(r.blockedMonths) ? normalizeBlockedMonths(r.blockedMonths) : undefined,
       perspektif: String(r.perspektif ?? "Proses"),
       kpi: String(r.kpi ?? ""),
       satuan: String(r.satuan ?? "%"),
@@ -1343,10 +1347,7 @@ export function resolveKpiMonthTarget(kpi: KPIItem, monthLabel: string): string 
     }
     const parsed = parseNum(rawTarget);
     if (parsed !== null && kpi.formula === "Jumlah") {
-      const divisor =
-        isPeriodicTrackingType(kpi.trackingPeriod) && kpi.periodicTargetBlock
-          ? Math.max(1, getActiveMonthIndicesForPeriod(kpi.trackingPeriod).length)
-          : 12;
+      const divisor = Math.max(1, getActiveMonthIndicesForKpi(kpi).length);
       return formatComputedKpiNumber(parsed / divisor, [rawTarget]);
     }
     return rawTarget;
@@ -1696,9 +1697,9 @@ function AddMonthModal({
                             : "bg-orange-50 text-orange-700"
                         }`}>{kpi.polaritas}</span>
                         {isBlockedInSelectedMonth && (
-                          <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-600 border border-slate-300">
+                          <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
                             <Lock className="w-2.5 h-2.5 shrink-0" />
-                            Tracking per {normKpiPeriod} · Bulan {displayMonth(label)} Diblok
+                            Inactive · Bulan {displayMonth(label)} Diblok ({normKpiPeriod})
                           </span>
                         )}
                       </p>
@@ -1714,7 +1715,7 @@ function AddMonthModal({
                         <div className="rounded-xl border border-slate-200 bg-slate-100/70 px-3.5 py-2.5 text-xs text-slate-500 flex items-center gap-2">
                           <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                           <span>
-                            Target dan Realisasi pada bulan <strong>{displayMonth(label)}</strong> diblok karena mengikuti aturan <strong>Tracking per {normKpiPeriod}</strong> (hanya bulan akhir setiap {normKpiPeriod} yang aktif).
+                            Field <strong>Aktual</strong> dan <strong>RCA</strong> pada bulan <strong>{displayMonth(label)}</strong> tidak aktif karena bulan ini ditandai <strong>Inactive</strong> (diblok) oleh owner KPI pada KPI Setting (Periode Tracking: <strong>{normKpiPeriod}</strong>).
                           </span>
                         </div>
                       ) : rowGroups.map((grp, gi) => {
@@ -2684,10 +2685,17 @@ function EditRequestModal({
     if (!canSubmit) return;
     const targets: { kpiNo: string; monthId: string }[] = [];
     selectedKpis.forEach((kpiNo) => {
+      const kpiObj = kpiItems.find((k) => k.no === kpiNo);
       selectedMonths.forEach((monthId) => {
+        const mObj = months.find((m) => m.id === monthId);
+        if (kpiObj && mObj && isMonthBlockedForKpi(kpiObj, mObj.label)) return;
         targets.push({ kpiNo, monthId });
       });
     });
+    if (targets.length === 0) {
+      toast.warning("Bulan yang dipilih berstatus Inactive (diblok) untuk KPI tersebut sehingga field Aktual tidak aktif.");
+      return;
+    }
     onConfirm(targets, reason);
   };
 
@@ -3045,19 +3053,19 @@ function KPITable({
                     key={m.id}
                     className="border border-slate-200 bg-slate-100/85 text-center text-xs py-1 px-1 select-none"
                     style={{ minWidth: 120 }}
-                    title={`Bulan ${displayMonth(m.label)} diblok — mengikuti Tracking per ${normKpiPeriod}`}
+                    title={`Bulan ${displayMonth(m.label)} ditandai Inactive (diblok) pada KPI Setting (${normKpiPeriod}) — field Aktual & RCA tidak aktif`}
                   >
                     {isComputed ? (
-                      <span className="text-slate-400 text-[11px] font-medium">—</span>
+                      <span className="text-slate-400 text-[11px] font-medium" title="RCA tidak aktif pada bulan yang diblok">—</span>
                     ) : isTargetRowBlocked ? (
                       <div className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-slate-200/75 text-slate-500 text-[10px] font-semibold">
                         <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
                         <span>Block</span>
                       </div>
                     ) : (
-                      <div className="inline-flex items-center justify-center gap-1 text-slate-400 text-[10px] font-medium">
-                        <Lock className="w-2.5 h-2.5 text-slate-300 shrink-0" />
-                        <span>Block</span>
+                      <div className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-rose-50/80 border border-rose-200/80 text-rose-600/80 text-[10px] font-semibold cursor-not-allowed">
+                        <Lock className="w-2.5 h-2.5 shrink-0" />
+                        <span>Inactive</span>
                       </div>
                     )}
                   </td>
@@ -4545,7 +4553,7 @@ function KPIWorkspace({
         for (const kpi of trackingKpiItems) {
           if (isMonthBlockedForKpi(kpi, m.label)) {
             kpi.subRows.forEach((sub, si) => {
-              if (!sub.compute && sub.label.toLowerCase().startsWith("target") && curMonthCells[ck(kpi.no, si)]) {
+              if (!sub.compute && curMonthCells[ck(kpi.no, si)]) {
                 curMonthCells[ck(kpi.no, si)] = "";
                 monthChanged = true;
               }
@@ -4566,7 +4574,7 @@ function KPIWorkspace({
       return changed ? next : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [months.map((m) => m.id).join("|"), JSON.stringify(trackingKpiItems.map((k) => ({ no: k.no, mt: k.monthlyTargets, t: k.target2026 })))]);
+  }, [months.map((m) => m.id).join("|"), JSON.stringify(trackingKpiItems.map((k) => ({ no: k.no, mt: k.monthlyTargets, t: k.target2026, tp: k.trackingPeriod, pb: k.periodicTargetBlock, bm: k.blockedMonths })))]);
 
   // Persist submitted state per owner employee
   React.useEffect(() => {
@@ -4923,6 +4931,7 @@ function KPIWorkspace({
           const normLbl = normalizeImportedMonthLabel(rawM);
           const mId = labelToMonthId[normLbl];
           if (!mId) return;
+          if (isMonthBlockedForKpi(kpiObj, normLbl)) return;
           const cellVal = String(r[monthStartIdx + li] ?? "").trim();
           if (!newCellsMap[mId]) newCellsMap[mId] = {} as Record<CellKey, string>;
           newCellsMap[mId][ck(currentKpiNo, si)] = cellVal;
@@ -5010,6 +5019,42 @@ function KPIWorkspace({
       return next;
     });
   };
+
+  // Sinkronkan Target & bersihkan sel bulan Inactive (diblok) pada Business KPI Tracking (KPI Group / KPI Unit)
+  React.useEffect(() => {
+    if (months.length === 0 || businessTrackingItems.length === 0) return;
+    setBusinessCellsMap((prev) => {
+      let changed = false;
+      const next: Record<string, Record<CellKey, string>> = { ...prev };
+      for (const m of months) {
+        const prefilled = getPrefilledCells(m.label, businessTrackingItems);
+        const curMonthCells = { ...(next[m.id] ?? {}) };
+        let monthChanged = false;
+        for (const kpi of businessTrackingItems) {
+          if (isMonthBlockedForKpi(kpi, m.label)) {
+            kpi.subRows.forEach((sub, si) => {
+              if (!sub.compute && curMonthCells[ck(kpi.no, si)]) {
+                curMonthCells[ck(kpi.no, si)] = "";
+                monthChanged = true;
+              }
+            });
+          }
+        }
+        for (const [cellK, targetVal] of Object.entries(prefilled)) {
+          if (targetVal !== "" && curMonthCells[cellK] !== targetVal) {
+            curMonthCells[cellK] = targetVal;
+            monthChanged = true;
+          }
+        }
+        if (monthChanged) {
+          next[m.id] = curMonthCells;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [months.map((m) => m.id).join("|"), JSON.stringify(businessTrackingItems.map((k) => ({ no: k.no, mt: k.monthlyTargets, t: k.target2026, tp: k.trackingPeriod, pb: k.periodicTargetBlock, bm: k.blockedMonths })))]);
 
   const kpiMonthStatuses = getKpiMonthStatuses(activeUser.employeeId);
   const validatedMonthLabels = new Set(
