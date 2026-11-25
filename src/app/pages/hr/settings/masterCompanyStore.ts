@@ -26,6 +26,8 @@ export interface MasterCompanyUnitRow {
   idUnit: string;
   abbUnit: string;
   fullName?: string;
+  /** Urutan tampilan Card Login di halaman `/login` (1 = paling kiri atas, dst.) */
+  loginOrder?: number;
   /** Riwayat nama lama unit usaha agar referensi historis otomatis dipetakan ke nama terbaru */
   aliases?: string[];
   /** Riwayat nama lama group */
@@ -47,6 +49,7 @@ export interface DynamicCompanyLocation {
   unitId: string;
   company: string;
   fullName: string;
+  loginOrder: number;
 }
 
 export interface DynamicCompanyGroup {
@@ -72,6 +75,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "11",
     abbUnit: "PSJ",
     fullName: "PT. Pulau Sambu (Jakarta)",
+    loginOrder: 1,
     aliases: ["PT. Pulau Sambu (Jakarta)"],
   },
   {
@@ -84,6 +88,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "12",
     abbUnit: "PSG",
     fullName: "PT. Pulau Sambu (Guntung)",
+    loginOrder: 2,
     aliases: ["PT. Pulau Sambu (Guntung)"],
   },
   {
@@ -96,6 +101,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "13",
     abbUnit: "PSKE",
     fullName: "PT. Pulau Sambu (Kuala Enok)",
+    loginOrder: 3,
     aliases: ["PT. Pulau Sambu (Kuala Enok)"],
   },
   {
@@ -108,6 +114,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "21",
     abbUnit: "RSUP IND",
     fullName: "PT. Riau Sakti United Plantations (Industry)",
+    loginOrder: 4,
     aliases: ["PT. Riau Sakti United Plantations (Industry)", "RSUP-IND"],
   },
   {
@@ -120,6 +127,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "22",
     abbUnit: "RSUP PKB",
     fullName: "PT. Riau Sakti United Plantations (Perkebunan)",
+    loginOrder: 5,
     aliases: ["PT. Riau Sakti United Plantations (Perkebunan)", "RSUP-PKB"],
   },
   {
@@ -132,6 +140,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "23",
     abbUnit: "RSTM",
     fullName: "PT. Riau Sakti Transmandiri",
+    loginOrder: 6,
     aliases: ["PT. Riau Sakti Transmandiri"],
   },
   {
@@ -144,6 +153,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "24",
     abbUnit: "GHS",
     fullName: "PT. Guntung Hasratmakmur",
+    loginOrder: 7,
     aliases: ["PT. Guntung Hasratmakmur"],
   },
   {
@@ -156,6 +166,7 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     idUnit: "25",
     abbUnit: "RSUP ASD",
     fullName: "Agronomi Service Division",
+    loginOrder: 8,
     aliases: ["ASD", "RSUP ASD", "PT. RSUP ASD", "PT RSUP (ASD)", "RSUP-ASD"],
   },
 ];
@@ -203,6 +214,7 @@ export function loadMasterCompanyCatalog(): MasterCompanyCatalog {
             idUnit: String(r.idUnit ?? "").trim(),
             abbUnit: String(r.abbUnit ?? "").trim(),
             fullName: r.fullName ? String(r.fullName).trim() : String(r.companyUnit ?? "").trim(),
+            loginOrder: typeof r.loginOrder === "number" && Number.isFinite(r.loginOrder) ? r.loginOrder : idx + 1,
             aliases: Array.isArray(r.aliases) ? r.aliases : [],
             groupAliases: Array.isArray(r.groupAliases) ? r.groupAliases : [],
           })),
@@ -274,17 +286,21 @@ export function resolveMasterGroupNameForUnit(companyOrGroup?: string | null): s
 }
 
 export function getMasterCompanyLocations(): DynamicCompanyLocation[] {
-  return loadMasterCompanyCatalog().rows.map((r) => ({
-    uid: r.uid,
-    groupUid: r.groupUid,
-    companyGroup: r.companyGroup,
-    idGroup: r.idGroup,
-    abbGroup: r.abbGroup,
-    code: r.abbUnit || r.idUnit || r.companyUnit,
-    unitId: r.idUnit || r.abbUnit,
-    company: r.companyUnit,
-    fullName: r.fullName || r.companyUnit,
-  }));
+  return [...loadMasterCompanyCatalog().rows]
+    .map((r, idx) => ({ row: r, order: typeof r.loginOrder === "number" && Number.isFinite(r.loginOrder) ? r.loginOrder : idx + 1 }))
+    .sort((a, b) => a.order - b.order)
+    .map(({ row: r }, sortedIdx) => ({
+      uid: r.uid,
+      groupUid: r.groupUid,
+      companyGroup: r.companyGroup,
+      idGroup: r.idGroup,
+      abbGroup: r.abbGroup,
+      code: r.abbUnit || r.idUnit || r.companyUnit,
+      unitId: r.idUnit || r.abbUnit,
+      company: r.companyUnit,
+      fullName: r.fullName || r.companyUnit,
+      loginOrder: sortedIdx + 1,
+    }));
 }
 
 export function getMasterCompanyGroups(): DynamicCompanyGroup[] {
@@ -471,7 +487,7 @@ export function saveMasterCompanyCatalog(
   const unitRenameMap = new Map<string, string>();
   const groupRenameMap = new Map<string, string>();
 
-  const enrichedRows: MasterCompanyUnitRow[] = nextRows.map((row) => {
+  const enrichedRows: MasterCompanyUnitRow[] = nextRows.map((row, idx) => {
     const prev = prevByUid.get(row.uid);
     const aliasesSet = new Set<string>([...(prev?.aliases ?? []), ...(row.aliases ?? [])]);
     const groupAliasesSet = new Set<string>([...(prev?.groupAliases ?? []), ...(row.groupAliases ?? [])]);
@@ -494,6 +510,7 @@ export function saveMasterCompanyCatalog(
       idUnit: row.idUnit.trim(),
       abbUnit: row.abbUnit.trim(),
       fullName: (row.fullName || row.companyUnit).trim(),
+      loginOrder: typeof row.loginOrder === "number" && Number.isFinite(row.loginOrder) ? row.loginOrder : (prev?.loginOrder ?? idx + 1),
       aliases: Array.from(aliasesSet),
       groupAliases: Array.from(groupAliasesSet),
     };

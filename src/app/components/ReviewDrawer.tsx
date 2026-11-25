@@ -2074,9 +2074,24 @@ function AppraisalFormReview({
                 <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-52">Indikator Penilaian</th>
                 {isAdminGlobalInspector ? (
                   <>
-                    <th className="py-3 px-4 text-left font-semibold text-[#1A284F] border-r border-gray-200 w-64">Evaluasi Pribadi Karyawan</th>
-                    <th className="py-3 px-4 text-left font-semibold text-indigo-700 border-r border-gray-200 w-64">Evaluasi Approver 1</th>
-                    <th className="py-3 px-4 text-left font-semibold text-teal-700 w-64">Evaluasi Approver 2</th>
+                    <th className="py-3 px-4 text-center font-semibold text-[#1A284F] border-r border-gray-200 w-56">
+                      <div>Evaluasi Pribadi Karyawan</div>
+                      <div className="flex justify-around mt-1 text-gray-400 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 text-center font-semibold text-indigo-700 border-r border-gray-200 w-56">
+                      <div>Evaluasi Approver 1</div>
+                      <div className="flex justify-around mt-1 text-indigo-300 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 text-center font-semibold text-teal-700 w-56">
+                      <div>Evaluasi Approver 2</div>
+                      <div className="flex justify-around mt-1 text-teal-300 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
                   </>
                 ) : (
                   <>
@@ -2110,8 +2125,6 @@ function AppraisalFormReview({
                 const ap1Val = readRating(firstRatings, form.id, item.no) ?? null;
                 const ap2Val = readRating(secondRatings, form.id, item.no) ?? (isSameAp1Ap2 ? ap1Val : null);
                 const assessorVal = readRating(assessorRatings, form.id, item.no) ?? null;
-                const findIndText = (score: number | null) =>
-                  score != null ? item.indicators.find((ind) => ind.score === score)?.text ?? "" : "";
                 return (
                   <tr key={item.no} className="hover:bg-gray-50/50">
                     <td className="py-3 px-4 text-gray-400 text-center border-r border-gray-100 align-middle">{item.no}</td>
@@ -2130,35 +2143,26 @@ function AppraisalFormReview({
                     </td>
                     {isAdminGlobalInspector ? (
                       <>
-                        <td className="py-3 px-4 border-r border-gray-100 align-top">
-                          {selfVal != null ? (
-                            <div className="space-y-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#1A284F] text-white text-xs font-bold">Nilai {selfVal}</span>
-                              <p className="text-[11px] text-gray-600 leading-snug">{findIndText(selfVal)}</p>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300">Belum dinilai</span>
-                          )}
+                        <td className="py-3 px-4 border-r border-gray-100 align-middle">
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => (
+                              <ReadOnlyScore key={n} value={n} active={selfVal === n} color="navy" />
+                            ))}
+                          </div>
                         </td>
-                        <td className="py-3 px-4 border-r border-gray-100 align-top bg-indigo-50/15">
-                          {ap1Val != null ? (
-                            <div className="space-y-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-600 text-white text-xs font-bold">Nilai {ap1Val}</span>
-                              <p className="text-[11px] text-gray-600 leading-snug">{findIndText(ap1Val)}</p>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300">Belum dinilai</span>
-                          )}
+                        <td className="py-3 px-4 border-r border-gray-100 align-middle bg-indigo-50/20">
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => (
+                              <ReadOnlyScore key={n} value={n} active={ap1Val === n} color="indigo" />
+                            ))}
+                          </div>
                         </td>
-                        <td className="py-3 px-4 align-top bg-teal-50/15">
-                          {ap2Val != null ? (
-                            <div className="space-y-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-teal-600 text-white text-xs font-bold">Nilai {ap2Val}</span>
-                              <p className="text-[11px] text-gray-600 leading-snug">{findIndText(ap2Val)}</p>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300">Belum dinilai</span>
-                          )}
+                        <td className="py-3 px-4 align-middle bg-teal-50/20">
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => (
+                              <ReadOnlyScore key={n} value={n} active={ap2Val === n} color="teal" />
+                            ))}
+                          </div>
                         </td>
                       </>
                     ) : (
@@ -2458,9 +2462,24 @@ function ManagerialSkillReview({
                 <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-52">Indikator Penilaian</th>
                 {isAdminGlobalInspector ? (
                   <>
-                    <th className="py-3 px-4 text-left font-semibold text-[#1A284F] border-r border-gray-200 w-64">Evaluasi Pribadi Karyawan</th>
-                    <th className="py-3 px-4 text-left font-semibold text-indigo-700 border-r border-gray-200 w-64">Evaluasi Approver 1</th>
-                    <th className="py-3 px-4 text-left font-semibold text-teal-700 w-64">Evaluasi Approver 2</th>
+                    <th className="py-3 px-4 text-center font-semibold text-[#1A284F] border-r border-gray-200 w-56">
+                      <div>Evaluasi Pribadi Karyawan</div>
+                      <div className="flex justify-around mt-1 text-gray-400 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 text-center font-semibold text-indigo-700 border-r border-gray-200 w-56">
+                      <div>Evaluasi Approver 1</div>
+                      <div className="flex justify-around mt-1 text-indigo-300 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 text-center font-semibold text-teal-700 w-56">
+                      <div>Evaluasi Approver 2</div>
+                      <div className="flex justify-around mt-1 text-teal-300 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
                   </>
                 ) : (
                   <>
@@ -2494,8 +2513,6 @@ function ManagerialSkillReview({
                 const app1Val     = firstRatings[item.no] ?? null;
                 const app2Val     = secondRatingsStored[item.no] ?? (isSameAp1Ap2 ? app1Val : null);
                 const assessorVal = assessorRatings[`ms-${item.no}`] ?? null;
-                const findMsIndText = (score: number | null) =>
-                  score != null ? item.indicators.find((ind) => ind.score === score)?.text ?? "" : "";
                 return (
                   <tr key={item.no} className="hover:bg-gray-50/50">
                     <td className="py-3 px-4 text-gray-400 text-center border-r border-gray-100 align-middle">{item.no}</td>
@@ -2514,35 +2531,26 @@ function ManagerialSkillReview({
                     </td>
                     {isAdminGlobalInspector ? (
                       <>
-                        <td className="py-3 px-4 border-r border-gray-100 align-top">
-                          {selfVal != null ? (
-                            <div className="space-y-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#1A284F] text-white text-xs font-bold">Nilai {selfVal}</span>
-                              <p className="text-[11px] text-gray-600 leading-snug">{findMsIndText(selfVal)}</p>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300">Belum dinilai</span>
-                          )}
+                        <td className="py-3 px-4 border-r border-gray-100 align-middle">
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => (
+                              <ReadOnlyScore key={n} value={n} active={selfVal === n} color="navy" />
+                            ))}
+                          </div>
                         </td>
-                        <td className="py-3 px-4 border-r border-gray-100 align-top bg-indigo-50/15">
-                          {app1Val != null ? (
-                            <div className="space-y-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-600 text-white text-xs font-bold">Nilai {app1Val}</span>
-                              <p className="text-[11px] text-gray-600 leading-snug">{findMsIndText(app1Val)}</p>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300">Belum dinilai</span>
-                          )}
+                        <td className="py-3 px-4 border-r border-gray-100 align-middle bg-indigo-50/20">
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => (
+                              <ReadOnlyScore key={n} value={n} active={app1Val === n} color="indigo" />
+                            ))}
+                          </div>
                         </td>
-                        <td className="py-3 px-4 align-top bg-teal-50/15">
-                          {app2Val != null ? (
-                            <div className="space-y-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-teal-600 text-white text-xs font-bold">Nilai {app2Val}</span>
-                              <p className="text-[11px] text-gray-600 leading-snug">{findMsIndText(app2Val)}</p>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300">Belum dinilai</span>
-                          )}
+                        <td className="py-3 px-4 align-middle bg-teal-50/20">
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => (
+                              <ReadOnlyScore key={n} value={n} active={app2Val === n} color="teal" />
+                            ))}
+                          </div>
                         </td>
                       </>
                     ) : (

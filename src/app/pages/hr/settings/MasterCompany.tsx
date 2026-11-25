@@ -1,9 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   Building2,
   CheckCircle2,
   Edit2,
+  LayoutGrid,
   Layers,
   Plus,
   Search,
@@ -71,6 +76,7 @@ export function MasterCompanyPage() {
   const [modalMode, setModalMode] = useState<"add" | "edit" | null>(null);
   const [form, setForm] = useState<CompanyRowForm>(EMPTY_FORM);
   const [deleteTarget, setDeleteTarget] = useState<MasterCompanyUnitRow | null>(null);
+  const [showLoginOrderPanel, setShowLoginOrderPanel] = useState(false);
 
   useEffect(() => {
     void refreshMasterCompanyCatalogFromBackend().then(setCatalog);
@@ -240,6 +246,7 @@ export function MasterCompanyPage() {
         return r;
       });
     } else {
+      const maxLoginOrder = catalog.rows.reduce((mx, r, idx) => Math.max(mx, r.loginOrder ?? idx + 1), 0);
       const newRow: MasterCompanyUnitRow = {
         uid: `unit-${makeGroupSlug(abbUnit || companyUnit)}-${Date.now().toString(36)}`,
         groupUid: resolvedGroupUid,
@@ -250,6 +257,7 @@ export function MasterCompanyPage() {
         idUnit,
         abbUnit,
         fullName: companyUnit,
+        loginOrder: maxLoginOrder + 1,
         aliases: [],
         groupAliases: [],
       };
@@ -281,7 +289,11 @@ export function MasterCompanyPage() {
       setDeleteTarget(null);
       return;
     }
-    const nextRows = catalog.rows.filter((r) => r.uid !== deleteTarget.uid);
+    const filtered = catalog.rows.filter((r) => r.uid !== deleteTarget.uid);
+    const orderedUids = [...filtered]
+      .sort((a, b) => (a.loginOrder ?? 999) - (b.loginOrder ?? 999))
+      .map((r) => r.uid);
+    const nextRows = filtered.map((r) => ({ ...r, loginOrder: orderedUids.indexOf(r.uid) + 1 }));
     const saved = saveMasterCompanyCatalog(
       nextRows,
       `Deleted Master Company Unit: ${deleteTarget.companyGroup} / ${deleteTarget.companyUnit}`,
@@ -289,6 +301,44 @@ export function MasterCompanyPage() {
     setCatalog(saved);
     setDeleteTarget(null);
     toast.success(`Unit Usaha "${deleteTarget.companyUnit}" telah dihapus dari Master Company.`);
+  };
+
+  const loginOrderedRows = useMemo(
+    () =>
+      [...catalog.rows]
+        .map((r, idx) => ({ row: r, ord: r.loginOrder ?? idx + 1 }))
+        .sort((a, b) => a.ord - b.ord)
+        .map((x) => x.row),
+    [catalog.rows],
+  );
+
+  const loginRankByUid = useMemo(() => {
+    const m: Record<string, number> = {};
+    loginOrderedRows.forEach((r, idx) => {
+      m[r.uid] = idx + 1;
+    });
+    return m;
+  }, [loginOrderedRows]);
+
+  const handleMoveLoginOrder = (uid: string, dir: -1 | 1) => {
+    if (!canEdit) return;
+    const ordered = [...loginOrderedRows];
+    const idx = ordered.findIndex((r) => r.uid === uid);
+    const targetIdx = idx + dir;
+    if (idx < 0 || targetIdx < 0 || targetIdx >= ordered.length) return;
+    const swapped = [...ordered];
+    [swapped[idx], swapped[targetIdx]] = [swapped[targetIdx], swapped[idx]];
+    const orderMap = new Map(swapped.map((r, i) => [r.uid, i + 1]));
+    const nextRows = catalog.rows.map((r) => ({
+      ...r,
+      loginOrder: orderMap.get(r.uid) ?? r.loginOrder ?? 1,
+    }));
+    const saved = saveMasterCompanyCatalog(
+      nextRows,
+      `Updated Login Page card order (${swapped[targetIdx]?.companyUnit} -> #${targetIdx + 1})`,
+    );
+    setCatalog(saved);
+    toast.success(`Urutan Card Login diperbarui (#${targetIdx + 1}: ${swapped[targetIdx]?.companyUnit}).`);
   };
 
   return (
@@ -314,6 +364,19 @@ export function MasterCompanyPage() {
         </div>
 
         {canEdit && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowLoginOrderPanel((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
+                showLoginOrderPanel
+                  ? "bg-[#2F5597] text-white border-[#2F5597] shadow-xs"
+                  : "bg-[#EBF2FA]/80 text-[#2F5597] border-[#C9DCF0] hover:bg-[#EBF2FA]"
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              Atur Urutan Card Login
+            </button>
           <button
             type="button"
             onClick={() => openAddNew()}
@@ -322,8 +385,75 @@ export function MasterCompanyPage() {
             <Plus className="w-4 h-4" />
             Add Company / Unit
           </button>
+          </div>
         )}
       </div>
+
+      {/* Interactive Login Card Order Organizer */}
+      {showLoginOrderPanel && (
+        <div className="rounded-2xl border border-[#C9DCF0] bg-gradient-to-br from-[#F4F8FD] via-white to-[#F6FAF9] p-4 shadow-2xs space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <h2 className="text-xs font-bold text-[#1A284F] flex items-center gap-1.5">
+                <LayoutGrid className="w-3.5 h-3.5 text-[#2F5597]" />
+                Urutan Card Perusahaan di Halaman Login (`/login`)
+              </h2>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Gunakan tombol panah kiri/kanan pada masing-masing kartu untuk mengatur urutan tampilan Card Unit Usaha di halaman Login (tersimpan otomatis ke database).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowLoginOrderPanel(false)}
+              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+            >
+              Tutup Panel
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {loginOrderedRows.map((row, i) => (
+              <div
+                key={row.uid}
+                className="flex items-center justify-between gap-2.5 rounded-xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-2xs"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-6 h-6 rounded-lg bg-[#1A284F] text-white text-[11px] font-extrabold flex items-center justify-center shrink-0 tabular-nums">
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-900 truncate">{row.companyUnit}</p>
+                    <p className="text-[10px] text-slate-500 truncate">
+                      {row.companyGroup} · {row.abbUnit}
+                    </p>
+                  </div>
+                </div>
+                {canEdit && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      disabled={i === 0}
+                      onClick={() => handleMoveLoginOrder(row.uid, -1)}
+                      title="Geser ke urutan sebelumnya"
+                      className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-[#EBF2FA] hover:text-[#2F5597] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={i === loginOrderedRows.length - 1}
+                      onClick={() => handleMoveLoginOrder(row.uid, 1)}
+                      title="Geser ke urutan berikutnya"
+                      className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-[#EBF2FA] hover:text-[#2F5597] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filter & Search Bar */}
       <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-2xs space-y-3">
@@ -383,13 +513,14 @@ export function MasterCompanyPage() {
                 <th className="py-3 px-3 text-center font-semibold whitespace-nowrap border-r border-white/10">Abb.Group</th>
                 <th className="py-3 px-4 text-left font-semibold whitespace-nowrap border-r border-white/10">Company Unit</th>
                 <th className="py-3 px-3 text-center font-semibold whitespace-nowrap border-r border-white/10">ID Unit</th>
-                <th className="py-3 px-3 text-center font-semibold whitespace-nowrap">Abb.Unit</th>
+                <th className="py-3 px-3 text-center font-semibold whitespace-nowrap border-r border-white/10">Abb.Unit</th>
+                <th className="py-3 px-3 text-center font-semibold whitespace-nowrap">Urutan Card Login</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {sortedFilteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-10 text-center text-slate-400">
+                  <td colSpan={9} className="py-10 text-center text-slate-400">
                     Tidak ada data Company Group / Company Unit yang sesuai pencarian.
                   </td>
                 </tr>
@@ -467,6 +598,35 @@ export function MasterCompanyPage() {
                       <span className="px-2.5 py-0.5 rounded-md bg-[#1A284F]/8 text-[#1A284F] font-mono font-bold">
                         {row.abbUnit}
                       </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
+                        <span className="px-2 py-0.5 rounded-full bg-[#EBF2FA] border border-[#C9DCF0] text-[#2F5597] font-bold text-[11px] tabular-nums">
+                          #{loginRankByUid[row.uid] ?? idx + 1}
+                        </span>
+                        {canEdit && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={(loginRankByUid[row.uid] ?? 1) <= 1}
+                              onClick={() => handleMoveLoginOrder(row.uid, -1)}
+                              title="Naikkan urutan Card Login"
+                              className="p-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-blue-50 hover:text-[#2F5597] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={(loginRankByUid[row.uid] ?? 1) >= loginOrderedRows.length}
+                              onClick={() => handleMoveLoginOrder(row.uid, 1)}
+                              title="Turunkan urutan Card Login"
+                              className="p-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-blue-50 hover:text-[#2F5597] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))

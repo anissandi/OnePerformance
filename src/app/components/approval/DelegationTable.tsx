@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Ban, Check, ChevronDown, Eye, Filter, Pencil, PlayCircle, RotateCcw, Search, ShieldCheck, UserCog, X } from "lucide-react";
+import { Ban, Check, ChevronDown, ChevronLeft, ChevronRight, Eye, Filter, Pencil, PlayCircle, RotateCcw, Search, ShieldCheck, UserCog, X } from "lucide-react";
 import { toast } from "sonner";
 import {
+  canonicalizeCompanyUnitName,
   canUserAccessEmployeeData,
+  getGroupNameForUnit,
   isAdminOrHrIcfRole,
-  isSameCompanyUnit,
   isUserEligibleForDelegation,
   loadManagedUsers,
   normalizeApproverPair,
@@ -47,7 +48,16 @@ function useLiveData() {
       window.removeEventListener("pa-db-hydrated", r);
     };
   }, []);
-  return { activeUser, allUsers: allUsers.filter((u) => u.status === "Active"), delegations, takeOvers };
+  const activeUsers = useMemo(() => allUsers.filter((u) => u.status === "Active"), [allUsers]);
+  const userByRefMap = useMemo(() => {
+    const m = new Map<string, ManagedUser>();
+    for (const u of activeUsers) {
+      if (u.employeeId) m.set(lc(u.employeeId), u);
+      if (u.regNo) m.set(lc(u.regNo), u);
+    }
+    return m;
+  }, [activeUsers]);
+  return { activeUser, allUsers: activeUsers, userByRefMap, delegations, takeOvers };
 }
 
 function uniqSorted(values: Array<string | undefined>): string[] {
@@ -169,14 +179,16 @@ function OrgFilterBar({
 function EmployeePicker({
   value,
   options,
-  lookupPool,
+  lookupMap,
   disabled,
+  placeholder = "Pilih karyawan…",
   onChange,
 }: {
   value: string;
   options: ManagedUser[];
-  lookupPool?: ManagedUser[];
+  lookupMap?: Map<string, ManagedUser>;
   disabled?: boolean;
+  placeholder?: string;
   onChange: (employeeId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -185,13 +197,28 @@ function EmployeePicker({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 288 });
 
-  const pool = lookupPool ?? options;
+  const normVal = lc(value);
   const selected =
-    options.find((u) => lc(u.employeeId) === lc(value) || (u.regNo && lc(u.regNo) === lc(value))) ??
-    pool.find((u) => lc(u.employeeId) === lc(value) || (u.regNo && lc(u.regNo) === lc(value)));
-  const list = options
-    .filter((u) => !q || [u.name, u.employeeId, u.regNo, u.position].some((v) => lc(v).includes(lc(q))))
-    .slice(0, 40);
+    (normVal && lookupMap ? lookupMap.get(normVal) : undefined) ??
+    (normVal ? options.find((u) => lc(u.employeeId) === normVal || (u.regNo && lc(u.regNo) === normVal)) : undefined);
+  const list = useMemo(() => {
+    if (!open) return [];
+    const query = lc(q);
+    if (!query) return options.slice(0, 50);
+    const out: ManagedUser[] = [];
+    for (const u of options) {
+      if (
+        lc(u.name).includes(query) ||
+        lc(u.employeeId).includes(query) ||
+        lc(u.regNo).includes(query) ||
+        lc(u.position).includes(query)
+      ) {
+        out.push(u);
+        if (out.length >= 50) break;
+      }
+    }
+    return out;
+  }, [open, options, q]);
 
   useEffect(() => {
     if (!open) return;
@@ -239,7 +266,7 @@ function EmployeePicker({
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-left text-xs hover:border-[#1A284F]/40 disabled:opacity-50"
       >
         <span className={`truncate ${selected ? "font-medium text-gray-800" : value ? "text-gray-700" : "text-gray-400"}`}>
-          {selected ? selected.name : value ? value : "Pilih karyawan…"}
+          {selected ? selected.name : value ? value : placeholder}
         </span>
         <span className="inline-flex shrink-0 items-center gap-1">
           {(selected || value) && !disabled && (
@@ -397,7 +424,7 @@ function isEligibleSubordinateForTakeOver(sub: ManagedUser): boolean {
 }
 
 export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "approvals" } = {}) {
-  const { activeUser, allUsers, delegations, takeOvers } = useLiveData();
+  const { activeUser, allUsers, userByRefMap, delegations, takeOvers } = useLiveData();
   const isAdmin = isAdminOrHrIcfRole(activeUser.role);
   const [subMode, setSubMode] = useState<"delegation" | "takeover">("delegation");
   const [search, setSearch] = useState("");
@@ -406,23 +433,98 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [positionFilter, setPositionFilter] = useState("");
   const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
+  const [selectedSelfSubId, setSelectedSelfSubId] = useState<string>("");
+  const [selfReasonDraft, setSelfReasonDraft] = useState<string>("");
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [page, setPage] = useState<number>(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [subMode, search, unitFilter, divisionFilter, departmentFilter, positionFilter, pageSize]);
+
+  // Precompute O(1) maps once per allUsers change so rendering is instantaneous (< 2ms)
+  const precomputed = useMemo(() => {
+    const canonCompanyByEmp = new Map<string, string>();
+    const rankByEmp = new Map<string, number>();
+    const eligibleDelegatorSet = new Set<string>();
+    const delegatesByCompany = new Map<string, ManagedUser[]>();
+    const superiorsByCompany = new Map<string, ManagedUser[]>();
+
+    for (const u of allUsers) {
+      const idKey = lc(u.employeeId);
+      const canonComp = canonicalizeCompanyUnitName(u.company);
+      canonCompanyByEmp.set(idKey, canonComp);
+      const rank = getHierarchyRankForTakeOver(u);
+      rankByEmp.set(idKey, rank);
+      const isElig = isUserEligibleForDelegation(u);
+      if (isElig) {
+        eligibleDelegatorSet.add(idKey);
+        if (u.role !== "Employee") {
+          const arr = delegatesByCompany.get(canonComp) ?? [];
+          arr.push(u);
+          delegatesByCompany.set(canonComp, arr);
+        }
+      }
+      if (rank >= 3 || isAdminOrHrIcfRole(u.role)) {
+        const sArr = superiorsByCompany.get(canonComp) ?? [];
+        sArr.push(u);
+        superiorsByCompany.set(canonComp, sArr);
+      }
+    }
+    return { canonCompanyByEmp, rankByEmp, eligibleDelegatorSet, delegatesByCompany, superiorsByCompany };
+  }, [allUsers]);
+
+  // O(N) single-pass authority scope set for non-admin viewers
+  const accessibleEmpIdSet = useMemo(() => {
+    if (isAdmin) return null;
+    const set = new Set<string>();
+    const viewerId = lc(activeUser.employeeId);
+    const viewerReg = lc(activeUser.regNo);
+    const viewerComp = canonicalizeCompanyUnitName(activeUser.company);
+    const viewerGroup = getGroupNameForUnit(viewerComp);
+    const viewerRank = precomputed.rankByEmp.get(viewerId) ?? getHierarchyRankForTakeOver(activeUser);
+    set.add(viewerId);
+    for (const u of allUsers) {
+      const uid = lc(u.employeeId);
+      if (uid === viewerId) continue;
+      const ap1 = lc(u.regNoAp1);
+      const ap2 = lc(u.regNoAp2);
+      if ((ap1 && (ap1 === viewerId || (viewerReg && ap1 === viewerReg))) || (ap2 && (ap2 === viewerId || (viewerReg && ap2 === viewerReg)))) {
+        set.add(uid);
+        continue;
+      }
+      const uComp = precomputed.canonCompanyByEmp.get(uid) ?? canonicalizeCompanyUnitName(u.company);
+      if (viewerRank >= 6 && getGroupNameForUnit(uComp) === viewerGroup) {
+        set.add(uid);
+      } else if (viewerRank === 5 && uComp === viewerComp) {
+        set.add(uid);
+      } else if (viewerRank === 4 && uComp === viewerComp && lc(u.division) === lc(activeUser.division)) {
+        set.add(uid);
+      } else if (viewerRank === 3 && uComp === viewerComp && lc(u.department) === lc(activeUser.department)) {
+        set.add(uid);
+      } else if (viewerRank === 2 && uComp === viewerComp && lc(u.department) === lc(activeUser.department) && lc(u.bagian) === lc(activeUser.bagian)) {
+        set.add(uid);
+      } else if (canUserAccessEmployeeData(activeUser, u.employeeId, allUsers)) {
+        set.add(uid);
+      }
+    }
+    return set;
+  }, [activeUser, allUsers, isAdmin, precomputed]);
 
   const isSelf = (u: ManagedUser) => lc(u.employeeId) === lc(activeUser.employeeId);
-  // - Approvals → Delegation: hanya baris milik user yang login (memilih sendiri penerima delegasinya)
-  // - Settings → Approval Management → Delegation: Administrator/HR ICF melihat seluruh karyawan eligible;
-  //   user lain yang di-allow submenu ini melihat karyawan sesuai cakupan wewenangnya (Role + Groupings + AP1/AP2)
-  const scoped = (u: ManagedUser) => {
-    if (mode === "approvals") return isSelf(u);
-    if (!isUserEligibleForDelegation(u)) return false;
-    if (isAdmin) return true;
-    return isSelf(u) || canUserAccessEmployeeData(activeUser, u.employeeId, allUsers);
-  };
 
   const basePool = useMemo(() => {
-    const pool = allUsers.filter((u) => scoped(u));
-    if (mode === "approvals" && pool.length === 0 && activeUser.employeeId) return [activeUser];
-    return pool;
-  }, [allUsers, activeUser, isAdmin, mode]);
+    if (mode === "approvals") {
+      const own = allUsers.find((u) => isSelf(u));
+      return own ? [own] : activeUser.employeeId ? [activeUser] : [];
+    }
+    return allUsers.filter((u) => {
+      const uid = lc(u.employeeId);
+      if (!precomputed.eligibleDelegatorSet.has(uid)) return false;
+      if (isAdmin) return true;
+      return accessibleEmpIdSet ? accessibleEmpIdSet.has(uid) : isSelf(u);
+    });
+  }, [allUsers, activeUser, isAdmin, mode, precomputed, accessibleEmpIdSet]);
   const unitOptions = useMemo(() => uniqSorted(basePool.map((u) => u.company)), [basePool]);
   const divisionOptions = useMemo(
     () => uniqSorted(basePool.filter((u) => !unitFilter || u.company === unitFilter).map((u) => u.division)),
@@ -452,24 +554,30 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
     [basePool, unitFilter, divisionFilter, departmentFilter],
   );
 
-  const rows = basePool
-    .filter((u) => !unitFilter || u.company === unitFilter)
-    .filter((u) => !divisionFilter || u.division === divisionFilter)
-    .filter((u) => !departmentFilter || u.department === departmentFilter)
-    .filter((u) => !positionFilter || u.position === positionFilter)
-    .filter(
-      (u) =>
-        !search ||
-        [u.name, u.employeeId, u.regNo, u.company, u.division, u.department, u.position].some((v) =>
-          lc(v).includes(lc(search)),
-        ),
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const rows = useMemo(() => {
+    const q = lc(search);
+    return basePool
+      .filter((u) => !unitFilter || u.company === unitFilter)
+      .filter((u) => !divisionFilter || u.division === divisionFilter)
+      .filter((u) => !departmentFilter || u.department === departmentFilter)
+      .filter((u) => !positionFilter || u.position === positionFilter)
+      .filter(
+        (u) =>
+          !q ||
+          lc(u.name).includes(q) ||
+          lc(u.employeeId).includes(q) ||
+          lc(u.regNo).includes(q) ||
+          lc(u.company).includes(q) ||
+          lc(u.division).includes(q) ||
+          lc(u.department).includes(q) ||
+          lc(u.position).includes(q),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [basePool, unitFilter, divisionFilter, departmentFilter, positionFilter, search]);
 
-  // Kandidat penerima delegasi: wajib Ka./Wa.Ka.Bagian ke atas, bukan role Employee, dan dalam Unit Usaha yang sama dengan pemberi delegasi
-  const eligibleDelegatesPool = useMemo(
-    () => allUsers.filter((c) => c.role !== "Employee" && isUserEligibleForDelegation(c)),
-    [allUsers],
+  const pagedDelegationRows = useMemo(
+    () => (mode === "approvals" ? rows : rows.slice((page - 1) * pageSize, page * pageSize)),
+    [rows, mode, page, pageSize],
   );
 
   function update(user: ManagedUser, patch: Partial<DelegationRecord>, action: string) {
@@ -533,29 +641,58 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
 
   // Pool bawahan yang dapat di-Take Over (minimal role Supervisor ke atas & berada di bawah wewenang atasan)
   const takeOverSubordinates = useMemo(() => {
-    const viewerRank = getHierarchyRankForTakeOver(activeUser);
+    const viewerId = lc(activeUser.employeeId);
+    const viewerRank = precomputed.rankByEmp.get(viewerId) ?? getHierarchyRankForTakeOver(activeUser);
+    const q = lc(search);
     return allUsers
       .filter((sub) => {
-        if (lc(sub.employeeId) === lc(activeUser.employeeId)) return false;
+        const subId = lc(sub.employeeId);
+        if (subId === viewerId) return false;
         if (!isEligibleSubordinateForTakeOver(sub)) return false;
-        if (isAdmin) return true;
-        const subRank = getHierarchyRankForTakeOver(sub);
+        if (mode === "settings" && isAdmin) return true;
+        const subRank = precomputed.rankByEmp.get(subId) ?? getHierarchyRankForTakeOver(sub);
         if (viewerRank <= subRank) return false;
-        return canUserAccessEmployeeData(activeUser, sub.employeeId, allUsers);
+        return accessibleEmpIdSet ? accessibleEmpIdSet.has(subId) : false;
       })
-      .filter((u) => !unitFilter || u.company === unitFilter)
-      .filter((u) => !divisionFilter || u.division === divisionFilter)
-      .filter((u) => !departmentFilter || u.department === departmentFilter)
-      .filter((u) => !positionFilter || u.position === positionFilter)
+      .filter((u) => mode === "approvals" || !unitFilter || u.company === unitFilter)
+      .filter((u) => mode === "approvals" || !divisionFilter || u.division === divisionFilter)
+      .filter((u) => mode === "approvals" || !departmentFilter || u.department === departmentFilter)
+      .filter((u) => mode === "approvals" || !positionFilter || u.position === positionFilter)
       .filter(
         (u) =>
-          !search ||
-          [u.name, u.employeeId, u.regNo, u.company, u.division, u.department, u.position, u.role].some((v) =>
-            lc(v).includes(lc(search)),
-          ),
+          mode === "approvals" ||
+          !q ||
+          lc(u.name).includes(q) ||
+          lc(u.employeeId).includes(q) ||
+          lc(u.regNo).includes(q) ||
+          lc(u.company).includes(q) ||
+          lc(u.division).includes(q) ||
+          lc(u.department).includes(q) ||
+          lc(u.position).includes(q) ||
+          lc(u.role).includes(q),
       )
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [allUsers, activeUser, isAdmin, unitFilter, divisionFilter, departmentFilter, positionFilter, search]);
+  }, [allUsers, activeUser, isAdmin, mode, precomputed, accessibleEmpIdSet, unitFilter, divisionFilter, departmentFilter, positionFilter, search]);
+
+  const pagedTakeOverSubordinates = useMemo(
+    () => takeOverSubordinates.slice((page - 1) * pageSize, page * pageSize),
+    [takeOverSubordinates, page, pageSize],
+  );
+
+  const myActiveTakeOvers = useMemo(() => {
+    const myId = lc(activeUser.employeeId);
+    return Object.values(takeOvers)
+      .filter((t) => t.active && lc(t.takeOverByEmployeeId) === myId)
+      .map((rec) => ({
+        rec,
+        sub: userByRefMap.get(lc(rec.subordinateEmployeeId)),
+      }));
+  }, [takeOvers, activeUser.employeeId, userByRefMap]);
+
+  const activeTakeOverCountBadge = useMemo(() => {
+    if (mode === "approvals") return myActiveTakeOvers.length;
+    return Object.values(takeOvers).filter((t) => t.active).length;
+  }, [mode, myActiveTakeOvers.length, takeOvers]);
 
   function handleUpdateTakeOver(
     sub: ManagedUser,
@@ -632,21 +769,142 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
           }`}
         >
           <ShieldCheck className="h-3.5 w-3.5" />
-          Take Over Peran Bawahan
-          {Object.values(takeOvers).filter((t) => t.active).length > 0 && (
+          Take Over Approval
+          {activeTakeOverCountBadge > 0 && (
             <span className="rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-extrabold text-[#1D6863]">
-              {Object.values(takeOvers).filter((t) => t.active).length} Aktif
+              {activeTakeOverCountBadge} Aktif
             </span>
           )}
         </button>
       </div>
 
       {subMode === "takeover" ? (
+        mode === "approvals" ? (
+          <>
+            <div className="flex items-start gap-2 rounded-2xl border border-[#B8DDD8] bg-[#F4FAF9] px-4 py-3 text-xs text-[#1D6863]">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                <strong>Take Over Approval:</strong> Pilih bawahan Anda (minimal level <strong>Supervisor</strong> ke atas) yang peran Approval &amp; Assessment-nya ingin Anda ambil alih sementara, isi alasan, lalu klik <strong>Start</strong>.
+              </span>
+            </div>
+            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
+              <table className="w-full text-xs">
+                <thead className="bg-[#1A284F] text-white">
+                  <tr>
+                    {[
+                      "No",
+                      "Aksi",
+                      "Reg No",
+                      "ID Karyawan",
+                      "Nama Karyawan (Pengambil Alih)",
+                      "Unit Usaha",
+                      "Divisi / Departemen",
+                      "Jabatan",
+                      "Pilih Bawahan yang Di-Take Over",
+                      "Alasan / Keterangan",
+                      "Bawahan Sedang Di-Take Over",
+                    ].map((h) => (
+                      <th key={h} className="whitespace-nowrap px-3 py-2.5 text-left font-semibold">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-gray-100 bg-white">
+                    <td className="px-3 py-3">1</td>
+                    <td className="px-3 py-3">
+                      <button
+                        type="button"
+                        disabled={!selectedSelfSubId}
+                        onClick={() => {
+                          const subUser = userByRefMap.get(lc(selectedSelfSubId));
+                          if (!subUser) {
+                            toast.error("Pilih bawahan yang akan di-Take Over terlebih dahulu.");
+                            return;
+                          }
+                          handleUpdateTakeOver(subUser, activeUser.employeeId, true, selfReasonDraft);
+                          setSelectedSelfSubId("");
+                          setSelfReasonDraft("");
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#248277] px-2.5 py-1.5 text-[11px] font-bold text-white hover:opacity-90 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                        title="Aktifkan Take Over Approval untuk bawahan terpilih"
+                      >
+                        <PlayCircle className="h-3.5 w-3.5" />
+                        Start
+                      </button>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3">{activeUser.regNo || "-"}</td>
+                    <td className="whitespace-nowrap px-3 py-3 font-mono font-semibold text-[#1A284F]">{activeUser.employeeId}</td>
+                    <td className="whitespace-nowrap px-3 py-3 font-semibold text-gray-900">{activeUser.name}</td>
+                    <td className="whitespace-nowrap px-3 py-3">{activeUser.company}</td>
+                    <td className="px-3 py-3">{activeUser.division || "-"} · {activeUser.department || "-"}</td>
+                    <td className="px-3 py-3">{activeUser.position || "-"}</td>
+                    <td className="px-3 py-3 min-w-[230px]">
+                      <EmployeePicker
+                        value={selectedSelfSubId}
+                        options={takeOverSubordinates.filter(
+                          (s) => !myActiveTakeOvers.some((m) => lc(m.rec.subordinateEmployeeId) === lc(s.employeeId)),
+                        )}
+                        lookupMap={userByRefMap}
+                        placeholder={takeOverSubordinates.length > 0 ? "Pilih bawahan…" : "Tidak ada bawahan eligible"}
+                        disabled={takeOverSubordinates.length === 0}
+                        onChange={setSelectedSelfSubId}
+                      />
+                    </td>
+                    <td className="px-3 py-3 min-w-[190px]">
+                      <input
+                        type="text"
+                        value={selfReasonDraft}
+                        onChange={(e) => setSelfReasonDraft(e.target.value)}
+                        placeholder="Mis. Sakit / Cuti mendadak..."
+                        className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-[#1A284F]"
+                      />
+                    </td>
+                    <td className="px-3 py-3 min-w-[240px]">
+                      {myActiveTakeOvers.length === 0 ? (
+                        <span className="text-[11px] text-slate-400 italic">Belum ada bawahan yang di-Take Over</span>
+                      ) : (
+                        <div className="flex flex-col gap-1.5">
+                          {myActiveTakeOvers.map(({ rec, sub }) => (
+                            <div
+                              key={rec.id}
+                              className="inline-flex items-center justify-between gap-2 rounded-lg border border-teal-200 bg-teal-50/70 px-2.5 py-1"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-bold text-[#1D6863] truncate">
+                                  {sub?.name || rec.subordinateEmployeeId} ({sub?.role || "-"})
+                                </p>
+                                {rec.reason && <p className="text-[10px] text-slate-500 truncate">{rec.reason}</p>}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (sub) {
+                                    handleUpdateTakeOver(sub, activeUser.employeeId, false, rec.reason);
+                                  } else {
+                                    saveTakeOver({ ...rec, active: false }, activeUser, "Stop Take Over");
+                                    toast.success("Take Over dihentikan.");
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 rounded border border-rose-200 bg-white px-2 py-0.5 text-[10px] font-bold text-rose-600 hover:bg-rose-50 shrink-0 cursor-pointer"
+                              >
+                                <Ban className="h-3 w-3" /> Stop
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
         <>
           <div className="flex items-start gap-2 rounded-2xl border border-[#B8DDD8] bg-[#F4FAF9] px-4 py-3 text-xs text-[#1D6863]">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
-              <strong>Take Over (Kebalikan dari Delegasi):</strong> Atasan dapat mengambil alih sementara peran Approval &amp; Assessment milik bawahannya (minimal level <strong>Supervisor</strong> ke atas, contoh Kepala Departemen mengambil alih Kepala Bagian yang berhalangan/sakit) agar pengajuan dari karyawan ke bawahan tersebut tetap berjalan.
+              <strong>Take Over Approval (Pengaturan Admin / Wewenang):</strong> Daftar seluruh karyawan ber-level minimal <strong>Supervisor</strong> ke atas yang dapat diambil alih sementara peran Approval &amp; Assessment-nya oleh atasan sesuai struktur wewenang.
             </span>
           </div>
           <OrgFilterBar
@@ -690,22 +948,22 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                 </tr>
               </thead>
               <tbody>
-                {takeOverSubordinates.map((sub, idx) => {
+                {pagedTakeOverSubordinates.map((sub, idx) => {
                   const rec = takeOvers[sub.employeeId.toUpperCase()];
                   const isAct = Boolean(rec?.active);
-                  const effectiveSuperiorId =
-                    rec?.takeOverByEmployeeId || (mode === "approvals" && !isAdmin ? activeUser.employeeId : "");
-                  const subRank = getHierarchyRankForTakeOver(sub);
-                  const superiorCandidates = allUsers.filter(
+                  const effectiveSuperiorId = rec?.takeOverByEmployeeId || "";
+                  const subIdKey = lc(sub.employeeId);
+                  const subRank = precomputed.rankByEmp.get(subIdKey) ?? getHierarchyRankForTakeOver(sub);
+                  const subComp = precomputed.canonCompanyByEmp.get(subIdKey) ?? canonicalizeCompanyUnitName(sub.company);
+                  const superiorCandidates = (precomputed.superiorsByCompany.get(subComp) ?? []).filter(
                     (cand) =>
-                      lc(cand.employeeId) !== lc(sub.employeeId) &&
-                      isSameCompanyUnit(cand.company, sub.company) &&
-                      getHierarchyRankForTakeOver(cand) > subRank,
+                      lc(cand.employeeId) !== subIdKey &&
+                      (precomputed.rankByEmp.get(lc(cand.employeeId)) ?? 0) > subRank,
                   );
                   const reasonVal = reasonDrafts[sub.employeeId] ?? rec?.reason ?? "";
                   return (
                     <tr key={sub.employeeId} className={`border-t border-gray-100 transition-colors ${isAct ? "bg-teal-50/50" : "hover:bg-slate-50/60"}`}>
-                      <td className="px-3 py-2.5">{idx + 1}</td>
+                      <td className="px-3 py-2.5">{(page - 1) * pageSize + idx + 1}</td>
                       <td className="px-3 py-2.5">
                         <button
                           type="button"
@@ -736,16 +994,12 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                       <td className="px-3 py-2.5">{sub.division || "-"} · {sub.department || "-"}</td>
                       <td className="px-3 py-2.5">{sub.position || "-"}</td>
                       <td className="px-3 py-2.5">
-                        {mode === "approvals" && !isAdmin ? (
-                          <span className="font-semibold text-[#1A284F]">{activeUser.name} ({activeUser.position})</span>
-                        ) : (
                           <EmployeePicker
                             value={effectiveSuperiorId}
                             options={superiorCandidates}
-                            lookupPool={allUsers}
+                            lookupMap={userByRefMap}
                             onChange={(empId) => handleUpdateTakeOver(sub, empId, Boolean(empId && isAct), reasonVal)}
                           />
-                        )}
                       </td>
                       <td className="px-3 py-2.5 min-w-[180px]">
                         <input
@@ -785,7 +1039,44 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
               </tbody>
             </table>
           </div>
+          {takeOverSubordinates.length > pageSize && (
+            <div className="flex flex-wrap items-center justify-between gap-3 px-2 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <span>Show</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold"
+                >
+                  {[15, 20, 50, 100].map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                <span>entries · Menampilkan {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, takeOverSubordinates.length)} dari {takeOverSubordinates.length}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" /> Prev
+                </button>
+                <span className="px-2 font-semibold">Hal. {page} / {Math.max(1, Math.ceil(takeOverSubordinates.length / pageSize))}</span>
+                <button
+                  type="button"
+                  disabled={page >= Math.ceil(takeOverSubordinates.length / pageSize)}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                >
+                  Next <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </>
+        )
       ) : (
       <>
       {mode === "approvals" ? (
@@ -842,17 +1133,18 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
             </tr>
           </thead>
           <tbody>
-            {rows.map((u, i) => {
+            {pagedDelegationRows.map((u, i) => {
               const d = delegations[u.employeeId.toUpperCase()] ?? blankDelegation(u.employeeId);
               const canStart =
                 Boolean(d.delegateEmployeeId) &&
                 (d.kpiSetting || d.kpiTracking || d.smartGoalsSetting || d.smartGoalsMeasurement);
-              const rowOptions = eligibleDelegatesPool.filter(
-                (c) => lc(c.employeeId) !== lc(u.employeeId) && isSameCompanyUnit(c.company, u.company),
+              const uComp = precomputed.canonCompanyByEmp.get(lc(u.employeeId)) ?? canonicalizeCompanyUnitName(u.company);
+              const rowOptions = (precomputed.delegatesByCompany.get(uComp) ?? []).filter(
+                (c) => lc(c.employeeId) !== lc(u.employeeId),
               );
               return (
                 <tr key={u.employeeId} className={`border-t border-gray-100 transition-colors ${d.active ? "bg-emerald-50/40" : "hover:bg-slate-50/60"}`}>
-                  <td className="px-3 py-2">{i + 1}</td>
+                  <td className="px-3 py-2">{mode === "approvals" ? i + 1 : (page - 1) * pageSize + i + 1}</td>
                   <td className="px-3 py-2">
                     <button
                       type="button"
@@ -875,7 +1167,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                     <EmployeePicker
                       value={d.delegateEmployeeId}
                       options={rowOptions}
-                      lookupPool={allUsers}
+                      lookupMap={userByRefMap}
                       onChange={(id) => update(u, { delegateEmployeeId: id, active: id ? d.active : false }, "Set Delegation To")}
                     />
                   </td>
@@ -936,6 +1228,42 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
           </tbody>
         </table>
       </div>
+      {mode === "settings" && rows.length > pageSize && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-2 text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span>Show</span>
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold"
+            >
+              {[15, 20, 50, 100].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+            <span>entries · Menampilkan {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, rows.length)} dari {rows.length}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" /> Prev
+            </button>
+            <span className="px-2 font-semibold">Hal. {page} / {Math.max(1, Math.ceil(rows.length / pageSize))}</span>
+            <button
+              type="button"
+              disabled={page >= Math.ceil(rows.length / pageSize)}
+              onClick={() => setPage((p) => p + 1)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+            >
+              Next <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
       <p className="text-[11px] text-gray-500">
         Klik tag modul (<strong>KPI Setting</strong>, <strong>KPI Tracking</strong>, <strong>SMART Goals Setting</strong>,{" "}
         <strong>SMART Goals Measurement</strong>) serta tag <strong>Hak Akses</strong> untuk memilih atau menonaktifkan pilihan.
@@ -950,7 +1278,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
 
 /** Tab Approver Monitoring: AP1 & AP2 seluruh karyawan, dengan View & Edit. */
 export function ApproverMonitoringTable() {
-  const { allUsers } = useLiveData();
+  const { allUsers, userByRefMap } = useLiveData();
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("");
   const [divisionFilter, setDivisionFilter] = useState("");
@@ -961,6 +1289,12 @@ export function ApproverMonitoringTable() {
   const [edit, setEdit] = useState<ManagedUser | null>(null);
   const [ap1, setAp1] = useState("");
   const [ap2, setAp2] = useState("");
+  const [monPageSize, setMonPageSize] = useState<number>(25);
+  const [monPage, setMonPage] = useState<number>(1);
+
+  useEffect(() => {
+    setMonPage(1);
+  }, [search, unitFilter, divisionFilter, departmentFilter, sectionFilter, positionFilter, monPageSize]);
 
   const unitOptions = useMemo(() => uniqSorted(allUsers.map((u) => u.company)), [allUsers]);
   const divisionOptions = useMemo(
@@ -1006,23 +1340,38 @@ export function ApproverMonitoringTable() {
     [allUsers, unitFilter, divisionFilter, departmentFilter, sectionFilter],
   );
 
-  const rows = allUsers
-    .filter((u) => !unitFilter || u.company === unitFilter)
-    .filter((u) => !divisionFilter || u.division === divisionFilter)
-    .filter((u) => !departmentFilter || u.department === departmentFilter)
-    .filter((u) => !sectionFilter || (u.bagian || "") === sectionFilter)
-    .filter((u) => !positionFilter || u.position === positionFilter)
-    .filter(
-      (u) =>
-        !search ||
-        [u.name, u.employeeId, u.regNo, u.company, u.division, u.department, u.bagian, u.position, u.role].some((v) =>
-          lc(v).includes(lc(search)),
-        ),
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const rows = useMemo(() => {
+    const q = lc(search);
+    return allUsers
+      .filter((u) => !unitFilter || u.company === unitFilter)
+      .filter((u) => !divisionFilter || u.division === divisionFilter)
+      .filter((u) => !departmentFilter || u.department === departmentFilter)
+      .filter((u) => !sectionFilter || (u.bagian || "") === sectionFilter)
+      .filter((u) => !positionFilter || u.position === positionFilter)
+      .filter(
+        (u) =>
+          !q ||
+          lc(u.name).includes(q) ||
+          lc(u.employeeId).includes(q) ||
+          lc(u.regNo).includes(q) ||
+          lc(u.company).includes(q) ||
+          lc(u.division).includes(q) ||
+          lc(u.department).includes(q) ||
+          lc(u.bagian).includes(q) ||
+          lc(u.position).includes(q) ||
+          lc(u.role).includes(q),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allUsers, unitFilter, divisionFilter, departmentFilter, sectionFilter, positionFilter, search]);
+
+  const pagedMonRows = useMemo(
+    () => rows.slice((monPage - 1) * monPageSize, monPage * monPageSize),
+    [rows, monPage, monPageSize],
+  );
+
   const nameOf = (ref?: string) => {
     if (!ref || !ref.trim()) return "Belum ada approver";
-    const u = findByRef(allUsers, ref);
+    const u = userByRefMap.get(lc(ref));
     return u ? u.name : ref || "-";
   };
   function saveEdit() {
@@ -1085,9 +1434,9 @@ export function ApproverMonitoringTable() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((u, i) => (
+            {pagedMonRows.map((u, i) => (
               <tr key={u.employeeId} className="border-t border-gray-100">
-                <td className="px-3 py-2">{i + 1}</td>
+                <td className="px-3 py-2">{(monPage - 1) * monPageSize + i + 1}</td>
                 <td className="px-3 py-2">
                   <div className="flex gap-1">
                     <button type="button" title="Lihat Detail" onClick={() => setView(u)} className="rounded-lg p-1.5 text-sky-600 hover:bg-sky-50"><Eye className="h-4 w-4" /></button>
@@ -1096,8 +1445,8 @@ export function ApproverMonitoringTable() {
                       title="Edit Approver"
                       onClick={() => {
                         setEdit(u);
-                        setAp1(findByRef(allUsers, u.regNoAp1)?.employeeId ?? "");
-                        setAp2(findByRef(allUsers, u.regNoAp2)?.employeeId ?? "");
+                        setAp1(u.regNoAp1 ? (userByRefMap.get(lc(u.regNoAp1))?.employeeId ?? "") : "");
+                        setAp2(u.regNoAp2 ? (userByRefMap.get(lc(u.regNoAp2))?.employeeId ?? "") : "");
                       }}
                       className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50"
                     >
@@ -1128,6 +1477,42 @@ export function ApproverMonitoringTable() {
           </tbody>
         </table>
       </div>
+      {rows.length > monPageSize && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-2 text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span>Show</span>
+            <select
+              value={monPageSize}
+              onChange={(e) => setMonPageSize(Number(e.target.value))}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold"
+            >
+              {[25, 50, 100].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+            <span>entries · Menampilkan {(monPage - 1) * monPageSize + 1}–{Math.min(monPage * monPageSize, rows.length)} dari {rows.length}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={monPage <= 1}
+              onClick={() => setMonPage((p) => Math.max(1, p - 1))}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" /> Prev
+            </button>
+            <span className="px-2 font-semibold">Hal. {monPage} / {Math.max(1, Math.ceil(rows.length / monPageSize))}</span>
+            <button
+              type="button"
+              disabled={monPage >= Math.ceil(rows.length / monPageSize)}
+              onClick={() => setMonPage((p) => p + 1)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+            >
+              Next <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
       {(view || edit) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { setView(null); setEdit(null); }}>
           <div className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -1146,10 +1531,10 @@ export function ApproverMonitoringTable() {
               <>
                 <h3 className="text-lg font-bold text-[#1A284F]">Edit Approver · {edit.name}</h3>
                 <label className="block text-xs font-bold text-gray-500">Approver 1
-                  <div className="mt-1"><EmployeePicker value={ap1} options={allUsers.filter((u) => u.employeeId !== edit.employeeId)} lookupPool={allUsers} onChange={setAp1} /></div>
+                  <div className="mt-1"><EmployeePicker value={ap1} options={allUsers.filter((u) => u.employeeId !== edit.employeeId)} lookupMap={userByRefMap} onChange={setAp1} /></div>
                 </label>
                 <label className="block text-xs font-bold text-gray-500">Approver 2
-                  <div className="mt-1"><EmployeePicker value={ap2} options={allUsers.filter((u) => u.employeeId !== edit.employeeId)} lookupPool={allUsers} onChange={setAp2} /></div>
+                  <div className="mt-1"><EmployeePicker value={ap2} options={allUsers.filter((u) => u.employeeId !== edit.employeeId)} lookupMap={userByRefMap} onChange={setAp2} /></div>
                 </label>
                 {ap1 && ap1 === ap2 && <p className="text-xs text-amber-700">Approver 1 & 2 sama — approval cukup dilakukan 1 kali.</p>}
                 {((ap1 && !ap2) || (!ap1 && ap2)) && (

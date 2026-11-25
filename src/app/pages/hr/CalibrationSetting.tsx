@@ -9,6 +9,7 @@ import {
   CheckCircle2, Clock, X, RefreshCw, Users, Archive, RotateCcw, Sparkles, AlertTriangle, TrendingUp, Percent,
 } from "lucide-react";
 import { ANALYTICS_CARD_TONES, AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
+import { Tooltip as UiTooltip, TooltipContent as UiTooltipContent, TooltipTrigger as UiTooltipTrigger } from "../../components/ui/tooltip";
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, Dot,
@@ -1380,6 +1381,7 @@ function ProportionTable({
   targetGradeTotals,
   calibrationGrades,
   editMode,
+  isConfirmedLocked = false,
   disableHcEdit = false,
   onUpdateHC,
   onUpdateQuota,
@@ -1400,6 +1402,7 @@ function ProportionTable({
   targetGradeTotals: number[];
   calibrationGrades: CalibrationGrade[];
   editMode: boolean;
+  isConfirmedLocked?: boolean;
   disableHcEdit?: boolean;
   onUpdateHC: (id: string, val: number) => void;
   onUpdateQuota: (rowId: string, gradeId: string, val: number | null) => void;
@@ -1430,24 +1433,36 @@ function ProportionTable({
           <h3 className="font-semibold text-gray-900">{title}</h3>
           <p className="text-sm text-gray-500 mt-1">{subtitle}</p>
         </div>
-        {editMode && (hasAnyCustomQuota || hasRowMismatch || hasColMismatch) && (
+        {((editMode && (hasAnyCustomQuota || hasRowMismatch || hasColMismatch)) || isConfirmedLocked) && (
           <div className="flex flex-wrap items-center gap-2">
+            {editMode && (hasAnyCustomQuota || hasRowMismatch || hasColMismatch) && (
             <button
               type="button"
               onClick={onAutoBalance}
               title="Kunci nilai kuota yang sudah Anda ubah manual, lalu seimbangkan otomatis sisa grade & baris lain agar kembali sesuai HC dan kurva normal"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition-colors"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold shadow-xs transition-colors cursor-pointer"
             >
-              <Sparkles className="w-3.5 h-3.5" />
+              <Sparkles className="w-3 h-3" />
               Auto-Balance Sisa Kuota
             </button>
-            {hasAnyCustomQuota && (
+            )}
+            {(hasAnyCustomQuota || isConfirmedLocked) && (
               <button
                 type="button"
-                onClick={onResetQuotas}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors"
+                disabled={isConfirmedLocked}
+                onClick={isConfirmedLocked ? undefined : onResetQuotas}
+                title={
+                  isConfirmedLocked
+                    ? "Reset Kuota Otomatis tidak aktif karena Confirm Data telah dilakukan. Klik Cancel Confirm terlebih dahulu."
+                    : "Kembalikan kuota manual ke perhitungan otomatis"
+                }
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors ${
+                  isConfirmedLocked
+                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed opacity-60"
+                    : "border-gray-200 bg-white hover:bg-gray-50 text-gray-700 cursor-pointer"
+                }`}
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3 h-3" />
                 Reset Kuota Otomatis
               </button>
             )}
@@ -3638,6 +3653,7 @@ function GroupCalibrationPanel({
   memberUnits,
   unitCustomQuotas,
   editMode,
+  isConfirmedLocked = false,
   selectedUnitId,
   onSelectUnitId,
   onUpdateCalibrationGrade,
@@ -3656,6 +3672,7 @@ function GroupCalibrationPanel({
   memberUnits: CompanyUnit[];
   unitCustomQuotas?: Record<string, Record<string, number>>;
   editMode: boolean;
+  isConfirmedLocked?: boolean;
   selectedUnitId: string | null;
   onSelectUnitId: (unitId: string | null) => void;
   onUpdateCalibrationGrade: (id: string, field: keyof CalibrationGrade, value: string) => void;
@@ -3685,6 +3702,23 @@ function GroupCalibrationPanel({
   );
   const groupGradeCounts = groupAlloc.groupGradeTargets;
   const totalGroupKaryawan = groupGradeCounts.reduce((a, b) => a + b, 0);
+  // Kurva Bell Curve real-time: mencerminkan perubahan pada Grade, Company Unit, maupun Division/Departement di setiap unit secara langsung
+  const liveEffectiveUnitGradeSums = calibrationGrades.map((_, gi) =>
+    memberUnits.reduce((sum, u) => {
+      const uAlloc = groupAlloc.perUnitAlloc[u.id];
+      const hasSubCustom =
+        u.divisionProportions.some((d) => d.customQuotas && Object.keys(d.customQuotas).length > 0) ||
+        u.departemenenProportions.some((d) => d.customQuotas && Object.keys(d.customQuotas).length > 0);
+      if (hasSubCustom && uAlloc) {
+        const hasDeptCustom = u.departemenenProportions.some((d) => d.customQuotas && Object.keys(d.customQuotas).length > 0);
+        if (hasDeptCustom) {
+          return sum + u.departemenenProportions.reduce((ds, dep) => ds + (uAlloc.deptMatrix[dep.id]?.[gi] ?? 0), 0);
+        }
+        return sum + u.divisionProportions.reduce((ds, div) => ds + (uAlloc.divMatrix[div.id]?.[gi] ?? 0), 0);
+      }
+      return sum + (groupAlloc.unitMatrix[u.id]?.[gi] ?? 0);
+    }, 0),
+  );
 
   const activeDrillUnit = selectedUnitId
     ? memberUnits.find((u) => u.id === selectedUnitId) ?? null
@@ -3780,7 +3814,7 @@ function GroupCalibrationPanel({
           title={`Grade Distribution (Bell Curve) — ${groupName}`}
           subtitle={`Visualisasi kurva normal proporsi & kuota karyawan gabungan ${groupName}`}
           calibrationGrades={calibrationGrades}
-          gradeCounts={unitGradeSums.some((v, i) => v !== groupGradeCounts[i]) ? unitGradeSums : groupGradeCounts}
+          gradeCounts={liveEffectiveUnitGradeSums}
         />
       </div>
 
@@ -3790,6 +3824,7 @@ function GroupCalibrationPanel({
         subtitle="Share kuota & distribusi grade per Unit Usaha berdasarkan distribusi normal Group (klik baris Unit Usaha untuk membuka & menyesuaikan proporsi Divisi & Departement)"
         firstColHeader="UNIT USAHA"
         disableHcEdit
+        isConfirmedLocked={isConfirmedLocked}
         selectedRowId={selectedUnitId}
         onRowClick={(uid) => onSelectUnitId(selectedUnitId === uid ? null : uid)}
         rows={memberUnits.map((u) => ({
@@ -3894,6 +3929,7 @@ function GroupCalibrationPanel({
               title={`Proportion per Division — ${activeDrillUnit.name}`}
               subtitle="Distribusi kuota grade per Divisi (mengikuti kuota Unit Usaha pada tabel Group)"
               firstColHeader="DIVISION"
+              isConfirmedLocked={isConfirmedLocked}
               rows={safeDivs.map((d) => ({
                 id: d.id,
                 label: d.divisi,
@@ -3920,6 +3956,7 @@ function GroupCalibrationPanel({
               title={`Proportion per Departement — ${activeDrillUnit.name}`}
               subtitle="Share Kuota & alokasi grade diturunkan dari kuota masing-masing Divisi induknya"
               firstColHeader="DEPARTEMENT"
+              isConfirmedLocked={isConfirmedLocked}
               rows={safeDepts.map((dept) => {
                 const parentDiv = safeDivs.find((d) => d.id === dept.divisiId);
                 return {
@@ -4423,6 +4460,9 @@ function GroupDetail({
 
   const [workingGroup, setWorkingGroup] = useState<CalibrationGroupSetting>(() => JSON.parse(JSON.stringify(group)));
   const [workingUnits, setWorkingUnits] = useState<CompanyUnit[]>(() => JSON.parse(JSON.stringify(memberUnits)));
+  const [editBaselineTotalHC, setEditBaselineTotalHC] = useState<number>(() =>
+    memberUnits.reduce((sum, u) => sum + u.divisionProportions.reduce((s, d) => s + d.hc, 0), 0),
+  );
 
   useEffect(() => {
     if (!soyEditMode && !eoyEditMode) {
@@ -4575,10 +4615,16 @@ function GroupDetail({
         if (u.id !== unitId) return u;
         const dept = u.departemenenProportions.find((d) => d.id === deptId);
         if (!dept) return u;
-        const parentDiv = u.divisionProportions.find((d) => d.id === dept.divisiId);
-        const newHC = Math.min(Math.max(0, rawVal), parentDiv?.hc ?? Infinity);
+        const newHC = Math.max(0, rawVal);
         const updDepts = u.departemenenProportions.map((d) =>
           d.id === deptId ? { ...d, hc: newHC, customQuotas: undefined } : d,
+        );
+        // Sinkronkan HC Divisi induk secara real-time dari total HC seluruh Departement di bawahnya
+        const newParentDivHC = updDepts
+          .filter((d) => d.divisiId === dept.divisiId)
+          .reduce((s, d) => s + d.hc, 0);
+        const updDivs = u.divisionProportions.map((div) =>
+          div.id === dept.divisiId ? { ...div, hc: newParentDivHC, customQuotas: undefined } : div,
         );
         const bags = u.bagianProportions.filter((b) => b.departemenenId === deptId);
         const bagHCs = apportionLargestRemainder(newHC, bags.map((b) => (b.hc > 0 ? b.hc : 1)));
@@ -4586,27 +4632,95 @@ function GroupDetail({
         const updBags = u.bagianProportions.map((b) =>
           bagHcById.has(b.id) ? { ...b, hc: bagHcById.get(b.id)!, customQuotas: undefined } : b,
         );
-        return { ...u, departemenenProportions: updDepts, bagianProportions: updBags };
+        return { ...u, divisionProportions: updDivs, departemenenProportions: updDepts, bagianProportions: updBags };
       }),
     );
   };
 
   const handleUpdateUnitDivisionQuota = (unitId: string, divId: string, gradeId: string, val: number | null) => {
-    setWorkingUnits((prev) =>
-      prev.map((u) =>
-        u.id === unitId ? { ...u, divisionProportions: patchQuotaRecord(u.divisionProportions, divId, gradeId, val) } : u,
-      ),
+    const gradeIds = workingGroup.calibrationGrades.map((g) => g.id);
+    const gradeWeights = workingGroup.calibrationGrades.map((g) => parseGradePct(g.proporsi));
+    const nextUnits = workingUnits.map((u) =>
+      u.id === unitId ? { ...u, divisionProportions: patchQuotaRecord(u.divisionProportions, divId, gradeId, val) } : u,
     );
+    setWorkingUnits(nextUnits);
+    // Propagasikan perubahan kuota Division ke kuota Company Unit & Bell Curve secara real-time
+    const targetU = nextUnits.find((u) => u.id === unitId);
+    if (targetU) {
+      const curAlloc = computeGroupQuotaAllocation({
+        calibrationGrades: workingGroup.calibrationGrades,
+        units: nextUnits,
+        unitCustomQuotas: workingGroup.unitCustomQuotas,
+      });
+      const unitColTargets = curAlloc.unitMatrix[unitId] ?? apportionLargestRemainder(curAlloc.unitHCs[unitId] ?? 0, gradeWeights);
+      const divMatrix = allocate2DQuotaMatrix({
+        rowHCs: targetU.divisionProportions.map((d) => d.hc),
+        colTargets: unitColTargets,
+        gradeWeights,
+        gradeIds,
+        rowCustomQuotas: targetU.divisionProportions.map((d) => d.customQuotas),
+      });
+      const summedUnitQuotas = Object.fromEntries(
+        gradeIds.map((gid, gi) => [gid, divMatrix.reduce((s, row) => s + (row[gi] ?? 0), 0)]),
+      );
+      setWorkingGroup((prev) => ({
+        ...prev,
+        unitCustomQuotas: { ...(prev.unitCustomQuotas ?? {}), [unitId]: summedUnitQuotas },
+      }));
+    }
   };
 
   const handleUpdateUnitDepartemenQuota = (unitId: string, deptId: string, gradeId: string, val: number | null) => {
-    setWorkingUnits((prev) =>
-      prev.map((u) =>
-        u.id === unitId
-          ? { ...u, departemenenProportions: patchQuotaRecord(u.departemenenProportions, deptId, gradeId, val) }
-          : u,
-      ),
-    );
+    const gradeIds = workingGroup.calibrationGrades.map((g) => g.id);
+    const gradeWeights = workingGroup.calibrationGrades.map((g) => parseGradePct(g.proporsi));
+    const nextUnits = workingUnits.map((u) => {
+      if (u.id !== unitId) return u;
+      const updDepts = patchQuotaRecord(u.departemenenProportions, deptId, gradeId, val);
+      const editedDept = updDepts.find((d) => d.id === deptId);
+      if (!editedDept) return { ...u, departemenenProportions: updDepts };
+      const parentDiv = u.divisionProportions.find((d) => d.id === editedDept.divisiId);
+      if (!parentDiv) return { ...u, departemenenProportions: updDepts };
+      const sibDepts = updDepts.filter((d) => d.divisiId === parentDiv.id);
+      const divColTargets = apportionLargestRemainder(parentDiv.hc, gradeWeights);
+      const deptMat = allocate2DQuotaMatrix({
+        rowHCs: sibDepts.map((s) => s.hc),
+        colTargets: divColTargets,
+        gradeWeights,
+        gradeIds,
+        rowCustomQuotas: sibDepts.map((s) => s.customQuotas),
+      });
+      const summedDivQuotas = Object.fromEntries(
+        gradeIds.map((gid, gi) => [gid, deptMat.reduce((s, r) => s + (r[gi] ?? 0), 0)]),
+      );
+      const updDivs = u.divisionProportions.map((d) =>
+        d.id === parentDiv.id ? { ...d, customQuotas: summedDivQuotas } : d,
+      );
+      return { ...u, divisionProportions: updDivs, departemenenProportions: updDepts };
+    });
+    setWorkingUnits(nextUnits);
+    const targetU = nextUnits.find((u) => u.id === unitId);
+    if (targetU) {
+      const curAlloc = computeGroupQuotaAllocation({
+        calibrationGrades: workingGroup.calibrationGrades,
+        units: nextUnits,
+        unitCustomQuotas: workingGroup.unitCustomQuotas,
+      });
+      const unitColTargets = curAlloc.unitMatrix[unitId] ?? apportionLargestRemainder(curAlloc.unitHCs[unitId] ?? 0, gradeWeights);
+      const divMatrix = allocate2DQuotaMatrix({
+        rowHCs: targetU.divisionProportions.map((d) => d.hc),
+        colTargets: unitColTargets,
+        gradeWeights,
+        gradeIds,
+        rowCustomQuotas: targetU.divisionProportions.map((d) => d.customQuotas),
+      });
+      const summedUnitQuotas = Object.fromEntries(
+        gradeIds.map((gid, gi) => [gid, divMatrix.reduce((s, row) => s + (row[gi] ?? 0), 0)]),
+      );
+      setWorkingGroup((prev) => ({
+        ...prev,
+        unitCustomQuotas: { ...(prev.unitCustomQuotas ?? {}), [unitId]: summedUnitQuotas },
+      }));
+    }
   };
 
   const handleAutoBalanceUnitLevel = (unitId: string, level: "division" | "department") => {
@@ -4677,7 +4791,88 @@ function GroupDetail({
         return { ...u, departemenenProportions: u.departemenenProportions.map((d) => ({ ...d, customQuotas: undefined })) };
       }),
     );
+    setWorkingGroup((prev) => {
+      const nextMap = { ...(prev.unitCustomQuotas ?? {}) };
+      delete nextMap[unitId];
+      return { ...prev, unitCustomQuotas: nextMap };
+    });
     toast.success("Kuota manual dikembalikan ke perhitungan otomatis.");
+  };
+
+  // Validasi real-time Save Changes: aktif HANYA jika jumlah total HC (& total kuota grade) sesudah diedit == sebelum diedit, dan total proporsi Grade == 100%
+  const saveValidation = useMemo(() => {
+    const curAlloc = computeGroupQuotaAllocation({
+      calibrationGrades: workingGroup.calibrationGrades,
+      units: workingUnits,
+      unitCustomQuotas: workingGroup.unitCustomQuotas,
+    });
+    const afterTotalHC = curAlloc.totalHC;
+    const allocatedUnitTotal = workingUnits.reduce(
+      (sum, u) => sum + (curAlloc.unitMatrix[u.id]?.reduce((a, b) => a + b, 0) ?? 0),
+      0,
+    );
+    let subQuotaTotalMismatchUnit: string | null = null;
+    for (const u of workingUnits) {
+      const uAlloc = curAlloc.perUnitAlloc[u.id];
+      const uHc = curAlloc.unitHCs[u.id] ?? 0;
+      if (uAlloc) {
+        const divQuotaSum = u.divisionProportions.reduce(
+          (s, d) => s + (uAlloc.divMatrix[d.id]?.reduce((a, b) => a + b, 0) ?? 0),
+          0,
+        );
+        const deptQuotaSum = u.departemenenProportions.reduce(
+          (s, d) => s + (uAlloc.deptMatrix[d.id]?.reduce((a, b) => a + b, 0) ?? 0),
+          0,
+        );
+        if (divQuotaSum !== uHc || (u.departemenenProportions.length > 0 && deptQuotaSum !== uHc)) {
+          subQuotaTotalMismatchUnit = u.name;
+          break;
+        }
+      }
+    }
+    const totalPct = workingGroup.calibrationGrades.reduce((s, g) => s + parseGradePct(g.proporsi), 0);
+    const reasons: string[] = [];
+    if (afterTotalHC !== editBaselineTotalHC) {
+      reasons.push(
+        `Total HC sesudah diedit (${afterTotalHC.toLocaleString()} orang) belum sama dengan Total HC awal sebelum diedit (${editBaselineTotalHC.toLocaleString()} orang).`,
+      );
+    }
+    if (allocatedUnitTotal !== editBaselineTotalHC) {
+      reasons.push(
+        `Total kuota distribusi Unit Usaha (${allocatedUnitTotal.toLocaleString()} orang) belum sama dengan Total HC (${editBaselineTotalHC.toLocaleString()} orang).`,
+      );
+    }
+    if (subQuotaTotalMismatchUnit) {
+      reasons.push(
+        `Total kuota Division / Departement pada ${subQuotaTotalMismatchUnit} belum sama dengan HC unit tersebut.`,
+      );
+    }
+    if (Math.abs(totalPct - 100) > 0.001) {
+      reasons.push(`Total proporsi Grade saat ini ${totalPct}% (wajib tepat 100%).`);
+    }
+    return {
+      canSave: reasons.length === 0,
+      tooltipText: reasons.join(" "),
+    };
+  }, [workingGroup, workingUnits, editBaselineTotalHC]);
+
+  const handleCancelConfirmGroupEoy = () => {
+    const unlockedUnits = memberUnits.map((u) => ({
+      ...u,
+      yearEndStatus: "edit" as PageMode,
+      yearEndUpdatedAt: new Date().toISOString(),
+    }));
+    const unlockedGroup: CalibrationGroupSetting = {
+      ...group,
+      yearEndStatus: "edit",
+      yearEndUpdatedAt: new Date().toISOString(),
+    };
+    onCommitGroupAndUnits(
+      unlockedGroup,
+      unlockedUnits,
+      `Status Confirm Data HC Akhir Tahun (EOY) ${group.name} dibatalkan. Pengaturan EOY dapat disesuaikan kembali.`,
+    );
+    setEoyPageMode("edit");
   };
 
   const handleRefreshEmployees = (targetPhase: "soy" | "eoy") => {
@@ -4923,9 +5118,9 @@ function GroupDetail({
                   type="button"
                   disabled
                   title="Tombol Reset dinonaktifkan karena status HC Awal Tahun (SOY) sudah Submitted / Approved"
-                  className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 bg-slate-100 text-slate-400 rounded-xl text-xs font-semibold cursor-not-allowed select-none"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 bg-slate-100 text-slate-400 rounded-lg text-[11px] font-semibold cursor-not-allowed select-none"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
+                  <RotateCcw className="w-3 h-3" />
                   Reset Status HC Awal Tahun (SOY)
                 </button>
               )}
@@ -4934,9 +5129,9 @@ function GroupDetail({
                   <button
                     type="button"
                     onClick={() => handleRefreshEmployees("soy")}
-                    className="flex items-center gap-2 px-3.5 py-2.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-xl text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-lg text-[11px] font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
                   >
-                    <RefreshCw className="w-3.5 h-3.5" />
+                    <RefreshCw className="w-3 h-3" />
                     Refresh Data Karyawan
                   </button>
                   {soyEditMode && (
@@ -4947,56 +5142,73 @@ function GroupDetail({
                         setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
                         setSoyEditMode(false);
                       }}
-                      className="px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                      className="px-2.5 py-1.5 border border-gray-200 text-gray-700 rounded-lg text-[11px] font-medium hover:bg-gray-50 transition-colors cursor-pointer"
                     >
                       Cancel
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (soyEditMode) handleSaveSoyChanges();
-                      else {
+                  {soyEditMode ? (
+                    <UiTooltip>
+                      <UiTooltipTrigger asChild>
+                        <span tabIndex={0} className="inline-flex">
+                          <button
+                            type="button"
+                            disabled={!saveValidation.canSave}
+                            onClick={saveValidation.canSave ? handleSaveSoyChanges : undefined}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors shadow-xs ${
+                              saveValidation.canSave
+                                ? "bg-[#1A284F] text-white hover:bg-[#131d3b] cursor-pointer"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          >
+                            <Save className="w-3 h-3" />
+                            Save Changes
+                          </button>
+                        </span>
+                      </UiTooltipTrigger>
+                      {!saveValidation.canSave && (
+                        <UiTooltipContent side="top" className="max-w-xs bg-[#1A284F] text-white text-[11px] px-3 py-2 rounded-lg shadow-lg z-[80]">
+                          {saveValidation.tooltipText}
+                        </UiTooltipContent>
+                      )}
+                    </UiTooltip>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const baseHc = memberUnits.reduce((sum, u) => sum + u.divisionProportions.reduce((s, d) => s + d.hc, 0), 0);
+                        setEditBaselineTotalHC(baseHc);
                         setWorkingGroup(JSON.parse(JSON.stringify(group)));
                         setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
                         setSoyEditMode(true);
-                      }
-                    }}
-                    className="flex items-center gap-2 bg-[#1A284F] text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm cursor-pointer"
-                  >
-                    {soyEditMode ? (
-                      <>
-                        <Save className="w-4 h-4" />
-                        Save Changes
-                      </>
-                    ) : (
-                      <>
-                        <Edit2 className="w-4 h-4" />
-                        Edit Settings
-                      </>
-                    )}
-                  </button>
+                      }}
+                      className="inline-flex items-center gap-1.5 bg-[#1A284F] text-white px-3 py-1.5 rounded-lg text-[11px] font-semibold hover:bg-[#131d3b] transition-colors shadow-xs cursor-pointer"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                      Edit Settings
+                    </button>
+                  )}
                   {!soyEditMode && (
                     <>
                       <button
                         type="button"
                         onClick={() => setSoyPageMode("preview")}
-                        className="flex items-center gap-2 px-4 py-2.5 border border-[#1A284F] text-[#1A284F] rounded-xl text-sm font-medium hover:bg-[#1A284F]/5 transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-[#1A284F] text-[#1A284F] rounded-lg text-[11px] font-medium hover:bg-[#1A284F]/5 transition-colors cursor-pointer"
                       >
-                        <Eye className="w-4 h-4" />
+                        <Eye className="w-3 h-3" />
                         Preview
                       </button>
                       <button
                         type="button"
                         disabled={!canSubmitSoy}
                         onClick={canSubmitSoy ? () => setShowSubmitModal(true) : undefined}
-                        className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm ${
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors shadow-xs ${
                           canSubmitSoy
                             ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
                             : "bg-gray-100 text-gray-400 cursor-not-allowed"
                         }`}
                       >
-                        <Send className="w-4 h-4" />
+                        <Send className="w-3 h-3" />
                         Submit
                       </button>
                     </>
@@ -5008,17 +5220,17 @@ function GroupDetail({
                   <button
                     type="button"
                     onClick={() => setSoyPageMode("edit")}
-                    className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 text-gray-700 rounded-lg text-[11px] font-medium hover:bg-gray-50 transition-colors cursor-pointer"
                   >
-                    <Edit2 className="w-4 h-4" />
+                    <Edit2 className="w-3 h-3" />
                     Back to Edit
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowSubmitModal(true)}
-                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm cursor-pointer"
+                    className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors shadow-xs cursor-pointer"
                   >
-                    <Send className="w-4 h-4" />
+                    <Send className="w-3 h-3" />
                     Submit
                   </button>
                 </>
@@ -5063,13 +5275,6 @@ function GroupDetail({
                       Data HC Akhir Tahun (EOY) <strong>{group.name}</strong> telah dikonfirmasi (tanpa perlu approval). Baseline HC Awal Tahun (SOY) tetap terjaga.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setEoyPageMode("edit")}
-                    className="px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
-                  >
-                    Perbarui EOY Lagi
-                  </button>
                 </div>
               )}
 
@@ -5078,14 +5283,24 @@ function GroupDetail({
                   HC Akhir Tahun (EOY) · {group.name} — konfirmasi perubahan data karyawan di akhir tahun (baseline SOY tidak berubah).
                 </p>
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  {eoyPageMode === "submitted" && (
+                    <button
+                      type="button"
+                      onClick={handleCancelConfirmGroupEoy}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Cancel Confirm
+                    </button>
+                  )}
                   {eoyPageMode === "edit" && (
                     <>
                       <button
                         type="button"
                         onClick={() => handleRefreshEmployees("eoy")}
-                        className="flex items-center gap-2 px-3.5 py-2.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-xl text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-lg text-[11px] font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
+                        <RefreshCw className="w-3 h-3" />
                         Refresh Data Karyawan
                       </button>
                       {eoyEditMode && (
@@ -5096,51 +5311,68 @@ function GroupDetail({
                             setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
                             setEoyEditMode(false);
                           }}
-                          className="px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                          className="px-2.5 py-1.5 border border-gray-200 text-gray-700 rounded-lg text-[11px] font-medium hover:bg-gray-50 transition-colors cursor-pointer"
                         >
                           Cancel
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (eoyEditMode) handleSaveEoyChanges();
-                          else {
+                      {eoyEditMode ? (
+                        <UiTooltip>
+                          <UiTooltipTrigger asChild>
+                            <span tabIndex={0} className="inline-flex">
+                              <button
+                                type="button"
+                                disabled={!saveValidation.canSave}
+                                onClick={saveValidation.canSave ? handleSaveEoyChanges : undefined}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors shadow-xs ${
+                                  saveValidation.canSave
+                                    ? "bg-[#1A284F] text-white hover:bg-[#131d3b] cursor-pointer"
+                                    : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                                }`}
+                              >
+                                <Save className="w-3 h-3" />
+                                Save Changes
+                              </button>
+                            </span>
+                          </UiTooltipTrigger>
+                          {!saveValidation.canSave && (
+                            <UiTooltipContent side="top" className="max-w-xs bg-[#1A284F] text-white text-[11px] px-3 py-2 rounded-lg shadow-lg z-[80]">
+                              {saveValidation.tooltipText}
+                            </UiTooltipContent>
+                          )}
+                        </UiTooltip>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const baseHc = memberUnits.reduce((sum, u) => sum + u.divisionProportions.reduce((s, d) => s + d.hc, 0), 0);
+                            setEditBaselineTotalHC(baseHc);
                             setWorkingGroup(JSON.parse(JSON.stringify(group)));
                             setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
                             setEoyEditMode(true);
-                          }
-                        }}
-                        className="flex items-center gap-2 bg-[#1A284F] text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm cursor-pointer"
-                      >
-                        {eoyEditMode ? (
-                          <>
-                            <Save className="w-4 h-4" />
-                            Save Changes
-                          </>
-                        ) : (
-                          <>
-                            <Edit2 className="w-4 h-4" />
-                            Edit Settings
-                          </>
-                        )}
-                      </button>
+                          }}
+                          className="inline-flex items-center gap-1.5 bg-[#1A284F] text-white px-3 py-1.5 rounded-lg text-[11px] font-semibold hover:bg-[#131d3b] transition-colors shadow-xs cursor-pointer"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          Edit Settings
+                        </button>
+                      )}
                       {!eoyEditMode && (
                         <>
                           <button
                             type="button"
                             onClick={() => setEoyPageMode("preview")}
-                            className="flex items-center gap-2 px-4 py-2.5 border border-[#1A284F] text-[#1A284F] rounded-xl text-sm font-medium hover:bg-[#1A284F]/5 transition-colors cursor-pointer"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-[#1A284F] text-[#1A284F] rounded-lg text-[11px] font-medium hover:bg-[#1A284F]/5 transition-colors cursor-pointer"
                           >
-                            <Eye className="w-4 h-4" />
+                            <Eye className="w-3 h-3" />
                             Preview
                           </button>
                           <button
                             type="button"
                             onClick={() => setShowEoyConfirmModal(true)}
-                            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm cursor-pointer"
+                            className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors shadow-xs cursor-pointer"
                           >
-                            <CheckCircle2 className="w-4 h-4" />
+                            <CheckCircle2 className="w-3 h-3" />
                             Confirm Data
                           </button>
                         </>
@@ -5152,17 +5384,17 @@ function GroupDetail({
                       <button
                         type="button"
                         onClick={() => setEoyPageMode("edit")}
-                        className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 text-gray-700 rounded-lg text-[11px] font-medium hover:bg-gray-50 transition-colors cursor-pointer"
                       >
-                        <Edit2 className="w-4 h-4" />
+                        <Edit2 className="w-3 h-3" />
                         Back to Edit
                       </button>
                       <button
                         type="button"
                         onClick={() => setShowEoyConfirmModal(true)}
-                        className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm cursor-pointer"
+                        className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors shadow-xs cursor-pointer"
                       >
-                        <CheckCircle2 className="w-4 h-4" />
+                        <CheckCircle2 className="w-3 h-3" />
                         Confirm Data
                       </button>
                     </>
@@ -5176,6 +5408,7 @@ function GroupDetail({
                 memberUnits={eoyEditMode ? workingUnits : memberUnits}
                 unitCustomQuotas={eoyEditMode ? workingGroup.unitCustomQuotas : group.unitCustomQuotas}
                 editMode={eoyPageMode === "edit" && eoyEditMode}
+                isConfirmedLocked={eoyPageMode === "submitted"}
                 selectedUnitId={selectedEoyUnitId}
                 onSelectUnitId={setSelectedEoyUnitId}
                 onUpdateCalibrationGrade={handleUpdateGrade}

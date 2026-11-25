@@ -16,6 +16,7 @@ import {
 import { loadAccessGroups } from "./settings/AccessManagement";
 import { loadManagedUsers, resolveEffectiveUserGrouping } from "../../store/authStore";
 import { ANALYTICS_CARD_TONES, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
+import { getMasterCompanyLocations } from "./settings/masterCompanyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -197,16 +198,32 @@ const makeUnit = (id: string, name: string, code: string, industry: string): Com
   };
 };
 
-const buildCompanyUnitsFromStore = (): CompanyUnit[] => [
-  makeUnit("1", "PT RSUP (Industry)",          "RSUP-IND", "Industry"),
-  makeUnit("2", "PT RSUP (Perkebunan)",        "RSUP-PKB", "Perkebunan"),
-  makeUnit("3", "PT Pulau Sambu (Jakarta)",    "PS-JKT",   "Jakarta"),
-  makeUnit("4", "PT Pulau Sambu (Guntung)",    "PS-GTG",   "Guntung"),
-  makeUnit("5", "PT Pulau Sambu (Kuala Enok)", "PS-KE",    "Kuala Enok"),
-  makeUnit("6", "PT RSTM",                     "RSTM",     ""),
-  makeUnit("7", "PT GHS",                      "GHS",      ""),
-  makeUnit("8", "PT RSUP ASD",                 "RSUP-ASD", ""),
+const EXTRA_SOFT_WEIGHT_ROW_BG = [
+  "bg-[#F6FAFF] hover:bg-[#ECF4FF]",
+  "bg-[#F4FBF9] hover:bg-[#E8F7F3]",
+  "bg-[#FFFBF4] hover:bg-[#FFF4E2]",
+  "bg-[#F8F7FF] hover:bg-[#F0EEFF]",
+  "bg-[#F5FBF6] hover:bg-[#E9F7EC]",
+  "bg-[#FDF7F9] hover:bg-[#FBEFF4]",
+  "bg-[#F7FAFC] hover:bg-[#EDF2F7]",
 ];
+
+const buildCompanyUnitsFromStore = (): CompanyUnit[] => {
+  const locs = getMasterCompanyLocations();
+  if (locs.length > 0) {
+    return locs.map((loc, idx) => makeUnit(String(idx + 1), loc.company, loc.code, loc.companyGroup));
+  }
+  return [
+    makeUnit("1", "PT RSUP (Industry)",          "RSUP-IND", "Industry"),
+    makeUnit("2", "PT RSUP (Perkebunan)",        "RSUP-PKB", "Perkebunan"),
+    makeUnit("3", "PT Pulau Sambu (Jakarta)",    "PS-JKT",   "Jakarta"),
+    makeUnit("4", "PT Pulau Sambu (Guntung)",    "PS-GTG",   "Guntung"),
+    makeUnit("5", "PT Pulau Sambu (Kuala Enok)", "PS-KE",    "Kuala Enok"),
+    makeUnit("6", "PT RSTM",                     "RSTM",     ""),
+    makeUnit("7", "PT GHS",                      "GHS",      ""),
+    makeUnit("8", "PT RSUP ASD",                 "RSUP-ASD", ""),
+  ];
+};
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -490,11 +507,11 @@ function ScorePanel({
             </thead>
             <tbody>
               {kpiWeights.map((w, idx) => (
-                <tr key={w.id} className="hover:bg-gray-50">
+                <tr key={w.id} className={`transition-colors ${EXTRA_SOFT_WEIGHT_ROW_BG[idx % EXTRA_SOFT_WEIGHT_ROW_BG.length]}`}>
                   <td className="border border-gray-300 px-4 py-3 text-center font-medium text-gray-900">{idx + 1}</td>
-                  <td className="border border-gray-300 px-4 py-3 text-gray-900">{w.indikator}</td>
+                  <td className="border border-gray-300 px-4 py-3 font-medium text-gray-900">{w.indikator}</td>
                   {allColumns.map((col) => (
-                    <td key={col.key} className={`border border-gray-300 px-4 py-3 text-center ${col.isCustom ? "bg-sky-50/25" : ""}`}>
+                    <td key={col.key} className={`border border-gray-300 px-4 py-3 text-center ${col.isCustom ? "bg-sky-100/20" : ""}`}>
                       {editMode && w.indikator !== "Inter-Departement Feedback" ? (
                         <input
                           type="text"
