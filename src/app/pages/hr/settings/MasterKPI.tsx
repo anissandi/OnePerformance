@@ -123,11 +123,11 @@ const SECTIONS: SectionConfig[] = [
   },
   {
     key: "period",
-    label: "Period (Satuan Periode)",
+    label: "Periode Satuan",
     color: "bg-rose-500",
     hasDescription: false,
     modalGroup: "subsection",
-    fieldHint: "Tab Sub Section → Field Satuan (/Periode)",
+    fieldHint: "Tab Sub Section → Field Periode Satuan",
   },
   {
     key: "formula",

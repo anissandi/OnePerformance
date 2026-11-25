@@ -1224,7 +1224,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                         {item.entity.shortName}
                       </p>
                       <p
-                        className="text-4xl sm:text-[42px] font-black leading-none mt-1.5 tabular-nums tracking-tight"
+                        className="text-2xl sm:text-[26px] font-black leading-tight mt-1 tabular-nums tracking-tight"
                         style={{ color: item.spec.accentHex }}
                       >
                         {item.achStr}
@@ -1238,11 +1238,16 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                     </div>
                   </div>
                   <div className="flex items-end justify-between gap-2 mt-3 relative z-10">
-                    <div className="min-w-0 text-[10.5px] text-gray-500 font-medium leading-tight">
-                      Target: <strong className="text-[#111827]">100%</strong> · Defisit:{" "}
-                      <strong style={{ color: "#B84A4A" }}>
-                        -{formatExecPct(Math.max(0, 100 - item.achNum), 1)}
-                      </strong>
+                    <div className="min-w-0 flex flex-col gap-0.5 text-[10.5px] text-gray-500 font-medium leading-snug">
+                      <span>
+                        Target: <strong className="text-[#111827]">100%</strong>
+                      </span>
+                      <span>
+                        Defisit:{" "}
+                        <strong style={{ color: "#B84A4A" }}>
+                          -{formatExecPct(Math.max(0, 100 - item.achNum), 1)}
+                        </strong>
+                      </span>
                     </div>
                     <svg
                       className="w-13 h-5 shrink-0 transition-transform duration-300 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5"

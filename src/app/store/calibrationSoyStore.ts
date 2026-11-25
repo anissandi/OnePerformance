@@ -1,4 +1,4 @@
-import { savePersistedState } from "../services/supabaseClient";
+import { savePersistedState, syncToSupabase } from "../services/supabaseClient";
 import {
   canonicalizeCompanyUnitName,
   getActiveUser,
@@ -15,16 +15,77 @@ import { pushEmployeeNotification } from "./notificationStore";
 
 export const SOY_APPROVAL_KEY = "calibration_soy_approvals_2026";
 export const SOY_SNAPSHOT_KEY = "calibration_soy_employee_snapshot_2026";
+export const GROUP_CALIBRATION_SETTINGS_KEY = "calibration_group_settings_2026";
 export const SOY_EVENT = "pa-calibration-soy-updated";
+
+export type CalibrationGroupId = "group-rsup" | "group-sambu";
+
+export interface CalibrationGroupMeta {
+  id: CalibrationGroupId;
+  slug: "rsup-group" | "sambu-group";
+  name: "RSUP Group" | "Sambu Group";
+  code: "RSUP-GRP" | "SAMBU-GRP";
+  industry: string;
+  unitNames: string[];
+}
+
+export const CALIBRATION_GROUPS: CalibrationGroupMeta[] = [
+  {
+    id: "group-rsup",
+    slug: "rsup-group",
+    name: "RSUP Group",
+    code: "RSUP-GRP",
+    industry: "5 Company Units",
+    unitNames: [
+      "PT RSUP (Industry)",
+      "PT RSUP (Perkebunan)",
+      "PT RSTM",
+      "PT GHS",
+      "PT RSUP ASD",
+    ],
+  },
+  {
+    id: "group-sambu",
+    slug: "sambu-group",
+    name: "Sambu Group",
+    code: "SAMBU-GRP",
+    industry: "3 Company Units",
+    unitNames: [
+      "PT Pulau Sambu (Jakarta)",
+      "PT Pulau Sambu (Guntung)",
+      "PT Pulau Sambu (Kuala Enok)",
+    ],
+  },
+];
+
+export function getCalibrationGroupByUnitName(unitName: string): CalibrationGroupMeta | undefined {
+  const canon = canonicalizeCompanyUnitName(unitName);
+  return CALIBRATION_GROUPS.find(
+    (g) => g.name === unitName || g.id === unitName || g.slug === unitName || g.unitNames.includes(canon),
+  );
+}
 
 export interface SoyUnitSnapshot {
   id: string;
   name: string;
   code?: string;
   calibrationGrades: Array<{ id: string; grade: string; proporsi: string }>;
+  /** Target kuota tingkat Unit Usaha hasil alokasi Group (`[A+, A, B, C, D, E]`) */
+  unitQuotaTargets?: number[];
   divisionProportions: Array<{ id: string; divisi: string; hc: number; customQuotas?: Record<string, number> }>;
   departemenenProportions: Array<{ id: string; divisiId: string; departemen: string; hc: number; customQuotas?: Record<string, number> }>;
   bagianProportions: Array<{ id: string; departemenenId: string; bagian: string; hc: number; customQuotas?: Record<string, number> }>;
+}
+
+export interface SoyGroupSnapshot {
+  id: CalibrationGroupId;
+  slug: "rsup-group" | "sambu-group";
+  name: "RSUP Group" | "Sambu Group";
+  code: string;
+  calibrationGrades: Array<{ id: string; grade: string; proporsi: string }>;
+  unitCustomQuotas?: Record<string, Record<string, number>>;
+  unitAllocatedQuotas?: Record<string, number[]>;
+  units: SoyUnitSnapshot[];
 }
 
 export type SoyStatus = "Pending" | "Approved" | "Revision";
@@ -32,6 +93,7 @@ export type SoyStatus = "Pending" | "Approved" | "Revision";
 export interface SoyApprovalRecord {
   unitId: string;
   unitName: string;
+  isGroupRecord?: boolean;
   status: SoyStatus;
   submittedAt: string;
   submittedBy: string;
@@ -41,6 +103,7 @@ export interface SoyApprovalRecord {
   acknowledgedBy?: Record<string, { employeeId: string; by: string; at: string; note?: string }>;
   history: Array<{ status: SoyStatus | "Submitted" | "Mengetahui"; by: string; at: string; note?: string }>;
   snapshot: SoyUnitSnapshot;
+  groupSnapshot?: SoyGroupSnapshot;
 }
 
 export function loadSoyApprovals(): Record<string, SoyApprovalRecord> {
@@ -50,6 +113,34 @@ export function loadSoyApprovals(): Record<string, SoyApprovalRecord> {
     const out: Record<string, SoyApprovalRecord> = {};
     for (const [k, rec] of Object.entries(parsed as Record<string, SoyApprovalRecord>)) {
       if (!rec) continue;
+      const isGroup =
+        Boolean(rec.isGroupRecord) ||
+        k === "group-rsup" ||
+        k === "group-sambu" ||
+        rec.unitName === "RSUP Group" ||
+        rec.unitName === "Sambu Group";
+      if (isGroup) {
+        const gMeta = CALIBRATION_GROUPS.find(
+          (g) => g.id === k || g.id === rec.unitId || g.name === rec.unitName,
+        );
+        const normGroupSnap = rec.groupSnapshot
+          ? {
+              ...rec.groupSnapshot,
+              units: (rec.groupSnapshot.units ?? []).map((u) => ({
+                ...u,
+                name: canonicalizeCompanyUnitName(u.name),
+              })),
+            }
+          : undefined;
+        out[gMeta?.id ?? k] = {
+          ...rec,
+          unitId: gMeta?.id ?? rec.unitId,
+          unitName: gMeta?.name ?? rec.unitName,
+          isGroupRecord: true,
+          groupSnapshot: normGroupSnap,
+        };
+        continue;
+      }
       const canon = canonicalizeCompanyUnitName(rec.unitName);
       out[k] = {
         ...rec,
@@ -63,8 +154,50 @@ export function loadSoyApprovals(): Record<string, SoyApprovalRecord> {
   }
 }
 
+/** Hanya memuat record pengajuan Calibration Setting (SOY) berbasis Group (RSUP Group & Sambu Group). */
+export function loadGroupSoyApprovals(): Record<string, SoyApprovalRecord> {
+  const all = loadSoyApprovals();
+  const out: Record<string, SoyApprovalRecord> = {};
+  for (const [k, rec] of Object.entries(all)) {
+    if (rec.isGroupRecord || k === "group-rsup" || k === "group-sambu") {
+      out[k] = rec;
+    }
+  }
+  return out;
+}
+
+export function getGroupSoyApproval(groupIdOrName: string): SoyApprovalRecord | undefined {
+  const groups = loadGroupSoyApprovals();
+  if (groups[groupIdOrName]) return groups[groupIdOrName];
+  return Object.values(groups).find(
+    (r) =>
+      r.unitId === groupIdOrName ||
+      r.unitName.toLowerCase() === groupIdOrName.toLowerCase() ||
+      r.groupSnapshot?.slug === groupIdOrName.toLowerCase(),
+  );
+}
+
 export function getSoyApproval(unitId: string): SoyApprovalRecord | undefined {
-  return loadSoyApprovals()[unitId];
+  const all = loadSoyApprovals();
+  if (all[unitId]) return all[unitId];
+  // Otomatis turunkan dari pengajuan Group induknya bila dicari berdasarkan ID / nama Company Unit!
+  const canonTarget = canonicalizeCompanyUnitName(unitId);
+  for (const rec of Object.values(all)) {
+    if (!rec.isGroupRecord || !rec.groupSnapshot?.units) continue;
+    const foundUnit = rec.groupSnapshot.units.find(
+      (u) => u.id === unitId || canonicalizeCompanyUnitName(u.name) === canonTarget,
+    );
+    if (foundUnit) {
+      return {
+        ...rec,
+        unitId: foundUnit.id,
+        unitName: foundUnit.name,
+        isGroupRecord: false,
+        snapshot: foundUnit,
+      };
+    }
+  }
+  return undefined;
 }
 
 export function formatActorWithPosition(rawBy?: string): string {
@@ -111,11 +244,66 @@ export function loadSoyEmployeeSnapshot(): Record<string, ManagedUser[]> {
 }
 
 /**
- * Peran user terhadap pengajuan Calibration Setting (SOY) suatu unit:
- * "approve" (Approver), "view" (Mengetahui) atau null (tidak terlibat).
- * Administrator / HR ICF hanya dihitung bila dipetakan eksplisit per unit agar tidak membanjiri notifikasi.
+ * Peran user terhadap pengajuan Calibration Setting (SOY) suatu Group (RSUP Group / Sambu Group):
+ * - Role Director sesuai cakupan Group-nya (atau user yang di-setup "approver" di User Management pada unit dalam Group tsb) -> "approve"
+ * - User "mengetahui" / "readonly" / BOD sesuai cakupan Group -> "view"
  */
+export function resolveGroupSoyRoleForUser(
+  user: ManagedUser,
+  groupIdOrName: string,
+  includeGlobalAdmins = false,
+): "approve" | "view" | null {
+  if (!user) return null;
+  const gMeta = CALIBRATION_GROUPS.find(
+    (g) =>
+      g.id === groupIdOrName ||
+      g.slug === groupIdOrName.toLowerCase() ||
+      g.name.toLowerCase() === groupIdOrName.toLowerCase(),
+  );
+  const unitNamesInGroup = gMeta ? gMeta.unitNames : [canonicalizeCompanyUnitName(groupIdOrName)];
+  const keysToCheck = gMeta ? [gMeta.name, gMeta.id, ...gMeta.unitNames] : unitNamesInGroup;
+
+  if (user.soyCalibrationRoleByUnit && typeof user.soyCalibrationRoleByUnit === "object") {
+    const rolesFound = keysToCheck
+      .map((k) => user.soyCalibrationRoleByUnit?.[k] ?? user.soyCalibrationRoleByUnit?.[canonicalizeCompanyUnitName(k)])
+      .filter(Boolean);
+    if (rolesFound.includes("approver")) return "approve";
+    if (rolesFound.includes("mengetahui") || rolesFound.includes("readonly")) return "view";
+    if (Object.values(user.soyCalibrationRoleByUnit).some(Boolean) && !isDirectorRoleOrGrouping(user) && !isAdminOrHrIcfRole(user.role)) {
+      return null;
+    }
+  }
+
+  if (isDirectorRoleOrGrouping(user)) {
+    const dirUnits = getGroupCompaniesForUnit(user.company, user.managedUnits).map(canonicalizeCompanyUnitName);
+    if (unitNamesInGroup.some((u) => dirUnits.includes(canonicalizeCompanyUnitName(u)))) {
+      return "approve";
+    }
+    return null;
+  }
+
+  if (user.calibrationRoleByUnit && typeof user.calibrationRoleByUnit === "object") {
+    const calRoles = keysToCheck
+      .map((k) => user.calibrationRoleByUnit?.[k] ?? user.calibrationRoleByUnit?.[canonicalizeCompanyUnitName(k)])
+      .filter(Boolean);
+    if (calRoles.includes("approver")) return "approve";
+    if (calRoles.includes("mengetahui") || calRoles.includes("readonly")) return "view";
+  }
+
+  if (isAdminOrHrIcfRole(user.role)) return includeGlobalAdmins ? "view" : null;
+  if (user.role === "BOD") {
+    const bodUnits = getGroupCompaniesForUnit(user.company, user.managedUnits).map(canonicalizeCompanyUnitName);
+    if (bodUnits.length === 0 || unitNamesInGroup.some((u) => bodUnits.includes(canonicalizeCompanyUnitName(u)))) {
+      return "view";
+    }
+  }
+  return null;
+}
+
 export function resolveSoyRoleForUser(user: ManagedUser, unitName: string, includeGlobalAdmins = false): "approve" | "view" | null {
+  if (unitName === "RSUP Group" || unitName === "Sambu Group" || unitName === "group-rsup" || unitName === "group-sambu") {
+    return resolveGroupSoyRoleForUser(user, unitName, includeGlobalAdmins);
+  }
   const explicitSoy = user.soyCalibrationRoleByUnit?.[canonicalizeCompanyUnitName(unitName)] ?? user.soyCalibrationRoleByUnit?.[unitName];
   if (explicitSoy === "approver") return "approve";
   if (explicitSoy === "mengetahui" || explicitSoy === "readonly") return "view";
@@ -141,6 +329,133 @@ export function findSoyRecipients(unitName: string, excludeEmployeeId?: string):
     .filter((u) => u.status === "Active" && (!excludeEmployeeId || u.employeeId.toUpperCase() !== excludeEmployeeId.toUpperCase()))
     .map((u) => ({ user: u, role: resolveSoyRoleForUser(u, unitName) }))
     .filter((x): x is { user: ManagedUser; role: "approve" | "view" } => x.role !== null);
+}
+
+/** Submit Calibration Setting (SOY) berbasis 1 Group (RSUP Group atau Sambu Group) untuk di-approve Director. */
+export function submitGroupSoyForApproval(groupSnap: SoyGroupSnapshot): SoyApprovalRecord {
+  const map = loadSoyApprovals();
+  const now = new Date().toISOString();
+  const by = actorLabel();
+  const prev = map[groupSnap.id];
+
+  // Bersihkan record per-unit lama pada group ini agar alur sepenuhnya berbasis 1 Group
+  const memberUnitIds = new Set(groupSnap.units.map((u) => u.id));
+  const memberUnitNames = new Set(groupSnap.units.map((u) => canonicalizeCompanyUnitName(u.name)));
+  for (const [k, existing] of Object.entries(map)) {
+    if (k === groupSnap.id) continue;
+    if (!existing.isGroupRecord && (memberUnitIds.has(k) || memberUnitNames.has(canonicalizeCompanyUnitName(existing.unitName)))) {
+      delete map[k];
+    }
+  }
+
+  // Bangun snapshot gabungan untuk kompatibilitas umum
+  const mergedSnapshot: SoyUnitSnapshot = {
+    id: groupSnap.id,
+    name: groupSnap.name,
+    code: groupSnap.code,
+    calibrationGrades: JSON.parse(JSON.stringify(groupSnap.calibrationGrades)),
+    divisionProportions: groupSnap.units.flatMap((u) =>
+      u.divisionProportions.map((d) => ({
+        ...d,
+        id: `${u.id}::${d.id}`,
+        divisi: `${d.divisi} (${u.name})`,
+      })),
+    ),
+    departemenenProportions: groupSnap.units.flatMap((u) =>
+      u.departemenenProportions.map((dep) => ({
+        ...dep,
+        id: `${u.id}::${dep.id}`,
+        divisiId: `${u.id}::${dep.divisiId}`,
+      })),
+    ),
+    bagianProportions: groupSnap.units.flatMap((u) =>
+      u.bagianProportions.map((bag) => ({
+        ...bag,
+        id: `${u.id}::${bag.id}`,
+        departemenenId: `${u.id}::${bag.departemenenId}`,
+      })),
+    ),
+  };
+
+  const record: SoyApprovalRecord = {
+    unitId: groupSnap.id,
+    unitName: groupSnap.name,
+    isGroupRecord: true,
+    status: "Pending",
+    submittedAt: now,
+    submittedBy: by,
+    history: [...(prev?.history ?? []), { status: "Submitted", by, at: now }],
+    snapshot: mergedSnapshot,
+    groupSnapshot: JSON.parse(JSON.stringify(groupSnap)),
+  };
+  map[groupSnap.id] = record;
+  save(map);
+
+  void syncToSupabase({
+    kind: "calibration-setting",
+    unitId: groupSnap.id,
+    unitName: groupSnap.name,
+    data: record,
+    audit: {
+      action: "Submit",
+      module: "Performance Appraisal",
+      subModule: "Calibration Setting (Group SOY)",
+      description: `Submitted Group Calibration Setting (SOY) for ${groupSnap.name}`,
+    },
+  });
+
+  // Kirim notifikasi ke Director / Approver & Mengetahui pada Group tersebut
+  const actor = getActiveUser();
+  const allActiveUsers = loadManagedUsers().filter(
+    (u) => u.status === "Active" && (!actor.employeeId || u.employeeId.toUpperCase() !== actor.employeeId.toUpperCase()),
+  );
+  const approvers: string[] = [];
+  const viewers: string[] = [];
+  for (const u of allActiveUsers) {
+    const r = resolveGroupSoyRoleForUser(u, groupSnap.name, false);
+    if (r === "approve") approvers.push(u.employeeId);
+    else if (r === "view") viewers.push(u.employeeId);
+  }
+  if (approvers.length > 0) {
+    pushEmployeeNotification({
+      employeeIds: approvers,
+      title: `Calibration Setting (SOY) ${groupSnap.name} Menunggu Persetujuan Director`,
+      summary: `${by} telah mensubmit Calibration Setting (HC Awal Tahun / SOY) untuk ${groupSnap.name} (${groupSnap.units.length} Unit Usaha). Silakan review Distribusi & Proporsi Grade lalu Approve atau Request Revision.`,
+      category: "Approval",
+      moduleName: "Calibration",
+      approvalStatus: "Pending",
+      ctaLabel: "Buka Approval Calibration — Setting",
+      ctaRoute: "/approvals/calibration/setting",
+      senderName: actor.name || by,
+      senderRole: actor.role || "HR",
+    });
+  }
+  if (viewers.length > 0) {
+    pushEmployeeNotification({
+      employeeIds: viewers,
+      title: `Calibration Setting (SOY) ${groupSnap.name} Disubmit (Mengetahui)`,
+      summary: `${by} telah mensubmit Calibration Setting (HC Awal Tahun / SOY) ${groupSnap.name} untuk diketahui.`,
+      category: "Approval",
+      moduleName: "Calibration",
+      approvalStatus: "Pending",
+      ctaLabel: "Lihat Calibration — Setting",
+      ctaRoute: "/approvals/calibration/setting",
+      senderName: actor.name || by,
+      senderRole: actor.role || "HR",
+    });
+  }
+
+  // Simpan snapshot karyawan aktif awal tahun untuk seluruh unit di dalam Group (dasar Eliminasi HC EOY)
+  const empSnap = loadSoyEmployeeSnapshot();
+  const activeEmployees = loadManagedUsers();
+  for (const u of groupSnap.units) {
+    const canonName = canonicalizeCompanyUnitName(u.name);
+    empSnap[canonName] = activeEmployees.filter(
+      (emp) => canonicalizeCompanyUnitName(emp.company) === canonName && emp.status === "Active" && !isExcludedFromAppraisalCalibration(emp),
+    );
+  }
+  savePersistedState(SOY_SNAPSHOT_KEY, empSnap);
+  return record;
 }
 
 export function submitSoyForApproval(unit: SoyUnitSnapshot): SoyApprovalRecord {
@@ -218,8 +533,85 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
   };
   save(map);
 
+  void syncToSupabase({
+    kind: "calibration-setting",
+    unitId: rec.unitId,
+    unitName: rec.unitName,
+    data: map[unitId],
+    audit: {
+      action: status === "Approved" ? "Approve" : "Revision",
+      module: "Performance Appraisal",
+      subModule: "Calibration Approval — Setting (SOY)",
+      description: `${status} Calibration Setting (SOY) for ${rec.unitName}`,
+    },
+  });
+
   // Ketika HC Awal Tahun (SOY) telah Approved, kunci baseline SOY di calibration_hc_settings_2026
-  // agar perubahan apa pun pada HC Akhir Tahun (EOY) tidak pernah mengubah HC di tab HC Awal Tahun (SOY).
+  // (baik untuk pengajuan Group -> seluruh Unit Usaha anggota Group, maupun unit tunggal).
+  if (status === "Approved" && rec.isGroupRecord && rec.groupSnapshot?.units) {
+    try {
+      const rawUnits = localStorage.getItem("calibration_hc_settings_2026");
+      if (rawUnits) {
+        const parsedUnits = JSON.parse(rawUnits) as Array<Record<string, unknown>>;
+        if (Array.isArray(parsedUnits)) {
+          const unitSnapById = new Map<string, SoyUnitSnapshot>();
+          const unitSnapByName = new Map<string, SoyUnitSnapshot>();
+          for (const uSnap of rec.groupSnapshot.units) {
+            unitSnapById.set(String(uSnap.id), uSnap);
+            unitSnapByName.set(canonicalizeCompanyUnitName(uSnap.name), uSnap);
+          }
+          const updatedUnits = parsedUnits.map((u) => {
+            const matched =
+              unitSnapById.get(String(u.id ?? "")) ??
+              unitSnapByName.get(canonicalizeCompanyUnitName(String(u.name ?? "")));
+            if (!matched) return u;
+            const lockedBeginningHC: Record<string, number> = {};
+            const lockedCustomQuotas: Record<string, Record<string, number>> = {};
+            for (const row of [
+              ...(matched.divisionProportions ?? []),
+              ...(matched.departemenenProportions ?? []),
+              ...(matched.bagianProportions ?? []),
+            ]) {
+              lockedBeginningHC[row.id] = row.hc;
+              if (row.customQuotas) lockedCustomQuotas[row.id] = { ...row.customQuotas };
+            }
+            return {
+              ...u,
+              calibrationGrades: matched.calibrationGrades.map((g) => ({ ...g })),
+              divisionProportions: matched.divisionProportions,
+              departemenenProportions: matched.departemenenProportions,
+              bagianProportions: matched.bagianProportions,
+              unitQuotaTargets: matched.unitQuotaTargets,
+              beginningGrades: matched.calibrationGrades.map((g) => ({ ...g })),
+              beginningHC: lockedBeginningHC,
+              beginningCustomQuotas: lockedCustomQuotas,
+            };
+          });
+          savePersistedState("calibration_hc_settings_2026", updatedUnits);
+        }
+      }
+      const rawGroups = localStorage.getItem(GROUP_CALIBRATION_SETTINGS_KEY);
+      if (rawGroups) {
+        const parsedGroups = JSON.parse(rawGroups) as Array<Record<string, unknown>>;
+        if (Array.isArray(parsedGroups)) {
+          const updatedGroups = parsedGroups.map((grp) =>
+            String(grp.id) === String(rec.unitId)
+              ? {
+                  ...grp,
+                  beginningGrades: rec.groupSnapshot!.calibrationGrades.map((g) => ({ ...g })),
+                  beginningUnitCustomQuotas: rec.groupSnapshot!.unitCustomQuotas ?? {},
+                }
+              : grp,
+          );
+          savePersistedState(GROUP_CALIBRATION_SETTINGS_KEY, updatedGroups);
+        }
+      }
+    } catch {
+      // ignore local parse issues
+    }
+    return;
+  }
+
   if (status === "Approved" && rec.snapshot) {
     try {
       const rawUnits = localStorage.getItem("calibration_hc_settings_2026");

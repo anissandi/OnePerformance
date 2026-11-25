@@ -1,10 +1,11 @@
 // @refresh reset
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { motion } from "motion/react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { toast } from "sonner";
 import {
-  Save, Edit2, Building2, ChevronRight, ArrowLeft, Eye, Send,
+  Save, Edit2, Building2, ChevronRight, ChevronDown, ArrowLeft, Eye, Send, Layers, Lock,
   CheckCircle2, Clock, X, RefreshCw, Users, Archive, RotateCcw, Sparkles, AlertTriangle, TrendingUp, Percent,
 } from "lucide-react";
 import { ANALYTICS_CARD_TONES, AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
@@ -12,16 +13,23 @@ import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, Dot,
 } from "recharts";
-import { loadPersistedState, safeSetLocalRaw, savePersistedState } from "../../services/supabaseClient";
-import { isExcludedFromAppraisalCalibration, loadManagedUsers, useAuthStore } from "../../store/authStore";
+import { loadPersistedState, safeSetLocalRaw, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
+import { canonicalizeCompanyUnitName, isExcludedFromAppraisalCalibration, loadManagedUsers, useAuthStore } from "../../store/authStore";
 import { archiveUsers, EOY_ARCHIVE_REASON, loadArchivedUsers } from "../../store/archiveStore";
 import {
+  CALIBRATION_GROUPS,
+  GROUP_CALIBRATION_SETTINGS_KEY,
+  getCalibrationGroupByUnitName,
+  getGroupSoyApproval,
   getSoyApproval,
   loadSoyEmployeeSnapshot,
   resetSoyApproval,
   SOY_EVENT,
-  submitSoyForApproval,
+  submitGroupSoyForApproval,
+  type CalibrationGroupId,
+  type CalibrationGroupMeta,
   type SoyApprovalRecord,
+  type SoyUnitSnapshot,
 } from "../../store/calibrationSoyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -55,12 +63,31 @@ export type CompanyUnit = {
   code: string;
   industry: string;
   calibrationGrades: CalibrationGrade[];
+  /** Target kuota tingkat Unit Usaha hasil distribusi dari Group (`[A+, A, B, C, D, E]`) */
+  unitQuotaTargets?: number[];
   divisionProportions: DivisionProportion[];
   departemenenProportions: DepartemenenProportion[];
   bagianProportions: BagianProportion[];
   beginningHC?: Record<string, number>;
   beginningGrades?: CalibrationGrade[];
+  beginningUnitQuotaTargets?: number[];
   beginningCustomQuotas?: Record<string, Record<string, number>>;
+  yearEndUpdatedAt?: string;
+  yearEndStatus?: PageMode;
+};
+
+export type CalibrationGroupSetting = {
+  id: CalibrationGroupId;
+  slug: "rsup-group" | "sambu-group";
+  name: "RSUP Group" | "Sambu Group";
+  code: "RSUP-GRP" | "SAMBU-GRP";
+  industry: string;
+  unitNames: string[];
+  calibrationGrades: CalibrationGrade[];
+  /** Override kuota manual pada tabel Proportion per Company Unit (`unitId -> gradeId -> kuota`) */
+  unitCustomQuotas?: Record<string, Record<string, number>>;
+  beginningGrades?: CalibrationGrade[];
+  beginningUnitCustomQuotas?: Record<string, Record<string, number>>;
   yearEndUpdatedAt?: string;
   yearEndStatus?: PageMode;
 };
@@ -141,13 +168,25 @@ const makeUnit = (id: string, name: string, code: string, industry: string): Com
 const defaultCompanyUnits: CompanyUnit[] = [
   makeUnit("1", "PT RSUP (Industry)",          "RSUP-IND", "Industry"),
   makeUnit("2", "PT RSUP (Perkebunan)",        "RSUP-PKB", "Perkebunan"),
-  makeUnit("3", "PT Pulau Sambu (Jakarta)",    "PS-JKT",   "Jakarta"),
-  makeUnit("4", "PT Pulau Sambu (Guntung)",    "PS-GTG",   "Guntung"),
-  makeUnit("5", "PT Pulau Sambu (Kuala Enok)", "PS-KE",    "Kuala Enok"),
   makeUnit("6", "PT RSTM",                     "RSTM",     ""),
   makeUnit("7", "PT GHS",                      "GHS",      ""),
   makeUnit("8", "PT RSUP ASD",                 "RSUP-ASD", ""),
+  makeUnit("3", "PT Pulau Sambu (Jakarta)",    "PS-JKT",   "Jakarta"),
+  makeUnit("4", "PT Pulau Sambu (Guntung)",    "PS-GTG",   "Guntung"),
+  makeUnit("5", "PT Pulau Sambu (Kuala Enok)", "PS-KE",    "Kuala Enok"),
 ];
+
+const makeDefaultGroupSettings = (): CalibrationGroupSetting[] =>
+  CALIBRATION_GROUPS.map((g) => ({
+    id: g.id,
+    slug: g.slug,
+    name: g.name,
+    code: g.code,
+    industry: g.industry,
+    unitNames: [...g.unitNames],
+    calibrationGrades: makeDefaultCalibrationGrades(),
+    unitCustomQuotas: {},
+  }));
 
 // ─── 2D Largest-Remainder & Management Override Allocation Engine ─────────────
 
@@ -337,17 +376,26 @@ export function computeUnitQuotaAllocation(params: {
   divisionProportions: DivisionProportion[];
   departemenenProportions: DepartemenenProportion[];
   bagianProportions: BagianProportion[];
+  unitQuotaTargets?: number[];
 }): UnitQuotaAllocationResult {
-  const { calibrationGrades, divisionProportions, departemenenProportions, bagianProportions } = params;
+  const { calibrationGrades, divisionProportions, departemenenProportions, bagianProportions, unitQuotaTargets: explicitTargets } = params;
   const gradeIds = calibrationGrades.map((g) => g.id);
   const gradeWeights = calibrationGrades.map((g) => parseGradePct(g.proporsi));
   const totalPct = Math.round(gradeWeights.reduce((a, b) => a + b, 0) * 100) / 100;
   const totalHC = divisionProportions.reduce((s, d) => s + Math.max(0, d.hc), 0);
 
+  const validExplicit =
+    Array.isArray(explicitTargets) &&
+    explicitTargets.length === calibrationGrades.length &&
+    explicitTargets.reduce((a, b) => a + Math.max(0, b), 0) === totalHC
+      ? explicitTargets
+      : null;
+
   const unitGradeTargets =
-    Math.abs(totalPct - 100) < 0.001
+    validExplicit ??
+    (Math.abs(totalPct - 100) < 0.001
       ? apportionLargestRemainder(totalHC, gradeWeights)
-      : gradeWeights.map((w) => Math.round((totalHC * w) / 100));
+      : gradeWeights.map((w) => Math.round((totalHC * w) / 100)));
 
   // Level 1: Division
   const divAlloc = allocate2DQuotaMatrix({
@@ -422,6 +470,81 @@ export function computeUnitQuotaAllocation(params: {
   }
 
   return { totalHC, totalPct, unitGradeTargets, divMatrix, deptMatrix, bagianMatrix };
+}
+
+export interface GroupQuotaAllocationResult {
+  totalHC: number;
+  totalPct: number;
+  groupGradeTargets: number[];
+  unitHCs: Record<string, number>;
+  unitShareMap: Record<string, number>;
+  unitMatrix: Record<string, number[]>;
+  perUnitAlloc: Record<string, UnitQuotaAllocationResult>;
+}
+
+/**
+ * Menghitung distribusi kuota terintegrasi dari level Group → Company Unit → Division → Departement (→ Bagian)
+ * menggunakan Largest-Remainder & 2D Matrix Allocation sehingga kuota konsisten dari Group hingga setiap Unit Usaha.
+ */
+export function computeGroupQuotaAllocation(params: {
+  calibrationGrades: CalibrationGrade[];
+  units: CompanyUnit[];
+  unitCustomQuotas?: Record<string, Record<string, number>>;
+}): GroupQuotaAllocationResult {
+  const { calibrationGrades, units, unitCustomQuotas } = params;
+  const gradeIds = calibrationGrades.map((g) => g.id);
+  const gradeWeights = calibrationGrades.map((g) => parseGradePct(g.proporsi));
+  const totalPct = Math.round(gradeWeights.reduce((a, b) => a + b, 0) * 100) / 100;
+
+  const unitHCs: Record<string, number> = {};
+  const rowHCs: number[] = [];
+  for (const u of units) {
+    const hc = (u.divisionProportions ?? []).reduce((s, d) => s + Math.max(0, d.hc), 0);
+    unitHCs[u.id] = hc;
+    rowHCs.push(hc);
+  }
+  const totalHC = rowHCs.reduce((a, b) => a + b, 0);
+
+  const groupGradeTargets =
+    Math.abs(totalPct - 100) < 0.001
+      ? apportionLargestRemainder(totalHC, gradeWeights)
+      : gradeWeights.map((w) => Math.round((totalHC * w) / 100));
+
+  const unitAlloc = allocate2DQuotaMatrix({
+    rowHCs,
+    colTargets: groupGradeTargets,
+    gradeWeights,
+    gradeIds,
+    rowCustomQuotas: units.map((u) => unitCustomQuotas?.[u.id]),
+  });
+
+  const unitMatrix: Record<string, number[]> = {};
+  const unitShareMap: Record<string, number> = {};
+  const perUnitAlloc: Record<string, UnitQuotaAllocationResult> = {};
+
+  units.forEach((u, idx) => {
+    const hc = unitHCs[u.id] ?? 0;
+    unitShareMap[u.id] = totalHC > 0 ? (hc / totalHC) * 100 : 0;
+    const uTargets = unitAlloc[idx] ?? new Array(gradeIds.length).fill(0);
+    unitMatrix[u.id] = uTargets;
+    perUnitAlloc[u.id] = computeUnitQuotaAllocation({
+      calibrationGrades,
+      divisionProportions: u.divisionProportions ?? [],
+      departemenenProportions: u.departemenenProportions ?? [],
+      bagianProportions: u.bagianProportions ?? [],
+      unitQuotaTargets: uTargets,
+    });
+  });
+
+  return {
+    totalHC,
+    totalPct,
+    groupGradeTargets,
+    unitHCs,
+    unitShareMap,
+    unitMatrix,
+    perUnitAlloc,
+  };
 }
 
 export function orgSlug(text: string): string {
@@ -572,7 +695,7 @@ export function applyImportedEmployeesDistribution(
 
 // ─── Single Bell Curve Card (SOY / EOY — tanpa Target vs Actual, motion lembut) ─
 
-function SingleBellCurveCard({
+export function SingleBellCurveCard({
   title = "Grade Distribution (Bell Curve)",
   subtitle = "Visualisasi kurva normal proporsi & kuota karyawan per grade",
   calibrationGrades,
@@ -975,7 +1098,9 @@ function CalibrationPanel({
   divisionProportions,
   departemenenProportions,
   bagianProportions,
+  unitQuotaTargets,
   editMode,
+  hideBagian = false,
   onUpdateCalibrationGrade,
   onUpdateDivisionHC,
   onUpdateDepartemenHC,
@@ -990,7 +1115,9 @@ function CalibrationPanel({
   divisionProportions: DivisionProportion[];
   departemenenProportions: DepartemenenProportion[];
   bagianProportions: BagianProportion[];
+  unitQuotaTargets?: number[];
   editMode: boolean;
+  hideBagian?: boolean;
   onUpdateCalibrationGrade: (id: string, field: keyof CalibrationGrade, value: string) => void;
   onUpdateDivisionHC: (id: string, value: number) => void;
   onUpdateDepartemenHC: (id: string, value: number) => void;
@@ -1010,6 +1137,7 @@ function CalibrationPanel({
     divisionProportions: safeDivisions,
     departemenenProportions: safeDepts,
     bagianProportions: safeBagian,
+    unitQuotaTargets,
   });
 
   const totalDivHC = alloc.totalHC;
@@ -1180,36 +1308,38 @@ function CalibrationPanel({
       />
 
       {/* Proportion per Bagian */}
-      <ProportionTable
-        title="Proportion per Bagian"
-        subtitle="Share Kuota & alokasi grade diturunkan dari kuota masing-masing Departemen induknya"
-        rows={safeBagian.map((b) => {
-          const parentDept = safeDepts.find((d) => d.id === b.departemenenId);
-          return {
-            id: b.id,
-            label: b.bagian,
-            parentLabel: parentDept?.departemen,
-            hc: b.hc,
-            shareKuota: fmtShare(bagianShareMap[b.id] ?? 0),
-            calcs: alloc.bagianMatrix[b.id] ?? new Array(calibrationGrades.length).fill(0),
-            customQuotas: b.customQuotas,
-          };
-        })}
-        totalHC={safeBagian.reduce((s, b) => s + b.hc, 0)}
-        targetGradeTotals={calibrationGrades.map((_, gi) =>
-          safeDepts.reduce((s, dep) => s + (alloc.deptMatrix[dep.id]?.[gi] ?? 0), 0),
-        )}
-        calibrationGrades={calibrationGrades}
-        editMode={editMode}
-        onUpdateHC={onUpdateBagianHC}
-        onUpdateQuota={onUpdateBagianQuota}
-        onAutoBalance={() => onAutoBalanceLevel("bagian")}
-        onResetQuotas={() => onResetLevelQuotas("bagian")}
-        showParent
-        parentHeader="DEPARTEMEN"
-        parentFooterLabel={`Jumlah Departemen: ${uniqueDeptInBagian}`}
-        primaryFooterLabel={`Jumlah Bagian: ${safeBagian.length}`}
-      />
+      {!hideBagian && (
+        <ProportionTable
+          title="Proportion per Bagian"
+          subtitle="Share Kuota & alokasi grade diturunkan dari kuota masing-masing Departemen induknya"
+          rows={safeBagian.map((b) => {
+            const parentDept = safeDepts.find((d) => d.id === b.departemenenId);
+            return {
+              id: b.id,
+              label: b.bagian,
+              parentLabel: parentDept?.departemen,
+              hc: b.hc,
+              shareKuota: fmtShare(bagianShareMap[b.id] ?? 0),
+              calcs: alloc.bagianMatrix[b.id] ?? new Array(calibrationGrades.length).fill(0),
+              customQuotas: b.customQuotas,
+            };
+          })}
+          totalHC={safeBagian.reduce((s, b) => s + b.hc, 0)}
+          targetGradeTotals={calibrationGrades.map((_, gi) =>
+            safeDepts.reduce((s, dep) => s + (alloc.deptMatrix[dep.id]?.[gi] ?? 0), 0),
+          )}
+          calibrationGrades={calibrationGrades}
+          editMode={editMode}
+          onUpdateHC={onUpdateBagianHC}
+          onUpdateQuota={onUpdateBagianQuota}
+          onAutoBalance={() => onAutoBalanceLevel("bagian")}
+          onResetQuotas={() => onResetLevelQuotas("bagian")}
+          showParent
+          parentHeader="DEPARTEMEN"
+          parentFooterLabel={`Jumlah Departemen: ${uniqueDeptInBagian}`}
+          primaryFooterLabel={`Jumlah Bagian: ${safeBagian.length}`}
+        />
+      )}
     </div>
   );
 }
@@ -1234,6 +1364,7 @@ function ProportionTable({
   targetGradeTotals,
   calibrationGrades,
   editMode,
+  disableHcEdit = false,
   onUpdateHC,
   onUpdateQuota,
   onAutoBalance,
@@ -1242,6 +1373,9 @@ function ProportionTable({
   parentHeader,
   parentFooterLabel,
   primaryFooterLabel,
+  firstColHeader,
+  selectedRowId,
+  onRowClick,
 }: {
   title: string;
   subtitle: string;
@@ -1250,6 +1384,7 @@ function ProportionTable({
   targetGradeTotals: number[];
   calibrationGrades: CalibrationGrade[];
   editMode: boolean;
+  disableHcEdit?: boolean;
   onUpdateHC: (id: string, val: number) => void;
   onUpdateQuota: (rowId: string, gradeId: string, val: number | null) => void;
   onAutoBalance: () => void;
@@ -1258,6 +1393,9 @@ function ProportionTable({
   parentHeader?: string;
   parentFooterLabel?: string;
   primaryFooterLabel: string;
+  firstColHeader?: string;
+  selectedRowId?: string | null;
+  onRowClick?: (rowId: string) => void;
 }) {
   const gradeHeaders = calibrationGrades.map((g) => g.grade);
   const gradeTotals = calibrationGrades.map((_, i) => rows.reduce((s, r) => s + (r.calcs[i] ?? 0), 0));
@@ -1325,7 +1463,7 @@ function ProportionTable({
                 </th>
               )}
               <th className="border border-gray-300 px-3 py-3 text-left font-semibold">
-                {title.replace("Proportion per ", "").toUpperCase()}
+                {firstColHeader ?? title.replace("Proportion per ", "").toUpperCase()}
               </th>
               <th className="border border-gray-300 px-3 py-3 text-center font-semibold">HC</th>
               <th className="border border-gray-300 px-3 py-3 text-center font-semibold whitespace-nowrap">
@@ -1343,18 +1481,55 @@ function ProportionTable({
             {rows.map((row) => {
               const rowTotal = row.calcs.reduce((s, v) => s + v, 0);
               const rowDiff = rowTotal - row.hc;
+              const isRowSelected = Boolean(selectedRowId && selectedRowId === row.id);
               return (
-                <tr key={row.id} className="hover:bg-gray-50">
+                <tr
+                  key={row.id}
+                  onClick={onRowClick ? () => onRowClick(row.id) : undefined}
+                  className={`transition-colors ${
+                    onRowClick ? "cursor-pointer" : ""
+                  } ${
+                    isRowSelected
+                      ? "bg-[#EBF2FA] hover:bg-[#E1ECF8]"
+                      : "hover:bg-gray-50"
+                  }`}
+                >
                   {showParent && (
                     <td className="border border-gray-300 px-3 py-2.5 text-center text-xs text-gray-500 whitespace-nowrap">
                       {row.parentLabel ?? "—"}
                     </td>
                   )}
                   <td className="border border-gray-300 px-3 py-2.5 text-gray-900 font-medium">
-                    {row.label}
+                    {onRowClick ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-2 font-semibold text-[#1A284F]">
+                          <Building2 className="w-4 h-4 text-[#2F5597] shrink-0" />
+                          <span>{row.label}</span>
+                        </span>
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            isRowSelected
+                              ? "bg-[#1A284F] text-white border-[#1A284F]"
+                              : "bg-slate-100 text-slate-600 border-slate-200"
+                          }`}
+                        >
+                          {isRowSelected ? "Terbuka" : "Lihat Divisi & Dept"}
+                          {isRowSelected ? (
+                            <ChevronDown className="w-3 h-3" />
+                          ) : (
+                            <ChevronRight className="w-3 h-3" />
+                          )}
+                        </span>
+                      </div>
+                    ) : (
+                      row.label
+                    )}
                   </td>
-                  <td className="border border-gray-300 px-3 py-2.5 text-center">
-                    {editMode ? (
+                  <td
+                    className="border border-gray-300 px-3 py-2.5 text-center"
+                    onClick={editMode && !disableHcEdit ? (e) => e.stopPropagation() : undefined}
+                  >
+                    {editMode && !disableHcEdit ? (
                       <input
                         type="number"
                         min={0}
@@ -1381,6 +1556,7 @@ function ProportionTable({
                         className={`border border-gray-300 px-2 py-2 text-center ${
                           isOverridden ? "bg-indigo-50/80" : "bg-gray-50"
                         }`}
+                        onClick={editMode ? (e) => e.stopPropagation() : undefined}
                       >
                         {editMode ? (
                           <div className="inline-flex items-center gap-1">
@@ -1497,7 +1673,7 @@ function headcountPercentageChange(beginning: number, ending: number): string {
   return `${percentage > 0 ? "+" : ""}${percentage.toFixed(1)}%`;
 }
 
-function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
+function CalibrationSummaryComparison({ unit, hideBagian = false }: { unit: CompanyUnit; hideBagian?: boolean }) {
   const [level, setLevel] = useState("division");
   const soyApproval = getSoyApproval(unit.id);
   const lockedSoySnap = soyApproval?.status === "Approved" && soyApproval.snapshot ? soyApproval.snapshot : null;
@@ -1543,6 +1719,7 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
     divisionProportions: soyDivs,
     departemenenProportions: soyDepts,
     bagianProportions: soyBags,
+    unitQuotaTargets: lockedSoySnap?.unitQuotaTargets ?? unit.beginningUnitQuotaTargets ?? unit.unitQuotaTargets,
   });
 
   const eoyAlloc = computeUnitQuotaAllocation({
@@ -1550,6 +1727,7 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
     divisionProportions: unit.divisionProportions,
     departemenenProportions: unit.departemenenProportions,
     bagianProportions: unit.bagianProportions,
+    unitQuotaTargets: unit.unitQuotaTargets,
   });
 
   const soyGradeCounts = initialGrades.map((_, gi) =>
@@ -1722,7 +1900,7 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
               >
                 <option value="division">Division</option>
                 <option value="department">Departemen</option>
-                <option value="bagian">Bagian</option>
+                {!hideBagian && <option value="bagian">Bagian</option>}
               </select>
             </label>
           </div>
@@ -1806,7 +1984,7 @@ function CalibrationSummaryComparison({ unit }: { unit: CompanyUnit }) {
   );
 }
 
-function HeadcountSummary({ unit }: { unit: CompanyUnit }) {
+function HeadcountSummary({ unit, hideBagian = false }: { unit: CompanyUnit; hideBagian?: boolean }) {
   const soyApproval = getSoyApproval(unit.id);
   const lockedSoySnap = soyApproval?.status === "Approved" && soyApproval.snapshot ? soyApproval.snapshot : null;
   const baseline = unit.beginningHC;
@@ -1863,7 +2041,7 @@ function HeadcountSummary({ unit }: { unit: CompanyUnit }) {
             />
           ))}
         </div>
-        <CalibrationSummaryComparison unit={unit} />
+        <CalibrationSummaryComparison unit={unit} hideBagian={hideBagian} />
       </div>
     </section>
   );
@@ -1874,9 +2052,13 @@ function HeadcountSummary({ unit }: { unit: CompanyUnit }) {
 function YearEndCalibrationSettings({
   unit,
   onUpdate,
+  readOnly = false,
+  hideBagian = false,
 }: {
   unit: CompanyUnit;
   onUpdate: (unit: CompanyUnit) => void;
+  readOnly?: boolean;
+  hideBagian?: boolean;
 }) {
   const soyApproval = getSoyApproval(unit.id);
   const lockedSoySnap = soyApproval?.status === "Approved" && soyApproval.snapshot ? soyApproval.snapshot : null;
@@ -2009,7 +2191,9 @@ function YearEndCalibrationSettings({
   if (!lockedSoySnap && !unit.beginningHC && baselineTotal === 0) {
     return (
       <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        Lengkapi dan simpan HC Awal Tahun (SOY) terlebih dahulu sebelum mengatur HC Akhir Tahun (EOY).
+        {readOnly
+          ? "Data HC Akhir Tahun (EOY) unit usaha ini akan tersedia otomatis setelah pengaturan Group diselesaikan."
+          : "Lengkapi dan simpan HC Awal Tahun (SOY) terlebih dahulu sebelum mengatur HC Akhir Tahun (EOY)."}
       </p>
     );
   }
@@ -2017,7 +2201,9 @@ function YearEndCalibrationSettings({
   return (
     <>
       <p className="text-sm font-medium text-gray-500">
-        HC Akhir Tahun (EOY) · 2026 — format tabel dan alur sama dengan HC Awal Tahun (SOY). Baseline awal tidak berubah.
+        {readOnly
+          ? "HC Akhir Tahun (EOY) · 2026 — tersinkronisasi otomatis dari konfirmasi EOY tingkat Group (Read-Only)."
+          : "HC Akhir Tahun (EOY) · 2026 — format tabel dan alur sama dengan HC Awal Tahun (SOY). Baseline awal tidak berubah."}
       </p>
       <UnitDetail
         unit={draft}
@@ -2027,10 +2213,12 @@ function YearEndCalibrationSettings({
         setPageMode={setMode}
         onShowConfirm={() => setConfirm(true)}
         embedded
+        readOnly={readOnly}
+        hideBagian={hideBagian}
         submitLabel="Confirm Data"
         onSave={(committed) => persist("edit", committed)}
       />
-      {confirm && (
+      {!readOnly && confirm && (
         <ConfirmYearEndModal
           unitName={unit.name}
           onCancel={() => setConfirm(false)}
@@ -2060,6 +2248,8 @@ function UnitDetail({
   setPageMode,
   onShowConfirm,
   embedded = false,
+  readOnly = false,
+  hideBagian = false,
   onSave,
   submitLabel = "Submit",
   soyApproval,
@@ -2072,6 +2262,8 @@ function UnitDetail({
   setPageMode: (m: PageMode) => void;
   onShowConfirm: () => void;
   embedded?: boolean;
+  readOnly?: boolean;
+  hideBagian?: boolean;
   onSave?: (committed: CompanyUnit) => boolean;
   submitLabel?: "Submit" | "Confirm Data";
   soyApproval?: SoyApprovalRecord;
@@ -2092,8 +2284,9 @@ function UnitDetail({
 
   const activeUnit = editMode ? workingUnit : unit;
   const isSoyApprovedLocked = Boolean(!embedded && soyApproval?.status === "Approved" && soyApproval.snapshot);
-  const isEditable = pageMode === "edit" && editMode && !activeUnit.beginningHC && !isSoyApprovedLocked;
+  const isEditable = !readOnly && pageMode === "edit" && editMode && !activeUnit.beginningHC && !isSoyApprovedLocked;
   const canSubmit = isSaved || pageMode === "preview";
+  const parentGroupMeta = getCalibrationGroupByUnitName(unit.name);
 
   const updWorking = (patch: Partial<CompanyUnit>) => {
     setWorkingUnit((prev) => ({ ...prev, ...patch }));
@@ -2368,14 +2561,25 @@ function UnitDetail({
           <div className="w-12 h-12 rounded-xl bg-[#1A284F]/10 flex items-center justify-center shrink-0">
             <Building2 className="w-6 h-6 text-[#1A284F]" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="font-bold text-gray-900">{unit.name}</p>
             <p className="text-sm text-gray-500">
               {unit.industry}
               {unit.industry ? " · " : ""}
               <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{unit.code}</span>
+              {parentGroupMeta && (
+                <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-[#1A284F] bg-[#1A284F]/8 px-2 py-0.5 rounded-full">
+                  <Layers className="w-3 h-3" /> {parentGroupMeta.name}
+                </span>
+              )}
             </p>
           </div>
+          {readOnly && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-600 shrink-0">
+              <Lock className="w-3.5 h-3.5 text-slate-500" />
+              Otomatis dari Setting {parentGroupMeta?.name ?? "Group"}
+            </span>
+          )}
         </div>
       )}
 
@@ -2432,6 +2636,7 @@ function UnitDetail({
         )}
 
         <Tabs.Content value="start" className="space-y-6">
+          {!readOnly && (
           <div className="flex flex-wrap items-center justify-end gap-2">
             {!embedded && (Boolean(unit.beginningHC) || pageMode === "submitted") && onResetSoy && (
               <button
@@ -2549,10 +2754,13 @@ function UnitDetail({
               </>
             )}
           </div>
+          )}
 
           {!embedded && (
             <p className="text-sm font-medium text-gray-500">
-              {isSoyApprovedLocked || unit.beginningHC
+              {readOnly
+                ? `HC Awal Tahun (SOY) — data terisi otomatis dari pengaturan ${parentGroupMeta?.name ?? "Group"} (tanpa aksi per unit).`
+                : isSoyApprovedLocked || unit.beginningHC
                 ? "HC Awal Tahun (SOY) — baseline tersimpan dan read-only; perubahan HC akhir tidak menimpa data ini."
                 : "Setting HC Awal Tahun (SOY) — klik Edit Settings untuk menyesuaikan proporsi grade maupun kuota per Divisi, Departemen, dan Bagian."}
             </p>
@@ -2563,7 +2771,13 @@ function UnitDetail({
             divisionProportions={displayDivisions}
             departemenenProportions={displayDepts}
             bagianProportions={displayBagian}
+            unitQuotaTargets={
+              lockedSnap?.unitQuotaTargets ??
+              (activeUnit.beginningHC ? activeUnit.beginningUnitQuotaTargets : undefined) ??
+              activeUnit.unitQuotaTargets
+            }
             editMode={isEditable}
+            hideBagian={hideBagian}
             onUpdateCalibrationGrade={(id, field, value) =>
               updWorking({
                 calibrationGrades: workingUnit.calibrationGrades.map((g) =>
@@ -2611,12 +2825,12 @@ function UnitDetail({
 
         {!embedded && (
           <Tabs.Content value="end">
-            <YearEndCalibrationSettings unit={unit} onUpdate={onUpdate} />
+            <YearEndCalibrationSettings unit={unit} onUpdate={onUpdate} readOnly={readOnly} hideBagian={hideBagian} />
           </Tabs.Content>
         )}
         {!embedded && (
           <Tabs.Content value="summary">
-            <HeadcountSummary unit={unit} />
+            <HeadcountSummary unit={unit} hideBagian={hideBagian} />
           </Tabs.Content>
         )}
       </Tabs.Root>
@@ -2689,9 +2903,11 @@ function ConfirmYearEndModal({
 // ─── Submit Confirmation Modal ────────────────────────────────────────────────
 
 function SubmitConfirmModal({
+  targetName,
   onConfirm,
   onCancel,
 }: {
+  targetName?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -2704,9 +2920,11 @@ function SubmitConfirmModal({
               <Send className="w-5 h-5 text-emerald-600" />
             </div>
             <div>
-              <h3 className="font-bold text-gray-900">Submit Calibration Setting (SOY)</h3>
+              <h3 className="font-bold text-gray-900">
+                Submit Calibration Setting (SOY){targetName ? ` — ${targetName}` : ""}
+              </h3>
               <p className="text-xs text-gray-500 mt-0.5">
-                HC Awal Tahun (SOY) &amp; Distribusi Proporsi Grade dikirim ke Approval Calibration — Setting (SOY)
+                HC Awal Tahun (SOY) &amp; Distribusi Proporsi Grade dikirim ke /approvals/calibration/setting untuk disetujui Director
               </p>
             </div>
           </div>
@@ -2715,8 +2933,8 @@ function SubmitConfirmModal({
           </button>
         </div>
 
-        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
-          Once submitted, you will not be able to edit the calibration settings until the approval is completed.
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs leading-relaxed text-amber-900">
+          Setelah disubmit, pengaturan <strong>{targetName ?? "Group"}</strong> akan dikunci sementara menunggu persetujuan role <strong>Director</strong> pada halaman <strong>/approvals/calibration/setting</strong>, dan seluruh kuota Company Units di dalam Group akan tersinkronisasi otomatis.
         </div>
 
         <div className="flex gap-3 justify-end">
@@ -2741,8 +2959,86 @@ function SubmitConfirmModal({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+function unitToSlug(u: CompanyUnit): string {
+  return u.code.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+}
+
+function synchronizeAllUnitsWithGroups(
+  groups: CalibrationGroupSetting[],
+  units: CompanyUnit[],
+): CompanyUnit[] {
+  const nextUnits = units.map((u) => ({ ...u }));
+  for (const grp of groups) {
+    const members = nextUnits.filter((u) =>
+      grp.unitNames.includes(canonicalizeCompanyUnitName(u.name)),
+    );
+    if (members.length === 0) continue;
+    const gAlloc = computeGroupQuotaAllocation({
+      calibrationGrades: grp.calibrationGrades,
+      units: members,
+      unitCustomQuotas: grp.unitCustomQuotas,
+    });
+    for (const m of members) {
+      const idx = nextUnits.findIndex((x) => x.id === m.id);
+      if (idx < 0) continue;
+      nextUnits[idx] = {
+        ...nextUnits[idx],
+        calibrationGrades: grp.calibrationGrades.map((g) => ({ ...g })),
+        unitQuotaTargets: gAlloc.unitMatrix[m.id] ?? nextUnits[idx].unitQuotaTargets,
+      };
+    }
+  }
+  return nextUnits;
+}
+
 export function CalibrationSetting() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const params = useParams<{ mainTab?: string; entitySlug?: string }>();
   const { lockedUnits: authLockedUnits } = useAuthStore();
+
+  // Base URL dinamis sesuai portal (/hr/calibration/setting, /bod/calibration/setting, atau /calibration/setting)
+  const portalMatch = location.pathname.match(/^\/(hr|bod|supervisor|employee)(?:\/|$)/);
+  const portalPrefix = portalMatch ? `/${portalMatch[1]}` : "";
+  const baseSettingPath = `${portalPrefix}/calibration/setting`;
+
+  const activeMainTab: "group" | "company-units" =
+    params.mainTab === "company-units" ? "company-units" : "group";
+
+  const [groupSettings, setGroupSettings] = useState<CalibrationGroupSetting[]>(() => {
+    try {
+      const saved = loadPersistedState<CalibrationGroupSetting[] | null>(GROUP_CALIBRATION_SETTINGS_KEY, null);
+      if (Array.isArray(saved) && saved.length > 0) {
+        return CALIBRATION_GROUPS.map((def) => {
+          const found = saved.find((s) => s.id === def.id || s.slug === def.slug || s.name === def.name);
+          return found
+            ? {
+                ...found,
+                id: def.id,
+                slug: def.slug,
+                name: def.name,
+                code: def.code,
+                industry: def.industry,
+                unitNames: [...def.unitNames],
+              }
+            : {
+                id: def.id,
+                slug: def.slug,
+                name: def.name,
+                code: def.code,
+                industry: def.industry,
+                unitNames: [...def.unitNames],
+                calibrationGrades: makeDefaultCalibrationGrades(),
+                unitCustomQuotas: {},
+              };
+        });
+      }
+    } catch {
+      // ignore
+    }
+    return makeDefaultGroupSettings();
+  });
+
   const [companyUnits, setCompanyUnits] = useState<CompanyUnit[]>(() => {
     try {
       const saved =
@@ -2750,7 +3046,14 @@ export function CalibrationSetting() {
         localStorage.getItem("calibration_submitted_units");
       const base: CompanyUnit[] = saved ? JSON.parse(saved) : defaultCompanyUnits;
       const needsInitialSoyReset = !localStorage.getItem("pa_cal_soy_reset_2026_v1");
-      const normalized = base.map((u) => {
+      // Pastikan ke-8 Company Units lengkap
+      const mergedBase = defaultCompanyUnits.map((def) => {
+        const existing = base.find(
+          (u) => u.id === def.id || canonicalizeCompanyUnitName(u.name) === canonicalizeCompanyUnitName(def.name),
+        );
+        return existing ? { ...def, ...existing, id: def.id, name: def.name, code: def.code } : def;
+      });
+      const normalized = mergedBase.map((u) => {
         const clean = needsInitialSoyReset
           ? {
               ...u,
@@ -2775,17 +3078,29 @@ export function CalibrationSetting() {
       return defaultCompanyUnits.map((u) => applyImportedEmployeesDistribution(u));
     }
   });
-  const [selectedUnit, setSelectedUnit] = useState<CompanyUnit | null>(null);
-  const [pageMode, setPageMode] = useState<PageMode>("edit");
-  const [showConfirm, setShowConfirm] = useState(false);
 
   useEffect(() => {
     const onHydrated = () => {
+      const savedGroups = loadPersistedState<CalibrationGroupSetting[] | null>(GROUP_CALIBRATION_SETTINGS_KEY, null);
+      if (Array.isArray(savedGroups) && savedGroups.length > 0) {
+        setGroupSettings((prev) =>
+          CALIBRATION_GROUPS.map((def) => {
+            const found = savedGroups.find((s) => s.id === def.id || s.name === def.name) ?? prev.find((p) => p.id === def.id);
+            return found
+              ? { ...found, id: def.id, slug: def.slug, name: def.name, code: def.code, industry: def.industry, unitNames: [...def.unitNames] }
+              : makeDefaultGroupSettings().find((x) => x.id === def.id)!;
+          }),
+        );
+      }
       const saved =
         loadPersistedState<CompanyUnit[] | null>("calibration_hc_settings_2026", null) ??
         loadPersistedState<CompanyUnit[] | null>("calibration_submitted_units", null);
       if (Array.isArray(saved) && saved.length > 0) {
-        setCompanyUnits(saved.map((u) => applyImportedEmployeesDistribution(u)));
+        const merged = defaultCompanyUnits.map((def) => {
+          const ex = saved.find((u) => u.id === def.id || canonicalizeCompanyUnitName(u.name) === canonicalizeCompanyUnitName(def.name));
+          return applyImportedEmployeesDistribution(ex ? { ...def, ...ex, id: def.id, name: def.name, code: def.code } : def);
+        });
+        setCompanyUnits(merged);
       }
     };
     const onEmployeesImported = () => {
@@ -2805,30 +3120,6 @@ export function CalibrationSetting() {
     };
   }, []);
 
-  const updateUnit = (updated: CompanyUnit) => {
-    const next = companyUnits.map((unit) => (unit.id === updated.id ? updated : unit));
-    try {
-      savePersistedState("calibration_hc_settings_2026", next, {
-        kind: "calibration-setting",
-        unitId: updated.id,
-        unitName: updated.name,
-        data: updated,
-        audit: {
-          action: "Update",
-          module: "Performance Appraisal",
-          subModule: "Calibration Setting",
-          description: `Updated Calibration HC & Grade setting for ${updated.name}`,
-        },
-      });
-      if (localStorage.getItem("calibration_submitted_units")) {
-        savePersistedState("calibration_submitted_units", next);
-      }
-      setCompanyUnits(next);
-    } catch {
-      toast.error("Pengaturan HC gagal disimpan. Periksa penyimpanan browser.");
-    }
-  };
-
   const [soyTick, setSoyTick] = useState(0);
   useEffect(() => {
     const refresh = () => setSoyTick((t) => t + 1);
@@ -2841,135 +3132,283 @@ export function CalibrationSetting() {
   }, []);
   void soyTick;
 
-  const handleSubmitConfirm = () => {
-    setShowConfirm(false);
-    const unitToSubmit = selectedUnit
-      ? companyUnits.find((u) => u.id === selectedUnit.id) ?? selectedUnit
-      : null;
-    if (unitToSubmit) {
-      submitSoyForApproval(unitToSubmit);
-      toast.success(
-        `Calibration Setting (SOY) ${unitToSubmit.name} dikirim ke Approval Calibration — Setting (SOY).`,
-      );
+  // Pastikan Company Units selalu terisi otomatis dari pengaturan Group (otomatis insert sesuai Poin 8)
+  const syncedCompanyUnits = useMemo(
+    () => synchronizeAllUnitsWithGroups(groupSettings, companyUnits),
+    [groupSettings, companyUnits],
+  );
+
+  const commitGroupAndUnits = (
+    nextGroup: CalibrationGroupSetting,
+    nextMemberUnits: CompanyUnit[],
+    toastMessage?: string,
+  ) => {
+    const nextGroups = groupSettings.map((g) => (g.id === nextGroup.id ? nextGroup : g));
+    const memberById = new Map(nextMemberUnits.map((u) => [u.id, u]));
+    const mergedUnitsRaw = syncedCompanyUnits.map((u) => memberById.get(u.id) ?? u);
+    const finalUnits = synchronizeAllUnitsWithGroups(nextGroups, mergedUnitsRaw);
+
+    setGroupSettings(nextGroups);
+    setCompanyUnits(finalUnits);
+
+    savePersistedState(GROUP_CALIBRATION_SETTINGS_KEY, nextGroups, {
+      kind: "calibration-setting",
+      unitId: nextGroup.id,
+      unitName: nextGroup.name,
+      data: { group: nextGroup, units: finalUnits.filter((u) => nextGroup.unitNames.includes(canonicalizeCompanyUnitName(u.name))) },
+      audit: {
+        action: "Update",
+        module: "Performance Appraisal",
+        subModule: "Calibration Setting (Group)",
+        description: `Updated Calibration Group Setting (${nextGroup.name}) & auto-synced member Company Units`,
+      },
+    });
+    savePersistedState("calibration_hc_settings_2026", finalUnits);
+    if (localStorage.getItem("calibration_submitted_units")) {
+      savePersistedState("calibration_submitted_units", finalUnits);
     }
-    setPageMode("submitted");
-    setSelectedUnit(null);
-    try {
-      const submittedAt = new Date().toISOString();
-      savePersistedState("calibration_submitted_units", companyUnits, {
+    // Sinkronkan juga masing-masing Company Unit anggota Group ke tabel pa_calibration_settings di Supabase
+    for (const u of finalUnits) {
+      if (!nextGroup.unitNames.includes(canonicalizeCompanyUnitName(u.name))) continue;
+      void syncToSupabase({
         kind: "calibration-setting",
-        unitId: selectedUnit?.id ?? "all",
-        unitName: selectedUnit?.name ?? "All Units",
-        data: { submittedAt, units: companyUnits },
-        audit: {
-          action: "Create",
-          module: "Performance Appraisal",
-          subModule: "Calibration Setting",
-          description: `Submitted Calibration Setting (${selectedUnit?.name ?? "All Units"}) for Approval Management`,
-        },
+        unitId: u.id,
+        unitName: u.name,
+        data: u,
       });
-      savePersistedState("calibration_submitted_at", submittedAt);
-    } catch {
-      // ignore
     }
+    if (toastMessage) toast.success(toastMessage);
   };
 
-  if (selectedUnit) {
-    const liveUnit = companyUnits.find((u) => u.id === selectedUnit.id) ?? selectedUnit;
-    const soyApproval = getSoyApproval(liveUnit.id);
-    const effectiveMode: PageMode = soyApproval
-      ? soyApproval.status === "Revision"
-        ? pageMode === "submitted"
-          ? "edit"
-          : pageMode
-        : "submitted"
-      : pageMode === "submitted"
-      ? "edit"
-      : pageMode;
+  const handleGroupSoySubmit = (
+    committedGroup: CalibrationGroupSetting,
+    committedMemberUnits: CompanyUnit[],
+  ) => {
+    const gAlloc = computeGroupQuotaAllocation({
+      calibrationGrades: committedGroup.calibrationGrades,
+      units: committedMemberUnits,
+      unitCustomQuotas: committedGroup.unitCustomQuotas,
+    });
+    const unitsSnap: SoyUnitSnapshot[] = committedMemberUnits.map((u) => ({
+      id: u.id,
+      name: u.name,
+      code: u.code,
+      calibrationGrades: committedGroup.calibrationGrades.map((g) => ({ ...g })),
+      unitQuotaTargets: gAlloc.unitMatrix[u.id] ?? [],
+      divisionProportions: JSON.parse(JSON.stringify(u.divisionProportions)),
+      departemenenProportions: JSON.parse(JSON.stringify(u.departemenenProportions)),
+      bagianProportions: JSON.parse(JSON.stringify(u.bagianProportions)),
+    }));
 
-    return (
-      <>
-        {showConfirm && (
-          <SubmitConfirmModal
-            onConfirm={handleSubmitConfirm}
-            onCancel={() => setShowConfirm(false)}
-          />
-        )}
-        <div className="w-full flex flex-col gap-6">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Setting</h2>
-            <p className="text-sm text-gray-500">
-              Configure performance calibration settings by company unit
-            </p>
-          </div>
-          <UnitDetail
-            unit={liveUnit}
-            onBack={() => setSelectedUnit(null)}
-            onUpdate={updateUnit}
-            pageMode={effectiveMode}
-            setPageMode={setPageMode}
-            onShowConfirm={() => setShowConfirm(true)}
-            soyApproval={soyApproval}
-            onResetSoy={() => {
-              resetSoyApproval(liveUnit.id);
-              const resetUnit: CompanyUnit = {
-                ...liveUnit,
-                beginningHC: undefined,
-                beginningGrades: undefined,
-                beginningCustomQuotas: undefined,
-                yearEndStatus: undefined,
-                yearEndUpdatedAt: undefined,
-              };
-              updateUnit(resetUnit);
-              setPageMode("edit");
-              toast.success(
-                `Status HC Awal Tahun (SOY) ${liveUnit.name} berhasil di-reset dan siap di-submit ulang.`,
-              );
-            }}
-          />
-        </div>
-      </>
+    commitGroupAndUnits(committedGroup, committedMemberUnits);
+    submitGroupSoyForApproval({
+      id: committedGroup.id,
+      slug: committedGroup.slug,
+      name: committedGroup.name,
+      code: committedGroup.code,
+      calibrationGrades: committedGroup.calibrationGrades.map((g) => ({ ...g })),
+      unitCustomQuotas: committedGroup.unitCustomQuotas ? JSON.parse(JSON.stringify(committedGroup.unitCustomQuotas)) : {},
+      unitAllocatedQuotas: gAlloc.unitMatrix,
+      units: unitsSnap,
+    });
+
+    const submittedAt = new Date().toISOString();
+    savePersistedState("calibration_submitted_units", syncedCompanyUnits);
+    savePersistedState("calibration_submitted_at", submittedAt);
+
+    toast.success(
+      `Calibration Setting (SOY) ${committedGroup.name} berhasil disubmit ke /approvals/calibration/setting untuk disetujui Director.`,
     );
-  }
+  };
 
-  return (
-    <>
-      {showConfirm && (
-        <SubmitConfirmModal
-          onConfirm={handleSubmitConfirm}
-          onCancel={() => setShowConfirm(false)}
-        />
-      )}
+  const visibleGroups = useMemo(() => {
+    if (authLockedUnits && authLockedUnits.length > 0) {
+      const canonLocks = authLockedUnits.map(canonicalizeCompanyUnitName);
+      return groupSettings.filter((g) => g.unitNames.some((u) => canonLocks.includes(canonicalizeCompanyUnitName(u))));
+    }
+    return groupSettings;
+  }, [groupSettings, authLockedUnits]);
+
+  const visibleCompanyUnits = useMemo(() => {
+    if (authLockedUnits && authLockedUnits.length > 0) {
+      const canonLocks = authLockedUnits.map(canonicalizeCompanyUnitName);
+      return syncedCompanyUnits.filter((u) => canonLocks.includes(canonicalizeCompanyUnitName(u.name)));
+    }
+    return syncedCompanyUnits;
+  }, [syncedCompanyUnits, authLockedUnits]);
+
+  // Resolve selected Group atau selected Company Unit dari URL `:entitySlug`
+  const selectedGroup = useMemo(() => {
+    if (activeMainTab !== "group" || !params.entitySlug) return null;
+    const slugLower = params.entitySlug.toLowerCase();
+    return (
+      visibleGroups.find(
+        (g) => g.slug === slugLower || g.id.toLowerCase() === slugLower || g.code.toLowerCase() === slugLower,
+      ) ?? null
+    );
+  }, [activeMainTab, params.entitySlug, visibleGroups]);
+
+  const selectedCompanyUnit = useMemo(() => {
+    if (activeMainTab !== "company-units" || !params.entitySlug) return null;
+    const slugLower = params.entitySlug.toLowerCase();
+    return (
+      visibleCompanyUnits.find(
+        (u) =>
+          unitToSlug(u) === slugLower ||
+          u.id.toLowerCase() === slugLower ||
+          orgSlug(u.name).replace(/_/g, "-") === slugLower,
+      ) ?? null
+    );
+  }, [activeMainTab, params.entitySlug, visibleCompanyUnits]);
+
+  // Detail View: Group (/calibration/setting/group/:entitySlug)
+  if (selectedGroup) {
+    const memberUnits = syncedCompanyUnits.filter((u) =>
+      selectedGroup.unitNames.includes(canonicalizeCompanyUnitName(u.name)),
+    );
+    const grpSoyApproval = getGroupSoyApproval(selectedGroup.id);
+    return (
       <div className="w-full flex flex-col gap-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Setting</h2>
           <p className="text-sm text-gray-500">
-            Configure performance calibration settings by company unit
+            Pengaturan HC Awal Tahun (SOY), HC Akhir Tahun (EOY), dan Distribusi Grade berbasis Group
           </p>
         </div>
+        <GroupDetail
+          group={selectedGroup}
+          memberUnits={memberUnits}
+          soyApproval={grpSoyApproval}
+          onBack={() => navigate(`${baseSettingPath}/group`)}
+          onCommitGroupAndUnits={commitGroupAndUnits}
+          onSubmitGroupSoy={handleGroupSoySubmit}
+          onResetGroupSoy={() => {
+            resetSoyApproval(selectedGroup.id);
+            const resetGrp: CalibrationGroupSetting = {
+              ...selectedGroup,
+              beginningGrades: undefined,
+              beginningUnitCustomQuotas: undefined,
+              yearEndStatus: undefined,
+              yearEndUpdatedAt: undefined,
+            };
+            const resetMembers = memberUnits.map((u) => ({
+              ...u,
+              beginningHC: undefined,
+              beginningGrades: undefined,
+              beginningUnitQuotaTargets: undefined,
+              beginningCustomQuotas: undefined,
+              yearEndStatus: undefined,
+              yearEndUpdatedAt: undefined,
+            }));
+            commitGroupAndUnits(
+              resetGrp,
+              resetMembers,
+              `Status HC Awal Tahun (SOY) ${selectedGroup.name} berhasil di-reset dan siap di-submit ulang.`,
+            );
+          }}
+        />
+      </div>
+    );
+  }
 
+  // Detail View: Company Unit Read-Only (/calibration/setting/company-units/:entitySlug)
+  if (selectedCompanyUnit) {
+    const soyApproval = getSoyApproval(selectedCompanyUnit.id);
+    return (
+      <div className="w-full flex flex-col gap-6">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Setting</h2>
+          <p className="text-sm text-gray-500">
+            Rincian kuota &amp; distribusi grade unit usaha (otomatis menyesuaikan dari pengaturan Group)
+          </p>
+        </div>
+        <UnitDetail
+          unit={selectedCompanyUnit}
+          onBack={() => navigate(`${baseSettingPath}/company-units`)}
+          onUpdate={() => {}}
+          pageMode="edit"
+          setPageMode={() => {}}
+          onShowConfirm={() => {}}
+          readOnly
+          hideBagian
+          soyApproval={soyApproval}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full flex flex-col gap-6">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">Calibration — Setting</h2>
+        <p className="text-sm text-gray-500">
+          Pengaturan distribusi &amp; proporsi grade berdasarkan Group (otomatis terdistribusi ke masing-masing Company Unit)
+        </p>
+      </div>
+
+      {/* Top Main Tabs: Group | Company Units */}
+      <div className="flex items-center gap-2 border-b border-gray-200">
+        <button
+          type="button"
+          onClick={() => navigate(`${baseSettingPath}/group`)}
+          className={`inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+            activeMainTab === "group"
+              ? "border-[#1A284F] text-[#1A284F]"
+              : "border-transparent text-gray-500 hover:text-[#1A284F]"
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          Group
+          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#1A284F]/10 text-[#1A284F]">
+            {visibleGroups.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate(`${baseSettingPath}/company-units`)}
+          className={`inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+            activeMainTab === "company-units"
+              ? "border-[#1A284F] text-[#1A284F]"
+              : "border-transparent text-gray-500 hover:text-[#1A284F]"
+          }`}
+        >
+          <Building2 className="w-4 h-4" />
+          Company Units
+          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
+            {visibleCompanyUnits.length}
+          </span>
+        </button>
+      </div>
+
+      {/* TAB 1: GROUP (Card RSUP Group & Sambu Group — desain sama persis dengan Company Unit) */}
+      {activeMainTab === "group" && (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-gray-500">
-            {pageMode === "edit"
-              ? "Select a company unit to configure its Calibration settings."
-              : "Select a company unit to review its Calibration settings."}
+            Pilih Group untuk mengatur HC Awal Tahun (SOY), HC Akhir Tahun (EOY), serta distribusi kuota per Unit Usaha, Division, dan Departement.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {(authLockedUnits && authLockedUnits.length > 0
-              ? companyUnits.filter((u) => authLockedUnits.includes(u.name))
-              : companyUnits
-            ).map((unit, idx) => {
-              const unitTones: AnalyticsCardTone[] = ["navy", "emerald", "plum", "terracotta", "teal", "rose", "slate", "navy"];
-              const spec = ANALYTICS_CARD_TONES[unitTones[idx % unitTones.length]];
-              const soyRec = getSoyApproval(unit.id);
-              const unitHc =
-                soyRec?.status === "Approved" && soyRec.snapshot
-                  ? soyRec.snapshot.divisionProportions.reduce((s, d) => s + d.hc, 0)
-                  : unit.divisionProportions.reduce((s, d) => s + d.hc, 0);
+            {visibleGroups.map((grp, idx) => {
+              const groupTones: AnalyticsCardTone[] = ["navy", "teal"];
+              const spec = ANALYTICS_CARD_TONES[groupTones[idx % groupTones.length]];
+              const soyRec = getGroupSoyApproval(grp.id);
+              const members = syncedCompanyUnits.filter((u) =>
+                grp.unitNames.includes(canonicalizeCompanyUnitName(u.name)),
+              );
+              const groupHc =
+                soyRec?.status === "Approved" && soyRec.groupSnapshot?.units
+                  ? soyRec.groupSnapshot.units.reduce(
+                      (sum, u) => sum + u.divisionProportions.reduce((s, d) => s + d.hc, 0),
+                      0,
+                    )
+                  : members.reduce(
+                      (sum, u) => sum + u.divisionProportions.reduce((s, d) => s + d.hc, 0),
+                      0,
+                    );
               return (
                 <button
-                  key={unit.id}
-                  onClick={() => setSelectedUnit(unit)}
+                  key={grp.id}
+                  type="button"
+                  onClick={() => navigate(`${baseSettingPath}/group/${grp.slug}`)}
                   style={{ animationDelay: `${Math.min(idx, 8) * 50}ms` }}
                   className={`group relative overflow-hidden text-left bg-gradient-to-br ${spec.gradient} border ${spec.border} rounded-2xl p-4 min-h-[132px] flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion cursor-pointer`}
                 >
@@ -2980,7 +3419,82 @@ export function CalibrationSetting() {
                   <div className="flex items-start justify-between gap-2 relative z-10">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold text-gray-500 truncate">
-                        {unit.code}{unit.industry ? ` · ${unit.industry}` : ""}
+                        {grp.code} · {members.length} Unit Usaha
+                      </p>
+                      <p className="text-base font-extrabold text-[#111827] leading-snug mt-1">{grp.name}</p>
+                    </div>
+                    <div
+                      className="w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-rotate-3"
+                      style={{ backgroundColor: spec.accentHex }}
+                    >
+                      <Layers className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 mt-4 relative z-10">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1A284F] tabular-nums">
+                        <Users className="w-3 h-3" /> HC: {groupHc}
+                      </span>
+                      {soyRec?.status === "Approved" && (
+                        <span className="text-[10px] font-semibold text-emerald-700 bg-white/80 border border-emerald-200 px-2 py-0.5 rounded-full">
+                          SOY Locked
+                        </span>
+                      )}
+                      {soyRec?.status === "Pending" && (
+                        <span className="text-[10px] font-semibold text-amber-700 bg-white/80 border border-amber-200 px-2 py-0.5 rounded-full">
+                          SOY Pending
+                        </span>
+                      )}
+                      {soyRec?.status === "Revision" && (
+                        <span className="text-[10px] font-semibold text-orange-700 bg-white/80 border border-orange-200 px-2 py-0.5 rounded-full">
+                          SOY Revision
+                        </span>
+                      )}
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-[#1A284F] group-hover:translate-x-0.5 transition-all shrink-0" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: COMPANY UNITS (Read-Only otomatis menyesuaikan dari setting tab Group) */}
+      {activeMainTab === "company-units" && (
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50/90 px-4 py-3 text-xs text-slate-600">
+            <Lock className="w-4 h-4 text-[#1A284F] shrink-0" />
+            <span>
+              Data pada tab <strong>Company Units</strong> terisi dan menyesuaikan secara otomatis dari pengaturan tab <strong>Group</strong> (tidak memerlukan tindakan Edit atau Submit terpisah per unit usaha).
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {visibleCompanyUnits.map((unit, idx) => {
+              const unitTones: AnalyticsCardTone[] = ["navy", "emerald", "plum", "terracotta", "teal", "rose", "slate", "navy"];
+              const spec = ANALYTICS_CARD_TONES[unitTones[idx % unitTones.length]];
+              const soyRec = getSoyApproval(unit.id);
+              const grpMeta = getCalibrationGroupByUnitName(unit.name);
+              const unitHc =
+                soyRec?.status === "Approved" && soyRec.snapshot
+                  ? soyRec.snapshot.divisionProportions.reduce((s, d) => s + d.hc, 0)
+                  : unit.divisionProportions.reduce((s, d) => s + d.hc, 0);
+              return (
+                <button
+                  key={unit.id}
+                  type="button"
+                  onClick={() => navigate(`${baseSettingPath}/company-units/${unitToSlug(unit)}`)}
+                  style={{ animationDelay: `${Math.min(idx, 8) * 50}ms` }}
+                  className={`group relative overflow-hidden text-left bg-gradient-to-br ${spec.gradient} border ${spec.border} rounded-2xl p-4 min-h-[132px] flex flex-col justify-between shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg pa-card-motion cursor-pointer`}
+                >
+                  <div
+                    className="pointer-events-none absolute -right-5 -bottom-6 w-24 h-24 rounded-full transition-transform duration-500 ease-out group-hover:scale-125"
+                    style={{ backgroundColor: `${spec.accentHex}0D` }}
+                  />
+                  <div className="flex items-start justify-between gap-2 relative z-10">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-gray-500 truncate">
+                        {unit.code}{grpMeta ? ` · ${grpMeta.name}` : unit.industry ? ` · ${unit.industry}` : ""}
                       </p>
                       <p className="text-base font-extrabold text-[#111827] leading-snug mt-1">{unit.name}</p>
                     </div>
@@ -3014,7 +3528,1528 @@ export function CalibrationSetting() {
             })}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+// ─── Group-Based Calibration Panel, EOY, Summary & Detail ─────────────────────
+
+function patchQuotaRecord<T extends { id: string; customQuotas?: Record<string, number> }>(
+  list: T[],
+  rowId: string,
+  gradeId: string,
+  val: number | null,
+): T[] {
+  return list.map((item) => {
+    if (item.id !== rowId) return item;
+    const nextMap = { ...(item.customQuotas ?? {}) };
+    if (val === null) delete nextMap[gradeId];
+    else nextMap[gradeId] = val;
+    return { ...item, customQuotas: Object.keys(nextMap).length > 0 ? nextMap : undefined };
+  });
+}
+
+function GroupCalibrationPanel({
+  groupName,
+  calibrationGrades,
+  memberUnits,
+  unitCustomQuotas,
+  editMode,
+  selectedUnitId,
+  onSelectUnitId,
+  onUpdateCalibrationGrade,
+  onUpdateCompanyUnitQuota,
+  onAutoBalanceCompanyUnits,
+  onResetCompanyUnitQuotas,
+  onUpdateUnitDivisionHC,
+  onUpdateUnitDepartemenHC,
+  onUpdateUnitDivisionQuota,
+  onUpdateUnitDepartemenQuota,
+  onAutoBalanceUnitLevel,
+  onResetUnitLevelQuotas,
+}: {
+  groupName: string;
+  calibrationGrades: CalibrationGrade[];
+  memberUnits: CompanyUnit[];
+  unitCustomQuotas?: Record<string, Record<string, number>>;
+  editMode: boolean;
+  selectedUnitId: string | null;
+  onSelectUnitId: (unitId: string | null) => void;
+  onUpdateCalibrationGrade: (id: string, field: keyof CalibrationGrade, value: string) => void;
+  onUpdateCompanyUnitQuota: (unitId: string, gradeId: string, val: number | null) => void;
+  onAutoBalanceCompanyUnits: () => void;
+  onResetCompanyUnitQuotas: () => void;
+  onUpdateUnitDivisionHC: (unitId: string, divId: string, newHC: number) => void;
+  onUpdateUnitDepartemenHC: (unitId: string, deptId: string, newHC: number) => void;
+  onUpdateUnitDivisionQuota: (unitId: string, divId: string, gradeId: string, val: number | null) => void;
+  onUpdateUnitDepartemenQuota: (unitId: string, deptId: string, gradeId: string, val: number | null) => void;
+  onAutoBalanceUnitLevel: (unitId: string, level: "division" | "department") => void;
+  onResetUnitLevelQuotas: (unitId: string, level: "division" | "department") => void;
+}) {
+  const groupAlloc = useMemo(
+    () =>
+      computeGroupQuotaAllocation({
+        calibrationGrades,
+        units: memberUnits,
+        unitCustomQuotas,
+      }),
+    [calibrationGrades, memberUnits, unitCustomQuotas],
+  );
+
+  const fmtShare = (v: number) => (v > 0 ? `${v.toFixed(1)}%` : "0.0%");
+  const unitGradeSums = calibrationGrades.map((_, gi) =>
+    memberUnits.reduce((s, u) => s + (groupAlloc.unitMatrix[u.id]?.[gi] ?? 0), 0),
+  );
+  const groupGradeCounts = groupAlloc.groupGradeTargets;
+  const totalGroupKaryawan = groupGradeCounts.reduce((a, b) => a + b, 0);
+
+  const activeDrillUnit = selectedUnitId
+    ? memberUnits.find((u) => u.id === selectedUnitId) ?? null
+    : null;
+  const activeUnitAlloc = activeDrillUnit ? groupAlloc.perUnitAlloc[activeDrillUnit.id] : null;
+
+  return (
+    <div className="space-y-6">
+      {/* Row 1: Grade Distribution & Calibration (Group) + Grade Distribution (Bell Curve) */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+          <div className="px-6 py-5 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-900">
+              Grade Distribution &amp; Calibration ({groupName})
+            </h3>
+            <p className="text-sm text-gray-500 mt-1">
+              Gabungan jumlah karyawan dari seluruh {memberUnits.length} unit usaha pada {groupName} (Largest-Remainder)
+            </p>
+          </div>
+          <div className="p-6 overflow-x-auto flex-1 flex flex-col justify-between gap-3">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-[#1A284F] text-white">
+                  <th className="border border-gray-300 px-4 py-3 text-center font-semibold">GRADE</th>
+                  <th className="border border-gray-300 px-4 py-3 text-center font-semibold">PROPORSI</th>
+                  <th className="border border-gray-300 px-4 py-3 text-center font-semibold">KARYAWAN</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calibrationGrades.map((grade, idx) => {
+                  const karyawan = groupGradeCounts[idx] ?? 0;
+                  const uSum = unitGradeSums[idx] ?? 0;
+                  const diffFromUnits = uSum - karyawan;
+                  return (
+                    <tr key={grade.id} className="hover:bg-gray-50">
+                      <td className="border border-gray-300 px-4 py-2.5 text-center font-semibold text-gray-900">
+                        {grade.grade}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-2.5 text-center">
+                        {editMode ? (
+                          <input
+                            type="text"
+                            value={grade.proporsi}
+                            onChange={(e) => onUpdateCalibrationGrade(grade.id, "proporsi", e.target.value)}
+                            className="w-20 px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 text-center"
+                          />
+                        ) : (
+                          <span className="text-gray-900">{grade.proporsi}</span>
+                        )}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-2.5 text-center bg-gray-50">
+                        <span className="font-semibold text-gray-900">{karyawan.toLocaleString()}</span>
+                        {diffFromUnits !== 0 && (
+                          <span
+                            title="Selisih total kuota manual Unit Usaha terhadap target kurva normal Group"
+                            className="ml-1.5 inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800"
+                          >
+                            Unit: {uSum} ({diffFromUnits > 0 ? `+${diffFromUnits}` : diffFromUnits})
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr className="bg-[#1A284F] text-white font-semibold">
+                  <td className="border border-gray-300 px-4 py-3 text-center">JUMLAH</td>
+                  <td
+                    className={`border border-gray-300 px-4 py-3 text-center ${
+                      Math.abs(groupAlloc.totalPct - 100) > 0.001 && groupAlloc.totalPct > 0 ? "text-red-300" : ""
+                    }`}
+                  >
+                    {groupAlloc.totalPct}%
+                  </td>
+                  <td className="border border-gray-300 px-4 py-3 text-center">
+                    {totalGroupKaryawan.toLocaleString()}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="text-[11px] text-gray-500 leading-relaxed">
+              Kuota karyawan dihitung terpusat pada level <strong>{groupName}</strong> ({groupAlloc.totalHC.toLocaleString()} orang) dan didistribusikan otomatis ke setiap Unit Usaha, Divisi, dan Departement.
+            </p>
+          </div>
+        </div>
+
+        <SingleBellCurveCard
+          title={`Grade Distribution (Bell Curve) — ${groupName}`}
+          subtitle={`Visualisasi kurva normal proporsi & kuota karyawan gabungan ${groupName}`}
+          calibrationGrades={calibrationGrades}
+          gradeCounts={unitGradeSums.some((v, i) => v !== groupGradeCounts[i]) ? unitGradeSums : groupGradeCounts}
+        />
       </div>
-    </>
+
+      {/* Row 2: Proportion per Company Unit (clickable rows -> opens Division & Departement) */}
+      <ProportionTable
+        title="Proportion per Company Unit"
+        subtitle="Share kuota & distribusi grade per Unit Usaha berdasarkan distribusi normal Group (klik baris Unit Usaha untuk membuka & menyesuaikan proporsi Divisi & Departement)"
+        firstColHeader="UNIT USAHA"
+        disableHcEdit
+        selectedRowId={selectedUnitId}
+        onRowClick={(uid) => onSelectUnitId(selectedUnitId === uid ? null : uid)}
+        rows={memberUnits.map((u) => ({
+          id: u.id,
+          label: u.name,
+          hc: groupAlloc.unitHCs[u.id] ?? 0,
+          shareKuota: fmtShare(groupAlloc.unitShareMap[u.id] ?? 0),
+          calcs: groupAlloc.unitMatrix[u.id] ?? new Array(calibrationGrades.length).fill(0),
+          customQuotas: unitCustomQuotas?.[u.id],
+        }))}
+        totalHC={groupAlloc.totalHC}
+        targetGradeTotals={groupGradeCounts}
+        calibrationGrades={calibrationGrades}
+        editMode={editMode}
+        onUpdateHC={() => {}}
+        onUpdateQuota={onUpdateCompanyUnitQuota}
+        onAutoBalance={onAutoBalanceCompanyUnits}
+        onResetQuotas={onResetCompanyUnitQuotas}
+        primaryFooterLabel={`Jumlah Unit Usaha: ${memberUnits.length}`}
+      />
+
+      {/* Row 3: Drilldown Proportion per Division & Proportion per Departement saat Unit Usaha diklik */}
+      {activeDrillUnit && activeUnitAlloc && (() => {
+        const safeDivs = activeDrillUnit.divisionProportions ?? [];
+        const safeDepts = activeDrillUnit.departemenenProportions ?? [];
+        const totalDivHC = activeUnitAlloc.totalHC;
+        const divShareMap: Record<string, number> = {};
+        safeDivs.forEach((d) => {
+          divShareMap[d.id] = totalDivHC > 0 ? (d.hc / totalDivHC) * 100 : 0;
+        });
+        const deptShareMap: Record<string, number> = {};
+        safeDepts.forEach((dept) => {
+          const sibHC = safeDepts.filter((d) => d.divisiId === dept.divisiId).reduce((s, d) => s + d.hc, 0);
+          deptShareMap[dept.id] = sibHC > 0 ? (dept.hc / sibHC) * (divShareMap[dept.divisiId] ?? 0) : 0;
+        });
+        const divGradeSums = calibrationGrades.map((_, gi) =>
+          safeDivs.reduce((s, d) => s + (activeUnitAlloc.divMatrix[d.id]?.[gi] ?? 0), 0),
+        );
+        const uniqueDivInDepts = new Set(safeDepts.map((d) => d.divisiId).filter(Boolean)).size || safeDivs.length;
+        const unitTargets = groupAlloc.unitMatrix[activeDrillUnit.id] ?? activeUnitAlloc.unitGradeTargets;
+
+        return (
+          <motion.div
+            key={activeDrillUnit.id}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25 }}
+            className="rounded-2xl border-2 border-[#2F5597]/25 bg-[#F8FAFD] p-5 space-y-5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#DCE3F2]">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1A284F] text-white text-xs font-bold">
+                    <Building2 className="w-3.5 h-3.5" />
+                    Detail Organisasi: {activeDrillUnit.name}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white border border-slate-200 text-xs font-semibold text-slate-700">
+                    HC Unit: {totalDivHC.toLocaleString()} orang
+                  </span>
+                  {calibrationGrades.map((g, gi) => (
+                    <span
+                      key={g.id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[11px] font-bold text-[#1A284F]"
+                    >
+                      <span>{g.grade}:</span>
+                      <span>{unitTargets[gi] ?? 0}</span>
+                    </span>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500">
+                  Distribusi kuota <strong>Division</strong> dan <strong>Departement</strong> pada {activeDrillUnit.name} otomatis mengikuti jatah kuota unit usaha di atas{editMode ? " (dapat disesuaikan manual di bawah ini)" : ""}.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {memberUnits.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => onSelectUnitId(u.id)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors cursor-pointer ${
+                      u.id === activeDrillUnit.id
+                        ? "bg-[#2F5597] text-white border-[#2F5597]"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    {u.code}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => onSelectUnitId(null)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white border border-slate-200 text-slate-500 hover:text-slate-800 cursor-pointer"
+                >
+                  <X className="w-3 h-3" /> Tutup
+                </button>
+              </div>
+            </div>
+
+            {/* Proportion per Division */}
+            <ProportionTable
+              title={`Proportion per Division — ${activeDrillUnit.name}`}
+              subtitle="Distribusi kuota grade per Divisi (mengikuti kuota Unit Usaha pada tabel Group)"
+              firstColHeader="DIVISION"
+              rows={safeDivs.map((d) => ({
+                id: d.id,
+                label: d.divisi,
+                hc: d.hc,
+                shareKuota: fmtShare(divShareMap[d.id] ?? 0),
+                calcs: activeUnitAlloc.divMatrix[d.id] ?? new Array(calibrationGrades.length).fill(0),
+                customQuotas: d.customQuotas,
+              }))}
+              totalHC={totalDivHC}
+              targetGradeTotals={unitTargets}
+              calibrationGrades={calibrationGrades}
+              editMode={editMode}
+              onUpdateHC={(divId, val) => onUpdateUnitDivisionHC(activeDrillUnit.id, divId, val)}
+              onUpdateQuota={(divId, gradeId, val) =>
+                onUpdateUnitDivisionQuota(activeDrillUnit.id, divId, gradeId, val)
+              }
+              onAutoBalance={() => onAutoBalanceUnitLevel(activeDrillUnit.id, "division")}
+              onResetQuotas={() => onResetUnitLevelQuotas(activeDrillUnit.id, "division")}
+              primaryFooterLabel={`Jumlah Divisi: ${safeDivs.length}`}
+            />
+
+            {/* Proportion per Departement (tanpa Bagian sesuai konfirmasi) */}
+            <ProportionTable
+              title={`Proportion per Departement — ${activeDrillUnit.name}`}
+              subtitle="Share Kuota & alokasi grade diturunkan dari kuota masing-masing Divisi induknya"
+              firstColHeader="DEPARTEMENT"
+              rows={safeDepts.map((dept) => {
+                const parentDiv = safeDivs.find((d) => d.id === dept.divisiId);
+                return {
+                  id: dept.id,
+                  label: dept.departemen,
+                  parentLabel: parentDiv?.divisi,
+                  hc: dept.hc,
+                  shareKuota: fmtShare(deptShareMap[dept.id] ?? 0),
+                  calcs: activeUnitAlloc.deptMatrix[dept.id] ?? new Array(calibrationGrades.length).fill(0),
+                  customQuotas: dept.customQuotas,
+                };
+              })}
+              totalHC={safeDepts.reduce((s, d) => s + d.hc, 0)}
+              targetGradeTotals={divGradeSums}
+              calibrationGrades={calibrationGrades}
+              editMode={editMode}
+              onUpdateHC={(deptId, val) => onUpdateUnitDepartemenHC(activeDrillUnit.id, deptId, val)}
+              onUpdateQuota={(deptId, gradeId, val) =>
+                onUpdateUnitDepartemenQuota(activeDrillUnit.id, deptId, gradeId, val)
+              }
+              onAutoBalance={() => onAutoBalanceUnitLevel(activeDrillUnit.id, "department")}
+              onResetQuotas={() => onResetUnitLevelQuotas(activeDrillUnit.id, "department")}
+              showParent
+              parentHeader="DIVISI"
+              parentFooterLabel={`Jumlah Divisi: ${uniqueDivInDepts}`}
+              primaryFooterLabel={`Jumlah Departement: ${safeDepts.length}`}
+            />
+          </motion.div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function GroupHeadcountSummary({
+  group,
+  memberUnits,
+  soyApproval,
+}: {
+  group: CalibrationGroupSetting;
+  memberUnits: CompanyUnit[];
+  soyApproval?: SoyApprovalRecord;
+}) {
+  const [level, setLevel] = useState<"unit" | "division" | "department">("unit");
+  const [unitFilter, setUnitFilter] = useState<string>("ALL");
+
+  const lockedGroupSnap =
+    soyApproval?.status === "Approved" && soyApproval.groupSnapshot ? soyApproval.groupSnapshot : null;
+
+  const soyGrades = lockedGroupSnap?.calibrationGrades ?? group.beginningGrades ?? group.calibrationGrades;
+  const soyUnits: CompanyUnit[] = useMemo(() => {
+    if (lockedGroupSnap?.units?.length) {
+      return memberUnits.map((u) => {
+        const snapU = lockedGroupSnap.units.find(
+          (su) => su.id === u.id || canonicalizeCompanyUnitName(su.name) === canonicalizeCompanyUnitName(u.name),
+        );
+        if (!snapU) return u;
+        return {
+          ...u,
+          calibrationGrades: snapU.calibrationGrades,
+          unitQuotaTargets: snapU.unitQuotaTargets,
+          divisionProportions: snapU.divisionProportions,
+          departemenenProportions: snapU.departemenenProportions,
+          bagianProportions: snapU.bagianProportions,
+        };
+      });
+    }
+    return memberUnits.map((u) => ({
+      ...u,
+      divisionProportions: u.divisionProportions.map((d) => ({
+        ...d,
+        hc: u.beginningHC ? u.beginningHC[d.id] ?? 0 : d.hc,
+        customQuotas: u.beginningHC ? u.beginningCustomQuotas?.[d.id] : d.customQuotas,
+      })),
+      departemenenProportions: u.departemenenProportions.map((dep) => ({
+        ...dep,
+        hc: u.beginningHC ? u.beginningHC[dep.id] ?? 0 : dep.hc,
+        customQuotas: u.beginningHC ? u.beginningCustomQuotas?.[dep.id] : dep.customQuotas,
+      })),
+    }));
+  }, [lockedGroupSnap, memberUnits]);
+
+  const soyAlloc = useMemo(
+    () =>
+      computeGroupQuotaAllocation({
+        calibrationGrades: soyGrades,
+        units: soyUnits,
+        unitCustomQuotas: lockedGroupSnap?.unitCustomQuotas ?? group.beginningUnitCustomQuotas ?? group.unitCustomQuotas,
+      }),
+    [soyGrades, soyUnits, lockedGroupSnap, group.beginningUnitCustomQuotas, group.unitCustomQuotas],
+  );
+
+  const eoyAlloc = useMemo(
+    () =>
+      computeGroupQuotaAllocation({
+        calibrationGrades: group.calibrationGrades,
+        units: memberUnits,
+        unitCustomQuotas: group.unitCustomQuotas,
+      }),
+    [group.calibrationGrades, memberUnits, group.unitCustomQuotas],
+  );
+
+  const initialTotal = soyAlloc.totalHC;
+  const finalTotal = eoyAlloc.totalHC;
+  const difference = finalTotal - initialTotal;
+  const hasConfirmedEoy = Boolean(
+    group.yearEndStatus === "submitted" || memberUnits.some((u) => u.yearEndStatus === "submitted"),
+  );
+
+  const soyGradeCounts = soyGrades.map((_, gi) =>
+    soyUnits.reduce((s, u) => s + (soyAlloc.unitMatrix[u.id]?.[gi] ?? 0), 0),
+  );
+  const eoyGradeCounts = group.calibrationGrades.map((_, gi) =>
+    memberUnits.reduce((s, u) => s + (eoyAlloc.unitMatrix[u.id]?.[gi] ?? 0), 0),
+  );
+
+  const comparisonRows = useMemo(() => {
+    if (level === "unit") {
+      return memberUnits.map((u) => {
+        const sHc = soyAlloc.unitHCs[u.id] ?? 0;
+        const eHc = eoyAlloc.unitHCs[u.id] ?? 0;
+        return {
+          id: u.id,
+          label: u.name,
+          startHc: sHc,
+          endHc: eHc,
+          beforeShare: soyAlloc.unitShareMap[u.id] ?? 0,
+          afterShare: eoyAlloc.unitShareMap[u.id] ?? 0,
+        };
+      });
+    }
+    const filteredUnits = unitFilter === "ALL" ? memberUnits : memberUnits.filter((u) => u.id === unitFilter);
+    const totalStartScope = filteredUnits.reduce((s, u) => s + (soyAlloc.unitHCs[u.id] ?? 0), 0);
+    const totalEndScope = filteredUnits.reduce((s, u) => s + (eoyAlloc.unitHCs[u.id] ?? 0), 0);
+    const out: Array<{
+      id: string;
+      label: string;
+      startHc: number;
+      endHc: number;
+      beforeShare: number;
+      afterShare: number;
+    }> = [];
+    for (const u of filteredUnits) {
+      const su = soyUnits.find((x) => x.id === u.id) ?? u;
+      if (level === "division") {
+        const divMap = new Map<string, { divisi: string; sHc: number; eHc: number }>();
+        for (const d of su.divisionProportions) divMap.set(d.id, { divisi: d.divisi, sHc: d.hc, eHc: 0 });
+        for (const d of u.divisionProportions) {
+          const cur = divMap.get(d.id);
+          divMap.set(d.id, { divisi: d.divisi, sHc: cur?.sHc ?? 0, eHc: d.hc });
+        }
+        for (const [did, entry] of divMap.entries()) {
+          out.push({
+            id: `${u.id}::${did}`,
+            label: unitFilter === "ALL" ? `${entry.divisi} (${u.code})` : entry.divisi,
+            startHc: entry.sHc,
+            endHc: entry.eHc,
+            beforeShare: totalStartScope > 0 ? (entry.sHc / totalStartScope) * 100 : 0,
+            afterShare: totalEndScope > 0 ? (entry.eHc / totalEndScope) * 100 : 0,
+          });
+        }
+      } else {
+        const depMap = new Map<string, { departemen: string; sHc: number; eHc: number }>();
+        for (const dep of su.departemenenProportions) depMap.set(dep.id, { departemen: dep.departemen, sHc: dep.hc, eHc: 0 });
+        for (const dep of u.departemenenProportions) {
+          const cur = depMap.get(dep.id);
+          depMap.set(dep.id, { departemen: dep.departemen, sHc: cur?.sHc ?? 0, eHc: dep.hc });
+        }
+        for (const [depId, entry] of depMap.entries()) {
+          out.push({
+            id: `${u.id}::${depId}`,
+            label: unitFilter === "ALL" ? `${entry.departemen} (${u.code})` : entry.departemen,
+            startHc: entry.sHc,
+            endHc: entry.eHc,
+            beforeShare: totalStartScope > 0 ? (entry.sHc / totalStartScope) * 100 : 0,
+            afterShare: totalEndScope > 0 ? (entry.eHc / totalEndScope) * 100 : 0,
+          });
+        }
+      }
+    }
+    return out;
+  }, [level, unitFilter, memberUnits, soyUnits, soyAlloc, eoyAlloc]);
+
+  const deltaColor = (value: number) =>
+    value > 0 ? "text-green-700" : value < 0 ? "text-red-700" : "text-gray-500";
+  const signed = (value: number, digits = 0) => `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+
+  const gradeRows = group.calibrationGrades.map((after, idx) => {
+    const before = soyGrades.find((item) => item.id === after.id) ?? after;
+    return {
+      id: after.id,
+      label: after.grade,
+      beforePercent: parseGradePct(before.proporsi),
+      beforeCount: soyGradeCounts[idx] ?? 0,
+      afterCount: eoyGradeCounts[idx] ?? 0,
+    };
+  });
+  const gradeTotals = gradeRows.reduce(
+    (tot, item) => ({
+      proportion: tot.proportion + item.beforePercent,
+      before: tot.before + item.beforeCount,
+      after: tot.after + item.afterCount,
+    }),
+    { proportion: 0, before: 0, after: 0 },
+  );
+  const quotaTotals = comparisonRows.reduce(
+    (tot, r) => ({
+      before: tot.before + r.startHc,
+      after: tot.after + r.endHc,
+      beforeShare: tot.beforeShare + r.beforeShare,
+      afterShare: tot.afterShare + r.afterShare,
+    }),
+    { before: 0, after: 0, beforeShare: 0, afterShare: 0 },
+  );
+
+  const cards: Array<{ label: string; value: React.ReactNode; sub: string; tone: AnalyticsCardTone; icon: React.ReactNode }> = [
+    {
+      label: "HC Awal Tahun (SOY)",
+      value: initialTotal,
+      sub: lockedGroupSnap ? `Terkunci (Approved ${group.name})` : `Baseline Awal Tahun ${group.name}`,
+      tone: "navy",
+      icon: <Users className="w-4 h-4" />,
+    },
+    {
+      label: "HC Akhir Tahun (EOY)",
+      value: finalTotal,
+      sub: hasConfirmedEoy ? "Data EOY Group terkonfirmasi" : "Proyeksi HC aktif saat ini",
+      tone: "teal",
+      icon: <CheckCircle2 className="w-4 h-4" />,
+    },
+    {
+      label: "Selisih HC",
+      value: (difference > 0 ? "+" : "") + difference,
+      sub: "Perbandingan EOY vs SOY",
+      tone: difference > 0 ? "emerald" : difference < 0 ? "rose" : "slate",
+      icon: <TrendingUp className="w-4 h-4" />,
+    },
+    {
+      label: "% Perubahan",
+      value: headcountPercentageChange(initialTotal, finalTotal),
+      sub: "Rasio perubahan headcount Group",
+      tone: "plum",
+      icon: <Percent className="w-4 h-4" />,
+    },
+  ];
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+      <div className="space-y-6 p-6">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {cards.map((card, idx) => (
+            <AnalyticsStatCard
+              key={card.label}
+              index={idx}
+              compact
+              tone={card.tone}
+              title={card.label}
+              value={card.value}
+              subtitle={card.sub}
+              icon={card.icon}
+            />
+          ))}
+        </div>
+
+        <ComparisonBellCurveCard
+          grades={group.calibrationGrades}
+          soyCounts={soyGradeCounts}
+          eoyCounts={eoyGradeCounts}
+          hasConfirmedEoy={hasConfirmedEoy}
+        />
+
+        <section className="overflow-hidden rounded-xl border border-gray-200">
+          <div className="border-b bg-gray-50 p-4">
+            <h4 className="font-semibold">Perbandingan Grade Distribution — {group.name} (SOY vs EOY)</h4>
+            <p className="mt-1 text-xs text-gray-500">
+              Proporsi dan kuota karyawan gabungan {group.name} antara HC Awal Tahun (SOY) dan HC Akhir Tahun (EOY).
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[#1A284F] text-white">
+                <tr>
+                  {["Grade", "Proporsi SOY", "Kuota Awal (SOY)", "Kuota Akhir (EOY)", "Selisih Karyawan"].map((label) => (
+                    <th key={label} className="whitespace-nowrap px-4 py-3 text-left">{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {gradeRows.map((item) => (
+                  <tr key={item.id} className="border-t">
+                    <td className="p-4 font-semibold">{item.label}</td>
+                    <td className="p-4">{item.beforePercent}%</td>
+                    <td className="p-4">{item.beforeCount}</td>
+                    <td className="p-4">{item.afterCount}</td>
+                    <td className={`p-4 font-semibold ${deltaColor(item.afterCount - item.beforeCount)}`}>
+                      {signed(item.afterCount - item.beforeCount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t-2 border-gray-200 bg-gray-100 font-semibold text-[#1A284F]">
+                <tr>
+                  <th scope="row" className="p-4 text-left">Total</th>
+                  <td className="p-4">{gradeTotals.proportion.toFixed(1)}%</td>
+                  <td className="p-4">{gradeTotals.before}</td>
+                  <td className="p-4">{gradeTotals.after}</td>
+                  <td className={`p-4 ${deltaColor(gradeTotals.after - gradeTotals.before)}`}>
+                    {signed(gradeTotals.after - gradeTotals.before)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-xl border border-gray-200">
+          <div className="space-y-4 border-b bg-gray-50 p-4">
+            <div>
+              <h4 className="font-semibold">Perbandingan Share Quota — {group.name} (SOY vs EOY)</h4>
+              <p className="mt-1 text-xs text-gray-500">
+                Ringkasan perubahan HC Awal Tahun (SOY) dan HC Akhir Tahun (EOY) per Unit Usaha, Division, dan Departement.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <label className="text-xs text-gray-600">
+                Level
+                <select
+                  value={level}
+                  onChange={(e) => setLevel(e.target.value as "unit" | "division" | "department")}
+                  className="mt-1 block rounded-lg border bg-white px-3 py-2 text-sm"
+                >
+                  <option value="unit">Company Unit</option>
+                  <option value="division">Division</option>
+                  <option value="department">Departement</option>
+                </select>
+              </label>
+              {level !== "unit" && (
+                <label className="text-xs text-gray-600">
+                  Filter Unit Usaha
+                  <select
+                    value={unitFilter}
+                    onChange={(e) => setUnitFilter(e.target.value)}
+                    className="mt-1 block rounded-lg border bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="ALL">Semua Unit ({group.name})</option>
+                    {memberUnits.map((u) => (
+                      <option key={u.id} value={u.id}>{u.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[#1A284F] text-white">
+                <tr>
+                  {[
+                    level === "unit" ? "Unit Usaha" : "Organisasi",
+                    "HC Awal (SOY)",
+                    "HC Akhir (EOY)",
+                    "Selisih HC",
+                    "Perubahan (%)",
+                    "Share Quota SOY",
+                    "Share Quota EOY",
+                    "Selisih Share (%)",
+                  ].map((label) => (
+                    <th key={label} className="whitespace-nowrap px-4 py-3 text-left">{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {comparisonRows.map((item) => (
+                  <tr key={item.id} className="border-t">
+                    <td className="p-4 font-medium">{item.label}</td>
+                    <td className="p-4">{item.startHc}</td>
+                    <td className="p-4">{item.endHc}</td>
+                    <td className={`p-4 font-semibold ${deltaColor(item.endHc - item.startHc)}`}>
+                      {signed(item.endHc - item.startHc)}
+                    </td>
+                    <td className={`p-4 font-semibold ${deltaColor(item.endHc - item.startHc)}`}>
+                      {headcountPercentageChange(item.startHc, item.endHc)}
+                    </td>
+                    <td className="p-4">{item.beforeShare.toFixed(1)}%</td>
+                    <td className="p-4">{item.afterShare.toFixed(1)}%</td>
+                    <td className={`p-4 font-semibold ${deltaColor(item.afterShare - item.beforeShare)}`}>
+                      {signed(item.afterShare - item.beforeShare, 1)}%
+                    </td>
+                  </tr>
+                ))}
+                {!comparisonRows.length && (
+                  <tr>
+                    <td colSpan={8} className="p-6 text-center text-gray-500">Tidak ada organisasi sesuai filter.</td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot className="border-t-2 border-gray-200 bg-gray-100 font-semibold text-[#1A284F]">
+                <tr>
+                  <th scope="row" className="p-4 text-left">Total</th>
+                  <td className="p-4">{quotaTotals.before}</td>
+                  <td className="p-4">{quotaTotals.after}</td>
+                  <td className={`p-4 ${deltaColor(quotaTotals.after - quotaTotals.before)}`}>
+                    {signed(quotaTotals.after - quotaTotals.before)}
+                  </td>
+                  <td className={`p-4 ${deltaColor(quotaTotals.after - quotaTotals.before)}`}>
+                    {headcountPercentageChange(quotaTotals.before, quotaTotals.after)}
+                  </td>
+                  <td className="p-4">{quotaTotals.beforeShare.toFixed(1)}%</td>
+                  <td className="p-4">{quotaTotals.afterShare.toFixed(1)}%</td>
+                  <td className={`p-4 ${deltaColor(quotaTotals.afterShare - quotaTotals.beforeShare)}`}>
+                    {signed(quotaTotals.afterShare - quotaTotals.beforeShare, 1)}%
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function GroupDetail({
+  group,
+  memberUnits,
+  soyApproval,
+  onBack,
+  onCommitGroupAndUnits,
+  onSubmitGroupSoy,
+  onResetGroupSoy,
+}: {
+  group: CalibrationGroupSetting;
+  memberUnits: CompanyUnit[];
+  soyApproval?: SoyApprovalRecord;
+  onBack: () => void;
+  onCommitGroupAndUnits: (nextGroup: CalibrationGroupSetting, nextMemberUnits: CompanyUnit[], toastMessage?: string) => void;
+  onSubmitGroupSoy: (committedGroup: CalibrationGroupSetting, committedMemberUnits: CompanyUnit[]) => void;
+  onResetGroupSoy: () => void;
+}) {
+  const [hcTab, setHcTab] = useState<"start" | "end" | "summary">("start");
+  const [soyEditMode, setSoyEditMode] = useState(false);
+  const [soyPageMode, setSoyPageMode] = useState<PageMode>("edit");
+  const [soySaved, setSoySaved] = useState(false);
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [selectedSoyUnitId, setSelectedSoyUnitId] = useState<string | null>(null);
+
+  const [eoyEditMode, setEoyEditMode] = useState(false);
+  const [eoyPageMode, setEoyPageMode] = useState<PageMode>(group.yearEndStatus ?? "edit");
+  const [showEoyConfirmModal, setShowEoyConfirmModal] = useState(false);
+  const [selectedEoyUnitId, setSelectedEoyUnitId] = useState<string | null>(null);
+
+  const [workingGroup, setWorkingGroup] = useState<CalibrationGroupSetting>(() => JSON.parse(JSON.stringify(group)));
+  const [workingUnits, setWorkingUnits] = useState<CompanyUnit[]>(() => JSON.parse(JSON.stringify(memberUnits)));
+
+  useEffect(() => {
+    if (!soyEditMode && !eoyEditMode) {
+      setWorkingGroup(JSON.parse(JSON.stringify(group)));
+      setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
+    }
+  }, [group, memberUnits, soyEditMode, eoyEditMode]);
+
+  useEffect(() => {
+    setEoyPageMode(group.yearEndStatus ?? "edit");
+  }, [group.id, group.yearEndStatus]);
+
+  const isSoyApprovedLocked = Boolean(soyApproval?.status === "Approved" && soyApproval.groupSnapshot);
+  const isSoyPending = Boolean(soyApproval?.status === "Pending");
+  const effectiveSoyMode: PageMode = isSoyApprovedLocked || isSoyPending ? "submitted" : soyPageMode;
+  const canSubmitSoy = !isSoyApprovedLocked && !isSoyPending && (soySaved || effectiveSoyMode === "preview" || memberUnits.some((u) => u.divisionProportions.length > 0));
+
+  // Data yang ditampilkan di tab SOY: bila sudah Approved, tampilkan snapshot SOY yang terkunci; bila sedang edit gunakan working state
+  const soyDisplayGrades = useMemo(() => {
+    if (soyEditMode) return workingGroup.calibrationGrades;
+    if (isSoyApprovedLocked && soyApproval?.groupSnapshot) return soyApproval.groupSnapshot.calibrationGrades;
+    if (group.beginningGrades) return group.beginningGrades;
+    return group.calibrationGrades;
+  }, [soyEditMode, workingGroup.calibrationGrades, isSoyApprovedLocked, soyApproval, group.beginningGrades, group.calibrationGrades]);
+
+  const soyDisplayUnitCustomQuotas = useMemo(() => {
+    if (soyEditMode) return workingGroup.unitCustomQuotas;
+    if (isSoyApprovedLocked && soyApproval?.groupSnapshot) return soyApproval.groupSnapshot.unitCustomQuotas;
+    if (group.beginningUnitCustomQuotas) return group.beginningUnitCustomQuotas;
+    return group.unitCustomQuotas;
+  }, [soyEditMode, workingGroup.unitCustomQuotas, isSoyApprovedLocked, soyApproval, group.beginningUnitCustomQuotas, group.unitCustomQuotas]);
+
+  const soyDisplayUnits: CompanyUnit[] = useMemo(() => {
+    if (soyEditMode) return workingUnits;
+    if (isSoyApprovedLocked && soyApproval?.groupSnapshot?.units) {
+      return memberUnits.map((u) => {
+        const snap = soyApproval.groupSnapshot!.units.find(
+          (su) => su.id === u.id || canonicalizeCompanyUnitName(su.name) === canonicalizeCompanyUnitName(u.name),
+        );
+        if (!snap) return u;
+        return {
+          ...u,
+          calibrationGrades: snap.calibrationGrades,
+          unitQuotaTargets: snap.unitQuotaTargets,
+          divisionProportions: snap.divisionProportions,
+          departemenenProportions: snap.departemenenProportions,
+          bagianProportions: snap.bagianProportions,
+        };
+      });
+    }
+    return memberUnits.map((u) =>
+      u.beginningHC
+        ? {
+            ...u,
+            divisionProportions: u.divisionProportions.map((d) => ({
+              ...d,
+              hc: u.beginningHC?.[d.id] ?? d.hc,
+              customQuotas: u.beginningCustomQuotas?.[d.id],
+            })),
+            departemenenProportions: u.departemenenProportions.map((dep) => ({
+              ...dep,
+              hc: u.beginningHC?.[dep.id] ?? dep.hc,
+              customQuotas: u.beginningCustomQuotas?.[dep.id],
+            })),
+          }
+        : u,
+    );
+  }, [soyEditMode, workingUnits, isSoyApprovedLocked, soyApproval, memberUnits]);
+
+  // Helpers mutasi workingGroup & workingUnits (digunakan bersama oleh SOY edit maupun EOY edit)
+  const handleUpdateGrade = (id: string, field: keyof CalibrationGrade, val: string) => {
+    setWorkingGroup((prev) => ({
+      ...prev,
+      calibrationGrades: prev.calibrationGrades.map((g) => (g.id === id ? { ...g, [field]: val } : g)),
+    }));
+  };
+
+  const handleUpdateCompanyUnitQuota = (unitId: string, gradeId: string, val: number | null) => {
+    setWorkingGroup((prev) => {
+      const nextAll = { ...(prev.unitCustomQuotas ?? {}) };
+      const nextUnit = { ...(nextAll[unitId] ?? {}) };
+      if (val === null) delete nextUnit[gradeId];
+      else nextUnit[gradeId] = val;
+      if (Object.keys(nextUnit).length === 0) delete nextAll[unitId];
+      else nextAll[unitId] = nextUnit;
+      return { ...prev, unitCustomQuotas: nextAll };
+    });
+  };
+
+  const handleAutoBalanceCompanyUnits = () => {
+    const gradeIds = workingGroup.calibrationGrades.map((g) => g.id);
+    const gradeWeights = workingGroup.calibrationGrades.map((g) => parseGradePct(g.proporsi));
+    const rowHCs = workingUnits.map((u) => u.divisionProportions.reduce((s, d) => s + d.hc, 0));
+    const totalHC = rowHCs.reduce((a, b) => a + b, 0);
+    const groupTargets = apportionLargestRemainder(totalHC, gradeWeights);
+    const balanced = allocate2DQuotaMatrix({
+      rowHCs,
+      colTargets: groupTargets,
+      gradeWeights,
+      gradeIds,
+      rowCustomQuotas: workingUnits.map((u) => workingGroup.unitCustomQuotas?.[u.id]),
+      autoBalanceLocked: true,
+    });
+    const nextMap: Record<string, Record<string, number>> = {};
+    workingUnits.forEach((u, idx) => {
+      nextMap[u.id] = Object.fromEntries(gradeIds.map((gid, g) => [gid, balanced[idx]?.[g] ?? 0]));
+    });
+    setWorkingGroup((prev) => ({ ...prev, unitCustomQuotas: nextMap }));
+    toast.success(`Kuota antar-Unit Usaha pada ${group.name} berhasil diseimbangkan sesuai kurva normal.`);
+  };
+
+  const handleResetCompanyUnitQuotas = () => {
+    setWorkingGroup((prev) => ({ ...prev, unitCustomQuotas: {} }));
+    toast.success("Kuota Unit Usaha dikembalikan ke distribusi normal otomatis.");
+  };
+
+  const handleUpdateUnitDivisionHC = (unitId: string, divId: string, newHC: number) => {
+    setWorkingUnits((prev) =>
+      prev.map((u) => {
+        if (u.id !== unitId) return u;
+        const updDivs = u.divisionProportions.map((d) =>
+          d.id === divId ? { ...d, hc: newHC, customQuotas: undefined } : d,
+        );
+        const deptsInDiv = u.departemenenProportions.filter((d) => d.divisiId === divId);
+        const deptWeights = deptsInDiv.map((d) => (d.hc > 0 ? d.hc : 1));
+        const deptHCs = apportionLargestRemainder(newHC, deptWeights);
+        const deptHcById = new Map(deptsInDiv.map((d, i) => [d.id, deptHCs[i] ?? 0]));
+        const updDepts = u.departemenenProportions.map((d) =>
+          deptHcById.has(d.id) ? { ...d, hc: deptHcById.get(d.id)!, customQuotas: undefined } : d,
+        );
+        const updBags = u.bagianProportions.map((b) => ({ ...b }));
+        for (const dep of deptsInDiv) {
+          const tDepHC = deptHcById.get(dep.id) ?? 0;
+          const bags = updBags.filter((b) => b.departemenenId === dep.id);
+          const bagHCs = apportionLargestRemainder(tDepHC, bags.map((b) => (b.hc > 0 ? b.hc : 1)));
+          bags.forEach((bag, idx) => {
+            bag.hc = bagHCs[idx] ?? 0;
+            bag.customQuotas = undefined;
+          });
+        }
+        return { ...u, divisionProportions: updDivs, departemenenProportions: updDepts, bagianProportions: updBags };
+      }),
+    );
+  };
+
+  const handleUpdateUnitDepartemenHC = (unitId: string, deptId: string, rawVal: number) => {
+    setWorkingUnits((prev) =>
+      prev.map((u) => {
+        if (u.id !== unitId) return u;
+        const dept = u.departemenenProportions.find((d) => d.id === deptId);
+        if (!dept) return u;
+        const parentDiv = u.divisionProportions.find((d) => d.id === dept.divisiId);
+        const newHC = Math.min(Math.max(0, rawVal), parentDiv?.hc ?? Infinity);
+        const updDepts = u.departemenenProportions.map((d) =>
+          d.id === deptId ? { ...d, hc: newHC, customQuotas: undefined } : d,
+        );
+        const bags = u.bagianProportions.filter((b) => b.departemenenId === deptId);
+        const bagHCs = apportionLargestRemainder(newHC, bags.map((b) => (b.hc > 0 ? b.hc : 1)));
+        const bagHcById = new Map(bags.map((b, i) => [b.id, bagHCs[i] ?? 0]));
+        const updBags = u.bagianProportions.map((b) =>
+          bagHcById.has(b.id) ? { ...b, hc: bagHcById.get(b.id)!, customQuotas: undefined } : b,
+        );
+        return { ...u, departemenenProportions: updDepts, bagianProportions: updBags };
+      }),
+    );
+  };
+
+  const handleUpdateUnitDivisionQuota = (unitId: string, divId: string, gradeId: string, val: number | null) => {
+    setWorkingUnits((prev) =>
+      prev.map((u) =>
+        u.id === unitId ? { ...u, divisionProportions: patchQuotaRecord(u.divisionProportions, divId, gradeId, val) } : u,
+      ),
+    );
+  };
+
+  const handleUpdateUnitDepartemenQuota = (unitId: string, deptId: string, gradeId: string, val: number | null) => {
+    setWorkingUnits((prev) =>
+      prev.map((u) =>
+        u.id === unitId
+          ? { ...u, departemenenProportions: patchQuotaRecord(u.departemenenProportions, deptId, gradeId, val) }
+          : u,
+      ),
+    );
+  };
+
+  const handleAutoBalanceUnitLevel = (unitId: string, level: "division" | "department") => {
+    const curGroupAlloc = computeGroupQuotaAllocation({
+      calibrationGrades: workingGroup.calibrationGrades,
+      units: workingUnits,
+      unitCustomQuotas: workingGroup.unitCustomQuotas,
+    });
+    const gradeIds = workingGroup.calibrationGrades.map((g) => g.id);
+    const gradeWeights = workingGroup.calibrationGrades.map((g) => parseGradePct(g.proporsi));
+    setWorkingUnits((prev) =>
+      prev.map((u) => {
+        if (u.id !== unitId) return u;
+        const unitTargets = curGroupAlloc.unitMatrix[u.id] ?? apportionLargestRemainder(curGroupAlloc.unitHCs[u.id] ?? 0, gradeWeights);
+        if (level === "division") {
+          const balanced = allocate2DQuotaMatrix({
+            rowHCs: u.divisionProportions.map((d) => d.hc),
+            colTargets: unitTargets,
+            gradeWeights,
+            gradeIds,
+            rowCustomQuotas: u.divisionProportions.map((d) => d.customQuotas),
+            autoBalanceLocked: true,
+          });
+          return {
+            ...u,
+            divisionProportions: u.divisionProportions.map((d, r) => ({
+              ...d,
+              customQuotas: Object.fromEntries(gradeIds.map((gid, g) => [gid, balanced[r]?.[g] ?? 0])),
+            })),
+          };
+        }
+        const uAlloc = curGroupAlloc.perUnitAlloc[u.id];
+        const nextDepts = [...u.departemenenProportions];
+        for (const div of u.divisionProportions) {
+          const children = nextDepts.filter((dep) => dep.divisiId === div.id);
+          if (!children.length) continue;
+          const balanced = allocate2DQuotaMatrix({
+            rowHCs: children.map((c) => c.hc),
+            colTargets: uAlloc?.divMatrix[div.id] ?? apportionLargestRemainder(div.hc, gradeWeights),
+            gradeWeights,
+            gradeIds,
+            rowCustomQuotas: children.map((c) => c.customQuotas),
+            autoBalanceLocked: true,
+          });
+          children.forEach((child, r) => {
+            const idx = nextDepts.findIndex((x) => x.id === child.id);
+            if (idx >= 0) {
+              nextDepts[idx] = {
+                ...nextDepts[idx],
+                customQuotas: Object.fromEntries(gradeIds.map((gid, g) => [gid, balanced[r]?.[g] ?? 0])),
+              };
+            }
+          });
+        }
+        return { ...u, departemenenProportions: nextDepts };
+      }),
+    );
+    toast.success(`Kuota ${level === "division" ? "Divisi" : "Departement"} berhasil diseimbangkan.`);
+  };
+
+  const handleResetUnitLevelQuotas = (unitId: string, level: "division" | "department") => {
+    setWorkingUnits((prev) =>
+      prev.map((u) => {
+        if (u.id !== unitId) return u;
+        if (level === "division") {
+          return { ...u, divisionProportions: u.divisionProportions.map((d) => ({ ...d, customQuotas: undefined })) };
+        }
+        return { ...u, departemenenProportions: u.departemenenProportions.map((d) => ({ ...d, customQuotas: undefined })) };
+      }),
+    );
+    toast.success("Kuota manual dikembalikan ke perhitungan otomatis.");
+  };
+
+  const handleRefreshEmployees = (targetPhase: "soy" | "eoy") => {
+    const baseUnits = (targetPhase === "soy" ? (soyEditMode ? workingUnits : memberUnits) : (eoyEditMode ? workingUnits : memberUnits)).map(
+      (u) => applyImportedEmployeesDistribution(u, true),
+    );
+    const baseGroup: CalibrationGroupSetting = {
+      ...(targetPhase === "soy" ? (soyEditMode ? workingGroup : group) : (eoyEditMode ? workingGroup : group)),
+      unitCustomQuotas: {},
+    };
+    if ((targetPhase === "soy" && soyEditMode) || (targetPhase === "eoy" && eoyEditMode)) {
+      setWorkingUnits(baseUnits);
+      setWorkingGroup(baseGroup);
+    } else {
+      onCommitGroupAndUnits(
+        baseGroup,
+        baseUnits,
+        `Data karyawan seluruh unit pada ${group.name} berhasil di-refresh dan didistribusikan otomatis.`,
+      );
+    }
+  };
+
+  const handleSaveSoyChanges = () => {
+    const totalPct = workingGroup.calibrationGrades.reduce((s, g) => s + parseGradePct(g.proporsi), 0);
+    if (Math.abs(totalPct - 100) > 0.001) {
+      toast.error(`Total proporsi Grade saat ini ${totalPct}%. Pastikan total proporsi tepat 100% sebelum menyimpan.`);
+      return;
+    }
+    onCommitGroupAndUnits(
+      workingGroup,
+      workingUnits,
+      `Pengaturan HC Awal Tahun (SOY) ${group.name} disimpan & tersinkronisasi otomatis ke ${workingUnits.length} Company Units.`,
+    );
+    setSoyEditMode(false);
+    setSoySaved(true);
+  };
+
+  const handleSaveEoyChanges = () => {
+    const totalPct = workingGroup.calibrationGrades.reduce((s, g) => s + parseGradePct(g.proporsi), 0);
+    if (Math.abs(totalPct - 100) > 0.001) {
+      toast.error(`Total proporsi Grade saat ini ${totalPct}%. Pastikan total proporsi tepat 100% sebelum menyimpan.`);
+      return;
+    }
+    const nextGrp: CalibrationGroupSetting = {
+      ...workingGroup,
+      yearEndUpdatedAt: new Date().toISOString(),
+      yearEndStatus: "edit",
+    };
+    onCommitGroupAndUnits(
+      nextGrp,
+      workingUnits,
+      ` Perubahan HC Akhir Tahun (EOY) ${group.name} disimpan; baseline SOY tetap terjaga.`,
+    );
+    setEoyEditMode(false);
+  };
+
+  const handleConfirmGroupEoy = () => {
+    const snapshots = loadSoyEmployeeSnapshot();
+    const allManaged = loadManagedUsers();
+    const archivedIds = new Set(loadArchivedUsers().map((a) => a.user.employeeId.toLowerCase()));
+    const toArchive: ReturnType<typeof loadManagedUsers> = [];
+
+    for (const u of memberUnits) {
+      const canonName = canonicalizeCompanyUnitName(u.name);
+      const snapList = snapshots[canonName] ?? [];
+      const activeIds = new Set(
+        allManaged
+          .filter((emp) => canonicalizeCompanyUnitName(emp.company) === canonName && emp.status === "Active" && !isExcludedFromAppraisalCalibration(emp))
+          .map((emp) => emp.employeeId.toLowerCase()),
+      );
+      const inactiveInUnit = allManaged.filter(
+        (emp) => canonicalizeCompanyUnitName(emp.company) === canonName && emp.status !== "Active",
+      );
+      for (const cand of [...snapList.filter((emp) => !activeIds.has(emp.employeeId.toLowerCase())), ...inactiveInUnit]) {
+        if (!archivedIds.has(cand.employeeId.toLowerCase()) && !toArchive.some((x) => x.employeeId === cand.employeeId)) {
+          toArchive.push(cand);
+        }
+      }
+    }
+    const archivedCount = archiveUsers(toArchive, EOY_ARCHIVE_REASON, "eoy");
+    const refreshedUnits = memberUnits.map((u) => {
+      const dist = applyImportedEmployeesDistribution(u);
+      const lockedSnapUnit = soyApproval?.groupSnapshot?.units?.find(
+        (su) => su.id === u.id || canonicalizeCompanyUnitName(su.name) === canonicalizeCompanyUnitName(u.name),
+      );
+      const lockedBeginningHC = lockedSnapUnit
+        ? Object.fromEntries(
+            [...lockedSnapUnit.divisionProportions, ...lockedSnapUnit.departemenenProportions, ...lockedSnapUnit.bagianProportions].map(
+              (r) => [r.id, r.hc],
+            ),
+          )
+        : u.beginningHC ??
+          Object.fromEntries(
+            [...u.divisionProportions, ...u.departemenenProportions, ...u.bagianProportions].map((r) => [r.id, r.hc]),
+          );
+      return {
+        ...dist,
+        beginningGrades: lockedSnapUnit?.calibrationGrades ?? u.beginningGrades ?? u.calibrationGrades,
+        beginningUnitQuotaTargets: lockedSnapUnit?.unitQuotaTargets ?? u.beginningUnitQuotaTargets ?? u.unitQuotaTargets,
+        beginningHC: lockedBeginningHC,
+        yearEndUpdatedAt: new Date().toISOString(),
+        yearEndStatus: "submitted" as PageMode,
+      };
+    });
+    const nextGrp: CalibrationGroupSetting = {
+      ...group,
+      beginningGrades: soyApproval?.groupSnapshot?.calibrationGrades ?? group.beginningGrades ?? group.calibrationGrades,
+      beginningUnitCustomQuotas:
+        soyApproval?.groupSnapshot?.unitCustomQuotas ?? group.beginningUnitCustomQuotas ?? group.unitCustomQuotas,
+      yearEndUpdatedAt: new Date().toISOString(),
+      yearEndStatus: "submitted",
+    };
+    onCommitGroupAndUnits(nextGrp, refreshedUnits);
+    setShowEoyConfirmModal(false);
+    setEoyPageMode("submitted");
+    window.dispatchEvent(new Event("pa-employees-imported"));
+    window.dispatchEvent(new Event("appraisal-updated"));
+    toast.success(
+      archivedCount > 0
+        ? `HC Akhir Tahun (EOY) ${group.name} dikonfirmasi. ${archivedCount} karyawan diarsipkan (${EOY_ARCHIVE_REASON}) & seluruh Company Units diperbarui.`
+        : `HC Akhir Tahun (EOY) ${group.name} dikonfirmasi & seluruh Company Units diperbarui.`,
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      {showSubmitModal && (
+        <SubmitConfirmModal
+          targetName={group.name}
+          onCancel={() => setShowSubmitModal(false)}
+          onConfirm={() => {
+            setShowSubmitModal(false);
+            onSubmitGroupSoy(group, memberUnits);
+            setSoyPageMode("submitted");
+          }}
+        />
+      )}
+      {showEoyConfirmModal && (
+        <ConfirmYearEndModal
+          unitName={`${group.name} (${memberUnits.length} Unit Usaha)`}
+          onCancel={() => setShowEoyConfirmModal(false)}
+          onConfirm={handleConfirmGroupEoy}
+        />
+      )}
+
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-[#1A284F] transition-colors cursor-pointer"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Group
+        </button>
+      </div>
+
+      {/* Group Header Card */}
+      <div className="flex items-center justify-between gap-4 flex-wrap bg-white border border-gray-100 rounded-2xl px-6 py-4 shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-[#1A284F]/10 flex items-center justify-center shrink-0">
+            <Layers className="w-6 h-6 text-[#1A284F]" />
+          </div>
+          <div>
+            <p className="font-bold text-gray-900 text-lg">{group.name}</p>
+            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+              <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{group.code}</span>
+              <span className="text-xs text-gray-400">·</span>
+              {memberUnits.map((u) => (
+                <span
+                  key={u.id}
+                  className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200"
+                >
+                  {u.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Status Banner SOY */}
+      {soyApproval?.status === "Approved" ? (
+        <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-3">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <p className="text-sm text-emerald-800 font-medium">
+            HC Awal Tahun (SOY) &amp; Distribusi Proporsi Grade <strong>{group.name}</strong> sudah <strong>Approved</strong> oleh{" "}
+            {soyApproval.decidedBy}
+            {soyApproval.note ? <> — “{soyApproval.note}”</> : null}. Data seluruh Company Units telah terkunci otomatis.
+          </p>
+        </div>
+      ) : soyApproval?.status === "Revision" ? (
+        <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-xl px-5 py-3">
+          <RotateCcw className="w-4 h-4 text-orange-600 shrink-0 mt-0.5" />
+          <p className="text-sm text-orange-800">
+            <strong>Revisi diminta</strong> oleh {soyApproval.decidedBy}: {soyApproval.note || "-"}. Silakan sesuaikan pengaturan {group.name} lalu klik <strong>Submit</strong> kembali.
+          </p>
+        </div>
+      ) : isSoyPending ? (
+        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
+          <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800 font-medium">
+            Calibration Setting (SOY) <strong>{group.name}</strong> sudah disubmit dan sedang menunggu persetujuan <strong>Director</strong> pada halaman <strong>/approvals/calibration/setting</strong>.
+          </p>
+        </div>
+      ) : null}
+
+      {/* Sub-Tabs: HC Awal Tahun (SOY) | HC Akhir Tahun (EOY) | Summary */}
+      <Tabs.Root value={hcTab} onValueChange={(v) => setHcTab(v as "start" | "end" | "summary")} className="space-y-6">
+        <Tabs.List aria-label="Pengaturan Headcount Group" className="flex flex-wrap gap-1 border-b border-gray-200">
+          {[
+            ["start", "HC Awal Tahun (SOY)"],
+            ["end", "HC Akhir Tahun (EOY)"],
+            ["summary", "Summary"],
+          ].map(([value, label]) => (
+            <Tabs.Trigger
+              key={value}
+              value={value}
+              className="border-b-2 border-transparent px-5 py-3 text-sm font-medium text-gray-500 transition-colors hover:text-[#1A284F] focus-visible:outline-none data-[state=active]:border-[#1A284F] data-[state=active]:text-[#1A284F] cursor-pointer"
+            >
+              {label}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+
+        {/* TAB 1: HC AWAL TAHUN (SOY) */}
+        <Tabs.Content value="start" className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm font-medium text-gray-500">
+              {isSoyApprovedLocked
+                ? `HC Awal Tahun (SOY) ${group.name} telah disetujui Director dan terkunci sebagai baseline.`
+                : `Setting HC Awal Tahun (SOY) ${group.name} — klik baris Unit Usaha pada tabel Proportion per Company Unit untuk membuka & menyesuaikan Division serta Departement.`}
+            </p>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {(isSoyApprovedLocked || isSoyPending) && (
+                <button
+                  type="button"
+                  onClick={onResetGroupSoy}
+                  className="flex items-center gap-2 px-4 py-2.5 border border-amber-300 bg-amber-50 text-amber-800 rounded-xl text-xs font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset Status HC Awal Tahun (SOY)
+                </button>
+              )}
+              {!isSoyApprovedLocked && !isSoyPending && effectiveSoyMode === "edit" && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleRefreshEmployees("soy")}
+                    className="flex items-center gap-2 px-3.5 py-2.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-xl text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Refresh Data Karyawan
+                  </button>
+                  {soyEditMode && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWorkingGroup(JSON.parse(JSON.stringify(group)));
+                        setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
+                        setSoyEditMode(false);
+                      }}
+                      className="px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (soyEditMode) handleSaveSoyChanges();
+                      else {
+                        setWorkingGroup(JSON.parse(JSON.stringify(group)));
+                        setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
+                        setSoyEditMode(true);
+                      }
+                    }}
+                    className="flex items-center gap-2 bg-[#1A284F] text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm cursor-pointer"
+                  >
+                    {soyEditMode ? (
+                      <>
+                        <Save className="w-4 h-4" />
+                        Save Changes
+                      </>
+                    ) : (
+                      <>
+                        <Edit2 className="w-4 h-4" />
+                        Edit Settings
+                      </>
+                    )}
+                  </button>
+                  {!soyEditMode && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSoyPageMode("preview")}
+                        className="flex items-center gap-2 px-4 py-2.5 border border-[#1A284F] text-[#1A284F] rounded-xl text-sm font-medium hover:bg-[#1A284F]/5 transition-colors cursor-pointer"
+                      >
+                        <Eye className="w-4 h-4" />
+                        Preview
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canSubmitSoy}
+                        onClick={canSubmitSoy ? () => setShowSubmitModal(true) : undefined}
+                        className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm ${
+                          canSubmitSoy
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                            : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                        }`}
+                      >
+                        <Send className="w-4 h-4" />
+                        Submit
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+              {!isSoyApprovedLocked && !isSoyPending && effectiveSoyMode === "preview" && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSoyPageMode("edit")}
+                    className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    Back to Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSubmitModal(true)}
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm cursor-pointer"
+                  >
+                    <Send className="w-4 h-4" />
+                    Submit
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <GroupCalibrationPanel
+            groupName={group.name}
+            calibrationGrades={soyDisplayGrades}
+            memberUnits={soyDisplayUnits}
+            unitCustomQuotas={soyDisplayUnitCustomQuotas}
+            editMode={!isSoyApprovedLocked && !isSoyPending && effectiveSoyMode === "edit" && soyEditMode}
+            selectedUnitId={selectedSoyUnitId}
+            onSelectUnitId={setSelectedSoyUnitId}
+            onUpdateCalibrationGrade={handleUpdateGrade}
+            onUpdateCompanyUnitQuota={handleUpdateCompanyUnitQuota}
+            onAutoBalanceCompanyUnits={handleAutoBalanceCompanyUnits}
+            onResetCompanyUnitQuotas={handleResetCompanyUnitQuotas}
+            onUpdateUnitDivisionHC={handleUpdateUnitDivisionHC}
+            onUpdateUnitDepartemenHC={handleUpdateUnitDepartemenHC}
+            onUpdateUnitDivisionQuota={handleUpdateUnitDivisionQuota}
+            onUpdateUnitDepartemenQuota={handleUpdateUnitDepartemenQuota}
+            onAutoBalanceUnitLevel={handleAutoBalanceUnitLevel}
+            onResetUnitLevelQuotas={handleResetUnitLevelQuotas}
+          />
+        </Tabs.Content>
+
+        {/* TAB 2: HC AKHIR TAHUN (EOY) — cukup konfirmasi perubahan data di akhir tahun (tanpa approval) */}
+        <Tabs.Content value="end" className="space-y-6">
+          {!isSoyApprovedLocked && !soyApproval && memberUnits.every((u) => u.divisionProportions.length === 0) ? (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              Lengkapi dan submit HC Awal Tahun (SOY) pada {group.name} terlebih dahulu sebelum mengonfirmasi HC Akhir Tahun (EOY).
+            </p>
+          ) : (
+            <>
+              {eoyPageMode === "submitted" && (
+                <div className="flex items-center justify-between gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-3 flex-wrap">
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <p className="text-sm text-emerald-800 font-medium">
+                      Data HC Akhir Tahun (EOY) <strong>{group.name}</strong> telah dikonfirmasi (tanpa perlu approval). Baseline HC Awal Tahun (SOY) tetap terjaga.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEoyPageMode("edit")}
+                    className="px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
+                  >
+                    Perbarui EOY Lagi
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-medium text-gray-500">
+                  HC Akhir Tahun (EOY) · {group.name} — konfirmasi perubahan data karyawan di akhir tahun (baseline SOY tidak berubah).
+                </p>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {eoyPageMode === "edit" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleRefreshEmployees("eoy")}
+                        className="flex items-center gap-2 px-3.5 py-2.5 border border-blue-200 bg-blue-50 text-[#1A284F] rounded-xl text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Refresh Data Karyawan
+                      </button>
+                      {eoyEditMode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWorkingGroup(JSON.parse(JSON.stringify(group)));
+                            setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
+                            setEoyEditMode(false);
+                          }}
+                          className="px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (eoyEditMode) handleSaveEoyChanges();
+                          else {
+                            setWorkingGroup(JSON.parse(JSON.stringify(group)));
+                            setWorkingUnits(JSON.parse(JSON.stringify(memberUnits)));
+                            setEoyEditMode(true);
+                          }
+                        }}
+                        className="flex items-center gap-2 bg-[#1A284F] text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-[#131d3b] transition-colors shadow-sm cursor-pointer"
+                      >
+                        {eoyEditMode ? (
+                          <>
+                            <Save className="w-4 h-4" />
+                            Save Changes
+                          </>
+                        ) : (
+                          <>
+                            <Edit2 className="w-4 h-4" />
+                            Edit Settings
+                          </>
+                        )}
+                      </button>
+                      {!eoyEditMode && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setEoyPageMode("preview")}
+                            className="flex items-center gap-2 px-4 py-2.5 border border-[#1A284F] text-[#1A284F] rounded-xl text-sm font-medium hover:bg-[#1A284F]/5 transition-colors cursor-pointer"
+                          >
+                            <Eye className="w-4 h-4" />
+                            Preview
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowEoyConfirmModal(true)}
+                            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            Confirm Data
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {eoyPageMode === "preview" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setEoyPageMode("edit")}
+                        className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                        Back to Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowEoyConfirmModal(true)}
+                        className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        Confirm Data
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <GroupCalibrationPanel
+                groupName={group.name}
+                calibrationGrades={eoyEditMode ? workingGroup.calibrationGrades : group.calibrationGrades}
+                memberUnits={eoyEditMode ? workingUnits : memberUnits}
+                unitCustomQuotas={eoyEditMode ? workingGroup.unitCustomQuotas : group.unitCustomQuotas}
+                editMode={eoyPageMode === "edit" && eoyEditMode}
+                selectedUnitId={selectedEoyUnitId}
+                onSelectUnitId={setSelectedEoyUnitId}
+                onUpdateCalibrationGrade={handleUpdateGrade}
+                onUpdateCompanyUnitQuota={handleUpdateCompanyUnitQuota}
+                onAutoBalanceCompanyUnits={handleAutoBalanceCompanyUnits}
+                onResetCompanyUnitQuotas={handleResetCompanyUnitQuotas}
+                onUpdateUnitDivisionHC={handleUpdateUnitDivisionHC}
+                onUpdateUnitDepartemenHC={handleUpdateUnitDepartemenHC}
+                onUpdateUnitDivisionQuota={handleUpdateUnitDivisionQuota}
+                onUpdateUnitDepartemenQuota={handleUpdateUnitDepartemenQuota}
+                onAutoBalanceUnitLevel={handleAutoBalanceUnitLevel}
+                onResetUnitLevelQuotas={handleResetUnitLevelQuotas}
+              />
+            </>
+          )}
+        </Tabs.Content>
+
+        {/* TAB 3: SUMMARY (SOY vs EOY) */}
+        <Tabs.Content value="summary">
+          <GroupHeadcountSummary group={group} memberUnits={memberUnits} soyApproval={soyApproval} />
+        </Tabs.Content>
+      </Tabs.Root>
+    </div>
   );
 }

@@ -199,11 +199,13 @@ export default async function handler(req, res) {
       ]);
       const mwRes = keysParam ? null : await pgRest(cfg, "pa_module_windows?select=*");
       const catRes = keysParam ? null : await pgRest(cfg, "pa_master_catalogs?select=*");
+      const calSetRes = keysParam ? null : await pgRest(cfg, "pa_calibration_settings?select=*");
 
       const kvRows = kvRes.ok ? await kvRes.json() : [];
       const users = usersRes.ok ? await usersRes.json() : [];
       const moduleWindows = mwRes && mwRes.ok ? await mwRes.json() : [];
       const masterCatalogs = catRes && catRes.ok ? await catRes.json() : [];
+      const calibrationSettings = calSetRes && calSetRes.ok ? await calSetRes.json() : [];
       // Auto-migrate baris pa_users di database yang masih bernama "ASD" / "RSUP ASD" -> "PT RSUP ASD"
       if (Array.isArray(users) && users.some((u) => u && (u.company === "ASD" || u.company === "RSUP ASD"))) {
         const nowIso = new Date().toISOString();
@@ -250,6 +252,7 @@ export default async function handler(req, res) {
         users: Array.isArray(users) ? users : [],
         moduleWindows: Array.isArray(moduleWindows) ? moduleWindows : [],
         masterCatalogs: Array.isArray(masterCatalogs) ? masterCatalogs : [],
+        calibrationSettings: Array.isArray(calibrationSettings) ? calibrationSettings : [],
       });
     }
 
@@ -786,6 +789,20 @@ export default async function handler(req, res) {
           }),
         ]);
         return res.status(200).json({ ok: catUp.ok || kvUp.ok });
+      }
+
+      if (kind === "calibration-setting" && body.unitId) {
+        const calUp = await pgRest(cfg, "pa_calibration_settings?on_conflict=unit_id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            unit_id: String(body.unitId),
+            unit_name: String(body.unitName ?? body.unitId),
+            data: body.data ?? {},
+            updated_at: now,
+          }),
+        });
+        return res.status(200).json({ ok: calUp.ok });
       }
 
       if (kind === "smart-goals") {

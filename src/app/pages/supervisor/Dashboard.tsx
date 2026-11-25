@@ -36,7 +36,7 @@ import {
 import { isMenuVisibleInMenuManagement, MENU_UPDATED_EVENT } from "../hr/settings/MenuManagement";
 import { useLocation } from "react-router";
 import { DashboardNotificationSection } from "../../components/DashboardNotificationSection";
-import { loadSoyApprovals, resolveSoyRoleForUser, SOY_EVENT } from "../../store/calibrationSoyStore";
+import { loadGroupSoyApprovals, resolveGroupSoyRoleForUser, SOY_EVENT } from "../../store/calibrationSoyStore";
 import { loadPersistedState } from "../../services/supabaseClient";
 import { getPendingTargetEditRequestsForViewer, KPI_TARGET_EDIT_EVENT } from "../../store/kpiTargetEditStore";
 import { getGroupCompaniesForUnit, isDirectorRoleOrGrouping } from "../../store/authStore";
@@ -323,12 +323,12 @@ function ApprovalDashboard({ onCountChange }: { onCountChange?: (n: number) => v
       }));
   }, [activeUser, tick]);
 
-  // Task Approval Calibration — Setting (SOY) yang masih Pending untuk Approver / Mengetahui unit tsb
+  // Task Approval Calibration — Setting (SOY) berbasis Group yang masih Pending untuk Director / Approver Group tsb
   const calibrationItems = useMemo<PendingItem[]>(() => {
     const out: PendingItem[] = [];
-    for (const rec of Object.values(loadSoyApprovals())) {
+    for (const rec of Object.values(loadGroupSoyApprovals())) {
       if (rec.status !== "Pending") continue;
-      const role = resolveSoyRoleForUser(activeUser, rec.unitName, true);
+      const role = resolveGroupSoyRoleForUser(activeUser, rec.unitName, false);
       if (!role) continue;
       out.push({
         id: `soy-${rec.unitId}`,
@@ -1458,8 +1458,8 @@ export function SupervisorDashboard() {
     if (getPendingTargetEditRequestsForViewer(activeUser, allUsers).length > 0) return true;
     if (getPendingKpiTrackingEditForDashboard(activeUser, allUsers).length > 0) return true;
     if (isVal && loadPersistedState<Array<{ status?: string }>>("pa_open_lock_requests_v1", []).some((r) => r.status === "pending")) return true;
-    for (const soyRec of Object.values(loadSoyApprovals())) {
-      if (soyRec.status === "Pending" && resolveSoyRoleForUser(activeUser, soyRec.unitName, true)) return true;
+    for (const soyRec of Object.values(loadGroupSoyApprovals())) {
+      if (soyRec.status === "Pending" && resolveGroupSoyRoleForUser(activeUser, soyRec.unitName, false)) return true;
     }
     const bizMap = loadPersistedState<Record<string, { submitted?: boolean; checked?: boolean; stage?: string; directorApproved?: boolean; approved?: boolean; companyUnit?: string }>>("pa_kpi_business_status_v1", {});
     const isBizChecker = Boolean(activeUser.isKpiBusinessChecker);

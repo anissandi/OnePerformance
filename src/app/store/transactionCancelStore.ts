@@ -11,7 +11,7 @@ import {
   type WorkflowRecord,
 } from "../pages/shared/appraisalWorkflowStore";
 import { canCancelTransaction, getLoginOriginUser, loadManagedUsers } from "./authStore";
-import { loadSoyApprovals, resetSoyApproval } from "./calibrationSoyStore";
+import { loadGroupSoyApprovals, resetSoyApproval } from "./calibrationSoyStore";
 import { pushEmployeeNotification } from "./notificationStore";
 import { projectStore } from "./projectStore";
 
@@ -151,7 +151,7 @@ export function listPendingTransactions(): PendingTransaction[] {
     });
   }
 
-  for (const rec of Object.values(loadSoyApprovals())) {
+  for (const rec of Object.values(loadGroupSoyApprovals())) {
     if (rec.status !== "Pending") continue;
     out.push({
       id: `calibration-soy::${rec.unitId}`,

@@ -1472,12 +1472,12 @@ export function BODCalibrationApproval() {
               <thead className="bg-[#1A284F] text-white">
                 <tr>
                   <th className="py-3 px-3 text-center font-semibold w-12">No</th>
-                  <th className="py-3 px-3.5 text-left font-semibold whitespace-nowrap">ID Karyawan</th>
-                  <th className="py-3 px-3.5 text-left font-semibold whitespace-nowrap">Nama Pejabat</th>
-                  <th className="py-3 px-3.5 text-left font-semibold whitespace-nowrap">Jabatan / Posisi</th>
-                  <th className="py-3 px-3.5 text-center font-semibold whitespace-nowrap">Peran Calibration</th>
+                  <th className="py-3 px-3.5 text-left font-semibold whitespace-nowrap">Employee ID</th>
+                  <th className="py-3 px-3.5 text-left font-semibold whitespace-nowrap">Approver Name</th>
+                  <th className="py-3 px-3.5 text-left font-semibold whitespace-nowrap">Position</th>
+                  <th className="py-3 px-3.5 text-center font-semibold whitespace-nowrap">Approval Type</th>
                   <th className="py-3 px-3.5 text-center font-semibold whitespace-nowrap">Status</th>
-                  <th className="py-3 px-3.5 text-center font-semibold whitespace-nowrap">Tanggal Tindakan</th>
+                  <th className="py-3 px-3.5 text-center font-semibold whitespace-nowrap">Action Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">

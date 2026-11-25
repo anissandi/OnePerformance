@@ -1,21 +1,25 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Building2, CheckCircle2, Clock, Eye, RotateCcw, Settings, ShieldAlert, UserCheck, X } from "lucide-react";
+import { Building2, CheckCircle2, Clock, Eye, Filter, Layers, RotateCcw, Settings, ShieldAlert, UserCheck, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   acknowledgeSoyApproval,
   decideSoyApproval,
   formatActorWithPosition,
-  loadSoyApprovals,
+  loadGroupSoyApprovals,
+  resolveGroupSoyRoleForUser,
   SOY_EVENT,
   type SoyApprovalRecord,
   type SoyStatus,
 } from "../../store/calibrationSoyStore";
-import { computeUnitQuotaAllocation } from "../hr/CalibrationSetting";
+import {
+  computeGroupQuotaAllocation,
+  computeUnitQuotaAllocation,
+  SingleBellCurveCard,
+  type CompanyUnit,
+} from "../hr/CalibrationSetting";
 import {
   canUserAccessCalibrationSoyApproval,
   getActiveUser,
-  getSoyCalibrationInvolvedUnits,
-  getSoyCalibrationRoleForUnit,
   isAdminOrHrIcfRole,
   isDirectorRoleOrGrouping,
 } from "../../store/authStore";
@@ -61,9 +65,9 @@ const UNIT_PILL_PALETTES = [
 ];
 
 const SECTION_HEAD_TONE: Record<string, string> = {
+  unit: "from-slate-100 via-white to-blue-50 text-[#1A284F]",
   division: "from-indigo-50 via-white to-sky-50 text-indigo-800",
   department: "from-emerald-50 via-white to-teal-50 text-emerald-800",
-  bagian: "from-amber-50 via-white to-orange-50 text-amber-800",
 };
 
 function GradeHead({ grade }: { grade: string }) {
@@ -77,14 +81,17 @@ function GradeHead({ grade }: { grade: string }) {
   );
 }
 
-function ProportionTable({ title, rows, grades, tone = "division" }: {
+function ProportionTable({ title, rows, grades, tone = "division", selectedRowId, onRowClick }: {
   title: string;
-  rows: Array<{ id: string; label: string; parent?: string; hc: number; calcs: number[] }>;
+  rows: Array<{ id: string; label: string; parent?: string; hc: number; sharePct?: string; calcs: number[] }>;
   grades: SoyApprovalRecord["snapshot"]["calibrationGrades"];
-  tone?: "division" | "department" | "bagian";
+  tone?: "unit" | "division" | "department";
+  selectedRowId?: string | null;
+  onRowClick?: (rowId: string) => void;
 }) {
   const total = rows.reduce((s, r) => s + r.hc, 0);
   const colTotals = grades.map((_, gi) => rows.reduce((s, r) => s + (r.calcs[gi] ?? 0), 0));
+  const hasShare = rows.some((r) => Boolean(r.sharePct));
   return (
     <div className="w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
       <div className={`flex items-center justify-between bg-gradient-to-r px-5 py-3 ${SECTION_HEAD_TONE[tone]}`}>
@@ -97,19 +104,36 @@ function ProportionTable({ title, rows, grades, tone = "division" }: {
         <table className="w-full text-xs">
           <thead className="bg-gray-50/80 text-[10px] uppercase tracking-wide text-gray-500">
             <tr>
-              <th className="px-4 py-2.5 text-left">Organisasi</th>
+              <th className="px-4 py-2.5 text-left">{tone === "unit" ? "Unit Usaha" : "Organisasi"}</th>
               <th className="px-4 py-2.5 text-right">HC</th>
+              {hasShare && <th className="px-3 py-2.5 text-right">Share Kuota</th>}
               {grades.map((g) => (
                 <th key={g.id} className="px-3 py-2.5 text-center"><GradeHead grade={g.grade} /></th>
               ))}
+              <th className="px-3 py-2.5 text-right">Jumlah</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={grades.length + 2} className="py-6 text-center text-gray-400">Tidak ada data.</td></tr>
+              <tr><td colSpan={grades.length + (hasShare ? 4 : 3)} className="py-6 text-center text-gray-400">Tidak ada data.</td></tr>
             ) : (
-              rows.map((r, ri) => (
-                <tr key={r.id} className={`border-t border-gray-100 transition-colors hover:bg-indigo-50/30 ${ri % 2 === 1 ? "bg-gray-50/40" : ""}`}>
+              rows.map((r, ri) => {
+                const rowSum = r.calcs.reduce((a, b) => a + b, 0);
+                const isSelected = Boolean(selectedRowId && selectedRowId === r.id);
+                return (
+                <tr
+                  key={r.id}
+                  onClick={onRowClick ? () => onRowClick(r.id) : undefined}
+                  className={`border-t border-gray-100 transition-colors ${
+                    onRowClick ? "cursor-pointer" : ""
+                  } ${
+                    isSelected
+                      ? "bg-[#EBF2FA] hover:bg-[#E1ECF8]"
+                      : ri % 2 === 1
+                      ? "bg-gray-50/40 hover:bg-indigo-50/30"
+                      : "hover:bg-indigo-50/30"
+                  }`}
+                >
                   <td className="px-4 py-2.5">
                     <span className="font-semibold text-gray-800">{r.label}</span>
                     {r.parent && <span className="block text-[10px] text-gray-400">{r.parent}</span>}
@@ -117,6 +141,11 @@ function ProportionTable({ title, rows, grades, tone = "division" }: {
                   <td className="px-4 py-2.5 text-right">
                     <span className="inline-flex min-w-[34px] justify-center rounded-md bg-[#1A284F]/[0.06] px-2 py-0.5 font-bold tabular-nums text-[#1A284F]">{r.hc}</span>
                   </td>
+                  {hasShare && (
+                    <td className="px-3 py-2.5 text-right font-semibold text-gray-600 tabular-nums">
+                      {r.sharePct ?? "0.0%"}
+                    </td>
+                  )}
                   {grades.map((g, gi) => {
                     const v = r.calcs[gi] ?? 0;
                     return (
@@ -129,8 +158,10 @@ function ProportionTable({ title, rows, grades, tone = "division" }: {
                       </td>
                     );
                   })}
+                  <td className="px-3 py-2.5 text-right font-bold tabular-nums text-[#1A284F]">{rowSum}</td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
           {rows.length > 0 && (
@@ -138,9 +169,11 @@ function ProportionTable({ title, rows, grades, tone = "division" }: {
               <tr>
                 <td className="px-4 py-2.5">Jumlah ({rows.length})</td>
                 <td className="px-4 py-2.5 text-right tabular-nums">{total}</td>
+                {hasShare && <td className="px-3 py-2.5 text-right tabular-nums">{total > 0 ? "100.0%" : "0.0%"}</td>}
                 {colTotals.map((t, gi) => (
                   <td key={gi} className="px-3 py-2.5 text-center tabular-nums" style={{ color: gradeTone(grades[gi]?.grade ?? "") }}>{t}</td>
                 ))}
+                <td className="px-3 py-2.5 text-right tabular-nums">{colTotals.reduce((a, b) => a + b, 0)}</td>
               </tr>
             </tfoot>
           )}
@@ -152,8 +185,9 @@ function ProportionTable({ title, rows, grades, tone = "division" }: {
 
 export function CalibrationSettingApproval() {
   const activeUser = getActiveUser();
-  const [records, setRecords] = useState<Record<string, SoyApprovalRecord>>(() => loadSoyApprovals());
+  const [records, setRecords] = useState<Record<string, SoyApprovalRecord>>(() => loadGroupSoyApprovals());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [unitFilterId, setUnitFilterId] = useState<string>("ALL");
   const [action, setAction] = useState<"Approved" | "Revision" | "Mengetahui" | null>(null);
   const [note, setNote] = useState("");
   const [bellOpen, setBellOpen] = useState(false);
@@ -161,7 +195,7 @@ export function CalibrationSettingApproval() {
 
   useEffect(() => {
     const refresh = () => {
-      setRecords(loadSoyApprovals());
+      setRecords(loadGroupSoyApprovals());
       setAuthTick((t) => t + 1);
     };
     window.addEventListener(SOY_EVENT, refresh);
@@ -176,23 +210,36 @@ export function CalibrationSettingApproval() {
 
   const isHrAdmin = isAdminOrHrIcfRole(activeUser.role);
   const isDirector = isDirectorRoleOrGrouping(activeUser);
-  const allowedUnits = useMemo(() => {
-    const all = Object.values(records).map((r) => r.unitName);
-    return getSoyCalibrationInvolvedUnits(activeUser, all);
+
+  const list = useMemo(() => {
+    return Object.values(records)
+      .filter((r) => resolveGroupSoyRoleForUser(activeUser, r.unitName, true) !== null)
+      .sort(
+        (a, b) =>
+          (a.status === "Pending" ? -1 : 1) - (b.status === "Pending" ? -1 : 1) ||
+          b.submittedAt.localeCompare(a.submittedAt),
+      );
   }, [records, activeUser, isHrAdmin, isDirector, authTick]);
 
-  const list = Object.values(records)
-    .filter((r) => allowedUnits.includes(r.unitName))
-    .sort((a, b) => (a.status === "Pending" ? -1 : 1) - (b.status === "Pending" ? -1 : 1) || b.submittedAt.localeCompare(a.submittedAt));
   const selected = list.find((r) => r.unitId === selectedId) ?? list[0] ?? null;
 
-  const getUnitSoyRole = (rec: SoyApprovalRecord) => getSoyCalibrationRoleForUnit(activeUser, rec.unitName);
+  useEffect(() => {
+    setUnitFilterId("ALL");
+  }, [selected?.unitId]);
+
+  const getGroupRole = (rec: SoyApprovalRecord) => resolveGroupSoyRoleForUser(activeUser, rec.unitName, false);
+  const isExplicitMengetahui = (rec: SoyApprovalRecord) => {
+    const keys = [rec.unitName, rec.unitId, ...(rec.groupSnapshot?.units?.map((u) => u.name) ?? [])];
+    const map = activeUser.soyCalibrationRoleByUnit ?? {};
+    const roles = keys.map((k) => map[k]).filter(Boolean);
+    return !roles.includes("approver") && roles.includes("mengetahui");
+  };
+
   const canApprove = (rec: SoyApprovalRecord) => {
-    const unitRole = getUnitSoyRole(rec);
-    if (unitRole === "mengetahui" || unitRole === "readonly") return false;
-    if (unitRole === "approver") return true;
+    const grpRole = getGroupRole(rec);
+    if (grpRole === "approve") return true;
     if (isAdminOrHrIcfRole(activeUser.role)) return false;
-    return isDirector || hasRolePermission(activeUser.role || "Employee", "approvals_calibration_soy", "approve");
+    return Boolean(isDirector && grpRole !== null && hasRolePermission(activeUser.role || "Employee", "approvals_calibration_soy", "approve"));
   };
 
   const submitDecision = () => {
@@ -206,34 +253,118 @@ export function CalibrationSettingApproval() {
       return;
     }
     decideSoyApproval(selected.unitId, action, note);
-    toast.success(action === "Approved" ? `Calibration Setting (SOY) ${selected.unitName} disetujui.` : `Revisi dikirim ke HR untuk ${selected.unitName}.`);
+    toast.success(
+      action === "Approved"
+        ? `Calibration Setting (SOY) ${selected.unitName} disetujui & seluruh Company Units telah dikunci.`
+        : `Permintaan revisi dikirim ke HR untuk ${selected.unitName}.`,
+    );
     setAction(null);
     setNote("");
   };
 
-  const snap = selected?.snapshot;
-  const snapAlloc = useMemo(
-    () =>
-      snap
-        ? computeUnitQuotaAllocation({
-            calibrationGrades: snap.calibrationGrades,
-            divisionProportions: snap.divisionProportions,
-            departemenenProportions: snap.departemenenProportions,
-            bagianProportions: snap.bagianProportions,
-          })
-        : null,
-    [snap],
+  const grpSnap = selected?.groupSnapshot;
+  const memberUnitsAsCompany: CompanyUnit[] = useMemo(() => {
+    if (!grpSnap?.units) return [];
+    return grpSnap.units.map((u) => ({
+      id: u.id,
+      name: u.name,
+      code: u.code || u.id,
+      industry: "",
+      calibrationGrades: u.calibrationGrades,
+      unitQuotaTargets: u.unitQuotaTargets,
+      divisionProportions: u.divisionProportions,
+      departemenenProportions: u.departemenenProportions,
+      bagianProportions: u.bagianProportions,
+    }));
+  }, [grpSnap]);
+
+  const groupAlloc = useMemo(() => {
+    if (!grpSnap || memberUnitsAsCompany.length === 0) return null;
+    return computeGroupQuotaAllocation({
+      calibrationGrades: grpSnap.calibrationGrades,
+      units: memberUnitsAsCompany,
+      unitCustomQuotas: grpSnap.unitCustomQuotas,
+    });
+  }, [grpSnap, memberUnitsAsCompany]);
+
+  const filteredUnit = useMemo(
+    () => (unitFilterId === "ALL" ? null : memberUnitsAsCompany.find((u) => u.id === unitFilterId) ?? null),
+    [unitFilterId, memberUnitsAsCompany],
   );
-  const totalHC = snapAlloc?.totalHC ?? 0;
-  const divName = (id: string) => snap?.divisionProportions.find((d) => d.id === id)?.divisi ?? "";
-  const deptName = (id: string) => snap?.departemenenProportions.find((d) => d.id === id)?.departemen ?? "";
+
+  const filteredUnitAlloc = useMemo(() => {
+    if (!filteredUnit || !grpSnap) return null;
+    return (
+      groupAlloc?.perUnitAlloc[filteredUnit.id] ??
+      computeUnitQuotaAllocation({
+        calibrationGrades: grpSnap.calibrationGrades,
+        divisionProportions: filteredUnit.divisionProportions,
+        departemenenProportions: filteredUnit.departemenenProportions,
+        bagianProportions: filteredUnit.bagianProportions,
+        unitQuotaTargets: filteredUnit.unitQuotaTargets,
+      })
+    );
+  }, [filteredUnit, grpSnap, groupAlloc]);
+
+  const activeGrades = grpSnap?.calibrationGrades ?? selected?.snapshot?.calibrationGrades ?? [];
+  const activeScopeLabel = filteredUnit ? `${filteredUnit.name} (${selected?.unitName})` : selected?.unitName ?? "";
+  const activeTotalHC = filteredUnit
+    ? filteredUnitAlloc?.totalHC ?? 0
+    : groupAlloc?.totalHC ?? 0;
+  const activeGradeTargets = useMemo(() => {
+    if (filteredUnit) {
+      return groupAlloc?.unitMatrix[filteredUnit.id] ?? filteredUnitAlloc?.unitGradeTargets ?? [];
+    }
+    if (!groupAlloc) return [];
+    const unitSums = activeGrades.map((_, gi) =>
+      memberUnitsAsCompany.reduce((s, u) => s + (groupAlloc.unitMatrix[u.id]?.[gi] ?? 0), 0),
+    );
+    return unitSums.some((v, i) => v !== groupAlloc.groupGradeTargets[i])
+      ? unitSums
+      : groupAlloc.groupGradeTargets;
+  }, [filteredUnit, groupAlloc, filteredUnitAlloc, activeGrades, memberUnitsAsCompany]);
+
+  const activeTargetSum = activeGradeTargets.reduce((a, b) => a + b, 0);
 
   const unitPalette = (unitId: string) => {
     const idx = Math.max(0, list.findIndex((r) => r.unitId === unitId));
     return UNIT_PILL_PALETTES[idx % UNIT_PILL_PALETTES.length];
   };
-  const unitTotalTargets = (snapAlloc?.unitGradeTargets ?? []).reduce((a, b) => a + b, 0);
   const gradeCardTones: AnalyticsCardTone[] = ["plum", "navy", "emerald", "terracotta", "rose", "slate"];
+
+  // Baris Proporsi per Divisi & Proporsi per Departement sesuai filter Unit Usaha (atau gabungan Group)
+  const divisionTableRows = useMemo(() => {
+    if (!groupAlloc) return [];
+    const targetUnits = filteredUnit ? [filteredUnit] : memberUnitsAsCompany;
+    return targetUnits.flatMap((u) => {
+      const uAlloc = groupAlloc.perUnitAlloc[u.id];
+      return u.divisionProportions.map((d) => ({
+        id: `${u.id}::${d.id}`,
+        label: d.divisi,
+        parent: filteredUnit ? undefined : u.name,
+        hc: d.hc,
+        calcs: uAlloc?.divMatrix[d.id] ?? [],
+      }));
+    });
+  }, [groupAlloc, filteredUnit, memberUnitsAsCompany]);
+
+  const departmentTableRows = useMemo(() => {
+    if (!groupAlloc) return [];
+    const targetUnits = filteredUnit ? [filteredUnit] : memberUnitsAsCompany;
+    return targetUnits.flatMap((u) => {
+      const uAlloc = groupAlloc.perUnitAlloc[u.id];
+      return u.departemenenProportions.map((dep) => {
+        const divLabel = u.divisionProportions.find((d) => d.id === dep.divisiId)?.divisi ?? "";
+        return {
+          id: `${u.id}::${dep.id}`,
+          label: dep.departemen,
+          parent: filteredUnit ? divLabel : `${u.name} · ${divLabel}`,
+          hc: dep.hc,
+          calcs: uAlloc?.deptMatrix[dep.id] ?? [],
+        };
+      });
+    });
+  }, [groupAlloc, filteredUnit, memberUnitsAsCompany]);
 
   if (!canUserAccessCalibrationSoyApproval(activeUser)) {
     return (
@@ -253,61 +384,104 @@ export function CalibrationSettingApproval() {
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1A284F]/8 text-[#1A284F]"><Settings className="h-5 w-5" /></div>
         <div>
           <h1 className="text-lg font-bold text-gray-800">Calibration Approval — Setting (SOY)</h1>
-          <p className="mt-0.5 text-xs text-gray-400">Distribusi & Proporsi Grade berdasarkan HC Awal Tahun dari Calibration Setting.</p>
+          <p className="mt-0.5 text-xs text-gray-400">
+            Persetujuan Distribusi &amp; Proporsi Grade HC Awal Tahun (SOY) berbasis Group (dapat difilter per Unit Usaha).
+          </p>
         </div>
       </div>
 
       {list.length === 0 ? (
         <div className="rounded-xl border border-gray-100 bg-white p-12 text-center text-sm text-gray-400">
-          Belum ada Calibration Setting (SOY) yang disubmit untuk unit dalam kewenangan Anda.
+          Belum ada pengajuan Calibration Setting (SOY) Group dalam kewenangan Anda.
         </div>
       ) : (
         <div className="flex w-full flex-col gap-4">
-          {/* Unit usaha (pill kecil berwarna lembut) + Grade Distribution (Bell Curve) di samping nama unit usaha */}
-          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
-            {list.map((r) => {
-              const active = selected?.unitId === r.unitId;
-              return (
-                <React.Fragment key={r.unitId}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(r.unitId)}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${unitPalette(r.unitId)} ${
-                      active ? "ring-2 ring-[#1A284F]/30 shadow-sm" : "opacity-75 hover:opacity-100"
-                    }`}
-                  >
-                    <Building2 className="h-3 w-3" />
-                    {r.unitName}
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${r.status === "Approved" ? "bg-emerald-500" : r.status === "Revision" ? "bg-orange-500" : "bg-amber-400"}`}
-                      title={r.status}
-                    />
-                  </button>
-                  {active && (
-                    <BellCurveTagButton onClick={() => setBellOpen(true)} label="Grade Distribution (Bell Curve)" />
-                  )}
-                </React.Fragment>
-              );
-            })}
-            {selected && (
-              <div className="ml-auto flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600">
-                  <Clock className="h-3 w-3" /> Disubmit oleh <strong className="font-semibold text-slate-800">{formatActorWithPosition(selected.submittedBy)}</strong> · {fmt(selected.submittedAt)}
+          {/* Bar Pilih Group + Filter Unit Usaha + Bell Curve */}
+          <div className="flex flex-col gap-3 rounded-2xl border border-gray-100 bg-white px-4 py-3.5 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              {list.map((r) => {
+                const active = selected?.unitId === r.unitId;
+                return (
+                  <React.Fragment key={r.unitId}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(r.unitId)}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${unitPalette(r.unitId)} ${
+                        active ? "ring-2 ring-[#1A284F]/30 shadow-sm" : "opacity-75 hover:opacity-100"
+                      }`}
+                    >
+                      <Layers className="h-3.5 w-3.5" />
+                      {r.unitName}
+                      <span
+                        className={`h-2 w-2 rounded-full ${r.status === "Approved" ? "bg-emerald-500" : r.status === "Revision" ? "bg-orange-500" : "bg-amber-400"}`}
+                        title={r.status}
+                      />
+                    </button>
+                    {active && (
+                      <BellCurveTagButton onClick={() => setBellOpen(true)} label="Grade Distribution (Bell Curve)" />
+                    )}
+                  </React.Fragment>
+                );
+              })}
+              {selected && (
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600">
+                    <Clock className="h-3 w-3" /> Disubmit oleh <strong className="font-semibold text-slate-800">{formatActorWithPosition(selected.submittedBy)}</strong> · {fmt(selected.submittedAt)}
+                  </span>
+                  <span className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
+                    HC {filteredUnit ? filteredUnit.code : selected.unitName}: {activeTotalHC}
+                  </span>
+                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${STATUS_TONE[selected.status]}`}>{selected.status}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Filter per Unit Usaha di dalam Group */}
+            {selected && memberUnitsAsCompany.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-gray-100 pt-2.5">
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500 mr-1">
+                  <Filter className="h-3 w-3" /> Filter Unit Usaha:
                 </span>
-                <span className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
-                  HC Awal Tahun: {totalHC}
-                </span>
-                <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${STATUS_TONE[selected.status]}`}>{selected.status}</span>
+                <button
+                  type="button"
+                  onClick={() => setUnitFilterId("ALL")}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
+                    unitFilterId === "ALL"
+                      ? "bg-[#1A284F] text-white border-[#1A284F]"
+                      : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  Semua Unit ({selected.unitName}) · HC {groupAlloc?.totalHC ?? 0}
+                </button>
+                {memberUnitsAsCompany.map((u) => {
+                  const isSel = unitFilterId === u.id;
+                  const uHc = groupAlloc?.unitHCs[u.id] ?? 0;
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setUnitFilterId(isSel ? "ALL" : u.id)}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
+                        isSel
+                          ? "bg-[#2F5597] text-white border-[#2F5597]"
+                          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      <Building2 className="h-3 w-3" />
+                      {u.name} ({uHc})
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
 
-          {selected && snap && (
+          {selected && activeGrades.length > 0 && (
             <div className="flex w-full flex-col gap-4">
               {/* Ringkasan kartu grade format Analytics Dashboard */}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                {snap.calibrationGrades.map((g, gi) => {
-                  const kuota = snapAlloc?.unitGradeTargets[gi] ?? 0;
+                {activeGrades.map((g, gi) => {
+                  const kuota = activeGradeTargets[gi] ?? 0;
                   return (
                     <AnalyticsStatCard
                       key={g.id}
@@ -316,94 +490,107 @@ export function CalibrationSettingApproval() {
                       tone={gradeCardTones[gi % gradeCardTones.length]}
                       title={`Grade ${g.grade} (${g.proporsi})`}
                       value={kuota}
-                      subtitle="Kuota karyawan (SOY)"
+                      subtitle={filteredUnit ? `Kuota ${filteredUnit.code}` : `Kuota ${selected.unitName}`}
                       icon={<span className="text-xs font-black">{g.grade}</span>}
                     />
                   );
                 })}
               </div>
 
-              <div className="w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="flex items-center justify-between bg-gradient-to-r from-[#1A284F] to-[#2B3F73] px-5 py-3 text-white">
-                  <span className="text-xs font-bold uppercase tracking-wide">Distribusi & Proporsi Grade</span>
-                  <span className="text-[11px] text-white/70">Total HC {totalHC}</span>
-                </div>
-                <table className="w-full text-xs">
-                  <thead className="bg-gray-50/80 text-[10px] uppercase tracking-wide text-gray-500">
-                    <tr>
-                      <th className="px-5 py-2.5 text-left">Grade</th>
-                      <th className="px-5 py-2.5 text-right">Proporsi</th>
-                      <th className="px-5 py-2.5 text-right">Kuota (HC {totalHC})</th>
-                      <th className="px-5 py-2.5 text-left">Distribusi</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {snap.calibrationGrades.map((g, gi) => {
-                      const kuota = snapAlloc?.unitGradeTargets[gi] ?? 0;
-                      const share = unitTotalTargets > 0 ? (kuota / unitTotalTargets) * 100 : pct(g.proporsi);
-                      const c = gradeTone(g.grade);
-                      return (
-                        <tr key={g.id} className="border-t border-gray-100 hover:bg-indigo-50/30">
-                          <td className="px-5 py-2.5"><GradeHead grade={g.grade} /></td>
-                          <td className="px-5 py-2.5 text-right font-semibold text-gray-600">{g.proporsi}</td>
-                          <td className="px-5 py-2.5 text-right text-sm font-black tabular-nums" style={{ color: c }}>{kuota}</td>
-                          <td className="px-5 py-2.5">
-                            <div className="flex items-center gap-2">
-                              <div className="h-2 w-40 overflow-hidden rounded-full bg-gray-100">
-                                <div className="h-full rounded-full" style={{ width: `${Math.min(share, 100)}%`, background: c }} />
-                              </div>
-                              <span className="text-[10px] font-semibold text-gray-500">{share.toFixed(1)}%</span>
-                            </div>
-                          </td>
+              {/* Tabel Distribusi & Proporsi Grade berdampingan dengan Grade Distribution (Bell Curve) */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
+                <div className="w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between bg-gradient-to-r from-[#1A284F] to-[#2B3F73] px-5 py-3 text-white">
+                      <span className="text-xs font-bold uppercase tracking-wide">
+                        Distribusi &amp; Proporsi Grade — {activeScopeLabel}
+                      </span>
+                      <span className="text-[11px] text-white/70">Total HC {activeTotalHC}</span>
+                    </div>
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50/80 text-[10px] uppercase tracking-wide text-gray-500">
+                        <tr>
+                          <th className="px-5 py-2.5 text-left">Grade</th>
+                          <th className="px-5 py-2.5 text-right">Proporsi</th>
+                          <th className="px-5 py-2.5 text-right">Kuota (HC {activeTotalHC})</th>
+                          <th className="px-5 py-2.5 text-left">Distribusi</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot className="border-t-2 border-gray-200 bg-[#1A284F]/[0.03] font-semibold text-[#1A284F]">
-                    <tr>
-                      <td className="px-5 py-2.5">Total</td>
-                      <td className="px-5 py-2.5 text-right">{snap.calibrationGrades.reduce((s, g) => s + pct(g.proporsi), 0)}%</td>
-                      <td className="px-5 py-2.5 text-right">{unitTotalTargets}</td>
-                      <td />
-                    </tr>
-                  </tfoot>
-                </table>
+                      </thead>
+                      <tbody>
+                        {activeGrades.map((g, gi) => {
+                          const kuota = activeGradeTargets[gi] ?? 0;
+                          const share = activeTargetSum > 0 ? (kuota / activeTargetSum) * 100 : pct(g.proporsi);
+                          const c = gradeTone(g.grade);
+                          return (
+                            <tr key={g.id} className="border-t border-gray-100 hover:bg-indigo-50/30">
+                              <td className="px-5 py-2.5"><GradeHead grade={g.grade} /></td>
+                              <td className="px-5 py-2.5 text-right font-semibold text-gray-600">{g.proporsi}</td>
+                              <td className="px-5 py-2.5 text-right text-sm font-black tabular-nums" style={{ color: c }}>{kuota}</td>
+                              <td className="px-5 py-2.5">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-2 w-36 overflow-hidden rounded-full bg-gray-100">
+                                    <div className="h-full rounded-full" style={{ width: `${Math.min(share, 100)}%`, background: c }} />
+                                  </div>
+                                  <span className="text-[10px] font-semibold text-gray-500">{share.toFixed(1)}%</span>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot className="border-t-2 border-gray-200 bg-[#1A284F]/[0.03] font-semibold text-[#1A284F]">
+                        <tr>
+                          <td className="px-5 py-2.5">Total</td>
+                          <td className="px-5 py-2.5 text-right">{activeGrades.reduce((s, g) => s + pct(g.proporsi), 0)}%</td>
+                          <td className="px-5 py-2.5 text-right">{activeTargetSum}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+
+                <SingleBellCurveCard
+                  title={`Grade Distribution (Bell Curve) — ${activeScopeLabel}`}
+                  subtitle={
+                    filteredUnit
+                      ? `Kurva distribusi proporsi & kuota karyawan untuk unit ${filteredUnit.name}`
+                      : `Kurva distribusi proporsi & kuota karyawan gabungan ${selected.unitName}`
+                  }
+                  calibrationGrades={activeGrades}
+                  gradeCounts={activeGradeTargets}
+                />
               </div>
 
+              {/* Proporsi per Unit Usaha (tampil saat melihat cakupan Group) */}
+              {groupAlloc && memberUnitsAsCompany.length > 0 && (
+                <ProportionTable
+                  title={`Proporsi per Unit Usaha — ${selected.unitName}`}
+                  tone="unit"
+                  grades={activeGrades}
+                  selectedRowId={unitFilterId === "ALL" ? null : unitFilterId}
+                  onRowClick={(uid) => setUnitFilterId(unitFilterId === uid ? "ALL" : uid)}
+                  rows={memberUnitsAsCompany.map((u) => ({
+                    id: u.id,
+                    label: u.name,
+                    hc: groupAlloc.unitHCs[u.id] ?? 0,
+                    sharePct: `${(groupAlloc.unitShareMap[u.id] ?? 0).toFixed(1)}%`,
+                    calcs: groupAlloc.unitMatrix[u.id] ?? [],
+                  }))}
+                />
+              )}
+
               <ProportionTable
-                title="Proporsi per Divisi"
+                title={`Proporsi per Divisi — ${activeScopeLabel}`}
                 tone="division"
-                grades={snap.calibrationGrades}
-                rows={snap.divisionProportions.map((d) => ({
-                  id: d.id,
-                  label: d.divisi,
-                  hc: d.hc,
-                  calcs: snapAlloc?.divMatrix[d.id] ?? [],
-                }))}
+                grades={activeGrades}
+                rows={divisionTableRows}
               />
               <ProportionTable
-                title="Proporsi per Departemen"
+                title={`Proporsi per Departement — ${activeScopeLabel}`}
                 tone="department"
-                grades={snap.calibrationGrades}
-                rows={snap.departemenenProportions.map((d) => ({
-                  id: d.id,
-                  label: d.departemen,
-                  parent: divName(d.divisiId),
-                  hc: d.hc,
-                  calcs: snapAlloc?.deptMatrix[d.id] ?? [],
-                }))}
-              />
-              <ProportionTable
-                title="Proporsi per Bagian"
-                tone="bagian"
-                grades={snap.calibrationGrades}
-                rows={snap.bagianProportions.map((b) => ({
-                  id: b.id,
-                  label: b.bagian,
-                  parent: deptName(b.departemenenId),
-                  hc: b.hc,
-                  calcs: snapAlloc?.bagianMatrix[b.id] ?? [],
-                }))}
+                grades={activeGrades}
+                rows={departmentTableRows}
               />
 
               <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
@@ -421,9 +608,8 @@ export function CalibrationSettingApproval() {
               </div>
 
               {(() => {
-                const myUnitRole = getUnitSoyRole(selected);
                 const myAck = selected.acknowledgedBy?.[activeUser.employeeId.trim().toUpperCase()];
-                if (myUnitRole === "mengetahui") {
+                if (isExplicitMengetahui(selected)) {
                   return myAck ? (
                     <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-5 py-3 text-xs font-medium text-sky-800">
                       <CheckCircle2 className="h-4 w-4 text-sky-600 shrink-0" />
@@ -434,34 +620,34 @@ export function CalibrationSettingApproval() {
                   ) : (
                     <div className="sticky bottom-0 flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white px-5 py-4 shadow-sm">
                       <span className="text-xs text-slate-600">
-                        Akun Anda memiliki peran <strong className="text-sky-700">Mengetahui</strong> untuk unit <strong>{selected.unitName}</strong>.
+                        Akun Anda memiliki peran <strong className="text-sky-700">Mengetahui</strong> untuk <strong>{selected.unitName}</strong>.
                       </span>
                       <button
                         type="button"
                         onClick={() => { setAction("Mengetahui"); setNote(""); }}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#1A284F] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#131d3b]"
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#1A284F] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#131d3b] cursor-pointer"
                       >
                         <UserCheck className="h-4 w-4" /> Mengetahui
                       </button>
                     </div>
                   );
                 }
-                if (myUnitRole === "readonly" || (!canApprove(selected) && selected.status === "Pending")) {
+                if (!canApprove(selected) && selected.status === "Pending") {
                   return (
                     <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-5 py-3 text-xs text-gray-600">
                       <Eye className="h-4 w-4 shrink-0" />
-                      <span>Anda memiliki akses <strong>Read Only</strong> untuk unit ini (tanpa tombol tindakan).</span>
+                      <span>Anda memiliki akses <strong>Read Only</strong> untuk <strong>{selected.unitName}</strong> (menunggu persetujuan Director).</span>
                     </div>
                   );
                 }
                 if (selected.status === "Pending" && canApprove(selected)) {
                   return (
                   <div className="sticky bottom-0 flex justify-end gap-3 rounded-xl border border-gray-100 bg-white px-5 py-4 shadow-sm">
-                    <button onClick={() => { setAction("Revision"); setNote(""); }} className="inline-flex items-center gap-2 rounded-xl border-2 border-orange-400 px-5 py-2.5 text-sm font-semibold text-orange-600 hover:bg-orange-50">
+                    <button onClick={() => { setAction("Revision"); setNote(""); }} className="inline-flex items-center gap-2 rounded-xl border-2 border-orange-400 px-5 py-2.5 text-sm font-semibold text-orange-600 hover:bg-orange-50 cursor-pointer">
                       <RotateCcw className="h-4 w-4" /> Request Revision
                     </button>
-                    <button onClick={() => { setAction("Approved"); setNote(""); }} className="inline-flex items-center gap-2 rounded-xl bg-[#1A284F] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#131d3b]">
-                      <CheckCircle2 className="h-4 w-4" /> Approve
+                    <button onClick={() => { setAction("Approved"); setNote(""); }} className="inline-flex items-center gap-2 rounded-xl bg-[#1A284F] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#131d3b] cursor-pointer">
+                      <CheckCircle2 className="h-4 w-4" /> Approve {selected.unitName}
                     </button>
                   </div>
                   );
@@ -473,16 +659,16 @@ export function CalibrationSettingApproval() {
         </div>
       )}
 
-      {bellOpen && selected && snap && (
+      {bellOpen && selected && activeGrades.length > 0 && (
         <GradeBellCurveModal
           mode="single"
-          title={`Grade Distribution (Bell Curve) — ${selected.unitName}`}
-          subtitle={`Proporsi & kuota grade HC Awal Tahun (SOY) · Total HC ${totalHC}`}
-          rows={snap.calibrationGrades.map((g, gi) => ({
+          title={`Grade Distribution (Bell Curve) — ${activeScopeLabel}`}
+          subtitle={`Proporsi & kuota grade HC Awal Tahun (SOY) · Total HC ${activeTotalHC}`}
+          rows={activeGrades.map((g, gi) => ({
             grade: g.grade,
             color: gradeTone(g.grade),
             target: pct(g.proporsi),
-            targetCount: snapAlloc?.unitGradeTargets[gi] ?? 0,
+            targetCount: activeGradeTargets[gi] ?? 0,
           }))}
           onClose={() => setBellOpen(false)}
         />

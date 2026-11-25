@@ -601,12 +601,11 @@ export function MasterExecutiveSummaryTab({ canEdit = true }: { canEdit?: boolea
             {canEdit && !previewMode && (
               <button
                 type="button"
-                onClick={() => setShowSyncActualConfirm(true)}
-                disabled={isSyncingActual}
-                title="Tarik pencapaian aktual terbaru dari transaksi KPI Business di dalam sistem"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#248277]/35 bg-[#E6F3F1] text-[#1D6863] hover:bg-[#D5ECE8] disabled:opacity-60 transition-colors cursor-pointer"
+                disabled
+                title="Belum aktif — menunggu data aktual KPI Business terisi di dalam sistem"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed select-none"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingActual ? "animate-spin" : ""}`} />
+                <RefreshCw className="w-3.5 h-3.5" />
                 Sync Data Aktual
               </button>
             )}
