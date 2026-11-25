@@ -284,9 +284,11 @@ function computeStats(goals: SmartGoal[], apStatuses: Record<number, LocalStatus
 function StatusOverviewCard({
   goals,
   apStatuses,
+  targetActuals,
 }: {
   goals: SmartGoal[];
   apStatuses: Record<number, LocalStatus>;
+  targetActuals: TargetActualMock[];
 }) {
   const { selesai, sedang, belum, batal, dash, totalAPs, closedGoals } = computeStats(goals, apStatuses);
   const totalGoals = goals.length;
@@ -452,7 +454,7 @@ function GoalReviewCard({
   );
 }
 
-// ─── Target vs Actual — read-only ───────────────────────────────────────────
+// ─── Goals Realization & Achievement Status — read-only ─────────────────────
 
 function TargetActualReadOnly({
   goals,
@@ -465,16 +467,17 @@ function TargetActualReadOnly({
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
       <div className="flex items-center px-4 py-3 bg-[#1A284F] gap-2">
         <BarChart2 className="w-4 h-4 text-green-300" />
-        <span className="text-white text-sm font-bold flex-1">Target vs Actual</span>
+        <span className="text-white text-sm font-bold flex-1">Goals Realization &amp; Achievement Status</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse" style={{ minWidth: "600px" }}>
+        <table className="w-full text-xs border-collapse" style={{ minWidth: "860px" }}>
           <thead>
             <tr>
               <th className="bg-gray-50 border-b border-gray-200 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-28">Goals</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-56">Goals Specific</th>
               <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-56">Target</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-40">Actual (karyawan)</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500">Status &amp; Keterangan</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-40">Aktual</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500">Achievement Target Status</th>
             </tr>
           </thead>
           <tbody>
@@ -484,6 +487,9 @@ function TargetActualReadOnly({
                 <tr key={goal.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/40"}>
                   <td className="border-t border-gray-100 px-4 py-3 align-top">
                     <span className="font-semibold text-[11px] text-gray-700">{goal.label}</span>
+                  </td>
+                  <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top">
+                    <span className="text-[11px] text-gray-700 leading-relaxed">{goal.specific || "—"}</span>
                   </td>
                   <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top">
                     <span className="text-[11px] text-gray-500 italic leading-relaxed">{goal.target || "—"}</span>
@@ -777,7 +783,7 @@ function DetailDrawer({
           </div>
 
           {/* 1 — Status Overview */}
-          <StatusOverviewCard goals={submission.goals} apStatuses={submission.actionPlanStatuses} />
+          <StatusOverviewCard goals={submission.goals} apStatuses={submission.actionPlanStatuses} targetActuals={submission.targetActuals} />
 
           {/* 2 — Per-Goal review cards */}
           <div>
@@ -1025,7 +1031,7 @@ export function SmartGoalsApproverReview() {
                 <th className="py-3 px-5">Unit / Divisi</th>
                 <th className="py-3 px-5 text-center">Goals</th>
                 <th className="py-3 px-5 text-center">AP Selesai</th>
-                <th className="py-3 px-5">Target vs Actual</th>
+                <th className="py-3 px-5">Goals Realization &amp; Achievement</th>
                 <th className="py-3 px-5">Submitted</th>
                 <th className="py-3 px-5">Status</th>
                 <th className="py-3 px-5 text-right">Aksi</th>

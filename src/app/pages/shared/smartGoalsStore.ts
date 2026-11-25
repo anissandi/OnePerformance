@@ -120,6 +120,7 @@ export function reconcileCheckInEntriesWithGoals(
       goalId: g.id,
       actual: targetChanged ? "" : (prevEntry.actual ?? ""),
       achievement: targetChanged ? "" : (prevEntry.achievement ?? ""),
+      achievementPct: targetChanged ? null : (prevEntry.achievementPct ?? null),
       kendala: prevEntry.kendala ?? "",
       rencanaLanjut: prevEntry.rencanaLanjut ?? "",
       actionPlanStatuses: nextStatuses,
@@ -127,9 +128,15 @@ export function reconcileCheckInEntriesWithGoals(
       actionPlanKendala: nextKendala,
       actionPlanAlasanBatal: nextAlasanBatal,
       actionPlanEvidence: nextEvidence,
+      realizationStatus: targetChanged ? "" : (prevEntry.realizationStatus ?? ""),
+      realizationFactor: targetChanged ? "" : (prevEntry.realizationFactor ?? ""),
+      realizationReason: targetChanged ? "" : (prevEntry.realizationReason ?? ""),
+      realizationEvidenceFiles: targetChanged ? [] : (prevEntry.realizationEvidenceFiles ?? []),
       targetAchievementStatus: targetChanged ? "" : (prevEntry.targetAchievementStatus ?? ""),
+      achievementFactor: targetChanged ? "" : (prevEntry.achievementFactor ?? ""),
       alasanTidakTercapai: targetChanged ? "" : (prevEntry.alasanTidakTercapai ?? ""),
       evidenceFiles: targetChanged ? [] : (prevEntry.evidenceFiles ?? []),
+      inappropriateEvidenceByRole: targetChanged ? {} : (prevEntry.inappropriateEvidenceByRole ?? {}),
     });
   }
 
@@ -286,6 +293,7 @@ export interface StoredCheckInEntry {
   goalId: number;
   actual: string;
   achievement: string;
+  achievementPct?: number | null;
   kendala: string;
   rencanaLanjut: string;
   /** action plan id → status string */
@@ -298,10 +306,112 @@ export interface StoredCheckInEntry {
   actionPlanAlasanBatal?: Record<number, string>;
   /** action plan id → evidence files */
   actionPlanEvidence?: Record<number, StoredSmartGoalEvidenceFile[]>;
+  /** Realization Goals Status: "Terwujud" | "Tidak Terwujud" */
+  realizationStatus?: string;
+  /** Faktor Internal | Faktor Eksternal ketika Tidak Terwujud */
+  realizationFactor?: string;
+  /** Alasan ketika Tidak Terwujud */
+  realizationReason?: string;
+  /** Evidence files untuk Realization Goals Status */
+  realizationEvidenceFiles?: StoredSmartGoalEvidenceFile[];
   targetAchievementStatus: string;
+  /** Faktor Internal | Faktor Eksternal ketika Tidak Tercapai */
+  achievementFactor?: string;
   alasanTidakTercapai: string;
   /** goal-level target vs actual evidence files */
   evidenceFiles?: StoredSmartGoalEvidenceFile[];
+  /** Checkbox Approver "Evidence Tidak Sesuai" per role ("approver1" | "approver2") */
+  inappropriateEvidenceByRole?: Partial<Record<"approver1" | "approver2", boolean>>;
+}
+
+export interface SmartGoalScoreBounds {
+  min: number;
+  max: number;
+  label: string;
+  hasEvidence: boolean;
+  validEvidence: boolean;
+}
+
+/**
+ * Menghitung batas minimal & maksimal nilai Approver per Goal sesuai aturan SMART Goals Measurement:
+ * - Tidak Terwujud (& % Achievement === 0%): 0% – 0% (maks 0%)
+ * - Terwujud & % Achievement < 30%: 0% – 20%
+ * - Terwujud & 30% <= % Achievement <= 49%: dengan evidence valid 20% – 40%; tanpa evidence / Evidence Tidak Sesuai maks 20% (0% – 20%)
+ * - Terwujud & 50% <= % Achievement <= 69%: dengan evidence valid 41% – 60%; tanpa evidence / Evidence Tidak Sesuai maks 20% (0% – 20%)
+ * - Terwujud & 70% <= % Achievement <= 90%: dengan evidence valid 61% – 80%; tanpa evidence / Evidence Tidak Sesuai maks 20% (0% – 20%)
+ * - Terwujud & % Achievement > 90%: dengan evidence valid 81% – 100%; tanpa evidence / Evidence Tidak Sesuai maks 20% (0% – 20%)
+ */
+export function computeSmartGoalApproverScoreBounds(
+  entry?: Partial<StoredCheckInEntry> | null,
+  evidenceInappropriate = false,
+): SmartGoalScoreBounds {
+  const realization = String(entry?.realizationStatus ?? "").trim();
+  const parsedPct =
+    entry?.achievementPct != null && Number.isFinite(Number(entry.achievementPct))
+      ? Number(entry.achievementPct)
+      : parseFloat(String(entry?.achievement ?? "").replace("%", "").replace(",", ".").trim());
+  const hasNumericPct = Number.isFinite(parsedPct);
+  const pct = hasNumericPct ? parsedPct : (entry?.targetAchievementStatus === "Tercapai" ? 100 : 0);
+  const achEvCount = entry?.evidenceFiles?.length ?? 0;
+  const realEvCount = entry?.realizationEvidenceFiles?.length ?? 0;
+  const hasEvidence = achEvCount + realEvCount > 0;
+  const validEvidence = hasEvidence && !evidenceInappropriate;
+
+  if (realization === "Tidak Terwujud") {
+    return { min: 0, max: 0, label: "0% (Tidak Terwujud)", hasEvidence, validEvidence };
+  }
+
+  if (realization === "Terwujud" || hasNumericPct || entry?.targetAchievementStatus) {
+    if (pct < 30) {
+      return { min: 0, max: 20, label: "0% – 20% (Capaian < 30%)", hasEvidence, validEvidence };
+    }
+    if (!validEvidence) {
+      return {
+        min: 0,
+        max: 20,
+        label: evidenceInappropriate ? "0% – 20% (Evidence Tidak Sesuai)" : "0% – 20% (Tanpa Evidence)",
+        hasEvidence,
+        validEvidence,
+      };
+    }
+    if (pct <= 49) {
+      return { min: 20, max: 40, label: "20% – 40% (Capaian 30%–49%)", hasEvidence, validEvidence };
+    }
+    if (pct <= 69) {
+      return { min: 41, max: 60, label: "41% – 60% (Capaian 50%–69%)", hasEvidence, validEvidence };
+    }
+    if (pct <= 90) {
+      return { min: 61, max: 80, label: "61% – 80% (Capaian 70%–90%)", hasEvidence, validEvidence };
+    }
+    return { min: 81, max: 100, label: "81% – 100% (Capaian > 90%)", hasEvidence, validEvidence };
+  }
+
+  return { min: 0, max: 100, label: "0% – 100%", hasEvidence, validEvidence };
+}
+
+export function saveGoalEvidenceInappropriateFlag(
+  employeeId: string,
+  goalId: number,
+  role: "approver1" | "approver2",
+  inappropriate: boolean,
+): void {
+  try {
+    const existing = loadCheckInEntries(employeeId);
+    const next = existing.map((e) =>
+      e.goalId === goalId
+        ? {
+            ...e,
+            inappropriateEvidenceByRole: {
+              ...(e.inappropriateEvidenceByRole ?? {}),
+              [role]: inappropriate,
+            },
+          }
+        : e,
+    );
+    saveCheckInEntries(next, { submitWorkflow: false, employeeId });
+  } catch {
+    // ignore
+  }
 }
 
 export function saveCheckInEntries(

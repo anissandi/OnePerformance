@@ -79,9 +79,9 @@ export type CompanyUnit = {
 
 export type CalibrationGroupSetting = {
   id: CalibrationGroupId;
-  slug: "rsup-group" | "sambu-group";
-  name: "RSUP Group" | "Sambu Group";
-  code: "RSUP-GRP" | "SAMBU-GRP";
+  slug: string;
+  name: string;
+  code: string;
   industry: string;
   unitNames: string[];
   calibrationGrades: CalibrationGrade[];
@@ -110,10 +110,25 @@ const GRADE_COLORS: Record<string, string> = {
   "A+": "#10B981",
   "A":  "#3B82F6",
   "B":  "#F59E0B",
-  "C":  "#F97316",
-  "D":  "#EF4444",
+  "C":  "#EF4444",
+  "D":  "#DC2626",
   "E":  "#991B1B",
 };
+
+const EXTRA_SOFT_ROW_PALETTE = [
+  "bg-[#F6FAFF] hover:bg-[#EDF4FC]",
+  "bg-[#F4FBF9] hover:bg-[#EBF6F3]",
+  "bg-[#FFFBF4] hover:bg-[#FDF3E3]",
+  "bg-[#F8F9FC] hover:bg-[#EFF2F9]",
+];
+
+const SOFT_TAG_PALETTE = [
+  "bg-[#EBF2FA] text-[#2F5597] border-[#C9DCF0]",
+  "bg-[#E6F3F1] text-[#1D6863] border-[#B8DDD8]",
+  "bg-[#FDF3E7] text-[#9A5B13] border-[#F3CFA4]",
+  "bg-emerald-50 text-emerald-800 border-emerald-200",
+  "bg-sky-50 text-sky-800 border-sky-200",
+];
 
 const DIV_DEFS = [
   { id: "div1", divisi: "Staff Management" },
@@ -1479,10 +1494,12 @@ function ProportionTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, rIdx) => {
               const rowTotal = row.calcs.reduce((s, v) => s + v, 0);
               const rowDiff = rowTotal - row.hc;
               const isRowSelected = Boolean(selectedRowId && selectedRowId === row.id);
+              const softRowBg = EXTRA_SOFT_ROW_PALETTE[rIdx % EXTRA_SOFT_ROW_PALETTE.length];
+              const softTagCls = SOFT_TAG_PALETTE[rIdx % SOFT_TAG_PALETTE.length];
               return (
                 <tr
                   key={row.id}
@@ -1491,8 +1508,8 @@ function ProportionTable({
                     onRowClick ? "cursor-pointer" : ""
                   } ${
                     isRowSelected
-                      ? "bg-[#EBF2FA] hover:bg-[#E1ECF8]"
-                      : "hover:bg-gray-50"
+                      ? "bg-[#E2EEFB] hover:bg-[#D7E7F8]"
+                      : softRowBg
                   }`}
                 >
                   {showParent && (
@@ -1511,7 +1528,7 @@ function ProportionTable({
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                             isRowSelected
                               ? "bg-[#1A284F] text-white border-[#1A284F]"
-                              : "bg-slate-100 text-slate-600 border-slate-200"
+                              : softTagCls
                           }`}
                         >
                           {isRowSelected ? "Terbuka" : "Lihat Divisi & Dept"}
@@ -2284,7 +2301,9 @@ function UnitDetail({
   }, [unit, editMode]);
 
   const activeUnit = editMode ? workingUnit : unit;
-  const isSoyApprovedLocked = Boolean(!embedded && soyApproval?.status === "Approved" && soyApproval.snapshot);
+  const isSoyApprovedLocked = Boolean(
+    !embedded && (soyApproval?.status === "Approved" || soyApproval?.status === "Pending") && soyApproval.snapshot,
+  );
   const isEditable = !readOnly && pageMode === "edit" && editMode && !activeUnit.beginningHC && !isSoyApprovedLocked;
   const canSubmit = isSaved || pageMode === "preview";
   const parentGroupMeta = getCalibrationGroupByUnitName(unit.name);
@@ -2619,20 +2638,27 @@ function UnitDetail({
 
       <Tabs.Root value={hcTab} onValueChange={setHcTab} className="space-y-6">
         {!embedded && (
-          <Tabs.List aria-label="Pengaturan Headcount" className="flex flex-wrap gap-1 border-b border-gray-200">
+          <Tabs.List aria-label="Pengaturan Headcount" className="flex flex-wrap gap-2 border-b border-gray-200 pb-2">
             {[
-              ["start", "HC Awal Tahun (SOY)"],
-              ["end", "HC Akhir Tahun (EOY)"],
-              ["summary", "Summary"],
-            ].map(([value, label]) => (
+              { value: "start", label: "HC Awal Tahun (SOY)", icon: Users, idle: "bg-[#EBF2FA]/70 text-[#2F5597] border-[#C9DCF0]", active: "bg-[#2F5597] text-white border-[#2F5597] shadow-xs" },
+              { value: "end", label: "HC Akhir Tahun (EOY)", icon: CheckCircle2, idle: "bg-[#E6F3F1]/70 text-[#1D6863] border-[#B8DDD8]", active: "bg-[#248277] text-white border-[#248277] shadow-xs" },
+              { value: "summary", label: "Summary", icon: TrendingUp, idle: "bg-[#FDF3E7]/70 text-[#9A5B13] border-[#F3CFA4]", active: "bg-[#C07A28] text-white border-[#C07A28] shadow-xs" },
+            ].map((t) => {
+              const IconComp = t.icon;
+              const isAct = hcTab === t.value;
+              return (
               <Tabs.Trigger
-                key={value}
-                value={value}
-                className="border-b-2 border-transparent px-5 py-3 text-sm font-medium text-gray-500 transition-colors hover:text-[#1A284F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 data-[state=active]:border-[#1A284F] data-[state=active]:text-[#1A284F]"
+                key={t.value}
+                value={t.value}
+                className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition-all cursor-pointer ${
+                  isAct ? t.active : `${t.idle} hover:opacity-90`
+                }`}
               >
-                {label}
+                <IconComp className="w-3.5 h-3.5" />
+                {t.label}
               </Tabs.Trigger>
-            ))}
+              );
+            })}
           </Tabs.List>
         )}
 
@@ -3060,6 +3086,52 @@ export function CalibrationSetting() {
   });
 
   useEffect(() => {
+    const syncDynamicMasterUnits = () => {
+      const dynLocations = getMasterCompanyLocations();
+      setGroupSettings((prev) =>
+        CALIBRATION_GROUPS.map((def) => {
+          const found = prev.find((p) => p.id === def.id || p.slug === def.slug || p.name === def.name);
+          return found
+            ? { ...found, id: def.id, slug: def.slug, name: def.name, code: def.code, industry: def.industry, unitNames: [...def.unitNames] }
+            : {
+                id: def.id,
+                slug: def.slug,
+                name: def.name,
+                code: def.code,
+                industry: def.industry,
+                unitNames: [...def.unitNames],
+                calibrationGrades: makeDefaultCalibrationGrades(),
+                unitCustomQuotas: {},
+              };
+        }),
+      );
+      if (dynLocations.length > 0) {
+        setCompanyUnits((prev) => {
+          const next = [...prev];
+          let added = false;
+          for (const loc of dynLocations) {
+            const exists = next.some(
+              (u) => canonicalizeCompanyUnitName(u.name) === canonicalizeCompanyUnitName(loc.company),
+            );
+            if (!exists) {
+              next.push(
+                applyImportedEmployeesDistribution(
+                  makeUnit(loc.unitId || `u-${next.length + 1}`, loc.company, loc.code, ""),
+                ),
+              );
+              added = true;
+            }
+          }
+          return added ? next : prev;
+        });
+      }
+    };
+    syncDynamicMasterUnits();
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, syncDynamicMasterUnits);
+    return () => window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, syncDynamicMasterUnits);
+  }, []);
+
+  useEffect(() => {
     const onHydrated = () => {
       const savedGroups = loadPersistedState<CalibrationGroupSetting[] | null>(GROUP_CALIBRATION_SETTINGS_KEY, null);
       if (Array.isArray(savedGroups) && savedGroups.length > 0) {
@@ -3181,7 +3253,31 @@ export function CalibrationSetting() {
       bagianProportions: JSON.parse(JSON.stringify(u.bagianProportions)),
     }));
 
-    commitGroupAndUnits(committedGroup, committedMemberUnits);
+    // Kunci segera baseline HC Awal Tahun (SOY) pada saat Submit agar angka HC SOY tidak pernah berubah meskipun ada karyawan diarsip kemudian
+    const lockedGroupOnSubmit: CalibrationGroupSetting = {
+      ...committedGroup,
+      beginningGrades: committedGroup.calibrationGrades.map((g) => ({ ...g })),
+      beginningUnitCustomQuotas: committedGroup.unitCustomQuotas
+        ? JSON.parse(JSON.stringify(committedGroup.unitCustomQuotas))
+        : {},
+    };
+    const lockedUnitsOnSubmit: CompanyUnit[] = committedMemberUnits.map((u) => {
+      const bHc: Record<string, number> = {};
+      const bCq: Record<string, Record<string, number>> = {};
+      for (const r of [...u.divisionProportions, ...u.departemenenProportions, ...u.bagianProportions]) {
+        bHc[r.id] = r.hc;
+        if (r.customQuotas) bCq[r.id] = { ...r.customQuotas };
+      }
+      return {
+        ...u,
+        beginningGrades: committedGroup.calibrationGrades.map((g) => ({ ...g })),
+        beginningUnitQuotaTargets: gAlloc.unitMatrix[u.id] ?? [],
+        beginningHC: bHc,
+        beginningCustomQuotas: bCq,
+      };
+    });
+
+    commitGroupAndUnits(lockedGroupOnSubmit, lockedUnitsOnSubmit);
     submitGroupSoyForApproval({
       id: committedGroup.id,
       slug: committedGroup.slug,
@@ -3327,35 +3423,39 @@ export function CalibrationSetting() {
         </p>
       </div>
 
-      {/* Top Main Tabs: Group | Company Units */}
-      <div className="flex items-center gap-2 border-b border-gray-200">
+      {/* Top Main Tabs: Group | Company Units (dengan warna soft pada tab & icon) */}
+      <div className="flex items-center gap-2.5 border-b border-gray-200 pb-2.5 flex-wrap">
         <button
           type="button"
           onClick={() => navigate(`${baseSettingPath}/group`)}
-          className={`inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+          className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border transition-all cursor-pointer ${
             activeMainTab === "group"
-              ? "border-[#1A284F] text-[#1A284F]"
-              : "border-transparent text-gray-500 hover:text-[#1A284F]"
+              ? "bg-[#EBF2FA] border-[#2F5597]/40 text-[#1A284F] shadow-2xs"
+              : "bg-slate-50/80 border-slate-200 text-slate-600 hover:bg-[#EBF2FA]/60 hover:text-[#1A284F]"
           }`}
         >
-          <Layers className="w-4 h-4" />
+          <span className={`w-6 h-6 rounded-lg flex items-center justify-center ${activeMainTab === "group" ? "bg-[#2F5597] text-white" : "bg-[#EBF2FA] text-[#2F5597]"}`}>
+            <Layers className="w-3.5 h-3.5" />
+          </span>
           Group
-          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#1A284F]/10 text-[#1A284F]">
+          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-white/90 border border-[#C9DCF0] text-[#2F5597]">
             {visibleGroups.length}
           </span>
         </button>
         <button
           type="button"
           onClick={() => navigate(`${baseSettingPath}/company-units`)}
-          className={`inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+          className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border transition-all cursor-pointer ${
             activeMainTab === "company-units"
-              ? "border-[#1A284F] text-[#1A284F]"
-              : "border-transparent text-gray-500 hover:text-[#1A284F]"
+              ? "bg-[#E6F3F1] border-[#248277]/40 text-[#1D6863] shadow-2xs"
+              : "bg-slate-50/80 border-slate-200 text-slate-600 hover:bg-[#E6F3F1]/60 hover:text-[#1D6863]"
           }`}
         >
-          <Building2 className="w-4 h-4" />
+          <span className={`w-6 h-6 rounded-lg flex items-center justify-center ${activeMainTab === "company-units" ? "bg-[#248277] text-white" : "bg-[#E6F3F1] text-[#248277]"}`}>
+            <Building2 className="w-3.5 h-3.5" />
+          </span>
           Company Units
-          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
+          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-white/90 border border-[#B8DDD8] text-[#1D6863]">
             {visibleCompanyUnits.length}
           </span>
         </button>
@@ -3376,7 +3476,7 @@ export function CalibrationSetting() {
                 grp.unitNames.includes(canonicalizeCompanyUnitName(u.name)),
               );
               const groupHc =
-                soyRec?.status === "Approved" && soyRec.groupSnapshot?.units
+                (soyRec?.status === "Approved" || soyRec?.status === "Pending") && soyRec.groupSnapshot?.units
                   ? soyRec.groupSnapshot.units.reduce(
                       (sum, u) => sum + u.divisionProportions.reduce((s, d) => s + d.hc, 0),
                       0,
@@ -3457,8 +3557,10 @@ export function CalibrationSetting() {
               const soyRec = getSoyApproval(unit.id);
               const grpMeta = getCalibrationGroupByUnitName(unit.name);
               const unitHc =
-                soyRec?.status === "Approved" && soyRec.snapshot
+                (soyRec?.status === "Approved" || soyRec?.status === "Pending") && soyRec.snapshot
                   ? soyRec.snapshot.divisionProportions.reduce((s, d) => s + d.hc, 0)
+                  : unit.beginningHC
+                  ? unit.divisionProportions.reduce((s, d) => s + (unit.beginningHC?.[d.id] ?? d.hc), 0)
                   : unit.divisionProportions.reduce((s, d) => s + d.hc, 0);
               return (
                 <button
@@ -3616,10 +3718,16 @@ function GroupCalibrationPanel({
                   const karyawan = groupGradeCounts[idx] ?? 0;
                   const uSum = unitGradeSums[idx] ?? 0;
                   const diffFromUnits = uSum - karyawan;
+                  const gHex = resolveGradeColorHex(grade.grade) ?? GRADE_COLORS[grade.grade] ?? "#1A284F";
                   return (
-                    <tr key={grade.id} className="hover:bg-gray-50">
+                    <tr key={grade.id} className={EXTRA_SOFT_ROW_PALETTE[idx % EXTRA_SOFT_ROW_PALETTE.length]}>
                       <td className="border border-gray-300 px-4 py-2.5 text-center font-semibold text-gray-900">
-                        {grade.grade}
+                        <span
+                          className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-md text-xs font-bold text-white"
+                          style={{ backgroundColor: gHex }}
+                        >
+                          {grade.grade}
+                        </span>
                       </td>
                       <td className="border border-gray-300 px-4 py-2.5 text-center">
                         {editMode ? (
@@ -3738,13 +3846,13 @@ function GroupCalibrationPanel({
                     <Building2 className="w-3.5 h-3.5" />
                     Detail Organisasi: {activeDrillUnit.name}
                   </span>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white border border-slate-200 text-xs font-semibold text-slate-700">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#E6F3F1] border border-[#B8DDD8] text-xs font-semibold text-[#1D6863]">
                     HC Unit: {totalDivHC.toLocaleString()} orang
                   </span>
                   {calibrationGrades.map((g, gi) => (
                     <span
                       key={g.id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[11px] font-bold text-[#1A284F]"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#EBF2FA] border border-[#C9DCF0] text-[11px] font-bold text-[#2F5597]"
                     >
                       <span>{g.grade}:</span>
                       <span>{unitTargets[gi] ?? 0}</span>
@@ -3859,7 +3967,9 @@ function GroupHeadcountSummary({
   const [unitFilter, setUnitFilter] = useState<string>("ALL");
 
   const lockedGroupSnap =
-    soyApproval?.status === "Approved" && soyApproval.groupSnapshot ? soyApproval.groupSnapshot : null;
+    (soyApproval?.status === "Approved" || soyApproval?.status === "Pending") && soyApproval.groupSnapshot
+      ? soyApproval.groupSnapshot
+      : null;
 
   const soyGrades = lockedGroupSnap?.calibrationGrades ?? group.beginningGrades ?? group.calibrationGrades;
   const soyUnits: CompanyUnit[] = useMemo(() => {
@@ -4100,8 +4210,8 @@ function GroupHeadcountSummary({
                 </tr>
               </thead>
               <tbody>
-                {gradeRows.map((item) => (
-                  <tr key={item.id} className="border-t">
+                {gradeRows.map((item, rIdx) => (
+                  <tr key={item.id} className={`border-t ${EXTRA_SOFT_ROW_PALETTE[rIdx % EXTRA_SOFT_ROW_PALETTE.length]}`}>
                     <td className="p-4 font-semibold">{item.label}</td>
                     <td className="p-4">{item.beforePercent}%</td>
                     <td className="p-4">{item.beforeCount}</td>
@@ -4135,33 +4245,81 @@ function GroupHeadcountSummary({
                 Ringkasan perubahan HC Awal Tahun (SOY) dan HC Akhir Tahun (EOY) per Unit Usaha, Division, dan Departement.
               </p>
             </div>
-            <div className="flex flex-wrap gap-3">
-              <label className="text-xs text-gray-600">
-                Level
-                <select
-                  value={level}
-                  onChange={(e) => setLevel(e.target.value as "unit" | "division" | "department")}
-                  className="mt-1 block rounded-lg border bg-white px-3 py-2 text-sm"
-                >
-                  <option value="unit">Company Unit</option>
-                  <option value="division">Division</option>
-                  <option value="department">Departement</option>
-                </select>
-              </label>
-              {level !== "unit" && (
-                <label className="text-xs text-gray-600">
-                  Filter Unit Usaha
-                  <select
-                    value={unitFilter}
-                    onChange={(e) => setUnitFilter(e.target.value)}
-                    className="mt-1 block rounded-lg border bg-white px-3 py-2 text-sm"
+            {/* CALIBRATION.4: Filter Level mode icon warna + anak filter ke samping + Clear Filter */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {[
+                { key: "unit" as const, label: "Company Unit", icon: Building2, activeCls: "bg-[#2F5597] text-white border-[#2F5597]", idleCls: "bg-[#EBF2FA] text-[#2F5597] border-[#C9DCF0] hover:bg-[#DCE8F6]", iconColor: "#2F5597" },
+                { key: "division" as const, label: "Division", icon: Layers, activeCls: "bg-[#248277] text-white border-[#248277]", idleCls: "bg-[#E6F3F1] text-[#1D6863] border-[#B8DDD8] hover:bg-[#D5ECE8]", iconColor: "#248277" },
+                { key: "department" as const, label: "Departement", icon: Users, activeCls: "bg-[#C07A28] text-white border-[#C07A28]", idleCls: "bg-[#FDF3E7] text-[#9A5B13] border-[#F3CFA4] hover:bg-[#FAE6CE]", iconColor: "#C07A28" },
+              ].map((lv) => {
+                const IconC = lv.icon;
+                const isAct = level === lv.key;
+                return (
+                  <button
+                    key={lv.key}
+                    type="button"
+                    onClick={() => {
+                      setLevel(lv.key);
+                      if (lv.key === "unit") setUnitFilter("ALL");
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                      isAct ? lv.activeCls : lv.idleCls
+                    }`}
                   >
-                    <option value="ALL">Semua Unit ({group.name})</option>
-                    {memberUnits.map((u) => (
-                      <option key={u.id} value={u.id}>{u.name}</option>
-                    ))}
-                  </select>
-                </label>
+                    <IconC className="w-3.5 h-3.5" style={{ color: isAct ? "#FFFFFF" : lv.iconColor }} />
+                    {lv.label}
+                  </button>
+                );
+              })}
+
+              {/* Anak filter ke samping saat memilih Division / Departement */}
+              {level !== "unit" && (
+                <div className="inline-flex items-center gap-1.5 flex-wrap pl-1.5 border-l-2 border-slate-200">
+                  <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <button
+                    type="button"
+                    onClick={() => setUnitFilter("ALL")}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors cursor-pointer ${
+                      unitFilter === "ALL"
+                        ? "bg-[#1A284F] text-white border-[#1A284F]"
+                        : "bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200/70"
+                    }`}
+                  >
+                    Semua Unit ({group.name})
+                  </button>
+                  {memberUnits.map((u, uIdx) => {
+                    const isSel = unitFilter === u.id;
+                    const idleTone = SOFT_TAG_PALETTE[uIdx % SOFT_TAG_PALETTE.length];
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => setUnitFilter(isSel ? "ALL" : u.id)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors cursor-pointer ${
+                          isSel ? "bg-[#2F5597] text-white border-[#2F5597]" : idleTone
+                        }`}
+                      >
+                        <Building2 className="w-3 h-3" />
+                        {u.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Clear Filter Tag */}
+              {(level !== "unit" || unitFilter !== "ALL") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLevel("unit");
+                    setUnitFilter("ALL");
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                  Clear Filter
+                </button>
               )}
             </div>
           </div>
@@ -4184,8 +4342,8 @@ function GroupHeadcountSummary({
                 </tr>
               </thead>
               <tbody>
-                {comparisonRows.map((item) => (
-                  <tr key={item.id} className="border-t">
+                {comparisonRows.map((item, rIdx) => (
+                  <tr key={item.id} className={`border-t ${EXTRA_SOFT_ROW_PALETTE[rIdx % EXTRA_SOFT_ROW_PALETTE.length]}`}>
                     <td className="p-4 font-medium">{item.label}</td>
                     <td className="p-4">{item.startHc}</td>
                     <td className="p-4">{item.endHc}</td>
@@ -4279,27 +4437,28 @@ function GroupDetail({
 
   const isSoyApprovedLocked = Boolean(soyApproval?.status === "Approved" && soyApproval.groupSnapshot);
   const isSoyPending = Boolean(soyApproval?.status === "Pending");
+  const isSoySnapshotFrozen = Boolean((isSoyApprovedLocked || isSoyPending) && soyApproval?.groupSnapshot);
   const effectiveSoyMode: PageMode = isSoyApprovedLocked || isSoyPending ? "submitted" : soyPageMode;
   const canSubmitSoy = !isSoyApprovedLocked && !isSoyPending && (soySaved || effectiveSoyMode === "preview" || memberUnits.some((u) => u.divisionProportions.length > 0));
 
-  // Data yang ditampilkan di tab SOY: bila sudah Approved, tampilkan snapshot SOY yang terkunci; bila sedang edit gunakan working state
+  // Data yang ditampilkan di tab SOY: bila sudah Submitted (Pending) maupun Approved, kunci penuh dari snapshot SOY agar tidak berubah walau ada karyawan diarsip!
   const soyDisplayGrades = useMemo(() => {
     if (soyEditMode) return workingGroup.calibrationGrades;
-    if (isSoyApprovedLocked && soyApproval?.groupSnapshot) return soyApproval.groupSnapshot.calibrationGrades;
+    if (isSoySnapshotFrozen && soyApproval?.groupSnapshot) return soyApproval.groupSnapshot.calibrationGrades;
     if (group.beginningGrades) return group.beginningGrades;
     return group.calibrationGrades;
-  }, [soyEditMode, workingGroup.calibrationGrades, isSoyApprovedLocked, soyApproval, group.beginningGrades, group.calibrationGrades]);
+  }, [soyEditMode, workingGroup.calibrationGrades, isSoySnapshotFrozen, soyApproval, group.beginningGrades, group.calibrationGrades]);
 
   const soyDisplayUnitCustomQuotas = useMemo(() => {
     if (soyEditMode) return workingGroup.unitCustomQuotas;
-    if (isSoyApprovedLocked && soyApproval?.groupSnapshot) return soyApproval.groupSnapshot.unitCustomQuotas;
+    if (isSoySnapshotFrozen && soyApproval?.groupSnapshot) return soyApproval.groupSnapshot.unitCustomQuotas;
     if (group.beginningUnitCustomQuotas) return group.beginningUnitCustomQuotas;
     return group.unitCustomQuotas;
-  }, [soyEditMode, workingGroup.unitCustomQuotas, isSoyApprovedLocked, soyApproval, group.beginningUnitCustomQuotas, group.unitCustomQuotas]);
+  }, [soyEditMode, workingGroup.unitCustomQuotas, isSoySnapshotFrozen, soyApproval, group.beginningUnitCustomQuotas, group.unitCustomQuotas]);
 
   const soyDisplayUnits: CompanyUnit[] = useMemo(() => {
     if (soyEditMode) return workingUnits;
-    if (isSoyApprovedLocked && soyApproval?.groupSnapshot?.units) {
+    if (isSoySnapshotFrozen && soyApproval?.groupSnapshot?.units) {
       return memberUnits.map((u) => {
         const snap = soyApproval.groupSnapshot!.units.find(
           (su) => su.id === u.id || canonicalizeCompanyUnitName(su.name) === canonicalizeCompanyUnitName(u.name),
@@ -4332,7 +4491,7 @@ function GroupDetail({
           }
         : u,
     );
-  }, [soyEditMode, workingUnits, isSoyApprovedLocked, soyApproval, memberUnits]);
+  }, [soyEditMode, workingUnits, isSoySnapshotFrozen, soyApproval, memberUnits]);
 
   // Helpers mutasi workingGroup & workingUnits (digunakan bersama oleh SOY edit maupun EOY edit)
   const handleUpdateGrade = (id: string, field: keyof CalibrationGrade, val: string) => {
@@ -4686,10 +4845,10 @@ function GroupDetail({
             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
               <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{group.code}</span>
               <span className="text-xs text-gray-400">·</span>
-              {memberUnits.map((u) => (
+              {memberUnits.map((u, uIdx) => (
                 <span
                   key={u.id}
-                  className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200"
+                  className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${SOFT_TAG_PALETTE[uIdx % SOFT_TAG_PALETTE.length]}`}
                 >
                   {u.name}
                 </span>
@@ -4720,27 +4879,34 @@ function GroupDetail({
         <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
           <Clock className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-800 font-medium">
-            Calibration Setting (SOY) <strong>{group.name}</strong> sudah disubmit dan sedang menunggu persetujuan <strong>Director</strong> pada halaman <strong>/approvals/calibration/setting</strong>.
+            Calibration Setting (SOY) <strong>{group.name}</strong> sudah disubmit dan sedang menunggu persetujuan <strong>Director</strong>.
           </p>
         </div>
       ) : null}
 
       {/* Sub-Tabs: HC Awal Tahun (SOY) | HC Akhir Tahun (EOY) | Summary */}
       <Tabs.Root value={hcTab} onValueChange={(v) => setHcTab(v as "start" | "end" | "summary")} className="space-y-6">
-        <Tabs.List aria-label="Pengaturan Headcount Group" className="flex flex-wrap gap-1 border-b border-gray-200">
+        <Tabs.List aria-label="Pengaturan Headcount Group" className="flex flex-wrap gap-2 border-b border-gray-200 pb-2.5">
           {[
-            ["start", "HC Awal Tahun (SOY)"],
-            ["end", "HC Akhir Tahun (EOY)"],
-            ["summary", "Summary"],
-          ].map(([value, label]) => (
+            { value: "start", label: "HC Awal Tahun (SOY)", icon: Users, idle: "bg-[#EBF2FA]/70 text-[#2F5597] border-[#C9DCF0]", active: "bg-[#2F5597] text-white border-[#2F5597] shadow-xs" },
+            { value: "end", label: "HC Akhir Tahun (EOY)", icon: CheckCircle2, idle: "bg-[#E6F3F1]/70 text-[#1D6863] border-[#B8DDD8]", active: "bg-[#248277] text-white border-[#248277] shadow-xs" },
+            { value: "summary", label: "Summary", icon: TrendingUp, idle: "bg-[#FDF3E7]/70 text-[#9A5B13] border-[#F3CFA4]", active: "bg-[#C07A28] text-white border-[#C07A28] shadow-xs" },
+          ].map((t) => {
+            const IconComp = t.icon;
+            const isAct = hcTab === t.value;
+            return (
             <Tabs.Trigger
-              key={value}
-              value={value}
-              className="border-b-2 border-transparent px-5 py-3 text-sm font-medium text-gray-500 transition-colors hover:text-[#1A284F] focus-visible:outline-none data-[state=active]:border-[#1A284F] data-[state=active]:text-[#1A284F] cursor-pointer"
+              key={t.value}
+              value={t.value}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition-all cursor-pointer ${
+                isAct ? t.active : `${t.idle} hover:opacity-90`
+              }`}
             >
-              {label}
+              <IconComp className="w-3.5 h-3.5" />
+              {t.label}
             </Tabs.Trigger>
-          ))}
+            );
+          })}
         </Tabs.List>
 
         {/* TAB 1: HC AWAL TAHUN (SOY) */}
@@ -4755,8 +4921,9 @@ function GroupDetail({
               {(isSoyApprovedLocked || isSoyPending) && (
                 <button
                   type="button"
-                  onClick={onResetGroupSoy}
-                  className="flex items-center gap-2 px-4 py-2.5 border border-amber-300 bg-amber-50 text-amber-800 rounded-xl text-xs font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+                  disabled
+                  title="Tombol Reset dinonaktifkan karena status HC Awal Tahun (SOY) sudah Submitted / Approved"
+                  className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 bg-slate-100 text-slate-400 rounded-xl text-xs font-semibold cursor-not-allowed select-none"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   Reset Status HC Awal Tahun (SOY)
@@ -5034,3 +5201,5 @@ function GroupDetail({
     </div>
   );
 }
+import { getMasterCompanyLocations, MASTER_COMPANY_UPDATED_EVENT } from "./settings/masterCompanyStore";
+import { resolveGradeColorHex } from "../shared/scoringWeightStore";

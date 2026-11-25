@@ -192,6 +192,7 @@ const INITIAL_MENUS: MenuItem[] = [
         id: "setting_master", label: "Master", path: "", icon: "ListTodo",
         isVisible: true, order: 1, roles: HR_ADMIN,
         children: [
+          { id: "setting_master_company",    label: "Company",          path: "/settings/master/company",          icon: "Building2",     isVisible: true, order: 0, roles: HR_ADMIN },
           { id: "setting_master_kpi",        label: "KPI",              path: "/settings/master/kpi",              icon: "TrendingUp",    isVisible: true, order: 1, roles: HR_ADMIN },
           { id: "setting_master_appraisal",  label: "Appraisal Form",   path: "/settings/master/appraisal-form",   icon: "ClipboardList", isVisible: true, order: 2, roles: HR_ADMIN },
           { id: "setting_master_managerial", label: "Managerial Skill", path: "/settings/master/managerial-skill", icon: "Briefcase",     isVisible: true, order: 3, roles: HR_ADMIN },

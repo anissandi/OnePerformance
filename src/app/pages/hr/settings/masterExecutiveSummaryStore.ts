@@ -953,11 +953,12 @@ export async function syncExecutiveSummaryFromActualBusinessKpi(
       if (!cellsMap) continue;
       const scopeName = scopeCfg.trackingScopes.find((k) => trackingByScope[k]) ?? scopeCfg.trackingScopes[0];
       const knownMonths = monthsMetaByScope[scopeName] ?? [];
-      const matchedMonthEntry =
+      const rawMatchedMonth =
         knownMonths.find((x) => x.label.toLowerCase().startsWith(mMeta.enShort.toLowerCase())) ?? {
           id: `m${mMeta.month}`,
           label: mMeta.trackingLabel26,
         };
+      const matchedMonthEntry = { ...rawMatchedMonth, cells: {} };
       const monthCells = cellsMap[matchedMonthEntry.id];
       if (!monthCells || Object.values(monthCells).every((v) => !String(v ?? "").trim())) continue;
 

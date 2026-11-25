@@ -632,9 +632,9 @@ export function HRSettingKPIPage() {
   const canCheckerSeeUnitTab = !isPureChecker || COMPANY_UNITS_BIZ.some((u) => canKpiBusinessCheckerHandleScope(activeUser, "unit", u));
   const allowedGroups = React.useMemo<Array<"RSUP Group" | "Sambu Group">>(() => {
     if (isDirector && !isValidator && !isKpiBizChecker) {
-      return [getGroupNameForUnit(activeUser.company)];
+      return [getGroupNameForUnit(activeUser.company) as "RSUP Group" | "Sambu Group"];
     }
-    return [...BUSINESS_GROUPS];
+    return [...BUSINESS_GROUPS] as Array<"RSUP Group" | "Sambu Group">;
   }, [isDirector, isValidator, isKpiBizChecker, activeUser.company]);
   const allowedUnits = React.useMemo(
     () =>
@@ -1651,12 +1651,9 @@ export function HRSettingKPIPage() {
       )}
       {previewAttachment && (
         <EvidenceViewerModal
-          file={{
-            name: previewAttachment.name,
-            url: previewAttachment.url,
-            mimeType: previewAttachment.mimeType,
-            size: previewAttachment.size,
-          }}
+          name={previewAttachment.name}
+          url={previewAttachment.url}
+          mimeType={previewAttachment.mimeType}
           subtitle="Lampiran KPI Business"
           onClose={() => setPreviewAttachment(null)}
         />

@@ -2,6 +2,12 @@ import { DELEGATION_EVENT, getDelegatedModuleFlagsForUser, resolveApproverIdenti
 import { useEffect, useState } from "react";
 import { notifyLoginToSupabase, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../services/supabaseClient";
 import {
+  getMasterCompanyLocations,
+  getMasterUnitsByGroupUidOrName,
+  resolveMasterCompanyUnitName,
+  resolveMasterGroupNameForUnit,
+} from "../pages/hr/settings/masterCompanyStore";
+import {
   ACCESS_UPDATED_EVENT,
   getGroupAllowedModules,
   getGroupAuthorityLevel,
@@ -114,33 +120,44 @@ export interface ManagedGroupRule {
   allowedModules: AppraisalModuleName[];
 }
 
-export const COMPANY_UNIT_LOCATIONS = [
-  { code: "RSUP IND", unitId: "IND",  company: "PT RSUP (Industry)",          fullName: "PT. Riau Sakti United Plantations (Industry)" },
-  { code: "RSUP PKB", unitId: "PKB",  company: "PT RSUP (Perkebunan)",        fullName: "PT. Riau Sakti United Plantations (Perkebunan)" },
-  { code: "PSJ",   unitId: "PSJ",  company: "PT Pulau Sambu (Jakarta)",    fullName: "PT. Pulau Sambu (Jakarta)" },
-  { code: "PSG",   unitId: "GTG",  company: "PT Pulau Sambu (Guntung)",    fullName: "PT. Pulau Sambu (Guntung)" },
-  { code: "PSKE",  unitId: "KEN",  company: "PT Pulau Sambu (Kuala Enok)", fullName: "PT. Pulau Sambu (Kuala Enok)" },
-  { code: "RSTM",  unitId: "RSTM", company: "PT RSTM",                     fullName: "PT. Riau Sakti Transmandiri" },
-  { code: "GHS",   unitId: "GHS",  company: "PT GHS",                      fullName: "PT. Guntung Hasratmakmur" },
-  { code: "RSUP ASD", unitId: "ASD", company: "PT RSUP ASD",               fullName: "Agronomi Service Division" },
-] as const;
+function makeDynamicArrayProxy<T>(getter: () => T[]): readonly T[] {
+  return new Proxy([] as T[], {
+    get(_target, prop) {
+      const cur = getter();
+      if (prop === Symbol.iterator) return cur[Symbol.iterator].bind(cur);
+      if (prop === "length") return cur.length;
+      const val = Reflect.get(cur, prop);
+      return typeof val === "function" ? val.bind(cur) : val;
+    },
+    ownKeys() {
+      return Reflect.ownKeys(getter());
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      return Reflect.getOwnPropertyDescriptor(getter(), prop);
+    },
+  });
+}
 
-export const RSUP_GROUP_COMPANIES = [
-  "PT RSUP (Industry)",
-  "PT RSUP (Perkebunan)",
-  "PT RSTM",
-  "PT GHS",
-  "PT RSUP ASD",
-] as const;
+export const COMPANY_UNIT_LOCATIONS: ReadonlyArray<{
+  code: string;
+  unitId: string;
+  company: string;
+  fullName: string;
+  companyGroup?: string;
+  idGroup?: string;
+  abbGroup?: string;
+}> = makeDynamicArrayProxy(() => getMasterCompanyLocations());
 
-/** Normalisasi nama Unit Usaha (mengubah legacy "ASD" / "RSUP ASD" menjadi nama resmi sistem "PT RSUP ASD"). */
+export const RSUP_GROUP_COMPANIES: readonly string[] = makeDynamicArrayProxy(() => {
+  const dynamic = getMasterUnitsByGroupUidOrName("group-rsup");
+  return dynamic.length > 0
+    ? dynamic
+    : ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT RSTM", "PT GHS", "PT RSUP ASD"];
+});
+
+/** Normalisasi nama Unit Usaha secara dinamis mengacu pada Master Company (/settings/master/company). */
 export function canonicalizeCompanyUnitName(raw?: string | null): string {
-  const s = String(raw ?? "").trim();
-  const u = s.toUpperCase().replace(/\s+/g, " ");
-  if (u === "ASD" || u === "RSUP ASD" || u === "PT. RSUP ASD" || u === "PT RSUP (ASD)" || u === "PT RSUP ASD") {
-    return "PT RSUP ASD";
-  }
-  return s;
+  return resolveMasterCompanyUnitName(raw);
 }
 
 /**
@@ -287,21 +304,15 @@ export function canCheckerHandleCompanyUnit(viewer: ManagedUser, targetCompany: 
   return allowed.some((u) => isSameCompanyUnit(targetCompany, u));
 }
 
-export const SAMBU_GROUP_COMPANIES = [
-  "PT Pulau Sambu (Jakarta)",
-  "PT Pulau Sambu (Guntung)",
-  "PT Pulau Sambu (Kuala Enok)",
-] as const;
+export const SAMBU_GROUP_COMPANIES: readonly string[] = makeDynamicArrayProxy(() => {
+  const dynamic = getMasterUnitsByGroupUidOrName("group-sambu");
+  return dynamic.length > 0
+    ? dynamic
+    : ["PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)"];
+});
 
-export function getGroupNameForUnit(company: string): "RSUP Group" | "Sambu Group" {
-  const c = (company ?? "").trim().toLowerCase();
-  if (
-    (SAMBU_GROUP_COMPANIES as readonly string[]).some((u) => u.toLowerCase() === c) ||
-    c.includes("pulau sambu")
-  ) {
-    return "Sambu Group";
-  }
-  return "RSUP Group";
+export function getGroupNameForUnit(company: string): string {
+  return resolveMasterGroupNameForUnit(company);
 }
 
 export function getRoleAllowedCompanyUnits(role?: string): string[] {
@@ -322,11 +333,32 @@ export function getGroupCompaniesForUnit(company: string, extraUnits?: string[])
     return Array.from(new Set([...roleUnits, ...(extraUnits ?? [])].filter(Boolean)));
   }
   const groupName = getGroupNameForUnit(company);
+  const dynamicUnits = getMasterUnitsByGroupUidOrName(groupName);
   const base =
-    groupName === "Sambu Group"
+    dynamicUnits.length > 0
+      ? dynamicUnits
+      : groupName.toLowerCase().includes("sambu")
       ? [...SAMBU_GROUP_COMPANIES]
       : [...RSUP_GROUP_COMPANIES];
   return Array.from(new Set([...base, ...(extraUnits ?? [])].filter(Boolean)));
+}
+
+/** Format tanggal waktu login ke format standar DD/MM/YYYY HH:MM. */
+export function formatLastLoginDDMMYYYY(raw?: string | null): string {
+  const s = String(raw ?? "").trim();
+  if (!s || s === "-" || s === "—") return "—";
+  if (/^\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}$/.test(s)) return s;
+  const isoCandidate = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(s) ? s.replace(" ", "T") : s;
+  const d = new Date(isoCandidate);
+  if (!Number.isNaN(d.getTime())) {
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+  }
+  return s;
 }
 
 function normGroupKey(val?: string | null): string {
@@ -2309,11 +2341,13 @@ export function loginWithCompanyAndEmployeeId(
     };
   }
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowD = new Date();
+  const nowStr = `${String(nowD.getDate()).padStart(2, "0")}/${String(nowD.getMonth() + 1).padStart(2, "0")}/${nowD.getFullYear()} ${String(nowD.getHours()).padStart(2, "0")}:${String(nowD.getMinutes()).padStart(2, "0")}`;
   const updatedUser: ManagedUser = { ...matched, lastLogin: nowStr };
   const updatedList = users.map((u) => (u.id === matched.id ? updatedUser : u));
-  safeSetLocalJson(USERS_KEY, updatedList);
+  savePersistedState(USERS_KEY, updatedList);
   safeSetLocalJson(ACTIVE_USER_KEY, updatedUser);
+  void syncToSupabase({ kind: "user-upsert", user: updatedUser });
   try {
     localStorage.removeItem(LEGACY_LOGIN_ORIGIN_KEY);
     sessionStorage.removeItem(SWITCH_ORIGIN_SESSION_KEY);

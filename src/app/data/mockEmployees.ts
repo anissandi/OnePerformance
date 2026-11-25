@@ -161,7 +161,7 @@ function buildSingleEmployeeRecord(
   let kpiScore = extractAssessmentScore("KPI");
   const sgScore = extractAssessmentScore("SMART Goals");
   let afScore = extractAssessmentScore("Appraisal Form");
-  let msScore = extractAssessmentScore("Managerial Skill");
+  let msScore = 0;
   let miScore = extractAssessmentScore("Management Interview");
   if (miScore === 0) {
     const liveMiPct = getPenilai1ScoreAsPercent(u.employeeId, u.name);
@@ -198,14 +198,30 @@ function buildSingleEmployeeRecord(
       afScore = computeWeightedAfPct(afSelf.forms);
     }
   }
-  if (msScore === 0) {
+  {
+    const wfMs = empWorkflows.find((w) => w.module === "Managerial Skill" && w.phase === "measurement");
     const msApprovers = loadAllMSApprovers(u.employeeId);
     const msSelf = loadMSSelfRatings(u.employeeId);
-    if (msApprovers.length > 0) {
-      const latest = msApprovers[msApprovers.length - 1];
-      msScore = latest.totalScore <= 5 ? Math.round((latest.totalScore / 5) * 100) : Math.round(latest.totalScore);
-    } else if (msSelf && msSelf.totalScore > 0) {
-      msScore = msSelf.totalScore <= 5 ? Math.round((msSelf.totalScore / 5) * 100) : Math.round(msSelf.totalScore);
+    const avgFromMap = (map?: Record<string | number, number> | null): number | null => {
+      if (!map) return null;
+      const vals = Object.values(map).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+      return vals.length > 0 ? vals.reduce((s, n) => s + n, 0) / vals.length : null;
+    };
+    const selfAvg5 = msSelf && !msSelf.isDraft ? avgFromMap(msSelf.ratings) : null;
+    const ap1Entry = msApprovers.find((e) => e.approverLevel === 1);
+    const ap2Entry = msApprovers.find((e) => e.approverLevel === 2);
+    const ap1Avg5 = avgFromMap(wfMs?.assessments.approver1?.ratings) ?? avgFromMap(ap1Entry?.ratings);
+    const sameAp1Ap2 = Boolean(
+      u.regNoAp1 && u.regNoAp2 && String(u.regNoAp1).trim().toLowerCase() === String(u.regNoAp2).trim().toLowerCase(),
+    );
+    const ap2Avg5 =
+      avgFromMap(wfMs?.assessments.approver2?.ratings) ??
+      avgFromMap(ap2Entry?.ratings) ??
+      (sameAp1Ap2 ? ap1Avg5 : null);
+    const activeEvaluatorAvgs = [selfAvg5, ap1Avg5, ap2Avg5].filter((v): v is number => v != null && v > 0);
+    if (activeEvaluatorAvgs.length > 0) {
+      const mean3 = activeEvaluatorAvgs.reduce((s, v) => s + v, 0) / activeEvaluatorAvgs.length;
+      msScore = parseFloat(((mean3 / 5) * 100).toFixed(2));
     }
   }
 

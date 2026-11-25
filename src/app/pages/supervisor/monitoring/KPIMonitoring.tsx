@@ -4,7 +4,7 @@ import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, Users
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
-import { getKpiMonthStatuses, loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
+import { getKpiMonthStatuses, loadWorkflowRecords, loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 const countValidatedKpiMonths = (employeeId: string) =>
   getKpiMonthStatuses(employeeId).filter((m) => m.state === "validated").length;

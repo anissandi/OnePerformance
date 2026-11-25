@@ -3488,7 +3488,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
           fileSize: Number(r.file_size ?? 0),
           mimeType: String(r.mime_type ?? "application/octet-stream"),
           url: String(r.public_url ?? ""),
-          approvalStatus: String(r.approval_status ?? "Pending"),
+          approvalStatus: (r.approval_status === "Approved" || r.approval_status === "Revision" ? r.approval_status : "Pending"),
           submittedDate: String(r.submitted_date ?? ""),
         }));
       if (mappedEvidence.length > 0) {

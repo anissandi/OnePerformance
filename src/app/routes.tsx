@@ -48,6 +48,7 @@ import { CalibrationSettingApproval } from "./pages/bod/CalibrationSettingApprov
 import { MasterAppraisalForm } from "./pages/hr/settings/MasterAppraisalForm"
 import { MasterManagerialSkill } from "./pages/hr/settings/MasterManagerialSkill"
 import { MasterKPIPage } from "./pages/hr/settings/MasterKPI"
+import { MasterCompanyPage } from "./pages/hr/settings/MasterCompany"
 import { SupervisorSettingKPIPage } from "./pages/supervisor/setting/KPISetting"
 import { SmartGoalsCheckInPage } from "./pages/supervisor/SmartGoalsCheckIn"
 import { SmartGoalsApproverReview } from "./pages/supervisor/SmartGoalsApproverReview"
@@ -369,6 +370,7 @@ export const router = createBrowserRouter([
         path: "settings/master/managerial-skill",
         Component: MasterManagerialSkill,
       },
+      { path: "settings/master/company", Component: MasterCompanyPage },
       { path: "settings/master/kpi", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab/:subtab", Component: MasterKPIPage },
@@ -524,6 +526,7 @@ export const router = createBrowserRouter([
       { path: "settings/archive", Component: ArchivePage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
       { path: "settings/master/managerial-skill", Component: MasterManagerialSkill },
+      { path: "settings/master/company", Component: MasterCompanyPage },
       { path: "settings/master/kpi", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab/:subtab", Component: MasterKPIPage },
@@ -656,6 +659,7 @@ export const router = createBrowserRouter([
       { path: "settings/archive", Component: ArchivePage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
       { path: "settings/master/managerial-skill", Component: MasterManagerialSkill },
+      { path: "settings/master/company", Component: MasterCompanyPage },
       { path: "settings/master/kpi", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab/:subtab", Component: MasterKPIPage },
@@ -772,6 +776,7 @@ export const router = createBrowserRouter([
       { path: "settings/archive", Component: ArchivePage },
       { path: "settings/master/appraisal-form", Component: MasterAppraisalForm },
       { path: "settings/master/managerial-skill", Component: MasterManagerialSkill },
+      { path: "settings/master/company", Component: MasterCompanyPage },
       { path: "settings/master/kpi", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab", Component: MasterKPIPage },
       { path: "settings/master/kpi/:tab/:subtab", Component: MasterKPIPage },
@@ -814,6 +819,7 @@ export const router = createBrowserRouter([
       { path: "notification-management/:tab", Component: NotificationManagementPage },
       { path: "notifications", Component: NotificationManagementPage },
       { path: "notifications/:tab", Component: NotificationManagementPage },
+      { path: "master/company", Component: MasterCompanyPage },
       { path: "master/kpi", Component: MasterKPIPage },
       { path: "master/kpi/:tab", Component: MasterKPIPage },
       { path: "master/kpi/:tab/:subtab", Component: MasterKPIPage },

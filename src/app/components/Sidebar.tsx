@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import {
   BarChart2,
+  Building2,
   Settings,
   Archive,
   Users,
@@ -164,6 +165,7 @@ const hrLinks = [
     icon: Settings,
     subLinks: [
       { label: "Master", icon: ListTodo, children: [
+          { to: "/hr/settings/master/company", label: "Company", icon: Building2 },
           { to: "/hr/settings/master/kpi", label: "KPI", icon: TrendingUp },
           { to: "/hr/settings/master/appraisal-form", label: "Appraisal Form", icon: ClipboardList },
           { to: "/hr/settings/master/managerial-skill", label: "Managerial Skill", icon: Briefcase },
@@ -357,6 +359,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
 
   const buildSettingLink = (p = "/hr"): NavTopLink | null => {
     const masterChildren: NavSubChild[] = [
+      ...(canView("setting_master_company") ? [{ to: `${p}/settings/master/company`, label: "Company", icon: Building2 }] : []),
       ...(canView("setting_master_kpi") ? [{ to: `${p}/settings/master/kpi`, label: "KPI", icon: TrendingUp }] : []),
       ...(canView("setting_master_appraisal") ? [{ to: `${p}/settings/master/appraisal-form`, label: "Appraisal Form", icon: ClipboardList }] : []),
       ...(canView("setting_master_managerial") ? [{ to: `${p}/settings/master/managerial-skill`, label: "Managerial Skill", icon: Briefcase }] : []),

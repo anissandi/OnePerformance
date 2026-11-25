@@ -11,6 +11,7 @@ export interface MSSelfRatings {
   ratings: Record<number, number>; // item.no → score 1-5
   totalScore: number;
   submittedAt: string;
+  isDraft?: boolean;
 }
 
 let _cachedMsSelfRaw: string | null | undefined = undefined;
@@ -57,12 +58,13 @@ export function saveMSSelfRatings(data: MSSelfRatings): void {
     savePersistedState(APPROVER_BY_EMP_KEY, appMap);
 
     const selfMap = readSelfMap();
-    selfMap[normId] = data;
+    const payload: MSSelfRatings = { ...data, isDraft: false };
+    selfMap[normId] = payload;
     savePersistedState(SELF_BY_EMP_KEY, selfMap, {
       kind: "managerial-skill",
       employeeId: activeUser.employeeId,
       period: "2026",
-      selfRatings: data,
+      selfRatings: payload,
       approverRatings: [],
       status: "Submitted",
       audit: {
@@ -73,6 +75,35 @@ export function saveMSSelfRatings(data: MSSelfRatings): void {
       },
     });
     submitWorkflowModule("Managerial Skill", "measurement", formatTodayDDMMYYYY(), activeUser.employeeId);
+  } catch { /* ignore */ }
+}
+
+export function saveMSDraftRatings(ratings: Record<number, number>, totalScore: number): void {
+  try {
+    const activeUser = getActiveUser();
+    const normId = normalizeEmployeeId(activeUser.employeeId);
+    const selfMap = readSelfMap();
+    const draftPayload: MSSelfRatings = {
+      ratings,
+      totalScore,
+      submittedAt: "",
+      isDraft: true,
+    };
+    selfMap[normId] = draftPayload;
+    savePersistedState(SELF_BY_EMP_KEY, selfMap, {
+      kind: "managerial-skill",
+      employeeId: activeUser.employeeId,
+      period: "2026",
+      selfRatings: draftPayload,
+      approverRatings: loadAllMSApprovers(activeUser.employeeId),
+      status: "Draft",
+      audit: {
+        action: "Update",
+        module: "Performance Appraisal",
+        subModule: "Managerial Skill",
+        description: `Saved Draft Managerial Skill Self-Assessment by ${activeUser.name} (${activeUser.employeeId})`,
+      },
+    });
   } catch { /* ignore */ }
 }
 

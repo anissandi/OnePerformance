@@ -700,7 +700,29 @@ export function AppraisalForm() {
     const updated = { ...selfRatings };
     form.items.forEach((item) => delete updated[key(form.id, item.no)]);
     setSelfRatings(updated);
-    setSavedForms((prev) => { const n = { ...prev }; delete n[activeForm]; return n; });
+    const nextSavedForms = { ...savedForms };
+    delete nextSavedForms[activeForm];
+    setSavedForms(nextSavedForms);
+    const nextEntries = formsList.map((f) => {
+      const fRatings: Record<string, number> = {};
+      f.items.forEach((item) => {
+        const v = updated[`${f.id}-${item.no}`] ?? updated[`${f.id}__${item.no}`];
+        if (v != null) {
+          fRatings[`${f.id}-${item.no}`] = v as number;
+          fRatings[`${f.id}__${item.no}`] = v as number;
+        }
+      });
+      const computedAvg = computeFormAvg(fRatings, f);
+      return { formId: f.id, ratings: fRatings, avgScore: nextSavedForms[f.id]?.total ?? computedAvg ?? 0 };
+    });
+    saveAppraisalSelf(
+      {
+        forms: nextEntries,
+        submittedAt: "",
+        submitted: false,
+      },
+      { submitWorkflow: false },
+    );
   };
 
   return (

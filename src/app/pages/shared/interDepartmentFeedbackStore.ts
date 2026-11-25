@@ -63,52 +63,164 @@ export type FeedbackFollowUp = Record<typeof FOLLOW_UP_COLUMNS[number], string>
 
 /** Minimal jumlah pemberi feedback yang wajib dinominasikan (boleh lebih). */
 export const MIN_FEEDBACK_GIVERS = 3
-export const MIN_FEEDBACK_SENTENCES = 4
+export const MIN_FEEDBACK_WORDS = 4
+export const MIN_FEEDBACK_SENTENCES = MIN_FEEDBACK_WORDS
+export const MAX_FEEDBACK_REPLACEMENTS = 3
+
+export const BLOCKED_PROFANITY_TERMS = [
+  "fuck you",
+  "payu dara",
+  "payudara",
+  "diperkosa",
+  "perkosa",
+  "ngentot",
+  "bencong",
+  "perawan",
+  "perjaka",
+  "anjing",
+  "monyet",
+  "jancok",
+  "jancuk",
+  "kontol",
+  "kondom",
+  "pantat",
+  "memek",
+  "setan",
+  "ngewe",
+  "binal",
+  "banci",
+  "lesbi",
+  "lesby",
+  "combi",
+  "babi",
+  "itil",
+  "laso",
+  "ewek",
+  "lgbt",
+  "tete",
+  "tai",
+  "ewe",
+  "oyo",
+  "ml",
+] as const
+
+export interface FeedbackTextValidationResult {
+  valid: boolean
+  wordCount: number
+  error?: string
+}
 
 /**
- * Menghitung jumlah kalimat bermakna dalam sebuah input teks Bahasa Indonesia / Inggris.
- * Melindungi singkatan umum (PT., Dr., dll.), angka desimal/ribuan (10.5), dan nomor urut (1. )
- * agar tidak terhitung keliru sebagai pemisah kalimat.
+ * Validasi teks Inter-Department Feedback (Pemberi Feedback & Summary Penerima Feedback):
+ * 1) Minimal 4 kata (contoh: "saya sedang menjalankan tugas")
+ * 2) Tidak boleh spasi berulang (spasi ganda) atau simbol berulang (mis. "!!", "..", "--", "@@")
+ * 3) Tidak boleh kata berulang berurutan ("dan dan"), namun reduplikasi bertanda hubung tunggal sah ("masing-masing") diperbolehkan
+ * 4) Blokir daftar kata kasar/tidak pantas
  */
+export function validateFeedbackText(
+  rawText?: string | null,
+  minWords = MIN_FEEDBACK_WORDS,
+): FeedbackTextValidationResult {
+  const raw = String(rawText ?? "")
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return { valid: false, wordCount: 0, error: `Minimal input ${minWords} kata (0/${minWords} kata).` }
+  }
+
+  // Cek spasi berulang pada baris yang sama
+  if (/[ \t]{2,}/.test(raw)) {
+    const wc = trimmed.split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w)).length
+    return {
+      valid: false,
+      wordCount: wc,
+      error: "Tidak boleh menggunakan spasi berulang (spasi ganda) di antara atau di dalam kata.",
+    }
+  }
+
+  // Cek simbol berulang berturut-turut (mis. "!!", "??", "..", "--", "##", dll.)
+  if (/[^A-Za-z0-9\s]{2,}/.test(trimmed)) {
+    const wc = trimmed.split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w)).length
+    return {
+      valid: false,
+      wordCount: wc,
+      error: "Tidak boleh menggunakan simbol berulang (contoh: !!, .., --, @@).",
+    }
+  }
+
+  // Cek simbol asing berulang di dalam satu kata (kecuali tanda hubung tunggal kata ulang mis. masing-masing, atau garis miring tunggal a/n)
+  const rawTokens = trimmed.split(/\s+/)
+  for (const tok of rawTokens) {
+    const strippedEdge = tok.replace(/^[.,;:!?"'()[\]]+|[.,;:!?"'()[\]]+$/g, "")
+    if (!strippedEdge) continue
+    const symbolMatches = strippedEdge.match(/[^A-Za-z0-9]/g) ?? []
+    if (symbolMatches.length >= 2) {
+      const isValidSingleSlashOrHyphen = /^[A-Za-z0-9]+[-/][A-Za-z0-9]+$/.test(strippedEdge)
+      if (!isValidSingleSlashOrHyphen) {
+        const wc = rawTokens.filter((w) => /[A-Za-z0-9]/.test(w)).length
+        return {
+          valid: false,
+          wordCount: wc,
+          error: `Kata "${tok}" mengandung simbol tidak valid atau berulang di dalam 1 kata.`,
+        }
+      }
+    }
+  }
+
+  // Cek bahasa kasar / terlarang (word boundary)
+  const lowerClean = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  for (const bad of BLOCKED_PROFANITY_TERMS) {
+    const escaped = bad.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const re = new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`, "i")
+    if (re.test(lowerClean)) {
+      const wc = rawTokens.filter((w) => /[A-Za-z0-9]/.test(w)).length
+      return {
+        valid: false,
+        wordCount: wc,
+        error: `Teks mengandung kata yang dilarang ("${bad}"). Gunakan bahasa profesional dan sopan.`,
+      }
+    }
+  }
+
+  // Ekstrak kata bermakna (mengizinkan kata ulang bertanda hubung tunggal seperti "masing-masing" sebagai 1 token sah)
+  const cleanWords = rawTokens
+    .map((t) => t.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""))
+    .filter((t) => /[A-Za-z0-9]/.test(t))
+
+  // Cek kata berulang berurutan ("dan dan" ditolak; "masing-masing" adalah 1 token bertanda hubung sehingga lolos, namun "masing-masing masing-masing" ditolak)
+  for (let i = 1; i < cleanWords.length; i++) {
+    if (cleanWords[i].toLowerCase() === cleanWords[i - 1].toLowerCase()) {
+      return {
+        valid: false,
+        wordCount: cleanWords.length,
+        error: `Tidak boleh menggunakan kata berulang berurutan ("${cleanWords[i - 1]} ${cleanWords[i]}").`,
+      }
+    }
+  }
+
+  if (cleanWords.length < minWords) {
+    return {
+      valid: false,
+      wordCount: cleanWords.length,
+      error: `Minimal input ${minWords} kata (${cleanWords.length}/${minWords} kata).`,
+    }
+  }
+
+  return { valid: true, wordCount: cleanWords.length }
+}
+
 export function countValidSentences(rawText?: string | null): number {
-  const text = String(rawText ?? "").trim()
-  if (!text) return 0
-
-  const normalized = text
-    .replace(/\r\n/g, "\n")
-    // Lindungi titik di antara angka (mis. 95.5 atau 10.000)
-    .replace(/(\d)\.(\d)/g, "$1_DOT_$2")
-    // Lindungi titik penomoran awal baris/spasi seperti "1. Kalimat"
-    .replace(/(^|[\n\s])\d+\.(?=\s)/g, "$1")
-    // Lindungi singkatan umum Bahasa Indonesia agar tidak memotong kalimat
-    .replace(
-      /\b(pt|cv|tbk|dr|drs|ir|bpk|bp|ibu|sdr|sdri|no|tgl|hlm|hal|dll|dsb|dst|mis|yg|dgn|utk|tsb|a\.n|s\.d|u\.p)\.(?=\s)/gi,
-      "$1_DOT_",
-    )
-
-  const segments = normalized
-    .split(/(?:[.!?;]+(?:\s+|$)|\n+)/)
-    .map((seg) =>
-      seg
-        .replace(/_DOT_/g, ".")
-        .replace(/^[\s\-•*\d.)]+/, "")
-        .trim(),
-    )
-    .filter((seg) => {
-      if (!seg) return false
-      const words = seg.split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w))
-      const alphaChars = (seg.match(/[A-Za-z]/g) ?? []).length
-      return words.length >= 2 && alphaChars >= 5
-    })
-
-  return segments.length
+  return validateFeedbackText(rawText).wordCount
 }
 
 export function hasMinFeedbackSentences(
   rawText?: string | null,
-  minSentences = MIN_FEEDBACK_SENTENCES,
+  minWords = MIN_FEEDBACK_WORDS,
 ): boolean {
-  return countValidSentences(rawText) >= minSentences
+  return validateFeedbackText(rawText, minWords).valid
 }
 
 export const OWNER_RESULT_STATUS_OPTIONS = ["Open", "Closed", "Cancel"] as const
@@ -153,6 +265,8 @@ export interface FeedbackPerson {
   departmentId?: string
   section?: string
   sectionId?: string
+  role?: string
+  groupings?: string
 }
 export interface ReceivedFeedback {
   id: string
@@ -173,6 +287,9 @@ export interface FeedbackSubmission {
   followUps: Partial<Record<ReviewerRole, FeedbackFollowUp[]>>
   followUpMeta?: Partial<Record<ReviewerRole, { approverName: string; date: string }>>
   nominations?: FeedbackNomination[]
+  /** Jumlah pergantian pemberi feedback (maksimal 3 kali selama status masih Pending). */
+  replacementCount?: number
+  replacementHistory?: Array<{ oldGiverId: string; oldGiverName: string; newGiverId: string; newGiverName: string; at: string }>
   summaryDraftSavedAt?: string
   summarySubmittedAt?: string
   /** Log selesai modul: setelah tindak lanjut AP1 & AP2 (jika ada) diterima owner. */
@@ -466,6 +583,93 @@ export function nominateFeedbackGivers(
   return submission
 }
 
+/**
+ * Ganti 1 pemberi feedback yang masih berstatus "Pending" (Menunggu feedback), maksimal 3 kali per periode.
+ */
+export function replacePendingFeedbackGiver(
+  recipient: FeedbackPerson,
+  oldGiverId: string,
+  newGiver: FeedbackPerson,
+): FeedbackSubmission {
+  const submission = getFeedbackSubmission(recipient.id)
+  if (!submission) throw new Error("Data nominasi pemberi feedback belum ditemukan.")
+  if (submission.summarySubmittedAt) {
+    throw new Error("Summary feedback sudah disubmit sehingga pemberi feedback tidak dapat diganti.")
+  }
+  const used = submission.replacementCount ?? 0
+  if (used >= MAX_FEEDBACK_REPLACEMENTS) {
+    throw new Error(`Kuota ganti pemberi feedback sudah mencapai batas maksimal (${MAX_FEEDBACK_REPLACEMENTS} kali).`)
+  }
+  const normOld = normalizeEmployeeId(oldGiverId)
+  const targetNom = (submission.nominations ?? []).find(
+    (n) => n.giver.id === oldGiverId || normalizeEmployeeId(n.giver.id) === normOld,
+  )
+  if (!targetNom) throw new Error("Pemberi feedback yang akan diganti tidak ditemukan.")
+  if (targetNom.status !== "Pending") {
+    throw new Error("Pemberi feedback yang sudah mengirimkan feedback tidak dapat diganti.")
+  }
+  const alreadyNominated = (submission.nominations ?? []).some(
+    (n) =>
+      n.giver.id === newGiver.id ||
+      normalizeEmployeeId(n.giver.id) === normalizeEmployeeId(newGiver.id),
+  )
+  if (alreadyNominated) {
+    throw new Error(`${newGiver.name} sudah terdaftar sebagai pemberi feedback Anda.`)
+  }
+  const eligErr = feedbackEligibilityError(recipient, newGiver)
+  if (eligErr) throw new Error(eligErr)
+
+  const updated = mutateSubmission(
+    submission.row.no,
+    (current) => {
+      const curUsed = current.replacementCount ?? 0
+      if (curUsed >= MAX_FEEDBACK_REPLACEMENTS) return current
+      return {
+        ...current,
+        replacementCount: curUsed + 1,
+        replacementHistory: [
+          ...(current.replacementHistory ?? []),
+          {
+            oldGiverId: targetNom.giver.id,
+            oldGiverName: targetNom.giver.name,
+            newGiverId: newGiver.id,
+            newGiverName: newGiver.name,
+            at: now(),
+          },
+        ],
+        nominations: (current.nominations ?? []).map((n) =>
+          n.giver.id === oldGiverId || normalizeEmployeeId(n.giver.id) === normOld
+            ? { giver: newGiver, status: "Pending" }
+            : n,
+        ),
+      }
+    },
+    `Ganti pemberi feedback (${used + 1}/${MAX_FEEDBACK_REPLACEMENTS}): ${targetNom.giver.name} -> ${newGiver.name}`,
+  )
+
+  triggerInterDeptNominationNotifications({
+    recipient: {
+      id: recipient.id,
+      name: recipient.name,
+      position: recipient.position,
+      department: recipient.department,
+      division: recipient.division,
+      companyUnit: recipient.companyUnit,
+    },
+    givers: [
+      {
+        id: newGiver.id,
+        name: newGiver.name,
+        position: newGiver.position,
+        department: newGiver.department,
+        division: newGiver.division,
+        companyUnit: newGiver.companyUnit,
+      },
+    ],
+  })
+  return updated
+}
+
 export function feedbackTasksFor(giverId: string): FeedbackTask[] {
   const normGiver = normalizeEmployeeId(giverId)
   return loadFeedbackSubmissions().flatMap((submission) =>
@@ -486,8 +690,12 @@ export function submitNominatedFeedback(
 ) {
   if (FEEDBACK_INDICATORS.some((indicator) => !answers[indicator.key]?.trim()))
     throw new Error("Semua indikator feedback wajib diisi.")
-  if (FEEDBACK_INDICATORS.some((indicator) => !hasMinFeedbackSentences(answers[indicator.key])))
-    throw new Error(`Setiap indikator feedback wajib diisi minimal ${MIN_FEEDBACK_SENTENCES} kalimat.`)
+  for (const indicator of FEEDBACK_INDICATORS) {
+    const check = validateFeedbackText(answers[indicator.key])
+    if (!check.valid) {
+      throw new Error(check.error || `Setiap indikator wajib diisi minimal ${MIN_FEEDBACK_WORDS} kata yang valid.`)
+    }
+  }
   const submission = getFeedbackSubmission(recipientId)
   if (!submission) throw new Error("Permintaan feedback tidak ditemukan.")
   const normGiver = normalizeEmployeeId(giverId)
@@ -557,7 +765,7 @@ export function summarySubmitReadiness(
   if (pending > 0) reasons.push(`Masih menunggu ${pending} dari ${total} feedback.`)
   const missing = feedbacksMissingSummary(submission, summaries)
   if (missing.length > 0)
-    reasons.push(`${missing.length} feedback belum lengkap Summary / Catatan Penerima-nya (minimal ${MIN_FEEDBACK_SENTENCES} kalimat di setiap field).`)
+    reasons.push(`${missing.length} feedback belum lengkap Summary / Catatan Penerima-nya (minimal ${MIN_FEEDBACK_WORDS} kata valid, tanpa kata/simbol/spasi berulang atau kata terlarang).`)
   if (submission.summarySubmittedAt) reasons.push("Feedback & Summary sudah disubmit.")
   return { ready: reasons.length === 0, reasons }
 }

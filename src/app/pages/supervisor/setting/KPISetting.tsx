@@ -41,7 +41,7 @@ import { DelegatedWorkspaceBanner } from "../../../components/approval/Delegated
 import { ModuleApprovalStatusBar } from "../../../components/ModuleApprovalStatusBar";
 import { ApproverNotesHistory } from "../../../components/ApproverNotesHistory";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
-import { AlertCircle, Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { AlertCircle, Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FileEdit, UserCircle2, Paperclip, Lock, Layers, Download, FileSpreadsheet, FileText, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import { CopyKpiFromSourceModal } from "./CopyKpiFromSourceModal";
 import { EmbeddedPdfPreview, EvidenceViewerModal, triggerReliableFileDownload } from "../../../components/EvidenceViewerModal";
@@ -878,7 +878,7 @@ const PERSP_COLOR: Record<string, string> = {
 const W_NO = 84;
 const W_PERSP = 140;
 const W_KPI = 270;
-const W_AKSI = 88;
+const W_AKSI = 128;
 const inputCls = "text-sm bg-white border border-slate-200/90 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] focus:ring-2 focus:ring-[#1A284F]/10 w-full shadow-2xs transition-all";
 
 // ─── Shared field wrapper ─────────────────────────────────────────────────────
@@ -918,46 +918,141 @@ function Field({ label, tone, children }: { label: string; tone?: FieldTone; chi
   );
 }
 
+function sortSatuanUnitOptions(opts: string[]): string[] {
+  const unique = Array.from(new Set(opts.map((s) => String(s ?? "").trim()).filter(Boolean)));
+  const rest = unique.filter((s) => s !== "%").sort((a, b) => a.localeCompare(b, "id"));
+  return ["%", ...rest];
+}
+
+function sortSatuanPeriodeOptions(opts: string[]): string[] {
+  const unique = Array.from(
+    new Set(
+      opts
+        .map((p) => String(p ?? "").trim())
+        .filter((p) => p && p.toLowerCase() !== "hari"),
+    ),
+  );
+  if (!unique.some((p) => p.toLowerCase() === "bulan")) unique.push("Bulan");
+  return unique.sort((a, b) => a.localeCompare(b, "id"));
+}
+
 function SatuanField({ value, onChange, unitOptions, periodeOptions }: {
   value: string; onChange: (v: string) => void;
   unitOptions?: string[]; periodeOptions?: string[];
 }) {
   const sep = value.indexOf("/");
   const unit   = sep >= 0 ? value.slice(0, sep).trim() : value.trim();
-  const periode = sep >= 0 ? value.slice(sep + 1).trim() : "";
+  const rawPeriode = sep >= 0 ? value.slice(sep + 1).trim() : "";
+  const periode = rawPeriode || "Bulan";
 
   const combine = (u: string, p: string) => onChange(u && p ? `${u}/${p}` : u ? u : p ? `/${p}` : "");
-  const baseUOpts = unitOptions ?? SATUAN_UNIT_OPTIONS;
+  const baseUOpts = sortSatuanUnitOptions(unitOptions ?? SATUAN_UNIT_OPTIONS);
   const uOpts = unit && !baseUOpts.includes(unit) ? [unit, ...baseUOpts] : baseUOpts;
-  const basePOpts = (periodeOptions ?? SATUAN_PERIODE_OPTIONS).filter((p) => p.toLowerCase() !== "hari");
+  const basePOpts = sortSatuanPeriodeOptions(periodeOptions ?? SATUAN_PERIODE_OPTIONS);
   const pOpts = periode && !basePOpts.includes(periode) ? [periode, ...basePOpts] : basePOpts;
 
   return (
     <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.violet.wrap}`}>
       <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.violet.label}`}>
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.violet.dot}`} />
-        <span>Satuan *</span>
+        <span>Satuan / Periode *</span>
       </label>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
         <select
           value={unit}
-          onChange={(e) => combine(e.target.value, periode)}
+          onChange={(e) => combine(e.target.value, e.target.value ? (periode || "Bulan") : "")}
           className={inputCls}
         >
           <option value="">— Satuan —</option>
           {uOpts.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        <span className="text-sm font-black text-violet-700 px-0.5 select-none">/</span>
         <select
           value={periode}
-          onChange={(e) => combine(unit, e.target.value)}
+          onChange={(e) => {
+            if (unit) combine(unit, e.target.value);
+            else onChange(`/${e.target.value}`);
+          }}
           className={inputCls}
         >
-          <option value="">— Periode —</option>
           {pOpts.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
     </div>
   );
+}
+
+function moveKpiItemAcrossSections(
+  list: KPISetting[],
+  itemId: string,
+  dir: "up" | "down",
+): KPISetting[] {
+  const sections = Array.from(new Set(list.map((i) => i.section || "A"))).sort();
+  const grouped: Record<string, KPISetting[]> = {};
+  sections.forEach((s) => {
+    grouped[s] = list.filter((i) => (i.section || "A") === s).map((i) => ({ ...i }));
+  });
+  let foundSecIdx = -1;
+  let foundRowIdx = -1;
+  sections.forEach((s, si) => {
+    const ri = grouped[s].findIndex((r) => r.id === itemId);
+    if (ri >= 0) {
+      foundSecIdx = si;
+      foundRowIdx = ri;
+    }
+  });
+  if (foundSecIdx < 0 || foundRowIdx < 0) return list;
+
+  const curSec = sections[foundSecIdx];
+  const curRows = grouped[curSec];
+  if (dir === "up") {
+    if (foundRowIdx > 0) {
+      const tmp = curRows[foundRowIdx - 1];
+      curRows[foundRowIdx - 1] = curRows[foundRowIdx];
+      curRows[foundRowIdx] = tmp;
+    } else if (foundSecIdx > 0) {
+      const prevSec = sections[foundSecIdx - 1];
+      const prevRows = grouped[prevSec];
+      const refRow = prevRows[0];
+      const [moved] = curRows.splice(foundRowIdx, 1);
+      moved.section = prevSec;
+      moved.sectionAlphabet = `${prevSec}.`;
+      if (refRow?.sectionLabel) moved.sectionLabel = refRow.sectionLabel;
+      if (refRow?.sectionBobot) moved.sectionBobot = refRow.sectionBobot;
+      prevRows.push(moved);
+    } else {
+      return list;
+    }
+  } else {
+    if (foundRowIdx < curRows.length - 1) {
+      const tmp = curRows[foundRowIdx + 1];
+      curRows[foundRowIdx + 1] = curRows[foundRowIdx];
+      curRows[foundRowIdx] = tmp;
+    } else if (foundSecIdx < sections.length - 1) {
+      const nextSec = sections[foundSecIdx + 1];
+      const nextRows = grouped[nextSec];
+      const refRow = nextRows[0];
+      const [moved] = curRows.splice(foundRowIdx, 1);
+      moved.section = nextSec;
+      moved.sectionAlphabet = `${nextSec}.`;
+      if (refRow?.sectionLabel) moved.sectionLabel = refRow.sectionLabel;
+      if (refRow?.sectionBobot) moved.sectionBobot = refRow.sectionBobot;
+      nextRows.unshift(moved);
+    } else {
+      return list;
+    }
+  }
+
+  const usesAlphaPrefix = list.some((r) => /^[A-Z]+\.\d+/i.test(String(r.no ?? "").trim()));
+  let globalCounter = 1;
+  const flattened: KPISetting[] = [];
+  for (const s of sections) {
+    grouped[s].forEach((row, idx) => {
+      const nextNo = usesAlphaPrefix ? `${s}.${idx + 1}` : String(globalCounter++);
+      flattened.push({ ...row, no: nextNo });
+    });
+  }
+  return flattened;
 }
 
 // ─── Bobot validation ────────────────────────────────────────────────────────
@@ -2578,14 +2673,12 @@ function MonthlyTargetTable({
   const pctSatuan = isPercentSatuan(satuan);
   const normPeriod = normalizeTrackingPeriod(trackingPeriod);
   const isPeriodic = isPeriodicTrackingType(normPeriod);
-  const blockedIdxSet = isPeriodic
-    ? resolveEffectiveBlockedMonthSet({
-        trackingPeriod: normPeriod,
-        periodicTargetBlock,
-        blockedMonths,
-        monthlyTargets,
-      })
-    : new Set<number>();
+  const blockedIdxSet = resolveEffectiveBlockedMonthSet({
+    trackingPeriod: normPeriod,
+    periodicTargetBlock,
+    blockedMonths,
+    monthlyTargets,
+  });
   const activeIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !blockedIdxSet.has(i));
   const activeIdxSet = new Set<number>(activeIndices);
   const firstActiveIdx = activeIndices[0] ?? 0;
@@ -2643,7 +2736,6 @@ function MonthlyTargetTable({
   };
 
   const handleToggleSingleMonthInactive = (monthIdx: number) => {
-    if (!isPeriodic) return;
     const nextSet = new Set(blockedIdxSet);
     if (nextSet.has(monthIdx)) {
       nextSet.delete(monthIdx);
@@ -2696,7 +2788,7 @@ function MonthlyTargetTable({
 
   const firstActiveShort = MONTHS_SHORT[firstActiveIdx] ?? "Jan";
   const lastActiveShort = MONTHS_SHORT[lastActiveIdx] ?? "Dec";
-  const hasAnyBlockedMonth = isPeriodic && blockedIdxSet.size > 0;
+  const hasAnyBlockedMonth = blockedIdxSet.size > 0;
   const ruleHint = ratioMode
     ? `Pilih ${firstActiveShort} → auto isi bulan aktif`
     : colorMode
@@ -2712,9 +2804,7 @@ function MonthlyTargetTable({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <label className={`text-[11px] font-bold uppercase tracking-wide ${softYellowHighlight ? "text-amber-800" : softOrangeHighlight ? "text-orange-800" : "text-gray-500"}`}>Monthly Target</label>
-          {isPeriodic && (
-            <>
-              {hasPresetPeriodRule && (
+          {isPeriodic && hasPresetPeriodRule && (
               <button
                 type="button"
                 onClick={handleTogglePeriodicTag}
@@ -2729,12 +2819,10 @@ function MonthlyTargetTable({
                 <span>Tracking per {normPeriod}</span>
                 {matchesStandardPreset && <CheckCircle2 className="w-3 h-3 text-teal-600 shrink-0" />}
               </button>
-              )}
-              <span className="text-[11px] text-slate-600 font-medium">
-                Klik tag <strong className="text-rose-700">Inactive</strong> di atas kolom bulan untuk memblokir bulan yang tidak perlu diisi saat tracking (Aktual &amp; RCA otomatis nonaktif)
-              </span>
-            </>
           )}
+          <span className="text-[11px] text-slate-600 font-medium">
+            Klik tag <strong className="text-emerald-700">Active</strong> / <strong className="text-rose-700">Inactive</strong> di atas kolom bulan untuk mengatur bulan aktif tracking (bulan Inactive otomatis read-only &amp; RCA nonaktif)
+          </span>
           {softYellowHighlight && hasAnyEmptyMonth && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-100 text-amber-800 border border-yellow-300">
               Belum diisi · Wajib dilengkapi
@@ -2754,7 +2842,6 @@ function MonthlyTargetTable({
       <div className={`overflow-x-auto rounded-xl ${softYellowHighlight ? "border-2 border-yellow-300 bg-white" : softOrangeHighlight ? "border-2 border-orange-300 bg-white" : "border border-gray-200"}`}>
         <table className="border-collapse w-full text-xs" style={{ minWidth: 680 }}>
           <thead>
-            {isPeriodic && (
               <tr className="bg-slate-50/90 border-b border-gray-200">
                 {MONTHS_SHORT.map((m, i) => {
                   const isBlockedMonth = blockedIdxSet.has(i);
@@ -2765,31 +2852,30 @@ function MonthlyTargetTable({
                         onClick={() => handleToggleSingleMonthInactive(i)}
                         title={
                           isBlockedMonth
-                            ? `Bulan ${m} diblok (Aktual & RCA tidak aktif saat tracking) — Klik lagi untuk membuka kembali`
-                            : `Klik untuk memblokir kolom bulan ${m} (Aktual & RCA tidak aktif saat tracking)`
+                            ? `Bulan ${m} Inactive (Aktual & RCA nonaktif saat tracking) — Klik untuk mengubah menjadi Active`
+                            : `Bulan ${m} Active — Klik untuk mengubah menjadi Inactive (read-only & RCA nonaktif saat tracking)`
                         }
                         className={`inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all cursor-pointer select-none ${
                           isBlockedMonth
                             ? "bg-rose-600 text-white border-rose-600 shadow-2xs ring-2 ring-rose-100 hover:bg-rose-700"
-                            : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300"
+                            : "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300"
                         }`}
                       >
                         {isBlockedMonth ? (
                           <Lock className="w-2.5 h-2.5 shrink-0" />
                         ) : (
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                         )}
-                        <span>Inactive</span>
+                        <span>{isBlockedMonth ? "Inactive" : "Active"}</span>
                       </button>
                     </th>
                   );
                 })}
               </tr>
-            )}
             <tr className="bg-[#1A284F]/5">
               {MONTHS_SHORT.map((m, i) => {
-                const isBlockedMonth = isPeriodic && blockedIdxSet.has(i);
-                const isActivePeriodicMonth = isPeriodic && hasAnyBlockedMonth && activeIdxSet.has(i);
+                const isBlockedMonth = blockedIdxSet.has(i);
+                const isActivePeriodicMonth = hasAnyBlockedMonth && activeIdxSet.has(i);
                 return (
                   <th
                     key={m}
@@ -2816,7 +2902,7 @@ function MonthlyTargetTable({
           <tbody>
             <tr>
               {MONTHS_LIST.map((key, i) => {
-                const isBlockedMonth = isPeriodic && blockedIdxSet.has(i);
+                const isBlockedMonth = blockedIdxSet.has(i);
                 if (isBlockedMonth) {
                   return (
                     <td key={key} className="border border-gray-200 p-1 bg-slate-100/85 text-center select-none" title={`Bulan ${MONTHS_SHORT[i]} diblok (Inactive) — Aktual & RCA tidak aktif saat tracking`}>
@@ -2866,7 +2952,7 @@ function MonthlyTargetTable({
                 }
                 const cellVal = monthlyTargets[key] ?? "";
                 const isCellEmptyYellow = softYellowHighlight && !cellVal.trim();
-                const isActivePeriodicCell = isPeriodic && hasAnyBlockedMonth && activeIdxSet.has(i);
+                const isActivePeriodicCell = hasAnyBlockedMonth && activeIdxSet.has(i);
                 return (
                   <td key={key} className={`border border-gray-200 p-1 ${isCellEmptyYellow ? "bg-yellow-50/85" : isActivePeriodicCell ? "bg-teal-50/35" : i === 11 ? "bg-amber-50/40" : "bg-white"}`}>
                     <input
@@ -6225,16 +6311,14 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                 formula,
                 trackingPeriod: normalizeTrackingPeriod(trackingPeriod),
                 periodicTargetBlock: isPeriodicTrackingType(trackingPeriod) ? periodicTargetBlock : false,
-                blockedMonths: isPeriodicTrackingType(trackingPeriod)
-                  ? Array.from(
-                      resolveEffectiveBlockedMonthSet({
-                        trackingPeriod,
-                        periodicTargetBlock,
-                        blockedMonths,
-                        monthlyTargets,
-                      }),
-                    ).sort((a, b) => a - b)
-                  : [],
+                blockedMonths: Array.from(
+                  resolveEffectiveBlockedMonthSet({
+                    trackingPeriod,
+                    periodicTargetBlock,
+                    blockedMonths,
+                    monthlyTargets,
+                  }),
+                ).sort((a, b) => a - b),
               });
               onClose();
             }}
@@ -6440,7 +6524,7 @@ function GlobalEditUnsavedModal({
   );
 }
 
-export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBatchUpdateItems, hideCascading = false, onRenameSection, onUpdateSectionMeta, displayControls }: {
+export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBatchUpdateItems, hideCascading = false, onRenameSection, onUpdateSectionMeta, displayControls, toolbarRightExtra }: {
   items: KPISetting[]; editable: boolean;
   onRenameSection?: (oldSec: string, newSec: string) => void;
   onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
@@ -6449,10 +6533,11 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
   onBatchUpdateItems?: (nextItems: KPISetting[]) => void;
   hideCascading?: boolean;
   displayControls?: React.ReactNode;
+  toolbarRightExtra?: React.ReactNode;
 }) {
   const master = useMasterKpi();
   const tablePerspektifOpts = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
-  const tablePeriodeOpts = (master.period?.length ? master.period : SATUAN_PERIODE_OPTIONS).filter((p) => p.toLowerCase() !== "hari");
+  const tablePeriodeOpts = sortSatuanPeriodeOptions(master.period?.length ? master.period : SATUAN_PERIODE_OPTIONS);
   const tableFormulaOpts = master.formula?.length ? master.formula : FORMULA_OPTIONS;
   const tablePolaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
@@ -6656,6 +6741,8 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
       const secLimitNum = resolveEffectiveSectionBobotNum(activeDisplayItems, sec, false);
       const otherSubBobot = calcSubSectionBobot(activeDisplayItems, sec, item.id);
       const maxAllowedSubBobot = Math.max(0, Math.round((secLimitNum - otherSubBobot) * 100) / 100);
+      const curItemBobotNum = parsePctNum(row.bobot);
+      const isBobotOverflow = curItemBobotNum > maxAllowedSubBobot + 1e-6;
       const rowSubBobotOpts = buildRemainingBobotOptions(
         secLimitNum === 0 ? 0 : 1,
         maxAllowedSubBobot,
@@ -6663,12 +6750,15 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
         true,
       );
       const setD = (patch: Partial<KPISetting>) => setRowPatch(item.id, patch);
+      const secIdx = sections.indexOf(sec);
+      const canMoveUp = rowIdx > 0 || secIdx > 0;
+      const canMoveDown = rowIdx < secItems(sec).length - 1 || secIdx < sections.length - 1;
       return (
         <tr
           key={item.id}
           data-kpi-editing-row={!globalEdit && editingId === item.id ? "true" : undefined}
           className={`border-t border-gray-200 transition-colors ${
-            hasRowRedAlert
+            hasRowRedAlert || isBobotOverflow
               ? "bg-rose-50/80 ring-1 ring-inset ring-rose-300/70"
               : isEditing
               ? "bg-blue-50/20 ring-1 ring-inset ring-[#1A284F]/20"
@@ -6697,7 +6787,29 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                   <button type="button" onClick={cancelEdit} className="w-full px-2 py-1 rounded text-[10px] font-semibold border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 transition-colors">Cancel</button>
                 </div>
               ) : (
-                <div className="flex items-center justify-center gap-1">
+                <div className="flex items-center justify-center gap-0.5">
+                  {onBatchUpdateItems && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={!canMoveUp}
+                        onClick={() => onBatchUpdateItems(moveKpiItemAcrossSections(items, item.id, "up"))}
+                        className="p-1 rounded hover:bg-slate-100 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title="Pindah ke atas (dapat berpindah antar Section)"
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canMoveDown}
+                        onClick={() => onBatchUpdateItems(moveKpiItemAcrossSections(items, item.id, "down"))}
+                        className="p-1 rounded hover:bg-slate-100 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title="Pindah ke bawah (dapat berpindah antar Section)"
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
                   {onUpdateItem && (
                     <button
                       type="button"
@@ -6780,16 +6892,16 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
               ? (() => {
                   const sep = row.satuan.indexOf("/");
                   const unit = sep >= 0 ? row.satuan.slice(0, sep).trim() : row.satuan.trim();
-                  const periode = sep >= 0 ? row.satuan.slice(sep + 1).trim() : "";
+                  const periode = (sep >= 0 ? row.satuan.slice(sep + 1).trim() : "") || "Bulan";
                   const combine = (u: string, p: string) => setD({ satuan: u && p ? `${u}/${p}` : u });
                   return (
-                    <div className="flex flex-col gap-1">
+                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1">
                       <select value={unit} onChange={(e) => combine(e.target.value, periode)} className={ci}>
                         <option value="">— Satuan —</option>
-                        {(master.satuan.length ? master.satuan : SATUAN_UNIT_OPTIONS).map((s) => <option key={s} value={s}>{s}</option>)}
+                        {sortSatuanUnitOptions(master.satuan.length ? master.satuan : SATUAN_UNIT_OPTIONS).map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
+                      <span className="text-xs font-bold text-slate-500">/</span>
                       <select value={periode} onChange={(e) => combine(unit, e.target.value)} className={ci}>
-                        <option value="">— Periode —</option>
                         {tablePeriodeOpts.map((p) => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </div>
@@ -6807,9 +6919,9 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
               : item.formula}
           </td>
           {/* Bobot */}
-          <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 88 }}>
+          <td className={`border py-3 px-2 text-center ${isBobotOverflow ? "border-rose-400 bg-rose-50/95" : "border-gray-200"}`} style={{ minWidth: 96 }}>
             {isEditing
-              ? <select value={row.bobot} onChange={(e) => setD({ bobot: e.target.value })} className={ci}>
+              ? <select value={row.bobot} onChange={(e) => setD({ bobot: e.target.value })} className={`${ci} ${isBobotOverflow ? "border-rose-500 bg-rose-50 text-rose-700 font-bold" : ""}`}>
                   {rowSubBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
                 </select>
               : editable && onUpdateItem && item._cascadeType !== "FC"
@@ -6817,13 +6929,22 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                   value={item.bobot}
                   title={`Pilih bobot Sub Section (Maks. sisa Section ${sec}: ${formatPctNum(maxAllowedSubBobot)}%)`}
                   onChange={(e) => onUpdateItem(item.id, { bobot: e.target.value })}
-                  className="px-2 py-1 rounded-full bg-[#1A284F] text-white text-[10px] font-bold outline-none cursor-pointer hover:bg-[#243869] transition-colors"
+                  className={`px-2 py-1 rounded-full text-[10px] font-bold outline-none cursor-pointer transition-colors ${
+                    isBobotOverflow
+                      ? "bg-rose-600 text-white ring-2 ring-rose-200 hover:bg-rose-700"
+                      : "bg-[#1A284F] text-white hover:bg-[#243869]"
+                  }`}
                 >
                   {rowSubBobotOpts.map((b) => (
                     <option key={b} value={b} style={{ background: "#ffffff", color: "#1A284F" }}>{b}</option>
                   ))}
                 </select>
-              : <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{item.bobot}</span>}
+              : <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isBobotOverflow ? "bg-rose-600 text-white" : "bg-[#1A284F] text-white"}`}>{item.bobot}</span>}
+            {isBobotOverflow && (
+              <div className="mt-1 px-1.5 py-0.5 rounded bg-rose-100 border border-rose-300 text-[9px] font-bold text-rose-800 leading-tight">
+                Melebihi Section {sec} (Sisa maks {formatPctNum(maxAllowedSubBobot)}%)
+              </div>
+            )}
           </td>
           {/* Definisi */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 leading-relaxed" style={{ minWidth: 240 }}>
@@ -7015,6 +7136,11 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
             )}
             {displayControls}
           </div>
+          {toolbarRightExtra && (
+            <div className="flex items-center gap-2 flex-wrap ml-auto">
+              {toolbarRightExtra}
+            </div>
+          )}
         </div>
       )}
     <DualScrollTableContainer className="border-0 rounded-none shadow-none bg-white">
@@ -7346,9 +7472,10 @@ function CascadingTypePanel({
   );
 }
 
-export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, onRenameSection, onUpdateSectionMeta, canSubmitKpi, submitBlockReasons, displayControls }: {
+export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onDeleteItem, onAddClick, onSubmit, onExport, onImport, submitted = false, hideCascading = false, hideScope = false, kpiApproved = false, targetEditApproved = false, onEditTargetRequest, sectionCascadeMap, onSectionCascadeChange, parentSectionCascadeMap, editedSectionBobots, onSectionBobotChange, toolbarExtra, toolbarRightExtra, onRenameSection, onUpdateSectionMeta, canSubmitKpi, submitBlockReasons, displayControls }: {
   hideScope?: boolean;
   toolbarExtra?: React.ReactNode;
+  toolbarRightExtra?: React.ReactNode;
   onRenameSection?: (oldSec: string, newSec: string) => void;
   onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
   canSubmitKpi?: boolean;
@@ -7569,7 +7696,7 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
   const corpPolaritasOpts = master.polaritas?.length
     ? master.polaritas.map((v) => ({ value: v as Polaritas, label: v }))
     : POLARITAS_OPTIONS;
-  const W_CORP_AKSI = 84;
+  const W_CORP_AKSI = 124;
   const W_CORP_CASC = 62;
   const W_CORP_NO = 80;
   const W_CORP_PERSP = 120;
@@ -7699,11 +7826,13 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
           {kpiApproved && !targetEditApproved && onEditTargetRequest && (
             <button
               onClick={onEditTargetRequest}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-amber-500 text-white hover:bg-amber-600 transition-colors whitespace-nowrap">
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 transition-colors whitespace-nowrap"
+              title="Ajukan Edit [Target] Request">
               <FileEdit className="w-3.5 h-3.5 shrink-0" />
-              Edit [Target] Request
+              <span>Edit [Target] Request</span>
             </button>
           )}
+          {toolbarRightExtra}
           {!hideCascading && (
             <button
               onClick={() => { setPreviewMode((p) => !p); if (!previewMode) { setEditingRowId(null); setDraft(null); } }}
@@ -7940,6 +8069,8 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                   const ct = item._cascadeType;
                   const otherSubUsed = calcSubSectionBobot(activeCorpItems, sec, item.id);
                   const maxAllowedRowSubBobot = Math.max(0, Math.round((secBobotNum - otherSubUsed) * 100) / 100);
+                  const curCorpBobotNum = parsePctNum(row.bobot);
+                  const isCorpBobotOverflow = curCorpBobotNum > maxAllowedRowSubBobot + 1e-6;
                   const corpRowSubBobotOpts = buildRemainingBobotOptions(
                     secBobotNum === 0 ? 0 : 1,
                     maxAllowedRowSubBobot,
@@ -7947,6 +8078,9 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                     true,
                   );
                   const canQuickEditBobot = showAksi && Boolean(onUpdateItem) && (!ct || ct === "PC" || ct === "CC");
+                  const corpSecIdx = sections.indexOf(sec);
+                  const corpCanMoveUp = idx > 0 || corpSecIdx > 0;
+                  const corpCanMoveDown = idx < secRows.length - 1 || corpSecIdx < sections.length - 1;
                   const setDraftField = (updates: Partial<KPISetting>) => setCorpRowPatch(item.id, updates);
                   const isFieldEditable = (field: string) => isRowFieldEditable(row, field);
                   const CASCADE_BADGE: Record<string, { label: string; cls: string }> = {
@@ -7959,7 +8093,7 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                       key={item.id}
                       data-kpi-editing-row={!corpGlobalEdit && editingRowId === item.id ? "true" : undefined}
                       className={`border-t border-gray-100 ${
-                        hasCorpRedAlert
+                        hasCorpRedAlert || isCorpBobotOverflow
                           ? "bg-rose-50/80 ring-1 ring-inset ring-rose-300/70"
                           : isEditing
                           ? "ring-1 ring-inset ring-[#1A284F]/20 bg-blue-50/10"
@@ -7987,7 +8121,29 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                               <button type="button" onClick={cancelEdit} className="w-full px-2 py-1 rounded text-[10px] font-semibold border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 transition-colors">Cancel</button>
                             </div>
                           ) : (
-                            <div className="flex items-center justify-center gap-1">
+                            <div className="flex items-center justify-center gap-0.5">
+                              {onBatchUpdateItems && (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={!corpCanMoveUp}
+                                    onClick={() => onBatchUpdateItems(moveKpiItemAcrossSections(items, item.id, "up"))}
+                                    className="p-1 rounded hover:bg-slate-100 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                    title="Pindah ke atas (dapat berpindah antar Section)"
+                                  >
+                                    <ArrowUp className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!corpCanMoveDown}
+                                    onClick={() => onBatchUpdateItems(moveKpiItemAcrossSections(items, item.id, "down"))}
+                                    className="p-1 rounded hover:bg-slate-100 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                    title="Pindah ke bawah (dapat berpindah antar Section)"
+                                  >
+                                    <ArrowDown className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
                               {onUpdateItem && (
                                 <button
                                   type="button"
@@ -8078,17 +8234,17 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                           ? (() => {
                               const sep = row.satuan.indexOf("/");
                               const unit = sep >= 0 ? row.satuan.slice(0, sep).trim() : row.satuan.trim();
-                              const periode = sep >= 0 ? row.satuan.slice(sep + 1).trim() : "";
+                              const periode = (sep >= 0 ? row.satuan.slice(sep + 1).trim() : "") || "Bulan";
                               const combine = (u: string, p: string) => setDraftField({ satuan: u && p ? `${u}/${p}` : u });
                               return (
-                                <div className="flex flex-col gap-1">
+                                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1">
                                   <select value={unit} onChange={(e) => combine(e.target.value, periode)} className={cellInput}>
                                     <option value="">— Satuan —</option>
-                                    {(master.satuan.length ? master.satuan : SATUAN_UNIT_OPTIONS).map((s) => <option key={s} value={s}>{s}</option>)}
+                                    {sortSatuanUnitOptions(master.satuan.length ? master.satuan : SATUAN_UNIT_OPTIONS).map((s) => <option key={s} value={s}>{s}</option>)}
                                   </select>
+                                  <span className="text-[11px] font-bold text-slate-500">/</span>
                                   <select value={periode} onChange={(e) => combine(unit, e.target.value)} className={cellInput}>
-                                    <option value="">— Periode —</option>
-                                    {SATUAN_PERIODE_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                                    {sortSatuanPeriodeOptions(SATUAN_PERIODE_OPTIONS).map((p) => <option key={p} value={p}>{p}</option>)}
                                   </select>
                                 </div>
                               );
@@ -8118,9 +8274,9 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                       </td>
                       )}
                       {/* Bobot */}
-                      <td className="border border-gray-200 py-2 px-1.5 text-center">
+                      <td className={`border py-2 px-1.5 text-center ${isCorpBobotOverflow ? "border-rose-400 bg-rose-50/95" : "border-gray-200"}`}>
                         {isEditing && isFieldEditable("bobot")
-                          ? <select value={row.bobot} onChange={(e) => setDraftField({ bobot: e.target.value })} className={cellInput + " text-center font-bold text-[#1A284F]"}>
+                          ? <select value={row.bobot} onChange={(e) => setDraftField({ bobot: e.target.value })} className={`${cellInput} text-center font-bold ${isCorpBobotOverflow ? "border-rose-500 bg-rose-50 text-rose-700" : "text-[#1A284F]"}`}>
                               {corpRowSubBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
                             </select>
                           : canQuickEditBobot
@@ -8128,13 +8284,22 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
                               value={row.bobot}
                               title={`Pilih bobot Sub Section (Maks. sisa Section ${sec}: ${formatPctNum(maxAllowedRowSubBobot)}%)`}
                               onChange={(e) => onUpdateItem?.(item.id, { bobot: e.target.value })}
-                              className="px-2 py-0.5 rounded-full bg-[#1A284F] text-white text-[10px] font-bold outline-none cursor-pointer hover:bg-[#243869] transition-colors"
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold outline-none cursor-pointer transition-colors ${
+                                isCorpBobotOverflow
+                                  ? "bg-rose-600 text-white ring-2 ring-rose-200 hover:bg-rose-700"
+                                  : "bg-[#1A284F] text-white hover:bg-[#243869]"
+                              }`}
                             >
                               {corpRowSubBobotOpts.map((b) => (
                                 <option key={b} value={b} style={{ background: "#ffffff", color: "#1A284F" }}>{b}</option>
                               ))}
                             </select>
-                          : <span className="px-2 py-0.5 bg-[#1A284F] text-white rounded-full text-[10px] font-bold">{row.bobot}</span>}
+                          : <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isCorpBobotOverflow ? "bg-rose-600 text-white" : "bg-[#1A284F] text-white"}`}>{row.bobot}</span>}
+                        {isCorpBobotOverflow && (
+                          <div className="mt-1 px-1 py-0.5 rounded bg-rose-100 border border-rose-300 text-[9px] font-bold text-rose-800 leading-tight">
+                            Melebihi Section {sec} (Sisa maks {formatPctNum(maxAllowedRowSubBobot)}%)
+                          </div>
+                        )}
                       </td>
                       {/* Definisi */}
                       <td className="border border-gray-200 py-2 px-1.5">
@@ -8814,10 +8979,6 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       void mergeKvMapRecord("pa_kpi_attachments_v1", key, kvLight);
       return next;
     });
-    const firstPdf = added.find((a) => a.mimeType === "application/pdf" || /\.pdf$/i.test(a.name));
-    if (firstPdf) {
-      setEmbeddedKpiPdfId(firstPdf.id);
-    }
     setUploadingAttachment(false);
     toast.success(`${added.length} file lampiran KPI berhasil diunggah.`);
   };
@@ -9800,64 +9961,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
               )}
             </>
           )}
-          {/* General Edit Request (submitted, not yet approved) */}
-          {!isCorporate && submitted && !kpiApproved && !pendingEditRequest && canEdit && (
-            <button onClick={() => setShowEditRequest(true)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 transition-colors">
-              <FileEdit className="w-4 h-4" /> Edit Request
-            </button>
-          )}
-          {!isCorporate && submitted && !kpiApproved && pendingEditRequest && (
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Pending Edit Approval
-              </span>
-              <button onClick={() => setPendingEditRequest(false)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors">
-                <X className="w-4 h-4" /> Cancel Request
-              </button>
-            </div>
-          )}
-
           {/* Approved / Validated state — all tabs */}
           {isCorporate && kpiApproved && !pendingTargetEditRequest && !monthlyTargetPending && (
             <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-50 border border-green-300 text-green-700">
               <CheckCircle2 className="w-3.5 h-3.5" /> {useValidateTerms ? "Validated" : "Approved"}
             </span>
-          )}
-          {/* Edit [Target] Request — hidden in validate mode (Business / Pak Anton) when approved */}
-          {kpiApproved && !pendingTargetEditRequest && !targetEditApproved && !monthlyTargetPending && !isCorporate && !useValidateTerms && (
-            <button onClick={() => setShowTargetEditRequest(true)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 transition-colors">
-              <FileEdit className="w-4 h-4" /> Edit [Target] Request
-            </button>
-          )}
-          {/* First pending — after EditTargetSuccessModal */}
-          {kpiApproved && pendingTargetEditRequest && (
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Pending Approval
-              </span>
-              <button onClick={() => { cancelTargetEditPhase1(effectiveOwner.employeeId); setPendingTargetEditRequest(false); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors">
-                <X className="w-3.5 h-3.5" /> Cancel
-              </button>
-            </div>
-          )}
-          {/* Edit Monthly Target — after first Simulate Approve */}
-          {kpiApproved && targetEditApproved && (
-            <button onClick={() => setShowMonthlyTargetEdit(true)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors">
-              <Edit3 className="w-4 h-4" /> Edit Monthly Target
-            </button>
-          )}
-          {/* Second pending — after MonthlyTargetEditModal submit */}
-          {kpiApproved && monthlyTargetPending && (
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Pending Approval
-              </span>
-            </div>
           )}
 
           {!isCorporate && <ExportImportButton onExport={handleExport} onImport={canCreate || canEdit ? handleImport : undefined} />}
@@ -9922,7 +10030,45 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           hideCascading={hideCascading}
           kpiApproved={kpiApproved}
           targetEditApproved={targetEditApproved}
-          onEditTargetRequest={useValidateTerms || !canEdit ? undefined : () => setShowTargetEditRequest(true)}
+          onEditTargetRequest={!canEdit || isViewOnly || pendingTargetEditRequest || monthlyTargetPending ? undefined : () => setShowTargetEditRequest(true)}
+          toolbarRightExtra={
+            kpiApproved && !isViewOnly && canEdit ? (
+              <>
+                {pendingTargetEditRequest && (
+                  <>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                      <span>Pending Edit Approval</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => { cancelTargetEditPhase1(effectiveOwner.employeeId); setPendingTargetEditRequest(false); }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Cancel Request</span>
+                    </button>
+                  </>
+                )}
+                {targetEditApproved && (
+                  <button
+                    type="button"
+                    onClick={() => setShowMonthlyTargetEdit(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100 transition-colors"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit Monthly Target</span>
+                  </button>
+                )}
+                {monthlyTargetPending && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    <span>Pending Target Approval</span>
+                  </span>
+                )}
+              </>
+            ) : undefined
+          }
           sectionCascadeMap={sectionCascadeMap}
           onSectionCascadeChange={canEdit ? onSectionCascadeChange : undefined}
           parentSectionCascadeMap={parentSectionCascadeMap}
@@ -9966,6 +10112,55 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
               tableScale={tableScale}
               onCycleScale={cycleTableScale}
             />
+          }
+          toolbarRightExtra={
+            kpiApproved && !isViewOnly && canEdit ? (
+              <>
+                {!pendingTargetEditRequest && !targetEditApproved && !monthlyTargetPending && (
+                  <button
+                    type="button"
+                    onClick={() => setShowTargetEditRequest(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 transition-colors"
+                    title="Ajukan Edit [Target] Request"
+                  >
+                    <FileEdit className="w-3.5 h-3.5" />
+                    <span>Edit [Target] Request</span>
+                  </button>
+                )}
+                {pendingTargetEditRequest && (
+                  <>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                      <span>Pending Edit Approval</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => { cancelTargetEditPhase1(effectiveOwner.employeeId); setPendingTargetEditRequest(false); }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Cancel Request</span>
+                    </button>
+                  </>
+                )}
+                {targetEditApproved && (
+                  <button
+                    type="button"
+                    onClick={() => setShowMonthlyTargetEdit(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100 transition-colors"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit Monthly Target</span>
+                  </button>
+                )}
+                {monthlyTargetPending && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 border border-amber-300 text-amber-700">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    <span>Pending Target Approval</span>
+                  </span>
+                )}
+              </>
+            ) : undefined
           }
         />
       )}

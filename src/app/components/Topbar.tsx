@@ -93,6 +93,7 @@ const HR_ITEMS: SearchItem[] = [
   { label: "Verification", path: "/hr/calibration/verification", category: "Calibration" },
   { label: "Calibration Adjustment", path: "/hr/calibration/adjustment", category: "Calibration" },
   { label: "Management Interview Calibration", path: "/hr/calibration/management-interview", category: "Calibration" },
+  { label: "Master Company", path: "/hr/settings/master/company", category: "Master Data" },
   { label: "Master Appraisal Form", path: "/hr/settings/master/appraisal-form", category: "Master Data" },
   { label: "Master Managerial Skill", path: "/hr/settings/master/managerial-skill", category: "Master Data" },
   { label: "Master KPI", path: "/hr/settings/master/kpi", category: "Master Data" },

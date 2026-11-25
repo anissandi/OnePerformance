@@ -3,12 +3,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { archiveUsers } from "../../../store/archiveStore";
 import { useRouteTab } from "../../../utils/useRouteTab";
 import { DEFAULT_SCORE_WEIGHTS, loadUnitScoreWeights, SCORE_WEIGHT_EVENT, weightColumnFromGrouping } from "../../shared/scoringWeightStore";
-import { loadLocalAuditLogs } from "../../../services/supabaseClient";
+import { loadLocalAuditLogs, syncToSupabase } from "../../../services/supabaseClient";
 import { Eye, Edit2, RefreshCw, ChevronDown, Search, X, Save, Plus, Trash2, Users, Layers, Building2, ChevronRight, Check, KeyRound, Lock, ShieldAlert, CheckCircle2, RotateCcw, AlertTriangle, UserCheck, Shield, Award, Briefcase } from "lucide-react";
 import {
   COMPANY_UNIT_LOCATIONS,
   KPI_BUSINESS_GROUP_SCOPE_TOKEN,
+  canonicalizeCompanyUnitName,
   defaultAllowedModulesForGrouping,
+  formatLastLoginDDMMYYYY,
   getActiveUser,
   getEffectiveCheckerUnits,
   loadManagedUsers,
@@ -31,11 +33,21 @@ type Status = "Active" | "Inactive";
 
 type User = ManagedUser;
 
-const COMPANIES = [
-  "PT RSUP (Industry)", "PT RSUP (Perkebunan)",
-  "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)",
-  "PT RSTM", "PT GHS", "PT RSUP ASD",
-];
+const COMPANIES: string[] = new Proxy([] as string[], {
+  get(_target, prop) {
+    const cur = COMPANY_UNIT_LOCATIONS.map((l) => l.company);
+    if (prop === Symbol.iterator) return cur[Symbol.iterator].bind(cur);
+    if (prop === "length") return cur.length;
+    const val = Reflect.get(cur, prop);
+    return typeof val === "function" ? val.bind(cur) : val;
+  },
+  ownKeys() {
+    return Reflect.ownKeys(COMPANY_UNIT_LOCATIONS.map((l) => l.company));
+  },
+  getOwnPropertyDescriptor(_target, prop) {
+    return Reflect.getOwnPropertyDescriptor(COMPANY_UNIT_LOCATIONS.map((l) => l.company), prop);
+  },
+});
 const GROUPINGS_SCORES = ["Operasional", "Ka./Wa.Ka.Seksi", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Div ke atas", "Direktur / Director"];
 
 function initials(name: string) {
@@ -1188,6 +1200,36 @@ function DeleteGroupModal({ rule, onClose, onConfirm }: { rule: GroupRule; onClo
 
 function UserGroupingTab({ companyName }: { companyName: string }) {
   const { groups: accessGroups } = useAccessManagement();
+  // Kumpulan jabatan aktual yang benar-benar ada pada Unit Usaha ini
+  const [unitUsersSnapshot, setUnitUsersSnapshot] = useState<User[]>(() =>
+    loadManagedUsers().filter(
+      (u) => canonicalizeCompanyUnitName(u.company) === canonicalizeCompanyUnitName(companyName) && u.position?.trim(),
+    ),
+  );
+  useEffect(() => {
+    const syncUsers = () => {
+      setUnitUsersSnapshot(
+        loadManagedUsers().filter(
+          (u) => canonicalizeCompanyUnitName(u.company) === canonicalizeCompanyUnitName(companyName) && u.position?.trim(),
+        ),
+      );
+    };
+    syncUsers();
+    window.addEventListener("pa-auth-updated", syncUsers);
+    window.addEventListener("pa-employees-imported", syncUsers);
+    window.addEventListener("pa-db-hydrated", syncUsers);
+    return () => {
+      window.removeEventListener("pa-auth-updated", syncUsers);
+      window.removeEventListener("pa-employees-imported", syncUsers);
+      window.removeEventListener("pa-db-hydrated", syncUsers);
+    };
+  }, [companyName]);
+
+  const validUnitPositionsLower = useMemo(
+    () => new Set(unitUsersSnapshot.map((u) => u.position.trim().toLowerCase()).filter(Boolean)),
+    [unitUsersSnapshot],
+  );
+
   const [rulesByCompany, setRulesByCompany] = useState<Record<string, GroupRule[]>>(() =>
     Object.fromEntries(COMPANIES.map(company => [company, loadUnitGroupRules(company, structuredClone(INITIAL_GROUP_RULES))])),
   );
@@ -1196,18 +1238,34 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
   const [deleteRule, setDeleteRule] = useState<GroupRule | null>(null);
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("All Groups");
+  const [positionFilter, setPositionFilter] = useState("All Positions");
   const [weights, setWeights] = useState(() => loadUnitScoreWeights(companyName));
   useEffect(() => {
+    setPositionFilter("All Positions");
     const refresh = () => setWeights(loadUnitScoreWeights(companyName));
     refresh();
     window.addEventListener(SCORE_WEIGHT_EVENT, refresh);
     window.addEventListener("storage", refresh);
     return () => { window.removeEventListener(SCORE_WEIGHT_EVENT, refresh); window.removeEventListener("storage", refresh); };
   }, [companyName]);
-  const rules = rulesByCompany[companyName] ?? INITIAL_GROUP_RULES;
+  const rawRules = rulesByCompany[companyName] ?? INITIAL_GROUP_RULES;
+  // USER_MGMT.4: Hanya tampilkan Position / Jabatan yang benar-benar ada pada Unit Usaha ini (bila data karyawan unit sudah tersedia)
+  const rules = useMemo(
+    () =>
+      validUnitPositionsLower.size > 0
+        ? rawRules.filter((r) => validUnitPositionsLower.has(r.position.trim().toLowerCase()))
+        : rawRules,
+    [rawRules, validUnitPositionsLower],
+  );
+
+  const positionOptions = useMemo(
+    () => Array.from(new Set(rules.map((r) => r.position.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "id")),
+    [rules],
+  );
 
   const filtered = rules.filter(r => {
     if (groupFilter !== "All Groups" && r.group !== groupFilter) return false;
+    if (positionFilter !== "All Positions" && r.position.trim() !== positionFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       if (!r.position.toLowerCase().includes(q) && !r.group.toLowerCase().includes(q)) return false;
@@ -1215,7 +1273,7 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
     return true;
   });
 
-  const hasActiveFilters = groupFilter !== "All Groups";
+  const hasActiveFilters = groupFilter !== "All Groups" || positionFilter !== "All Positions";
 
   function handleSave(updated: GroupRule) {
     updated = normalizeGroupRule(updated);
@@ -1243,8 +1301,14 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
   }
 
   function handleSyncPositionsFromUsers() {
-    const unitUsers = loadManagedUsers().filter(u => u.company === companyName && u.position.trim());
-    const current = rulesByCompany[companyName] ?? [];
+    const unitUsers = loadManagedUsers().filter(
+      u => canonicalizeCompanyUnitName(u.company) === canonicalizeCompanyUnitName(companyName) && u.position.trim(),
+    );
+    const unitPosSet = new Set(unitUsers.map((u) => u.position.trim().toLowerCase()));
+    // Buang jabatan template/asing yang tidak ada pada Unit Usaha ini, pertahankan mapping jabatan yang memang ada di unit ini
+    const current = (rulesByCompany[companyName] ?? []).filter((r) =>
+      unitPosSet.has(r.position.trim().toLowerCase()),
+    );
     const existingPositions = new Set(current.map(r => r.position.trim().toLowerCase()));
     const addedRules: GroupRule[] = [];
 
@@ -1263,11 +1327,10 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
       }
     });
 
-    if (addedRules.length > 0) {
-      const nextList = [...current, ...addedRules];
-      saveUnitGroupRules(companyName, nextList);
-      setRulesByCompany(prev => ({ ...prev, [companyName]: nextList }));
-    }
+    const nextList = [...current, ...addedRules].sort((a, b) => a.position.localeCompare(b.position, "id"));
+    saveUnitGroupRules(companyName, nextList);
+    setRulesByCompany(prev => ({ ...prev, [companyName]: nextList }));
+    setUnitUsersSnapshot(unitUsers);
   }
 
   // Summary: count per group
@@ -1310,6 +1373,17 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
           </div>
           <div className="relative">
             <select
+              className="appearance-none border border-gray-200 rounded-lg pl-3 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 max-w-[230px]"
+              value={positionFilter}
+              onChange={e => setPositionFilter(e.target.value)}
+            >
+              <option value="All Positions">All Position / Jabatan</option>
+              {positionOptions.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+          <div className="relative">
+            <select
               className="appearance-none border border-gray-200 rounded-lg pl-3 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
               value={groupFilter}
               onChange={e => setGroupFilter(e.target.value)}
@@ -1320,7 +1394,7 @@ function UserGroupingTab({ companyName }: { companyName: string }) {
             <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
           {hasActiveFilters && (
-            <button onClick={() => setGroupFilter("All Groups")} className="text-xs text-red-500 hover:text-red-700 underline">Reset filters</button>
+            <button onClick={() => { setGroupFilter("All Groups"); setPositionFilter("All Positions"); }} className="text-xs text-red-500 hover:text-red-700 underline">Reset filters</button>
           )}
           <div className="flex-1" />
           <span className="text-xs text-gray-400">{filtered.length} rules</span>
@@ -2114,9 +2188,9 @@ export function UserManagementPage() {
   } = useLoginManagement();
   const [pageSize, setPageSize] = useState(10);
   const [roleFilter, setRoleFilter] = useState("All Roles");
-  const [statusFilter, setStatusFilter] = useState("All Status");
   const [divisiFilter, setDivisiFilter] = useState("All Divisi");
   const [deptFilter, setDeptFilter] = useState("All Departemen");
+  const [groupingFilter, setGroupingFilter] = useState("All Groupings");
   const [search, setSearch] = useState("");
   const [viewUser, setViewUser] = useState<User | null>(null);
   const [editUser, setEditUser] = useState<User | null>(null);
@@ -2124,6 +2198,8 @@ export function UserManagementPage() {
   const [deleteUser, setDeleteUser] = useState<User | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkRoleValue, setBulkRoleValue] = useState("");
+  const [bulkGroupingValue, setBulkGroupingValue] = useState("");
   const [resetPwdUser, setResetPwdUser] = useState<User | null>(null);
   const [resetPwdBanner, setResetPwdBanner] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -2143,9 +2219,9 @@ export function UserManagementPage() {
   useEffect(() => {
     setSearch("");
     setRoleFilter("All Roles");
-    setStatusFilter("All Status");
     setDivisiFilter("All Divisi");
     setDeptFilter("All Departemen");
+    setGroupingFilter("All Groupings");
     setCurrentPage(1);
     setSelectedIds(new Set());
   }, [selectedCompany]);
@@ -2193,14 +2269,25 @@ export function UserManagementPage() {
     )
   ).sort();
 
+  const groupingOpts = Array.from(
+    new Set([...accessGroups, ...companyUsers.map((u) => (u.groupings || "").trim()).filter(Boolean)]),
+  );
+
   const allFiltered = companyUsers.filter(u => {
     if (roleFilter !== "All Roles" && u.role !== roleFilter) return false;
-    if (statusFilter !== "All Status" && u.status !== statusFilter) return false;
     if (divisiFilter !== "All Divisi" && (u.division || "").trim() !== divisiFilter) return false;
     if (deptFilter !== "All Departemen" && (u.department || "").trim() !== deptFilter) return false;
+    if (groupingFilter !== "All Groupings" && (u.groupings || "").trim() !== groupingFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!u.name.toLowerCase().includes(q) && !u.employeeId.toLowerCase().includes(q) && !u.email.toLowerCase().includes(q)) return false;
+      if (
+        !u.name.toLowerCase().includes(q) &&
+        !u.employeeId.toLowerCase().includes(q) &&
+        !String(u.regNo ?? "").toLowerCase().includes(q) &&
+        !u.email.toLowerCase().includes(q)
+      ) {
+        return false;
+      }
     }
     return true;
   });
@@ -2212,9 +2299,9 @@ export function UserManagementPage() {
   function reset() {
     setSearch("");
     setRoleFilter("All Roles");
-    setStatusFilter("All Status");
     setDivisiFilter("All Divisi");
     setDeptFilter("All Departemen");
+    setGroupingFilter("All Groupings");
     setCurrentPage(1);
   }
 
@@ -2328,6 +2415,46 @@ export function UserManagementPage() {
     setResetPwdBanner(`${targets.length} user berhasil dihapus & dipindahkan ke Archive.`);
   }
 
+  function handleBulkApplyRole() {
+    if (!bulkRoleValue) return;
+    const targetIdSet = new Set(selectedUsers.map((u) => u.id));
+    if (targetIdSet.size === 0) return;
+    const currentList = loadManagedUsers();
+    const updatedTargets: User[] = [];
+    const nextList = currentList.map((u) => {
+      if (!targetIdSet.has(u.id)) return u;
+      const upd: User = { ...u, role: bulkRoleValue };
+      updatedTargets.push(upd);
+      return upd;
+    });
+    saveManagedUsers(nextList);
+    void syncToSupabase({ kind: "users-batch", users: updatedTargets });
+    setUsers(loadManagedUsers());
+    setResetPwdBanner(`Role pada ${updatedTargets.length} user berhasil diubah menjadi "${bulkRoleValue}".`);
+    setBulkRoleValue("");
+    setSelectedIds(new Set());
+  }
+
+  function handleBulkApplyGrouping() {
+    if (!bulkGroupingValue) return;
+    const targetIdSet = new Set(selectedUsers.map((u) => u.id));
+    if (targetIdSet.size === 0) return;
+    const currentList = loadManagedUsers();
+    const updatedTargets: User[] = [];
+    const nextList = currentList.map((u) => {
+      if (!targetIdSet.has(u.id)) return u;
+      const upd: User = { ...u, groupings: bulkGroupingValue };
+      updatedTargets.push(upd);
+      return upd;
+    });
+    saveManagedUsers(nextList);
+    void syncToSupabase({ kind: "users-batch", users: updatedTargets });
+    setUsers(loadManagedUsers());
+    setResetPwdBanner(`Groupings pada ${updatedTargets.length} user berhasil diubah menjadi "${bulkGroupingValue}".`);
+    setBulkGroupingValue("");
+    setSelectedIds(new Set());
+  }
+
   const employeeCount = companyUsers.filter(u => u.role === "Employee").length;
   const supervisorCount = companyUsers.filter(u => u.role === "Supervisor").length;
   const gmCount = companyUsers.filter(u => u.role === "GM").length;
@@ -2415,75 +2542,135 @@ export function UserManagementPage() {
 
       {/* Filters + table */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        {/* Filter bar */}
-        <div className="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-gray-100">
-          {/* Show entries */}
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <span>Show</span>
-            <div className="relative">
-              <select className="appearance-none border border-gray-200 rounded-lg pl-3 pr-7 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}>
-                {[10, 25, 50].map(n => <option key={n}>{n}</option>)}
-              </select>
-              <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-            <span>entries</span>
+        {/* USER_MGMT.2: Urutan kiri ke kanan: Add User -> Searching -> Role -> Divisi -> Departement -> Groupings -> Show xx Entries */}
+        <div className="flex flex-wrap items-center gap-2.5 px-5 py-4 border-b border-gray-100">
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#1A284F] text-white text-sm font-medium rounded-lg hover:bg-[#2a3d6e] shrink-0 cursor-pointer"
+          >
+            <Plus size={14} /> Add User
+          </button>
+
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              className="border border-gray-200 rounded-lg pl-9 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 w-52"
+              placeholder="Search name, ID, Reg No..."
+              value={search}
+              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
+            />
           </div>
 
           {[
             { val: roleFilter, set: (v: string) => { setRoleFilter(v); setCurrentPage(1); }, opts: ["All Roles", ...accessRoles] },
-            { val: statusFilter, set: (v: string) => { setStatusFilter(v); setCurrentPage(1); }, opts: ["All Status", "Active", "Inactive"] },
             { val: divisiFilter, set: (v: string) => { setDivisiFilter(v); setDeptFilter("All Departemen"); setCurrentPage(1); }, opts: ["All Divisi", ...divisiOpts] },
             { val: deptFilter, set: (v: string) => { setDeptFilter(v); setCurrentPage(1); }, opts: ["All Departemen", ...deptOpts] },
+            { val: groupingFilter, set: (v: string) => { setGroupingFilter(v); setCurrentPage(1); }, opts: ["All Groupings", ...groupingOpts] },
           ].map(({ val, set, opts }, i) => (
             <div key={i} className="relative">
-              <select className="appearance-none border border-gray-200 rounded-lg pl-3 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                value={val} onChange={e => set(e.target.value)}>
+              <select
+                className="appearance-none border border-gray-200 rounded-lg pl-3 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                value={val}
+                onChange={e => set(e.target.value)}
+              >
                 {opts.map(o => <option key={o}>{o}</option>)}
               </select>
               <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             </div>
           ))}
 
-          <div className="flex-1" />
-          <button onClick={reset} className="p-2 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50" title="Reset filters"><RefreshCw size={14} /></button>
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input className="border border-gray-200 rounded-lg pl-9 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 w-56"
-              placeholder="Search name, ID, email..." value={search} onChange={e => { setSearch(e.target.value); setCurrentPage(1); }} />
-          </div>
-          <button onClick={() => setAddOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1A284F] text-white text-sm rounded-lg hover:bg-[#2a3d6e]">
-            <Plus size={14} /> Add User
+          <button onClick={reset} className="p-2 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 cursor-pointer" title="Reset filters">
+            <RefreshCw size={14} />
           </button>
+
+          <div className="flex-1" />
+
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <span>Show</span>
+            <div className="relative">
+              <select
+                className="appearance-none border border-gray-200 rounded-lg pl-3 pr-7 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            </div>
+            <span>Entries</span>
+          </div>
         </div>
 
         {selectedUsers.length > 0 && (
-          <div className="flex items-center justify-between gap-3 px-5 py-2.5 bg-rose-50/70 border-b border-rose-100">
-            <span className="text-xs font-semibold text-rose-800">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 bg-[#F6FAFF] border-b border-[#C9DCF0]">
+            <span className="text-xs font-semibold text-[#1A284F]">
               {selectedUsers.length} user dipilih
               {allFiltered.length > selectedUsers.length && (
                 <button
                   type="button"
                   onClick={() => setSelectedIds(new Set(allFiltered.filter(isSelectable).map(u => u.id)))}
-                  className="ml-2 font-medium text-rose-600 underline hover:text-rose-800"
+                  className="ml-2 font-semibold text-[#2F5597] underline hover:opacity-80 cursor-pointer"
                 >
                   Pilih semua {allFiltered.filter(isSelectable).length} hasil filter
                 </button>
               )}
             </span>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setSelectedIds(new Set())} className="px-3 py-1.5 text-xs border border-gray-200 bg-white rounded-lg text-gray-600 hover:bg-gray-50">
+            {/* USER_MGMT.3: Multi-action Role, Groupings, & Delete / Archive */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1">
+                <select
+                  value={bulkRoleValue}
+                  onChange={(e) => setBulkRoleValue(e.target.value)}
+                  className="text-xs text-slate-700 outline-none bg-transparent pr-1"
+                >
+                  <option value="">Ubah Role Multi...</option>
+                  {accessRoles.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!bulkRoleValue}
+                  onClick={handleBulkApplyRole}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#1A284F] text-white hover:bg-[#2a3d6e] disabled:opacity-40 cursor-pointer"
+                >
+                  Terapkan Role
+                </button>
+              </div>
+
+              <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1">
+                <select
+                  value={bulkGroupingValue}
+                  onChange={(e) => setBulkGroupingValue(e.target.value)}
+                  className="text-xs text-slate-700 outline-none bg-transparent pr-1"
+                >
+                  <option value="">Ubah Groupings Multi...</option>
+                  {accessGroups.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!bulkGroupingValue}
+                  onClick={handleBulkApplyGrouping}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#248277] text-white hover:opacity-90 disabled:opacity-40 cursor-pointer"
+                >
+                  Terapkan Groupings
+                </button>
+              </div>
+
+              <button type="button" onClick={() => setSelectedIds(new Set())} className="px-3 py-1.5 text-xs border border-gray-200 bg-white rounded-lg text-gray-600 hover:bg-gray-50 cursor-pointer">
                 Batal Pilih
               </button>
-              <button type="button" onClick={() => setBulkDeleteOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700">
+              <button type="button" onClick={() => setBulkDeleteOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 cursor-pointer">
                 <Trash2 size={13} /> Delete / Archive Terpilih
               </button>
             </div>
           </div>
         )}
 
-        {/* Table */}
+        {/* USER_MGMT.1: Urutan kolom: Checklist | No | Action | Reg No | ID Employee | Name | Division | Departement | Role | Groupings | Status | Last Login */}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -2491,21 +2678,22 @@ export function UserManagementPage() {
                 <th className="w-10 pl-5 pr-1 py-3 text-left">
                   <input type="checkbox" checked={allPageChecked} onChange={togglePageAll} className="h-3.5 w-3.5 accent-[#1A284F] cursor-pointer" aria-label="Pilih semua user di halaman ini" />
                 </th>
+                <th className="text-center px-3 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-12">No</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Action</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Employee</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Reg No & AP1/AP2</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Company / Unit</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Reg No</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">ID Employee</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Division</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Dept</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Departement</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Role</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Groupings Scores</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Groupings</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Last Login</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Last Login</th>
               </tr>
             </thead>
             <tbody>
               {paginated.length === 0 ? (
-                <tr><td colSpan={11} className="text-center text-gray-400 py-14">No users match the current filter.</td></tr>
+                <tr><td colSpan={12} className="text-center text-gray-400 py-14">No users match the current filter.</td></tr>
               ) : paginated.map((user, idx) => {
                 const userUnitCfg = getUnitLoginConfig(user.company);
                 const isUserUnitPwdMode = userUnitCfg.enabledMethods.includes("password");
@@ -2528,6 +2716,9 @@ export function UserManagementPage() {
                       title={isSelectable(user) ? "Pilih user" : "Akun yang sedang login tidak dapat dihapus"}
                       className="h-3.5 w-3.5 accent-[#1A284F] cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
                     />
+                  </td>
+                  <td className="px-3 py-3 text-center text-xs font-semibold text-gray-500 tabular-nums">
+                    {(page - 1) * pageSize + idx + 1}
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-1.5">
@@ -2555,35 +2746,8 @@ export function UserManagementPage() {
                       <button onClick={() => setDeleteUser(user)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete"><Trash2 size={14} /></button>
                     </div>
                   </td>
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shrink-0 ${avatarColor(user.id)}`}>
-                        {initials(user.name)}
-                      </div>
-                      <div>
-                        <p className="font-semibold text-gray-800 leading-tight">{user.name}</p>
-                        <div className="text-xs text-gray-400 flex items-center gap-1.5 flex-wrap mt-0.5">
-                          {dupPeers.length > 0 ? (
-                            <span className="group/dupid relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-300 font-mono font-bold text-[11px] cursor-help">
-                              <AlertTriangle size={11} className="text-rose-600 shrink-0" />
-                              <span>{user.employeeId}</span>
-                              <span
-                                role="tooltip"
-                                className="pointer-events-none invisible opacity-0 group-hover/dupid:visible group-hover/dupid:opacity-100 transition-opacity absolute left-0 bottom-full mb-1.5 z-50 w-72 rounded-xl bg-[#1A284F] text-white p-2.5 text-[11px] font-sans font-normal shadow-xl leading-relaxed"
-                              >
-                                <span className="block font-bold text-rose-300 mb-0.5">ID Karyawan Duplikat</span>
-                                {dupTooltipText}
-                              </span>
-                            </span>
-                          ) : (
-                            <span>{user.employeeId}</span>
-                          )}
-                          <span>· {user.position}{user.bagian ? ` (${user.bagian})` : ""}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-xs">
+                  {/* Reg No */}
+                  <td className="px-4 py-3 text-xs whitespace-nowrap">
                     <div className="font-mono font-semibold text-[#1A284F]">{user.regNo || "—"}</div>
                     {!user.regNoAp1 && !user.regNoAp2 ? (
                       <div className="mt-0.5">
@@ -2598,8 +2762,37 @@ export function UserManagementPage() {
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-600 text-xs max-w-[160px]">
-                    <span className="block truncate" title={user.company}>{user.company}</span>
+                  {/* ID Employee */}
+                  <td className="px-4 py-3 text-xs whitespace-nowrap">
+                    {dupPeers.length > 0 ? (
+                      <span className="group/dupid relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-300 font-mono font-bold text-[11px] cursor-help">
+                        <AlertTriangle size={11} className="text-rose-600 shrink-0" />
+                        <span>{user.employeeId}</span>
+                        <span
+                          role="tooltip"
+                          className="pointer-events-none invisible opacity-0 group-hover/dupid:visible group-hover/dupid:opacity-100 transition-opacity absolute left-0 bottom-full mb-1.5 z-50 w-72 rounded-xl bg-[#1A284F] text-white p-2.5 text-[11px] font-sans font-normal shadow-xl leading-relaxed whitespace-normal"
+                        >
+                          <span className="block font-bold text-rose-300 mb-0.5">ID Karyawan Duplikat</span>
+                          {dupTooltipText}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="font-mono font-semibold text-gray-800">{user.employeeId || "—"}</span>
+                    )}
+                  </td>
+                  {/* Name */}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shrink-0 ${avatarColor(user.id)}`}>
+                        {initials(user.name)}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-gray-800 leading-tight">{user.name}</p>
+                        <div className="text-xs text-gray-400 flex items-center gap-1.5 flex-wrap mt-0.5">
+                          <span>{user.position || "—"}{user.bagian ? ` (${user.bagian})` : ""}</span>
+                        </div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs max-w-[160px]">
                     <span className="block truncate" title={user.division}>{user.division}</span>
@@ -2658,7 +2851,9 @@ export function UserManagementPage() {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{user.lastLogin || "—"}</td>
+                  <td className="px-4 py-3 text-gray-500 font-mono text-xs whitespace-nowrap tabular-nums">
+                    {formatLastLoginDDMMYYYY(user.lastLogin)}
+                  </td>
                 </tr>
                 );
               })}

@@ -18,6 +18,7 @@ import {
   loadManagedUsers,
   type ManagedUser,
 } from "./authStore";
+import { getMasterCompanyGroups } from "../pages/hr/settings/masterCompanyStore";
 import { pushEmployeeNotification } from "./notificationStore";
 
 export const SOY_APPROVAL_KEY = "calibration_soy_approvals_2026";
@@ -25,45 +26,64 @@ export const SOY_SNAPSHOT_KEY = "calibration_soy_employee_snapshot_2026";
 export const GROUP_CALIBRATION_SETTINGS_KEY = "calibration_group_settings_2026";
 export const SOY_EVENT = "pa-calibration-soy-updated";
 
-export type CalibrationGroupId = "group-rsup" | "group-sambu";
+export type CalibrationGroupId = string;
 
 export interface CalibrationGroupMeta {
   id: CalibrationGroupId;
-  slug: "rsup-group" | "sambu-group";
-  name: "RSUP Group" | "Sambu Group";
-  code: "RSUP-GRP" | "SAMBU-GRP";
+  slug: string;
+  name: string;
+  code: string;
   industry: string;
   unitNames: string[];
 }
 
-export const CALIBRATION_GROUPS: CalibrationGroupMeta[] = [
-  {
-    id: "group-rsup",
-    slug: "rsup-group",
-    name: "RSUP Group",
-    code: "RSUP-GRP",
-    industry: "5 Company Units",
-    unitNames: [
-      "PT RSUP (Industry)",
-      "PT RSUP (Perkebunan)",
-      "PT RSTM",
-      "PT GHS",
-      "PT RSUP ASD",
-    ],
+function buildDynamicCalibrationGroups(): CalibrationGroupMeta[] {
+  const dynamic = getMasterCompanyGroups();
+  if (dynamic.length > 0) {
+    return dynamic.map((g) => ({
+      id: g.id,
+      slug: g.slug,
+      name: g.name,
+      code: g.code,
+      industry: g.industry,
+      unitNames: [...g.unitNames],
+    }));
+  }
+  return [
+    {
+      id: "group-rsup",
+      slug: "rsup-group",
+      name: "RSUP Group",
+      code: "RSUP-GRP",
+      industry: "5 Company Units",
+      unitNames: ["PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
+    },
+    {
+      id: "group-sambu",
+      slug: "sambu-group",
+      name: "Sambu Group",
+      code: "SAMBU-GRP",
+      industry: "3 Company Units",
+      unitNames: ["PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)"],
+    },
+  ];
+}
+
+export const CALIBRATION_GROUPS: CalibrationGroupMeta[] = new Proxy([] as CalibrationGroupMeta[], {
+  get(_target, prop) {
+    const cur = buildDynamicCalibrationGroups();
+    if (prop === Symbol.iterator) return cur[Symbol.iterator].bind(cur);
+    if (prop === "length") return cur.length;
+    const val = Reflect.get(cur, prop);
+    return typeof val === "function" ? val.bind(cur) : val;
   },
-  {
-    id: "group-sambu",
-    slug: "sambu-group",
-    name: "Sambu Group",
-    code: "SAMBU-GRP",
-    industry: "3 Company Units",
-    unitNames: [
-      "PT Pulau Sambu (Jakarta)",
-      "PT Pulau Sambu (Guntung)",
-      "PT Pulau Sambu (Kuala Enok)",
-    ],
+  ownKeys() {
+    return Reflect.ownKeys(buildDynamicCalibrationGroups());
   },
-];
+  getOwnPropertyDescriptor(_target, prop) {
+    return Reflect.getOwnPropertyDescriptor(buildDynamicCalibrationGroups(), prop);
+  },
+});
 
 export function getCalibrationGroupByUnitName(unitName: string): CalibrationGroupMeta | undefined {
   const canon = canonicalizeCompanyUnitName(unitName);
@@ -86,8 +106,8 @@ export interface SoyUnitSnapshot {
 
 export interface SoyGroupSnapshot {
   id: CalibrationGroupId;
-  slug: "rsup-group" | "sambu-group";
-  name: "RSUP Group" | "Sambu Group";
+  slug: string;
+  name: string;
   code: string;
   calibrationGrades: Array<{ id: string; grade: string; proporsi: string }>;
   unitCustomQuotas?: Record<string, Record<string, number>>;
@@ -557,6 +577,8 @@ export function submitGroupSoyForApproval(groupSnap: SoyGroupSnapshot): SoyAppro
         role: emp.role,
         groupings: emp.groupings,
         status: emp.status,
+        lastLogin: emp.lastLogin || "",
+        email: emp.email || "",
       }));
   }
   savePersistedState(SOY_SNAPSHOT_KEY, empSnap);
@@ -653,6 +675,47 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
 
   // Ketika HC Awal Tahun (SOY) telah Approved, kunci baseline SOY di calibration_hc_settings_2026
   // (baik untuk pengajuan Group -> seluruh Unit Usaha anggota Group, maupun unit tunggal).
+  // Jika status === "Revision", buka kembali kunci beginningHC agar HR dapat menyesuaikan sebelum submit ulang.
+  if (status === "Revision" && rec.isGroupRecord && rec.groupSnapshot?.units) {
+    try {
+      const rawUnits = safeGetLocalRaw("calibration_hc_settings_2026");
+      if (rawUnits) {
+        const parsedUnits = JSON.parse(rawUnits) as Array<Record<string, unknown>>;
+        if (Array.isArray(parsedUnits)) {
+          const unitIds = new Set(rec.groupSnapshot.units.map((u) => String(u.id)));
+          const unitNames = new Set(rec.groupSnapshot.units.map((u) => canonicalizeCompanyUnitName(u.name)));
+          const updatedUnits = parsedUnits.map((u) =>
+            unitIds.has(String(u.id ?? "")) || unitNames.has(canonicalizeCompanyUnitName(String(u.name ?? "")))
+              ? {
+                  ...u,
+                  beginningGrades: undefined,
+                  beginningHC: undefined,
+                  beginningUnitQuotaTargets: undefined,
+                  beginningCustomQuotas: undefined,
+                }
+              : u,
+          );
+          savePersistedState("calibration_hc_settings_2026", updatedUnits);
+        }
+      }
+      const rawGroups = safeGetLocalRaw(GROUP_CALIBRATION_SETTINGS_KEY);
+      if (rawGroups) {
+        const parsedGroups = JSON.parse(rawGroups) as Array<Record<string, unknown>>;
+        if (Array.isArray(parsedGroups)) {
+          const updatedGroups = parsedGroups.map((grp) =>
+            String(grp.id) === String(rec.unitId)
+              ? { ...grp, beginningGrades: undefined, beginningUnitCustomQuotas: undefined }
+              : grp,
+          );
+          savePersistedState(GROUP_CALIBRATION_SETTINGS_KEY, updatedGroups);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
   if (status === "Approved" && rec.isGroupRecord && rec.groupSnapshot?.units) {
     try {
       const rawUnits = safeGetLocalRaw("calibration_hc_settings_2026");

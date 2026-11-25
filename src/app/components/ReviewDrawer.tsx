@@ -1,7 +1,7 @@
 // @refresh reset
 import { loadAppraisalSelf } from "../pages/shared/appraisalFormStore";
 import { SmartGoalsProgressCard } from "./SmartGoalsProgressCard";
-import { loadMSSelfRatings } from "../pages/shared/msStore";
+import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
 import { normalizeEmployeeId, workflowAlias, loadWorkflowRecords } from "../pages/shared/appraisalWorkflowStore";
 import React, { useState } from "react";
 import { useLanguage } from "../context/LangContext";
@@ -14,26 +14,34 @@ import {
 import { FORMS, loadMasterAppraisalForms, type FormItem } from "../pages/employee/AppraisalForm";
 import { KPI_ITEMS, loadKPITracking, resolveEmployeeTrackingKpiItems, type KPIItem, type MonthEntry } from "../pages/employee/KPIPage";
 import { SAMPLE_GOALS, ROWS } from "../pages/employee/SMARTGoals";
-import { loadCheckInEntries, loadSubmittedGoals, type StoredSmartGoalEvidenceFile } from "../pages/shared/smartGoalsStore";
+import {
+  computeSmartGoalApproverScoreBounds,
+  loadCheckInEntries,
+  loadSubmittedGoals,
+  saveGoalEvidenceInappropriateFlag,
+  type StoredCheckInEntry,
+  type StoredSmartGoalEvidenceFile,
+} from "../pages/shared/smartGoalsStore";
 import { fetchEmployeeKpiSettingsLive, fetchEmployeeKpiTrackingLive, fetchEmployeeSmartGoalsLive } from "../services/supabaseClient";
 import { loadKPIComments, loadKPICommentsForEmployee, saveKPIComment } from "../pages/shared/kpiCommentsStore";
 import { loadEvidenceFiles, type StoredEvidenceFile } from "../pages/shared/kpiEvidenceStore";
 import { saveAssessment, loadAssessment, loadSGAssessment } from "../pages/shared/approvalsStore";
 import { loadRCASubmissions, type StoredRCASubmission } from "../pages/shared/rcaStore";
 import { formatTodayDDMMYYYY, normalizeDateDDMMYYYY } from "../utils/dateFormat";
-import { MS_ITEMS, type MSItem } from "../pages/supervisor/ManagerialSkillCheckIn";
+import { MS_ITEMS, loadMasterMSItems, type MSItem } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPITableView } from "./KPITableView";
 import { UnifiedRCADetailTable } from "./UnifiedRCADetailTable";
 import { FeedbackApprovalDrawer } from "./FeedbackApprovalDrawer";
 import { getLatestEditedCellsDiffForEmployee } from "../store/kpiTrackingEditStore";
 import {
   getActiveUser,
+  isAdminOrHrIcfRole,
   loadManagedUsers,
   resolveEffectiveUserGrouping,
   type ManagedUser,
   type WorkflowStageRole,
 } from "../store/authStore";
-import { loadUnitScoreWeights, weightColumnFromGrouping } from "../pages/shared/scoringWeightStore";
+import { loadUnitScoreWeights, resolveEmployeeModuleWeightPercent, weightColumnFromGrouping } from "../pages/shared/scoringWeightStore";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -52,6 +60,7 @@ export interface ApprovalRow {
   status: string;
   reviewerRoleForRow?: ReviewerRole;
   workflowStageForRow?: "checker" | "approver1" | "approver2" | "validator";
+  globalHistoryOnly?: boolean;
   editRequestReason?: string;
   editRequestDate?: string;
   period?: string;
@@ -669,7 +678,18 @@ type SG_LocalStatus = "-" | "Belum dilaksanakan" | "Sedang dilaksanakan" | "Sele
 type SG_AchievementStatus = "" | "Tercapai" | "Tidak Tercapai";
 
 interface SG_TargetActual {
-  goalId: number; actual: string; status: SG_AchievementStatus; alasan: string; evidenceCount: number;
+  goalId: number;
+  actual: string;
+  achievementPct?: string;
+  realizationStatus?: string;
+  realizationFactor?: string;
+  realizationReason?: string;
+  realizationFiles?: StoredSmartGoalEvidenceFile[];
+  status: SG_AchievementStatus;
+  achievementFactor?: string;
+  alasan: string;
+  evidenceCount: number;
+  inappropriateEvidence?: boolean;
 }
 
 const SG_AP_COLOR: Record<SG_LocalStatus, string> = {
@@ -972,42 +992,91 @@ function SG_GoalCard({
   );
 }
 
-// ── Target vs Actual read-only ────────────────────────────────────────────────
+// ── Goals Realization & Achievement Status (Approval View) ───────────────────
 
 function SG_TargetVsActual({
   goals,
   targetActuals,
   onPreviewFile,
+  canToggleEvidenceInvalid,
+  onToggleEvidenceInvalid,
 }: {
   goals: typeof SAMPLE_GOALS;
   targetActuals: Record<number, SG_TargetActual & { files?: StoredSmartGoalEvidenceFile[] }>;
   onPreviewFile: (file: StoredSmartGoalEvidenceFile) => void;
+  canToggleEvidenceInvalid?: boolean;
+  onToggleEvidenceInvalid?: (goalId: number, invalid: boolean) => void;
 }) {
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
       <div className="flex items-center px-4 py-3 bg-[#1A284F] gap-2">
         <TrendingUp className="w-4 h-4 text-green-300" />
-        <span className="text-white text-sm font-bold flex-1">Target vs Actual</span>
+        <span className="text-white text-sm font-bold flex-1">Goals Realization &amp; Achievement Status</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse" style={{ minWidth: "560px" }}>
+        <table className="w-full text-xs border-collapse" style={{ minWidth: "1050px" }}>
           <thead>
             <tr>
-              <th className="bg-gray-50 border-b border-gray-200 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-24">Goals</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-48">Target</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-36">Actual</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500">Status &amp; Keterangan</th>
+              <th className="bg-gray-50 border-b border-gray-200 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-24">Goals</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-52">Goals Specific</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-52">Realization Goals Status</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-44">Target</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-36">Aktual</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-center px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-24">% Achievement</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-100 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-64">Achievement Target Status</th>
             </tr>
           </thead>
           <tbody>
             {goals.map((goal, idx) => {
               const ta = targetActuals[goal.id];
+              const totalGoalEvidences = (ta?.files?.length ?? 0) + (ta?.realizationFiles?.length ?? 0);
               return (
                 <tr key={goal.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/40"}>
-                  <td className="border-t border-gray-100 px-4 py-3 align-top"><span className="font-semibold text-[11px] text-gray-700">{goal.label}</span></td>
-                  <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top"><span className="text-[11px] text-gray-500 italic leading-relaxed">{goal.target || "—"}</span></td>
-                  <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top"><span className="text-[11px] text-gray-800 font-medium">{ta?.actual || <span className="italic text-gray-300">—</span>}</span></td>
-                  <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top">
+                  <td className="border-t border-gray-100 px-3.5 py-3 align-top"><span className="font-semibold text-[11px] text-[#1A284F]">{goal.label}</span></td>
+                  <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top"><p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-wrap">{goal.specific || "—"}</p></td>
+                  <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top">
+                    {!ta?.realizationStatus ? (
+                      <span className="text-[11px] text-gray-300 italic">—</span>
+                    ) : (
+                      <div className="flex flex-col gap-1.5">
+                        <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full w-fit ${ta.realizationStatus === "Terwujud" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${ta.realizationStatus === "Terwujud" ? "bg-teal-500" : "bg-amber-500"}`} />
+                          {ta.realizationStatus}
+                        </span>
+                        {ta.realizationFactor && (
+                          <span className="inline-flex w-fit px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold">
+                            {ta.realizationFactor}
+                          </span>
+                        )}
+                        {ta.realizationReason && (
+                          <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5 leading-relaxed">
+                            {ta.realizationReason}
+                          </p>
+                        )}
+                        {(ta.realizationFiles ?? []).length > 0 && (
+                          <div className="flex flex-col gap-1 mt-0.5">
+                            {(ta.realizationFiles ?? []).map((f, fi) => (
+                              <div key={fi} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-teal-50 border border-teal-200 w-fit">
+                                <Paperclip className="w-3 h-3 text-teal-600 shrink-0" />
+                                <span className="text-[10px] text-teal-900 font-medium truncate max-w-[130px]" title={f.name}>{f.name}</span>
+                                <button type="button" onClick={() => onPreviewFile(f)} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-white border border-teal-300 text-[9px] font-bold text-[#1A284F] hover:bg-teal-100">
+                                  <Eye className="w-2.5 h-2.5" /> Open
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top"><span className="text-[11px] text-gray-500 italic leading-relaxed">{goal.target || "—"}</span></td>
+                  <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top"><span className="text-[11px] text-gray-800 font-medium">{ta?.actual || <span className="italic text-gray-300">—</span>}</span></td>
+                  <td className="border-t border-gray-100 border-l border-gray-100 px-3 py-3 align-top text-center">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-slate-100 text-[#1A284F] font-bold text-[11px]">
+                      {ta?.achievementPct ? `${String(ta.achievementPct).replace(/%$/, "")}%` : "—"}
+                    </span>
+                  </td>
+                  <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top">
                     {!ta?.status ? (
                       <span className="text-[11px] text-gray-300 italic">Belum diisi</span>
                     ) : (
@@ -1016,24 +1085,29 @@ function SG_TargetVsActual({
                           <span className={`w-1.5 h-1.5 rounded-full ${ta.status === "Tercapai" ? "bg-green-500" : "bg-red-500"}`} />
                           {ta.status}
                         </span>
+                        {ta.achievementFactor && (
+                          <span className="inline-flex w-fit px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-800 text-[10px] font-bold">
+                            {ta.achievementFactor}
+                          </span>
+                        )}
                         {ta.status === "Tidak Tercapai" && ta.alasan && (
                           <div className="bg-red-50 border border-red-100 rounded-lg px-2.5 py-2 max-w-xs">
                             <p className="text-[10px] font-bold text-red-500 uppercase tracking-wide mb-0.5">Alasan</p>
                             <p className="text-[11px] text-red-700 leading-relaxed">{ta.alasan}</p>
                           </div>
                         )}
-                        {ta.status === "Tercapai" && ta.evidenceCount > 0 && (
+                        {(ta.files ?? []).length > 0 && (
                           <div className="flex flex-col gap-1 mt-1">
                             {(ta.files ?? []).map((f, fi) => (
                               <div key={fi} className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-green-50 border border-green-200 w-fit">
                                 <Paperclip className="w-3 h-3 text-green-600 shrink-0" />
-                                <span className="text-[11px] text-green-800 font-medium">{f.name}</span>
+                                <span className="text-[11px] text-green-800 font-medium truncate max-w-[130px]" title={f.name}>{f.name}</span>
                                 <button
                                   type="button"
                                   onClick={() => onPreviewFile(f)}
                                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-green-300 text-[10px] font-bold text-[#1A284F] hover:bg-green-100"
                                 >
-                                  <Eye className="w-3 h-3" /> Lihat di Browser
+                                  <Eye className="w-3 h-3" /> Open
                                 </button>
                                 <a
                                   href={f.url || f.dataUrl || FAKE_BLOB}
@@ -1046,6 +1120,22 @@ function SG_TargetVsActual({
                               </div>
                             ))}
                           </div>
+                        )}
+                        {totalGoalEvidences > 0 && (canToggleEvidenceInvalid || ta.inappropriateEvidence) && (
+                          <label className={`mt-1 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold select-none ${
+                            ta.inappropriateEvidence
+                              ? "bg-rose-50 border-rose-300 text-rose-700"
+                              : "bg-slate-50 border-slate-200 text-slate-700"
+                          } ${canToggleEvidenceInvalid ? "cursor-pointer hover:border-rose-300" : "cursor-default"}`}>
+                            <input
+                              type="checkbox"
+                              disabled={!canToggleEvidenceInvalid}
+                              checked={Boolean(ta.inappropriateEvidence)}
+                              onChange={(e) => onToggleEvidenceInvalid?.(goal.id, e.target.checked)}
+                              className="accent-rose-600 rounded"
+                            />
+                            <span>Evidence Tidak Sesuai (Maks. Skor 20%)</span>
+                          </label>
                         )}
                       </div>
                     )}
@@ -1174,9 +1264,11 @@ function SmartGoalsApproverReview({
   const ownerApAlasanBatal: Record<number, string> = {};
   const ownerApEvidence: Record<number, StoredSmartGoalEvidenceFile[]> = {};
   const ownerTargetActuals: Record<number, SG_TargetActual & { files?: StoredSmartGoalEvidenceFile[] }> = {};
+  const ownerCheckInByGoalId: Record<number, StoredCheckInEntry | undefined> = {};
 
   for (const g of goals) {
     const ci = ownerCheckInEntries.find((e) => e.goalId === g.id);
+    ownerCheckInByGoalId[g.id] = ci;
     for (const ap of g.actionPlans) {
       const st = (ci?.actionPlanStatuses?.[ap.id] as SG_LocalStatus | undefined) ?? "-";
       ownerApStatuses[ap.id] = st;
@@ -1192,18 +1284,47 @@ function SmartGoalsApproverReview({
       }
     }
     const files = ci?.evidenceFiles ?? [];
+    const realizationFiles = ci?.realizationEvidenceFiles ?? [];
+    const rawPctStr =
+      ci?.achievementPct != null && Number.isFinite(Number(ci.achievementPct))
+        ? String(ci.achievementPct)
+        : String(ci?.achievement ?? "").replace("%", "").trim();
     ownerTargetActuals[g.id] = {
       goalId: g.id,
       actual: ci?.actual ?? "",
+      achievementPct: rawPctStr,
+      realizationStatus: ci?.realizationStatus ?? "",
+      realizationFactor: ci?.realizationFactor ?? "",
+      realizationReason: ci?.realizationReason ?? "",
+      realizationFiles,
       status: (ci?.targetAchievementStatus as "Tercapai" | "Tidak Tercapai" | "") ?? "",
+      achievementFactor: ci?.achievementFactor ?? "",
       alasan: ci?.alasanTidakTercapai ?? "",
       evidenceCount: files.length,
       files,
+      inappropriateEvidence: Boolean(
+        ci?.inappropriateEvidenceByRole?.[reviewerRole] ??
+        ci?.inappropriateEvidenceByRole?.approver1 ??
+        ci?.inappropriateEvidenceByRole?.approver2,
+      ),
     };
   }
 
   const isCheckerStage = workflowStage === "checker";
   const isValidatorStage = workflowStage === "validator";
+
+  React.useEffect(() => {
+    if (submitted || isCheckerStage || isValidatorStage) return;
+    for (const g of goals) {
+      const ci = ownerCheckInByGoalId[g.id];
+      const inv = Boolean(ci?.inappropriateEvidenceByRole?.[reviewerRole]);
+      const b = computeSmartGoalApproverScoreBounds(ci, inv);
+      if (b.max === 0 && assessorRatings[`sg-${g.id}`] !== 0) {
+        onRate(`sg-${g.id}`, 0);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submitted, isCheckerStage, isValidatorStage, goals.length, reviewerRole]);
 
   // Load Approver 1 & Approver 2 stored assessments from workflow record
   const normEmpId = employeeId ? normalizeEmployeeId(employeeId) : "";
@@ -1320,13 +1441,34 @@ function SmartGoalsApproverReview({
         goals={goals.map((g) => ({ id: g.id, actionPlanIds: g.actionPlans.map((ap) => ap.id) }))}
         getActionPlanStatus={(_goalId, apId) => ownerApStatuses[apId as number] ?? "-"}
         getGoalStatus={(goalId) => ownerTargetActuals[goalId as number]?.status ?? ""}
+        getRealizationStatus={(goalId) => ownerTargetActuals[goalId as number]?.realizationStatus ?? ""}
       />
 
-      {/* 3 — Target vs Actual */}
+      {!isCheckerStage && !isValidatorStage && !submitted && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50/90 px-4 py-3 text-xs text-amber-900">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <strong>Panduan Verifikasi Evidence Approver:</strong> Periksa kesesuaian setiap file evidence yang dilampirkan karyawan. Apabila lampiran evidence <strong>tidak sesuai / tidak relevan</strong>, centang <strong>&ldquo;Evidence Tidak Sesuai (Maks. Skor 20%)&rdquo;</strong> pada kolom <em>Achievement Target Status</em> agar batas maksimal nilai pada goal tersebut terkunci di <strong>20%</strong>.
+          </p>
+        </div>
+      )}
+
+      {/* 3 — Goals Realization & Achievement Status */}
       <SG_TargetVsActual
         goals={goals}
         targetActuals={ownerTargetActuals}
         onPreviewFile={(file) => setPreviewEvidenceFile(file)}
+        canToggleEvidenceInvalid={!isCheckerStage && !isValidatorStage && !submitted && Boolean(employeeId)}
+        onToggleEvidenceInvalid={(goalId, invalid) => {
+          if (!employeeId) return;
+          saveGoalEvidenceInappropriateFlag(employeeId, goalId, reviewerRole, invalid);
+          const bounds = computeSmartGoalApproverScoreBounds(ownerCheckInByGoalId[goalId], invalid);
+          const curScore = assessorRatings[`sg-${goalId}`];
+          if (curScore != null && (curScore > bounds.max || curScore < bounds.min)) {
+            onRate(`sg-${goalId}`, Math.min(bounds.max, Math.max(bounds.min, curScore)));
+          }
+          setSgRemoteTick((t) => t + 1);
+        }}
       />
 
       {/* Section Penilaian Approver DISEMBUNYIKAN pada level Checker (HR Unit) */}
@@ -1452,14 +1594,24 @@ function SmartGoalsApproverReview({
                 const ratingKey = `sg-${goal.id}`;
                 const ratingVal = assessorRatings[ratingKey];
                 const achieveStatus = ownerTargetActuals[goal.id]?.status ?? "";
+                const isEvInvalid = Boolean(ownerCheckInByGoalId[goal.id]?.inappropriateEvidenceByRole?.[reviewerRole]);
+                const scoreBounds = computeSmartGoalApproverScoreBounds(ownerCheckInByGoalId[goal.id], isEvInvalid);
+                const isOutOfBounds = ratingVal != null && (ratingVal < scoreBounds.min || ratingVal > scoreBounds.max);
                 return (
                   <tr key={goal.id} className={idx % 2 === 0 ? "bg-white" : `${assessorColor === "indigo" ? "bg-indigo-50/20" : "bg-teal-50/20"}`}>
                     <td className={`border-t px-4 py-3 align-middle text-center font-bold ${assessorColor === "indigo" ? "border-indigo-50 text-indigo-400" : "border-teal-50 text-teal-400"}`}>{idx + 1}</td>
                     <td className={`border-t border-l px-4 py-3 align-middle font-semibold text-gray-700 ${assessorColor === "indigo" ? "border-indigo-50" : "border-teal-50"}`}>{goal.label}</td>
                     <td className={`border-t border-l px-4 py-3 align-middle text-center ${assessorColor === "indigo" ? "border-indigo-50" : "border-teal-50"}`}>
+                      <div className="flex flex-col items-center gap-1">
                       {achieveStatus === "Tercapai" && <span className="inline-flex items-center gap-1 text-[10px] rounded-full px-2.5 py-1 font-bold bg-green-100 text-green-700"><span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />Tercapai</span>}
                       {achieveStatus === "Tidak Tercapai" && <span className="inline-flex items-center gap-1 text-[10px] rounded-full px-2.5 py-1 font-bold bg-red-100 text-red-600"><span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />Tidak Tercapai</span>}
                       {!achieveStatus && <span className="text-gray-300 italic">—</span>}
+                      {ownerTargetActuals[goal.id]?.realizationStatus && (
+                        <span className="text-[10px] font-semibold text-slate-500">
+                          {ownerTargetActuals[goal.id]?.realizationStatus} · {ownerTargetActuals[goal.id]?.achievementPct || "0"}%
+                        </span>
+                      )}
+                      </div>
                     </td>
                     <td className={`border-t border-l px-4 py-3 align-middle ${assessorColor === "indigo" ? "border-indigo-50" : "border-teal-50"}`}>
                       {submitted ? (
@@ -1468,9 +1620,29 @@ function SmartGoalsApproverReview({
                           <span className={`text-sm font-bold w-12 text-right shrink-0 ${PCT_TEXT_COLOR(ratingVal ?? 0)}`}>{ratingVal ?? 0}%</span>
                         </div>
                       ) : (
+                        <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-2">
-                          <div className={`flex items-center border-2 rounded-lg overflow-hidden ${assessorColor === "indigo" ? "border-indigo-200 focus-within:border-indigo-500" : "border-teal-200 focus-within:border-teal-500"}`}>
-                            <input type="number" min={0} max={100} value={ratingVal ?? ""} onChange={(e) => onRate(ratingKey, Math.min(100, Math.max(0, Number(e.target.value))))} placeholder="0"
+                          <div className={`flex items-center border-2 rounded-lg overflow-hidden ${isOutOfBounds ? "border-rose-400 bg-rose-50" : assessorColor === "indigo" ? "border-indigo-200 focus-within:border-indigo-500" : "border-teal-200 focus-within:border-teal-500"}`}>
+                            <input
+                              type="number"
+                              min={scoreBounds.min}
+                              max={scoreBounds.max}
+                              disabled={scoreBounds.max === 0}
+                              value={scoreBounds.max === 0 ? 0 : (ratingVal ?? "")}
+                              onChange={(e) => {
+                                if (scoreBounds.max === 0) {
+                                  onRate(ratingKey, 0);
+                                  return;
+                                }
+                                const raw = Number(e.target.value);
+                                onRate(ratingKey, Math.min(scoreBounds.max, Math.max(0, raw)));
+                              }}
+                              onBlur={() => {
+                                if (ratingVal != null && ratingVal < scoreBounds.min) {
+                                  onRate(ratingKey, scoreBounds.min);
+                                }
+                              }}
+                              placeholder={String(scoreBounds.min)}
                               className={`text-sm font-bold text-right outline-none w-14 px-2 py-1.5 bg-white ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`} />
                             <span className={`pr-2 text-xs font-semibold ${assessorColor === "indigo" ? "text-indigo-400" : "text-teal-400"}`}>%</span>
                           </div>
@@ -1480,6 +1652,10 @@ function SmartGoalsApproverReview({
                               <span className={`text-xs font-bold w-10 text-right shrink-0 ${PCT_TEXT_COLOR(ratingVal)}`}>{ratingVal}%</span>
                             </div>
                           )}
+                        </div>
+                        <span className={`text-[10px] font-semibold ${isOutOfBounds ? "text-rose-600" : "text-slate-500"}`}>
+                          Rentang nilai diizinkan: <strong>{scoreBounds.label}</strong>
+                        </span>
                         </div>
                       )}
                     </td>
@@ -1741,6 +1917,7 @@ function AppraisalFormReview({
     return Boolean(u1 && u2 && u1.employeeId.toLowerCase() === u2.employeeId.toLowerCase());
   })();
   const form = formsList.find((f) => f.id === activeForm) ?? formsList[0] ?? FORMS[0];
+  const isAdminGlobalInspector = Boolean(readOnlyView && isAdminOrHrIcfRole(getActiveUser().role));
   const showApp1 = reviewerRole === "approver2";
   const assessorColor = reviewerRole === "approver1" ? "indigo" : "teal";
   const assessorLabel = reviewerRole === "approver1" ? "Evaluasi Approver 1" : "Evaluasi Approver 2";
@@ -1895,31 +2072,46 @@ function AppraisalFormReview({
                 <th className="py-3 px-4 text-left font-semibold text-gray-700 border-r border-gray-200 w-10">No</th>
                 <th className="py-3 px-4 text-left font-semibold text-gray-700 border-r border-gray-200">Kompetensi</th>
                 <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-52">Indikator Penilaian</th>
-                <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-56">
-                  <div>Evaluasi Pribadi Karyawan</div>
-                  <div className="flex justify-around mt-1 text-gray-400 font-normal text-xs">
-                    {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
-                  </div>
-                </th>
-                {showApp1 && (
-                  <th className="py-3 px-4 text-center font-semibold text-blue-700 border-r border-gray-200 w-56">
-                    <div>Evaluasi Approver 1</div>
-                    <div className="flex justify-around mt-1 text-blue-300 font-normal text-xs">
-                      {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
-                    </div>
-                  </th>
+                {isAdminGlobalInspector ? (
+                  <>
+                    <th className="py-3 px-4 text-left font-semibold text-[#1A284F] border-r border-gray-200 w-64">Evaluasi Pribadi Karyawan</th>
+                    <th className="py-3 px-4 text-left font-semibold text-indigo-700 border-r border-gray-200 w-64">Evaluasi Approver 1</th>
+                    <th className="py-3 px-4 text-left font-semibold text-teal-700 w-64">Evaluasi Approver 2</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-56">
+                      <div>Evaluasi Pribadi Karyawan</div>
+                      <div className="flex justify-around mt-1 text-gray-400 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                    {showApp1 && (
+                      <th className="py-3 px-4 text-center font-semibold text-blue-700 border-r border-gray-200 w-56">
+                        <div>Evaluasi Approver 1</div>
+                        <div className="flex justify-around mt-1 text-blue-300 font-normal text-xs">
+                          {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                        </div>
+                      </th>
+                    )}
+                    <th className={`py-3 px-4 text-center font-semibold w-56 ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`}>
+                      <div>{assessorLabel}</div>
+                      <div className={`flex justify-around mt-1 font-normal text-xs ${assessorColor === "indigo" ? "text-indigo-300" : "text-teal-300"}`}>
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                  </>
                 )}
-                <th className={`py-3 px-4 text-center font-semibold w-56 ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`}>
-                  <div>{assessorLabel}</div>
-                  <div className={`flex justify-around mt-1 font-normal text-xs ${assessorColor === "indigo" ? "text-indigo-300" : "text-teal-300"}`}>
-                    {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
-                  </div>
-                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {form.items.map((item) => {
+                const selfVal = readRating(selfRatings, form.id, item.no) ?? null;
+                const ap1Val = readRating(firstRatings, form.id, item.no) ?? null;
+                const ap2Val = readRating(secondRatings, form.id, item.no) ?? (isSameAp1Ap2 ? ap1Val : null);
                 const assessorVal = readRating(assessorRatings, form.id, item.no) ?? null;
+                const findIndText = (score: number | null) =>
+                  score != null ? item.indicators.find((ind) => ind.score === score)?.text ?? "" : "";
                 return (
                   <tr key={item.no} className="hover:bg-gray-50/50">
                     <td className="py-3 px-4 text-gray-400 text-center border-r border-gray-100 align-middle">{item.no}</td>
@@ -1936,21 +2128,58 @@ function AppraisalFormReview({
                         Lihat Indikator Penilaian
                       </button>
                     </td>
-                    {/* Self rating — detail hidden, only average shown in total row */}
-                    <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
-                    {/* Approver 1 — detail hidden from Approver 2, only average shown in total row */}
-                    {showApp1 && (
-                      <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
-                    )}
-                    {/* Assessor editable */}
-                    <td className={`py-3 px-4 align-middle ${assessorColor === "indigo" ? "bg-indigo-50/20" : "bg-teal-50/20"}`}>
-                      <div className="flex items-center justify-around">
-                        {[1,2,3,4,5].map(n => submitted
-                          ? <ReadOnlyScore key={n} value={n} active={assessorVal === n} color={assessorColor} />
-                          : <EditableScore key={n} value={n} selected={assessorVal === n} color={assessorColor} onSelect={() => onRate(`${form.id}-${item.no}`, n)} />
+                    {isAdminGlobalInspector ? (
+                      <>
+                        <td className="py-3 px-4 border-r border-gray-100 align-top">
+                          {selfVal != null ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#1A284F] text-white text-xs font-bold">Nilai {selfVal}</span>
+                              <p className="text-[11px] text-gray-600 leading-snug">{findIndText(selfVal)}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-300">Belum dinilai</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 border-r border-gray-100 align-top bg-indigo-50/15">
+                          {ap1Val != null ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-600 text-white text-xs font-bold">Nilai {ap1Val}</span>
+                              <p className="text-[11px] text-gray-600 leading-snug">{findIndText(ap1Val)}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-300">Belum dinilai</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 align-top bg-teal-50/15">
+                          {ap2Val != null ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-teal-600 text-white text-xs font-bold">Nilai {ap2Val}</span>
+                              <p className="text-[11px] text-gray-600 leading-snug">{findIndText(ap2Val)}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-300">Belum dinilai</span>
+                          )}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        {/* Self rating — detail hidden, only average shown in total row */}
+                        <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
+                        {/* Approver 1 — detail hidden from Approver 2, only average shown in total row */}
+                        {showApp1 && (
+                          <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
                         )}
-                      </div>
-                    </td>
+                        {/* Assessor editable */}
+                        <td className={`py-3 px-4 align-middle ${assessorColor === "indigo" ? "bg-indigo-50/20" : "bg-teal-50/20"}`}>
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => submitted
+                              ? <ReadOnlyScore key={n} value={n} active={assessorVal === n} color={assessorColor} />
+                              : <EditableScore key={n} value={n} selected={assessorVal === n} color={assessorColor} onSelect={() => onRate(`${form.id}-${item.no}`, n)} />
+                            )}
+                          </div>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
@@ -1959,9 +2188,26 @@ function AppraisalFormReview({
                 <td colSpan={3} className="py-3 px-4 text-sm text-gray-800 border-r border-gray-200 text-right">
                   Rata-Rata <span className="text-xs text-gray-400 font-normal">(maks 5.00)</span>
                 </td>
-                <td className="py-3 px-4 text-center text-[#1A284F] border-r border-gray-100">{selfTotal}</td>
-                {showApp1 && <td className="py-3 px-4 text-center text-blue-600 border-r border-gray-100">{app1Total}</td>}
-                <td className={`py-3 px-4 text-center ${assessorColor === "indigo" ? "text-indigo-600 bg-indigo-50/20" : "text-teal-600 bg-teal-50/20"}`}>{assessorTotal}</td>
+                {isAdminGlobalInspector ? (
+                  <>
+                    <td className="py-3 px-4 text-center text-[#1A284F] border-r border-gray-100">{selfTotal}</td>
+                    <td className="py-3 px-4 text-center text-indigo-600 border-r border-gray-100">{app1Total}</td>
+                    <td className="py-3 px-4 text-center text-teal-600">
+                      {(() => {
+                        const vals = form.items
+                          .map((it) => readRating(secondRatings, form.id, it.no) ?? (isSameAp1Ap2 ? readRating(firstRatings, form.id, it.no) : undefined))
+                          .filter((v): v is number => v != null);
+                        return vals.length > 0 ? (vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(2) : "—";
+                      })()}
+                    </td>
+                  </>
+                ) : (
+                  <>
+                    <td className="py-3 px-4 text-center text-[#1A284F] border-r border-gray-100">{selfTotal}</td>
+                    {showApp1 && <td className="py-3 px-4 text-center text-blue-600 border-r border-gray-100">{app1Total}</td>}
+                    <td className={`py-3 px-4 text-center ${assessorColor === "indigo" ? "text-indigo-600 bg-indigo-50/20" : "text-teal-600 bg-teal-50/20"}`}>{assessorTotal}</td>
+                  </>
+                )}
               </tr>
             </tbody>
           </table>
@@ -2092,7 +2338,7 @@ function AppraisalFormReview({
 // ─── Managerial Skill Review ───────────────────────────────────────────────────
 
 function ManagerialSkillReview({
-  row, reviewerRole, assessorRatings, onRate, submitted,
+  row, reviewerRole, assessorRatings, onRate, submitted, readOnlyView,
   indicatorItem, setIndicatorItem,
 }: {
   row: ApprovalRow;
@@ -2100,28 +2346,90 @@ function ManagerialSkillReview({
   assessorRatings: Record<string, number>;
   onRate: (key: string, val: number) => void;
   submitted: boolean;
+  readOnlyView?: boolean;
   indicatorItem: FormItem | MSItem | null;
   setIndicatorItem: (item: FormItem | MSItem | null) => void;
 }) {
-  const selfRatings = loadMSSelfRatings(row.employeeId)?.ratings ?? {};
+  const msItems = loadMasterMSItems();
+  const msSelfObj = loadMSSelfRatings(row.employeeId);
+  const selfRatings = msSelfObj && !msSelfObj.isDraft ? (msSelfObj.ratings ?? {}) : {};
   const alias = workflowAlias(row.no);
   const record = alias && loadWorkflowRecords().find((item) => item.key === alias.key);
   const first = loadAssessment(row.no, "approver1");
+  const second = loadAssessment(row.no, "approver2");
+  const msApproverList = loadAllMSApprovers(row.employeeId);
   const rawFirst = first?.ratings ?? record?.assessments.approver1?.ratings ?? {};
-  const firstRatings: Record<number, number> = Object.fromEntries(Object.entries(rawFirst).map(([key, value]) => [Number(key.replace("ms-", "")), value]));
+  const rawSecond = second?.ratings ?? record?.assessments.approver2?.ratings ?? {};
+  const firstRatings: Record<number, number> =
+    Object.keys(rawFirst).length > 0
+      ? Object.fromEntries(Object.entries(rawFirst).map(([key, value]) => [Number(key.replace("ms-", "")), value]))
+      : (msApproverList.find((e) => e.approverLevel === 1)?.ratings ?? {});
+  const secondRatingsStored: Record<number, number> =
+    Object.keys(rawSecond).length > 0
+      ? Object.fromEntries(Object.entries(rawSecond).map(([key, value]) => [Number(key.replace("ms-", "")), value]))
+      : (msApproverList.find((e) => e.approverLevel === 2)?.ratings ?? {});
+
+  const managedUsers = loadManagedUsers();
+  const targetOwner = managedUsers.find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(row.employeeId) ||
+      u.employeeId.trim().toLowerCase() === row.employeeId.trim().toLowerCase(),
+  );
+  const isSameAp1Ap2 = (() => {
+    if (!targetOwner) return false;
+    const r1 = String(targetOwner.regNoAp1 ?? "").trim().toLowerCase();
+    const r2 = String(targetOwner.regNoAp2 ?? "").trim().toLowerCase();
+    return Boolean(r1 && r2 && r1 === r2);
+  })();
+
+  const isAdminGlobalInspector = Boolean(readOnlyView && isAdminOrHrIcfRole(getActiveUser().role));
   const showApp1 = reviewerRole === "approver2";
   const assessorColor = reviewerRole === "approver1" ? "indigo" : "teal";
   const assessorLabel = reviewerRole === "approver1" ? "Evaluasi Approver 1" : "Evaluasi Approver 2";
 
-  const msCount = MS_ITEMS.length || 1;
-  const PERCENTAGE = 20;
+  const msCount = msItems.length || 1;
+  const PERCENTAGE = resolveEmployeeModuleWeightPercent(
+    targetOwner ?? { company: row.companyUnit, position: row.position },
+    "Managerial Skill",
+    20,
+  );
   const msW = PERCENTAGE / 100;
-  const selfTotal     = ((MS_ITEMS.reduce((s, i) => s + (selfRatings[i.no] ?? 0), 0) / msCount) * msW).toFixed(2);
-  const app1Total     = ((MS_ITEMS.reduce((s, i) => s + (firstRatings[i.no] ?? 0), 0) / msCount) * msW).toFixed(2);
-  const msAssessorRated = MS_ITEMS.filter((i) => assessorRatings[`ms-${i.no}`] != null).length;
+  void msW;
+  const selfRatedVals = msItems.map((i) => selfRatings[i.no]).filter((v): v is number => v != null && v > 0);
+  const selfAvg5 = selfRatedVals.length > 0 ? selfRatedVals.reduce((s, v) => s + v, 0) / selfRatedVals.length : null;
+  const app1RatedVals = msItems.map((i) => firstRatings[i.no]).filter((v): v is number => v != null && v > 0);
+  const storedApp1Avg5 = app1RatedVals.length > 0 ? app1RatedVals.reduce((s, v) => s + v, 0) / app1RatedVals.length : null;
+  const app2RatedVals = msItems.map((i) => secondRatingsStored[i.no]).filter((v): v is number => v != null && v > 0);
+  const storedApp2Avg5 = app2RatedVals.length > 0 ? app2RatedVals.reduce((s, v) => s + v, 0) / app2RatedVals.length : null;
+
+  const msAssessorRated = msItems.filter((i) => assessorRatings[`ms-${i.no}`] != null).length;
+  const liveAssessorAvg5 =
+    msAssessorRated > 0
+      ? msItems.reduce((s, i) => s + (assessorRatings[`ms-${i.no}`] ?? 0), 0) / msAssessorRated
+      : null;
+
+  const evalAp1Avg5 =
+    reviewerRole === "approver1"
+      ? (liveAssessorAvg5 ?? storedApp1Avg5)
+      : (storedApp1Avg5 ?? (isSameAp1Ap2 ? liveAssessorAvg5 : null));
+  const evalAp2Avg5 =
+    reviewerRole === "approver2"
+      ? (liveAssessorAvg5 ?? storedApp2Avg5)
+      : isSameAp1Ap2
+      ? evalAp1Avg5
+      : storedApp2Avg5;
+
+  const selfTotal = selfAvg5 != null ? selfAvg5.toFixed(2) : "—";
+  const app1Total = evalAp1Avg5 != null ? evalAp1Avg5.toFixed(2) : "—";
   const assessorTotal = msAssessorRated > 0
-    ? ((MS_ITEMS.reduce((s, i) => s + (assessorRatings[`ms-${i.no}`] ?? 0), 0) / msCount) * msW).toFixed(2)
+    ? (liveAssessorAvg5 ?? 0).toFixed(2)
     : "—";
+
+  const activeSummaryAvgs = [selfAvg5, evalAp1Avg5, evalAp2Avg5].filter((v): v is number => v != null && v > 0);
+  const combinedAvg5 = activeSummaryAvgs.length > 0 ? activeSummaryAvgs.reduce((s, v) => s + v, 0) / activeSummaryAvgs.length : null;
+  const konversiPct = combinedAvg5 != null ? (combinedAvg5 / 5) * 100 : null;
+  const skorFinalPct = combinedAvg5 != null ? (combinedAvg5 / 5) * PERCENTAGE : null;
+  const shouldShowMsSummary = Boolean(readOnlyView || submitted || (msItems.length > 0 && msAssessorRated === msItems.length));
 
   return (
     <div className="flex flex-col gap-4">
@@ -2137,7 +2445,7 @@ function ManagerialSkillReview({
 
       <div className="flex items-center justify-between bg-[#1A284F] text-white px-5 py-3 rounded-lg">
         <span className="text-sm font-bold">KOMPETENSI MANAJERIAL</span>
-        <span className="text-xs bg-[#C69A45] text-white px-3 py-1 rounded font-semibold">Managerial Skill</span>
+        <span className="text-xs bg-[#C69A45] text-white px-3 py-1 rounded font-semibold">({PERCENTAGE}%) Nilai Rata-Rata</span>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
@@ -2148,33 +2456,46 @@ function ManagerialSkillReview({
                 <th className="py-3 px-4 text-left font-semibold text-gray-700 border-r border-gray-200 w-10">No</th>
                 <th className="py-3 px-4 text-left font-semibold text-gray-700 border-r border-gray-200">Kompetensi Manajerial</th>
                 <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-52">Indikator Penilaian</th>
-                <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-56">
-                  <div>Evaluasi Pribadi</div>
-                  <div className="flex justify-around mt-1 text-gray-400 font-normal text-xs">
-                    {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
-                  </div>
-                </th>
-                {showApp1 && (
-                  <th className="py-3 px-4 text-center font-semibold text-blue-700 border-r border-gray-200 w-56">
-                    <div>Evaluasi Approver 1</div>
-                    <div className="flex justify-around mt-1 text-blue-300 font-normal text-xs">
-                      {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
-                    </div>
-                  </th>
+                {isAdminGlobalInspector ? (
+                  <>
+                    <th className="py-3 px-4 text-left font-semibold text-[#1A284F] border-r border-gray-200 w-64">Evaluasi Pribadi Karyawan</th>
+                    <th className="py-3 px-4 text-left font-semibold text-indigo-700 border-r border-gray-200 w-64">Evaluasi Approver 1</th>
+                    <th className="py-3 px-4 text-left font-semibold text-teal-700 w-64">Evaluasi Approver 2</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="py-3 px-4 text-center font-semibold text-gray-700 border-r border-gray-200 w-56">
+                      <div>Evaluasi Pribadi Karyawan</div>
+                      <div className="flex justify-around mt-1 text-gray-400 font-normal text-xs">
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                    {showApp1 && (
+                      <th className="py-3 px-4 text-center font-semibold text-blue-700 border-r border-gray-200 w-56">
+                        <div>Evaluasi Approver 1</div>
+                        <div className="flex justify-around mt-1 text-blue-300 font-normal text-xs">
+                          {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                        </div>
+                      </th>
+                    )}
+                    <th className={`py-3 px-4 text-center font-semibold w-56 ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`}>
+                      <div>{assessorLabel}</div>
+                      <div className={`flex justify-around mt-1 font-normal text-xs ${assessorColor === "indigo" ? "text-indigo-300" : "text-teal-300"}`}>
+                        {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
+                      </div>
+                    </th>
+                  </>
                 )}
-                <th className={`py-3 px-4 text-center font-semibold w-56 ${assessorColor === "indigo" ? "text-indigo-700" : "text-teal-700"}`}>
-                  <div>{assessorLabel}</div>
-                  <div className={`flex justify-around mt-1 font-normal text-xs ${assessorColor === "indigo" ? "text-indigo-300" : "text-teal-300"}`}>
-                    {[1,2,3,4,5].map(n => <span key={n} className="w-9 text-center">{n}</span>)}
-                  </div>
-                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {MS_ITEMS.map((item) => {
+              {msItems.map((item) => {
                 const selfVal     = selfRatings[item.no] ?? null;
                 const app1Val     = firstRatings[item.no] ?? null;
+                const app2Val     = secondRatingsStored[item.no] ?? (isSameAp1Ap2 ? app1Val : null);
                 const assessorVal = assessorRatings[`ms-${item.no}`] ?? null;
+                const findMsIndText = (score: number | null) =>
+                  score != null ? item.indicators.find((ind) => ind.score === score)?.text ?? "" : "";
                 return (
                   <tr key={item.no} className="hover:bg-gray-50/50">
                     <td className="py-3 px-4 text-gray-400 text-center border-r border-gray-100 align-middle">{item.no}</td>
@@ -2191,34 +2512,179 @@ function ManagerialSkillReview({
                         Lihat Indikator Penilaian
                       </button>
                     </td>
-                    {/* Self rating — detail hidden, only average shown in total row */}
-                    <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
-                    {showApp1 && (
-                      <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
-                    )}
-                    <td className={`py-3 px-4 align-middle ${assessorColor === "indigo" ? "bg-indigo-50/20" : "bg-teal-50/20"}`}>
-                      <div className="flex items-center justify-around">
-                        {[1,2,3,4,5].map(n => submitted
-                          ? <ReadOnlyScore key={n} value={n} active={assessorVal === n} color={assessorColor} />
-                          : <EditableScore key={n} value={n} selected={assessorVal === n} color={assessorColor} onSelect={() => onRate(`ms-${item.no}`, n)} />
+                    {isAdminGlobalInspector ? (
+                      <>
+                        <td className="py-3 px-4 border-r border-gray-100 align-top">
+                          {selfVal != null ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#1A284F] text-white text-xs font-bold">Nilai {selfVal}</span>
+                              <p className="text-[11px] text-gray-600 leading-snug">{findMsIndText(selfVal)}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-300">Belum dinilai</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 border-r border-gray-100 align-top bg-indigo-50/15">
+                          {app1Val != null ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-600 text-white text-xs font-bold">Nilai {app1Val}</span>
+                              <p className="text-[11px] text-gray-600 leading-snug">{findMsIndText(app1Val)}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-300">Belum dinilai</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 align-top bg-teal-50/15">
+                          {app2Val != null ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-teal-600 text-white text-xs font-bold">Nilai {app2Val}</span>
+                              <p className="text-[11px] text-gray-600 leading-snug">{findMsIndText(app2Val)}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-300">Belum dinilai</span>
+                          )}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        {/* Self rating — detail hidden, only average shown in total row */}
+                        <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
+                        {showApp1 && (
+                          <td className="py-3 px-4 border-r border-gray-100 align-middle text-center text-gray-300 text-xs">—</td>
                         )}
-                      </div>
-                    </td>
+                        <td className={`py-3 px-4 align-middle ${assessorColor === "indigo" ? "bg-indigo-50/20" : "bg-teal-50/20"}`}>
+                          <div className="flex items-center justify-around">
+                            {[1,2,3,4,5].map(n => submitted
+                              ? <ReadOnlyScore key={n} value={n} active={assessorVal === n} color={assessorColor} />
+                              : <EditableScore key={n} value={n} selected={assessorVal === n} color={assessorColor} onSelect={() => onRate(`ms-${item.no}`, n)} />
+                            )}
+                          </div>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
               <tr className="bg-gray-50 border-t border-gray-200 font-bold">
                 <td colSpan={3} className="py-3 px-4 text-sm text-gray-800 border-r border-gray-200 text-right">
-                  Rata-Rata × {PERCENTAGE}% <span className="text-xs text-gray-400 font-normal">(maks {(5 * msW).toFixed(2)})</span>
+                  ({PERCENTAGE}%) Nilai Rata-Rata <span className="text-xs text-gray-400 font-normal">(maks 5.00)</span>
                 </td>
-                <td className="py-3 px-4 text-center text-[#1A284F] border-r border-gray-100">{selfTotal}</td>
-                {showApp1 && <td className="py-3 px-4 text-center text-blue-600 border-r border-gray-100">{app1Total}</td>}
-                <td className={`py-3 px-4 text-center ${assessorColor === "indigo" ? "text-indigo-600 bg-indigo-50/20" : "text-teal-600 bg-teal-50/20"}`}>{assessorTotal}</td>
+                {isAdminGlobalInspector ? (
+                  <>
+                    <td className="py-3 px-4 text-center text-[#1A284F] border-r border-gray-100">{selfTotal}</td>
+                    <td className="py-3 px-4 text-center text-indigo-600 border-r border-gray-100">{app1Total}</td>
+                    <td className="py-3 px-4 text-center text-teal-600">{evalAp2Avg5 != null ? evalAp2Avg5.toFixed(2) : "—"}</td>
+                  </>
+                ) : (
+                  <>
+                    <td className="py-3 px-4 text-center text-[#1A284F] border-r border-gray-100">{selfTotal}</td>
+                    {showApp1 && <td className="py-3 px-4 text-center text-blue-600 border-r border-gray-100">{app1Total}</td>}
+                    <td className={`py-3 px-4 text-center ${assessorColor === "indigo" ? "text-indigo-600 bg-indigo-50/20" : "text-teal-600 bg-teal-50/20"}`}>{assessorTotal}</td>
+                  </>
+                )}
               </tr>
             </tbody>
           </table>
         </div>
       </div>
+
+      {!submitted && !readOnlyView && msAssessorRated < msItems.length && (
+        <div className="rounded-xl border border-teal-100 bg-teal-50/50 px-4 py-3 text-xs text-teal-800 flex items-center justify-between gap-3">
+          <span>
+            Lengkapi seluruh penilaian kompetensi manajerial ({msAssessorRated}/{msItems.length}) untuk menampilkan <strong>Managerial Skill Summary</strong> sebelum klik Assessed.
+          </span>
+          <span className="font-bold tabular-nums text-teal-700 shrink-0">
+            {msAssessorRated}/{msItems.length} dinilai
+          </span>
+        </div>
+      )}
+
+      {/* Managerial Skill Summary — muncul otomatis saat seluruh item selesai dinilai */}
+      {shouldShowMsSummary && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="bg-[#1A284F] px-5 py-3 flex items-center justify-between">
+            <span className="text-sm font-bold text-white">Managerial Skill Summary</span>
+            <span className="text-xs bg-[#C69A45] text-white px-3 py-1 rounded font-semibold">Ringkasan Penilaian</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  <th className="py-3 px-5 text-left border-r border-gray-200 w-52">Kompetensi</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200">Bobot</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200">Evaluasi Pribadi Karyawan</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200 text-indigo-600">Evaluasi Approver 1</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200 text-teal-600">Evaluasi Approver 2</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200 text-amber-700 bg-amber-50/60">Aktual</th>
+                  <th className="py-3 px-5 text-center border-r border-gray-200 text-purple-700 bg-purple-50/60">Konversi Nilai</th>
+                  <th className="py-3 px-5 text-center text-green-700 bg-green-50/60">Skor Final</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                <tr className="hover:bg-gray-50/40">
+                  <td className="py-3 px-5 font-semibold text-gray-800 border-r border-gray-100">
+                    Managerial Skills ({msCount} Indikator)
+                  </td>
+                  <td className="py-3 px-5 text-center text-gray-500 border-r border-gray-100 font-medium">{PERCENTAGE}%</td>
+                  <td className="py-3 px-5 text-center text-[#1A284F] font-bold border-r border-gray-100">
+                    {selfAvg5 != null ? selfAvg5.toFixed(2) : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className={`py-3 px-5 text-center text-indigo-600 font-bold border-r border-gray-100 ${reviewerRole === "approver1" ? "bg-indigo-50/20" : ""}`}>
+                    {evalAp1Avg5 != null ? evalAp1Avg5.toFixed(2) : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className={`py-3 px-5 text-center text-teal-600 font-bold border-r border-gray-100 ${reviewerRole === "approver2" || isSameAp1Ap2 ? "bg-teal-50/20" : ""}`}>
+                    {evalAp2Avg5 != null ? evalAp2Avg5.toFixed(2) : "0"}
+                  </td>
+                  <td className="py-3 px-5 text-center font-bold border-r border-gray-200 text-amber-700 bg-amber-50/40">
+                    {combinedAvg5 != null ? combinedAvg5.toFixed(2) : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="py-3 px-5 text-center font-bold border-r border-gray-200 text-purple-700 bg-purple-50/40">
+                    {konversiPct != null ? `${konversiPct.toFixed(2)}%` : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="py-3 px-5 text-center font-bold text-green-700 bg-green-50/40">
+                    {skorFinalPct != null ? `${skorFinalPct.toFixed(2)}%` : <span className="text-gray-300">—</span>}
+                  </td>
+                </tr>
+                <tr className="bg-[#1A284F]/5 border-t-2 border-[#1A284F]/20 font-bold">
+                  <td className="py-3.5 px-5 text-sm text-[#1A284F] border-r border-gray-200" colSpan={2}>
+                    Skor Pencapaian
+                  </td>
+                  <td className="py-3.5 px-5 text-center border-r border-gray-100">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-[#1A284F] text-white text-sm font-black">
+                      {selfAvg5 != null ? selfAvg5.toFixed(2) : "—"}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-5 text-center border-r border-gray-100">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-indigo-600 text-white text-sm font-black">
+                      {evalAp1Avg5 != null ? evalAp1Avg5.toFixed(2) : "—"}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-5 text-center border-r border-gray-100">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-teal-600 text-white text-sm font-black">
+                      {evalAp2Avg5 != null ? evalAp2Avg5.toFixed(2) : "0"}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-5 text-center border-r border-gray-200 bg-amber-50/60">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-amber-500 text-white text-sm font-black">
+                      {combinedAvg5 != null ? combinedAvg5.toFixed(2) : "—"}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-5 text-center border-r border-gray-200 bg-purple-50/60">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-purple-600 text-white text-sm font-black">
+                      {konversiPct != null ? `${konversiPct.toFixed(2)}%` : "—"}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-5 text-center bg-green-50/60">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-green-600 text-white text-sm font-black">
+                      {skorFinalPct != null ? `${skorFinalPct.toFixed(2)}%` : "—"}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2431,8 +2897,16 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
   const allFilled = (() => {
     if (isCheckerStage || isValidatorStage) return true;
     if (row.type === "SMART Goals") {
+      const ciList = loadCheckInEntries(row.employeeId);
       return (
-        ownerGoalsForCheck.every((g) => assessorRatings[`sg-${g.id}`] != null) &&
+        ownerGoalsForCheck.every((g) => {
+          const ci = ciList.find((e) => e.goalId === g.id);
+          const inv = Boolean(ci?.inappropriateEvidenceByRole?.[reviewerRole]);
+          const b = computeSmartGoalApproverScoreBounds(ci, inv);
+          if (b.max === 0) return true;
+          const val = assessorRatings[`sg-${g.id}`];
+          return val != null && val >= b.min && val <= b.max;
+        }) &&
         isApproverCommentFilled
       );
     }
@@ -2469,6 +2943,20 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
       const missingCount = MS_ITEMS.filter((item) => assessorRatings[`ms-${item.no}`] == null).length;
       if (missingCount > 0) {
         reasons.push(`${missingCount} item kompetensi manajerial belum dinilai`);
+      }
+    } else if (row.type === "SMART Goals") {
+      const ciList = loadCheckInEntries(row.employeeId);
+      for (const g of ownerGoalsForCheck) {
+        const ci = ciList.find((e) => e.goalId === g.id);
+        const inv = Boolean(ci?.inappropriateEvidenceByRole?.[reviewerRole]);
+        const b = computeSmartGoalApproverScoreBounds(ci, inv);
+        if (b.max === 0) continue;
+        const val = assessorRatings[`sg-${g.id}`];
+        if (val == null) {
+          reasons.push(`${g.label}: nilai belum diisi (${b.label})`);
+        } else if (val < b.min || val > b.max) {
+          reasons.push(`${g.label}: nilai ${val}% harus berada pada rentang ${b.label}`);
+        }
       }
     }
     if (!isApproverCommentFilled) {
@@ -2510,7 +2998,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
     );
     if (row.type === "Project")          return <ProjectReview employeeId={row.employeeId} />;
     if (row.type === "Appraisal Form")   return <AppraisalFormReview {...sharedProps} readOnlyView={effectiveReadOnly} assessmentSubmitted={assessmentSubmitted} />;
-    if (row.type === "Managerial Skill") return <ManagerialSkillReview {...sharedProps} />;
+    if (row.type === "Managerial Skill") return <ManagerialSkillReview {...sharedProps} readOnlyView={effectiveReadOnly} />;
     if (row.type === "RCA")              return <RCAReviewPreview employeeId={row.employeeId} />;
     return (
       <div className="flex flex-col items-center gap-3 py-16 text-gray-400">

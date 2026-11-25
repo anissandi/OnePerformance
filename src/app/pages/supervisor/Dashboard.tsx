@@ -52,7 +52,7 @@ type Module =
   | "Inter-Department Feedback"
   | "RCA"
   | "Calibration";
-type ActionType = "Approve" | "Complete Assessment" | "Review & Validate";
+type ActionType = "Approve" | "Complete Assessment" | "Review & Validate" | "Check";
 
 interface PendingItem {
   id: string;
@@ -87,6 +87,7 @@ const ACTION_STYLE: Record<ActionType, string> = {
   "Approve":             "bg-[#1A284F] hover:bg-[#131d3b] text-white",
   "Complete Assessment": "bg-green-700 hover:bg-green-800 text-white",
   "Review & Validate":   "bg-amber-600 hover:bg-amber-700 text-white",
+  "Check":               "bg-teal-600 hover:bg-teal-700 text-white",
 };
 
 type TabFilter = "All" | Module;

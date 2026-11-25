@@ -1,5 +1,5 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
-import { safeGetLocalRaw, safeSetLocalJson, savePersistedState } from "../../services/supabaseClient";
+import { safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
 import {
   findHrIcfValidatorUser,
   findHrUnitCheckerUserForCompany,

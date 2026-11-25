@@ -12,6 +12,7 @@ import {
   FileText,
   Info,
   Lock,
+  RefreshCw,
   Search,
   Send,
   Users,
@@ -30,11 +31,11 @@ import {
 import {
   FEEDBACK_INDICATORS,
   FOLLOW_UP_COLUMNS,
+  MAX_FEEDBACK_REPLACEMENTS,
   MIN_FEEDBACK_GIVERS,
-  MIN_FEEDBACK_SENTENCES,
+  MIN_FEEDBACK_WORDS,
   OWNER_RESULT_STATUS_OPTIONS,
   buildOwnerResultTemplate,
-  countValidSentences,
   feedbackTasksFor,
   getFeedbackSubmission,
   hasMinFeedbackSentences,
@@ -42,6 +43,7 @@ import {
   nominateFeedbackGivers,
   ownerResultMissingFields,
   refreshFeedbackSubmissionsFromBackend,
+  replacePendingFeedbackGiver,
   requiredFollowUpRoles,
   saveFeedbackSummaryDraft,
   submitFeedbackSummary,
@@ -49,6 +51,7 @@ import {
   submitOwnerFollowUpResults,
   summaryKey,
   summarySubmitReadiness,
+  validateFeedbackText,
   type FeedbackFollowUp,
   type FeedbackPerson,
   type FeedbackTask,
@@ -75,27 +78,30 @@ const personFromManagedUser = (user: ManagedUser): FeedbackPerson => ({
   division: user.division,
   department: user.department,
   section: user.bagian,
+  role: user.role,
+  groupings: user.groupings,
 })
 const inputClass =
   "w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-800 outline-none transition focus:border-[#1A284F] focus:ring-2 focus:ring-[#1A284F]/15 disabled:cursor-not-allowed disabled:bg-gray-50"
 
 function SentenceCountHint({ value }: { value?: string }) {
-  const count = countValidSentences(value)
-  const met = count >= MIN_FEEDBACK_SENTENCES
+  const res = validateFeedbackText(value)
   const hasText = Boolean(value?.trim())
   return (
     <p
       className={`mt-1.5 text-[11px] font-medium normal-case tracking-normal ${
-        met
+        res.valid
           ? "text-emerald-700"
           : hasText
-          ? "text-amber-700"
+          ? "text-rose-600"
           : "text-gray-400"
       }`}
     >
-      {met
-        ? `Minimal ${MIN_FEEDBACK_SENTENCES} kalimat terpenuhi (${count} kalimat)`
-        : `Minimal input ${MIN_FEEDBACK_SENTENCES} kalimat (${count}/${MIN_FEEDBACK_SENTENCES} kalimat)`}
+      {res.valid
+        ? `Valid · ${res.wordCount} kata (minimal ${MIN_FEEDBACK_WORDS} kata terpenuhi)`
+        : hasText
+        ? res.error
+        : `Minimal input ${MIN_FEEDBACK_WORDS} kata (contoh: saya sedang menjalankan tugas), tanpa kata/simbol/spasi berulang`}
     </p>
   )
 }
@@ -419,6 +425,7 @@ export function InterDepartmentFeedback() {
           workflow={workflow}
           selected={selected}
           candidates={candidates}
+          allPeople={people}
           unit={unit}
           division={division}
           department={department}
@@ -455,6 +462,12 @@ export function InterDepartmentFeedback() {
             setError("")
             setConfirmNomination(true)
           }}
+          onReplaced={(msg) => {
+            setError("")
+            setNotice(msg)
+            refresh()
+          }}
+          onReplaceError={(msg) => setError(msg)}
         />
       )}
       {activeTab === "tasks" && actor && (
@@ -541,6 +554,7 @@ function NominationPanel({
   workflow,
   selected,
   candidates,
+  allPeople,
   unit,
   division,
   department,
@@ -557,11 +571,14 @@ function NominationPanel({
   onAdd,
   onRemove,
   onConfirm,
+  onReplaced,
+  onReplaceError,
 }: {
   actor: FeedbackPerson
   workflow: ReturnType<typeof getFeedbackSubmission>
   selected: FeedbackPerson[]
   candidates: FeedbackPerson[]
+  allPeople: FeedbackPerson[]
   unit: string
   division: string
   department: string
@@ -578,8 +595,13 @@ function NominationPanel({
   onAdd: (person: FeedbackPerson) => void
   onRemove: (id: string) => void
   onConfirm: () => void
+  onReplaced: (msg: string) => void
+  onReplaceError: (msg: string) => void
 }) {
   const [page, setPage] = useState(1)
+  const [replacingOldGiver, setReplacingOldGiver] = useState<FeedbackPerson | null>(null)
+  const [replaceQuery, setReplaceQuery] = useState("")
+  const [replaceUnit, setReplaceUnit] = useState("")
   useEffect(() => {
     setPage(1)
   }, [unit, division, department, search])
@@ -597,20 +619,38 @@ function NominationPanel({
     ? `Pilih minimal ${MIN_FEEDBACK_GIVERS} pemberi feedback (${selected.length} terpilih) untuk mengaktifkan tombol Kirim Nominasi.`
     : `Klik untuk mengirim nominasi ke ${selected.length} pemberi feedback terpilih.`
 
-  if (workflow)
+  if (workflow) {
+    const usedReplacements = workflow.replacementCount ?? 0
+    const remainingReplacements = Math.max(0, MAX_FEEDBACK_REPLACEMENTS - usedReplacements)
+    const alreadyIds = new Set((workflow.nominations ?? []).map((n) => n.giver.id.toLowerCase()))
+    const replaceCandidates = allPeople
+      .filter(
+        (p) =>
+          !alreadyIds.has(p.id.toLowerCase()) &&
+          !feedbackEligibilityError(actor, p) &&
+          (!replaceUnit || p.companyUnit === replaceUnit) &&
+          (!replaceQuery.trim() ||
+            [p.name, p.id, p.position, p.department, p.division, p.companyUnit].some((v) =>
+              String(v ?? "").toLowerCase().includes(replaceQuery.trim().toLowerCase()),
+            )),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name, "id", { sensitivity: "base" }))
+
     return (
       <section className="space-y-5">
         <div className="flex items-start gap-4 rounded-2xl border border-green-200 bg-green-50 p-5">
           <CheckCircle2 className="h-7 w-7 shrink-0 text-green-600" />
-          <div>
+          <div className="flex-1">
             <h2 className="font-bold text-green-900">
               Pemberi feedback sudah dipilih
             </h2>
             <p className="mt-1 text-sm text-green-800">
-              Anda telah menominasikan {workflow.nominations?.length ?? 0} karyawan. Pilihan terkunci untuk
-              periode ini; status tugas diperbarui saat feedback diterima.
+              Anda telah menominasikan {workflow.nominations?.length ?? 0} karyawan. Selama status masih <strong>Menunggu feedback</strong>, Anda dapat mengganti pemberi feedback maksimal <strong>{MAX_FEEDBACK_REPLACEMENTS} kali</strong>.
             </p>
           </div>
+          <span className="shrink-0 rounded-full border border-emerald-300 bg-white px-3 py-1 text-xs font-bold text-emerald-800">
+            Sisa Ganti: {remainingReplacements}/{MAX_FEEDBACK_REPLACEMENTS}
+          </span>
         </div>
         <section className="rounded-2xl border bg-white p-6">
           <h3 className="mb-4 font-bold text-[#1A284F]">
@@ -620,7 +660,7 @@ function NominationPanel({
             {workflow.nominations?.map((nomination, index) => (
               <div
                 key={nomination.giver.id}
-                className="flex items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4"
+                className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4"
               >
                 <div className="flex items-center gap-3">
                   <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1A284F]/10 text-xs font-bold text-[#1A284F]">
@@ -628,23 +668,115 @@ function NominationPanel({
                   </span>
                   <EmployeeBadge person={nomination.giver} />
                 </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                    nomination.status === "Submitted"
-                      ? "bg-green-100 text-green-800"
-                      : "bg-amber-100 text-amber-800"
-                  }`}
-                >
-                  {nomination.status === "Submitted"
-                    ? "Feedback diterima"
-                    : "Menunggu feedback"}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      nomination.status === "Submitted"
+                        ? "bg-green-100 text-green-800"
+                        : "bg-amber-100 text-amber-800"
+                    }`}
+                  >
+                    {nomination.status === "Submitted"
+                      ? "Feedback diterima"
+                      : "Menunggu feedback"}
+                  </span>
+                  {nomination.status === "Pending" && !workflow.summarySubmittedAt && (
+                    <button
+                      type="button"
+                      disabled={!enabled || remainingReplacements <= 0}
+                      onClick={() => {
+                        setReplacingOldGiver(nomination.giver)
+                        setReplaceQuery("")
+                        setReplaceUnit("")
+                      }}
+                      title={
+                        remainingReplacements <= 0
+                          ? `Kuota ganti pemberi feedback maksimal ${MAX_FEEDBACK_REPLACEMENTS} kali sudah habis.`
+                          : "Ganti pemberi feedback ini"
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#1A284F]/30 bg-white px-3 py-1.5 text-xs font-bold text-[#1A284F] hover:bg-[#1A284F] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 transition-colors cursor-pointer"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Ganti ({remainingReplacements}/{MAX_FEEDBACK_REPLACEMENTS})
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         </section>
+
+        {replacingOldGiver && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={() => setReplacingOldGiver(null)}>
+            <div
+              className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-bold text-[#1A284F]">
+                    Ganti Pemberi Feedback ({usedReplacements + 1}/{MAX_FEEDBACK_REPLACEMENTS})
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Menggantikan <strong>{replacingOldGiver.name}</strong> ({replacingOldGiver.department} · {replacingOldGiver.companyUnit})
+                  </p>
+                </div>
+                <button type="button" onClick={() => setReplacingOldGiver(null)} className="p-1 text-gray-400 hover:text-gray-600">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                <input
+                  type="text"
+                  value={replaceQuery}
+                  onChange={(e) => setReplaceQuery(e.target.value)}
+                  placeholder="Cari nama, ID, departemen..."
+                  className={inputClass}
+                />
+                <select
+                  value={replaceUnit}
+                  onChange={(e) => setReplaceUnit(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Semua Unit Usaha</option>
+                  {units.map((u) => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[220px]">
+                {replaceCandidates.slice(0, 30).map((cand) => (
+                  <div key={cand.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 p-3 hover:bg-slate-50">
+                    <EmployeeBadge person={cand} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        try {
+                          replacePendingFeedbackGiver(actor, replacingOldGiver.id, cand)
+                          setReplacingOldGiver(null)
+                          onReplaced(`Pemberi feedback "${replacingOldGiver.name}" berhasil diganti menjadi "${cand.name}".`)
+                        } catch (err) {
+                          onReplaceError(err instanceof Error ? err.message : "Gagal mengganti pemberi feedback.")
+                        }
+                      }}
+                      className="rounded-lg bg-[#1A284F] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[#131d3b] shrink-0 cursor-pointer"
+                    >
+                      Pilih Pengganti
+                    </button>
+                  </div>
+                ))}
+                {replaceCandidates.length === 0 && (
+                  <p className="py-10 text-center text-xs text-gray-400">
+                    Tidak ada kandidat pengganti yang memenuhi aturan lintas organisasi untuk role Anda.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </section>
     )
+  }
   return (
     <section className="grid gap-6 xl:grid-cols-[1fr_380px] items-start">
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
@@ -1063,7 +1195,7 @@ function TaskInbox({
                     })
                   }
                   className={inputClass + " resize-none"}
-                  placeholder={`Tuliskan feedback profesional dan spesifik (minimal ${MIN_FEEDBACK_SENTENCES} kalimat)...`}
+                  placeholder={`Tuliskan feedback profesional dan spesifik (minimal ${MIN_FEEDBACK_WORDS} kata)...`}
                 />
                 <SentenceCountHint value={answers[indicator.key]} />
               </label>
@@ -1087,7 +1219,7 @@ function TaskInbox({
               className="rounded-lg bg-[#1A284F] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
               title={
                 FEEDBACK_INDICATORS.some((indicator) => !hasMinFeedbackSentences(answers[indicator.key]))
-                  ? `Setiap indikator feedback wajib diisi minimal ${MIN_FEEDBACK_SENTENCES} kalimat.`
+                  ? `Setiap indikator feedback wajib minimal ${MIN_FEEDBACK_WORDS} kata valid (tanpa kata/simbol/spasi berulang atau kata terlarang).`
                   : "Kirim Feedback Anonim"
               }
             >
@@ -1372,7 +1504,7 @@ function ReceivedPanel({
                                 setSummaries({ ...summaries, [key]: event.target.value })
                               }}
                               className={inputClass + " mt-2 resize-none normal-case tracking-normal font-normal"}
-                              placeholder={`Tuliskan ringkasan atau catatan pribadi atas feedback ini (minimal ${MIN_FEEDBACK_SENTENCES} kalimat)...`}
+                              placeholder={`Tuliskan ringkasan atau catatan pribadi atas feedback ini (minimal ${MIN_FEEDBACK_WORDS} kata)...`}
                             />
                             <SentenceCountHint value={summaries[key]} />
                           </>

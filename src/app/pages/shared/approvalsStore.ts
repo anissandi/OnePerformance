@@ -8,6 +8,7 @@ import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClie
 import { resolveActingApproverLabel } from "../../store/delegationStore";
 import {
   getActiveUser,
+  isAdminOrHrIcfRole,
   loadManagedUsers,
   resolveWorkflowStageForTarget,
   shouldBypassCheckerForSubmission,
@@ -291,12 +292,13 @@ export function resolveDynamicApprovalRowsForUser(
   const overrides = loadOverrides();
   const feedbackSubs = phase === "measurement" ? loadFeedbackSubmissions() : [];
   const managedUsers = loadManagedUsers();
+  const isGlobalAdminViewer = isAdminOrHrIcfRole(activeUser.role);
   const seenKeys = new Set<string>();
   const result: ApprovalRow[] = [];
 
   for (const row of rawRows) {
     if (!allowedTypes.has(row.type)) continue;
-    if (lockedUnits && !lockedUnits.includes(row.companyUnit)) continue;
+    if (!isGlobalAdminViewer && lockedUnits && !lockedUnits.includes(row.companyUnit)) continue;
 
     const normEmpId = normalizeEmployeeId(row.employeeId);
     const ownerManaged = managedUsers.find(
@@ -356,9 +358,10 @@ export function resolveDynamicApprovalRowsForUser(
       phase,
     );
     // Jika user yang login bukan Approver 1, bukan Approver 2, bukan Checker/Validator berwenang untuk karyawan ini -> sembunyikan
-    if (!stageForRow) continue;
+    if (!stageForRow && !isGlobalAdminViewer) continue;
+    const isGlobalHistoryFallback = !stageForRow && isGlobalAdminViewer;
     const roleForRow: "approver1" | "approver2" =
-      stageForRow === "approver2" || stageForRow === "validator"
+      isGlobalHistoryFallback || stageForRow === "approver2" || stageForRow === "validator"
         ? "approver2"
         : "approver1";
     seenKeys.add(dedupKey);
@@ -369,12 +372,14 @@ export function resolveDynamicApprovalRowsForUser(
         : `${prefix}-LIVE-${normEmpId}-${row.type}`;
     const rowWithCanonicalNo: ApprovalRow = {
       ...row,
+      companyUnit: ownerManaged?.company || row.companyUnit,
       division: ownerManaged?.division || row.division,
       department: ownerManaged?.department || row.department,
       bagian: ownerManaged?.bagian || row.bagian || "",
       no: canonicalNo,
       reviewerRoleForRow: roleForRow,
-      workflowStageForRow: stageForRow,
+      workflowStageForRow: stageForRow ?? "validator",
+      globalHistoryOnly: isGlobalHistoryFallback,
     };
     registerWorkflowRows([rowWithCanonicalNo], roleForRow);
     if (row.type === "Inter-Department Feedback") {
@@ -386,16 +391,21 @@ export function resolveDynamicApprovalRowsForUser(
       if (sub) {
         const fbState = feedbackRowStatusFor(sub, roleForRow);
         // Jika masih menunggu Approver 1 selesai terlebih dahulu, jangan tampilkan di antrean Approver 2
-        if (fbState.stage === "waiting" && roleForRow === "approver2") {
+        if (!isGlobalHistoryFallback && fbState.stage === "waiting" && roleForRow === "approver2") {
           continue;
         }
+        const fbEffectiveStatus =
+          isGlobalHistoryFallback && fbState.status === "Pending"
+            ? (sub.followUpMeta?.approver1 ? "Pending-Approver 2" : "Pending-Approver 1")
+            : fbState.status;
         result.push({
           ...rowWithCanonicalNo,
           no: sub.row.no,
-          status: fbState.status,
+          status: fbEffectiveStatus,
           approvalDate: sub.row.approvalDate || "-",
           reviewerRoleForRow: roleForRow,
-          workflowStageForRow: stageForRow,
+          workflowStageForRow: stageForRow ?? "validator",
+          globalHistoryOnly: isGlobalHistoryFallback,
         });
         continue;
       }
@@ -403,10 +413,13 @@ export function resolveDynamicApprovalRowsForUser(
     const shared = workflowRowStatus(rowWithCanonicalNo, roleForRow);
     const ov = overrides.find((o) => o.no === canonicalNo);
     const resolvedRow: ApprovalRow = shared
-      ? { ...rowWithCanonicalNo, ...shared, reviewerRoleForRow: roleForRow, workflowStageForRow: stageForRow }
+      ? { ...rowWithCanonicalNo, ...shared, reviewerRoleForRow: roleForRow, workflowStageForRow: stageForRow ?? "validator", globalHistoryOnly: isGlobalHistoryFallback }
       : ov
-      ? { ...rowWithCanonicalNo, status: ov.status, approvalDate: ov.approvalDate, reviewerRoleForRow: roleForRow, workflowStageForRow: stageForRow }
+      ? { ...rowWithCanonicalNo, status: ov.status, approvalDate: ov.approvalDate, reviewerRoleForRow: roleForRow, workflowStageForRow: stageForRow ?? "validator", globalHistoryOnly: isGlobalHistoryFallback }
       : rowWithCanonicalNo;
+    if (isGlobalHistoryFallback && resolvedRow.status === "Pending") {
+      resolvedRow.status = a1Done ? "Pending-Approver 2" : checkerDone ? "Pending-Approver 1" : "Pending-Approver 1";
+    }
     result.push(resolvedRow);
   }
   return result;

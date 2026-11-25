@@ -4,7 +4,7 @@ import { SmartGoalsProgressCard } from "../../components/SmartGoalsProgressCard"
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import {
   CheckCircle2, Send, Eye, Edit3, AlertCircle, Paperclip, X, Plus,
-  ChevronDown, ChevronUp, Star, Info, TrendingUp, Target, Activity, Upload, Clock, RotateCcw, Lock,
+  ChevronDown, ChevronUp, Star, Info, TrendingUp, Target, Activity, Upload, Clock, RotateCcw, Lock, Download, FileText,
 } from "lucide-react";
 import type { SmartGoal } from "../employee/SMARTGoals";
 import { ROWS, SAMPLE_GOALS } from "../employee/SMARTGoals";
@@ -34,13 +34,54 @@ interface EvidenceFile {
 type LocalStatus = "-" | "Belum dilaksanakan" | "Sedang dilaksanakan" | "Selesai" | "Batal";
 
 type GoalAchievementStatus = "" | "Tercapai" | "Tidak Tercapai";
+type GoalRealizationStatus = "" | "Terwujud" | "Tidak Terwujud";
+type GoalReasonFactor = "" | "Faktor Internal" | "Faktor Eksternal";
 
 interface TargetActualEntry {
   goalId: number;
+  realizationStatus: GoalRealizationStatus;
+  realizationFactor: GoalReasonFactor;
+  realizationReason: string;
+  realizationEvidenceFiles: EvidenceFile[];
   actual: string;
+  achievementPct: string;
   status: GoalAchievementStatus;
+  achievementFactor: GoalReasonFactor;
   alasanTidakTercapai: string;
   evidenceFiles: EvidenceFile[];
+}
+
+function deriveAutoRealizationFromActionPlans(
+  goal: SmartGoal,
+  statuses: Record<number, LocalStatus> | undefined,
+): GoalRealizationStatus | null {
+  const plans = goal.actionPlans ?? [];
+  if (plans.length === 0) return null;
+  const vals = plans.map((ap) => statuses?.[ap.id] ?? "-");
+  if (vals.every((s) => s === "Selesai")) return "Terwujud";
+  if (vals.every((s) => s === "Belum dilaksanakan" || s === "Batal")) return "Tidak Terwujud";
+  return null;
+}
+
+function applyGoalRealizationAndAchievementRules(entry: TargetActualEntry): TargetActualEntry {
+  const next = { ...entry };
+  if (next.realizationStatus === "Tidak Terwujud") {
+    next.achievementPct = "0";
+    next.status = "Tidak Tercapai";
+    return next;
+  }
+  const trimmedPct = String(next.achievementPct ?? "").replace("%", "").replace(",", ".").trim();
+  if (trimmedPct !== "") {
+    const num = parseFloat(trimmedPct);
+    if (Number.isFinite(num)) {
+      if (next.realizationStatus === "Terwujud" && num >= 100) {
+        next.status = "Tercapai";
+      } else if (num < 100) {
+        next.status = "Tidak Tercapai";
+      }
+    }
+  }
+  return next;
 }
 
 interface ActionPlanExtra {
@@ -193,6 +234,7 @@ function AccumulationCard({
         entries.find((e) => e.goalId === goalId)?.actionPlanStatuses[apId as number] ?? "-"
       }
       getGoalStatus={(goalId) => targetActuals.find((t) => t.goalId === goalId)?.status ?? ""}
+      getRealizationStatus={(goalId) => targetActuals.find((t) => t.goalId === goalId)?.realizationStatus ?? ""}
     />
   );
 }
@@ -609,7 +651,7 @@ function GoalSection({
   );
 }
 
-// ─── Target vs Actual Section ────────────────────────────────────────────────
+// ─── Goals Realization & Achievement Status Section ──────────────────────────
 
 function TargetVsActualSection({
   goals,
@@ -623,24 +665,32 @@ function TargetVsActualSection({
   onChange: (updated: TargetActualEntry[]) => void;
 }) {
   const evidenceRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const realEvidenceRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const [previewFile, setPreviewFile] = useState<EvidenceFile | null>(null);
 
   const getEntry = (goalId: number): TargetActualEntry =>
     targetActuals.find((e) => e.goalId === goalId) ?? {
       goalId,
+      realizationStatus: "",
+      realizationFactor: "",
+      realizationReason: "",
+      realizationEvidenceFiles: [],
       actual: "",
+      achievementPct: "",
       status: "",
+      achievementFactor: "",
       alasanTidakTercapai: "",
       evidenceFiles: [],
     };
 
   const updateEntry = (goalId: number, patch: Partial<TargetActualEntry>) => {
     const prev = getEntry(goalId);
-    const next = { ...prev, ...patch };
+    const next = applyGoalRealizationAndAchievementRules({ ...prev, ...patch });
     const others = targetActuals.filter((e) => e.goalId !== goalId);
     onChange([...others, next]);
   };
 
-  const handleEvidenceUpload = (goalId: number, files: FileList | null) => {
+  const handleEvidenceUpload = (goalId: number, files: FileList | null, targetField: "evidenceFiles" | "realizationEvidenceFiles" = "evidenceFiles") => {
     if (!files) return;
     const valid = Array.from(files).filter((f) =>
       ["image/jpeg", "image/png", "application/pdf",
@@ -672,8 +722,8 @@ function TargetVsActualSection({
             }));
         const curr = getEntry(goalId);
         updateEntry(goalId, {
-          evidenceFiles: [
-            ...curr.evidenceFiles,
+          [targetField]: [
+            ...(curr[targetField] ?? []),
             {
               name: rawFile.name,
               size: rawFile.size,
@@ -687,64 +737,250 @@ function TargetVsActualSection({
     });
   };
 
+  const renderEvidenceList = (
+    goalId: number,
+    files: EvidenceFile[],
+    targetField: "evidenceFiles" | "realizationEvidenceFiles",
+    inputRefMap: React.MutableRefObject<Record<number, HTMLInputElement | null>>,
+    mandatoryLabel?: string,
+  ) => (
+    <div className="flex flex-col gap-1 mt-1.5">
+      <input
+        ref={(el) => { inputRefMap.current[goalId] = el; }}
+        type="file"
+        accept=".jpg,.jpeg,.png,.pdf,.xlsx,.xls"
+        multiple
+        className="hidden"
+        onChange={(e) => { handleEvidenceUpload(goalId, e.target.files, targetField); e.target.value = ""; }}
+      />
+      <div className="flex items-center justify-between gap-1.5 flex-wrap">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-600">
+          Evidence {mandatoryLabel ? <span className="text-rose-600">({mandatoryLabel})</span> : <span className="text-slate-400 font-normal">(Opsional)</span>}
+        </span>
+        {editable && (
+          <button
+            type="button"
+            onClick={() => inputRefMap.current[goalId]?.click()}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-50 border border-sky-200 text-[10px] font-semibold text-sky-700 hover:bg-sky-100 transition-colors"
+          >
+            <Upload className="w-2.5 h-2.5" /> Upload
+          </button>
+        )}
+      </div>
+      {files.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          {files.map((f, fi) => (
+            <div key={fi} className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-md border border-slate-200">
+              <Paperclip className="w-2.5 h-2.5 text-sky-600 shrink-0" />
+              <span className="text-[10px] text-gray-700 flex-1 truncate max-w-[140px]" title={f.name}>{f.name}</span>
+              {(f.url || f.dataUrl) && (
+                <button
+                  type="button"
+                  onClick={() => setPreviewFile(f)}
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-white border border-slate-300 text-[9px] font-bold text-[#1A284F] hover:bg-slate-100 shrink-0"
+                >
+                  <Eye className="w-2.5 h-2.5" /> Open
+                </button>
+              )}
+              {editable && (
+                <button
+                  type="button"
+                  onClick={() => updateEntry(goalId, { [targetField]: files.filter((_, ei) => ei !== fi) })}
+                  className="text-gray-400 hover:text-rose-600 shrink-0"
+                  title="Hapus file"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[10px] text-gray-400 italic">Belum ada file terlampir</p>
+      )}
+    </div>
+  );
+
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
       <div className="flex items-center px-5 py-3 bg-gradient-to-r from-sky-50 via-indigo-50/70 to-slate-50 border-b border-sky-200 gap-3">
         <TrendingUp className="w-4 h-4 text-emerald-600" />
-        <span className="text-[#1A284F] text-sm font-bold flex-1">Target vs Actual</span>
+        <span className="text-[#1A284F] text-sm font-bold flex-1">Goals Realization &amp; Achievement Status</span>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse" style={{ minWidth: "680px" }}>
+        <table className="w-full text-xs border-collapse" style={{ minWidth: "1120px" }}>
           <thead>
             <tr>
-              <th className="bg-gray-50 border-b border-gray-200 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-36">Goals</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-64">Target</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-48">Actual</th>
-              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500">Status</th>
+              <th className="bg-gray-50 border-b border-gray-200 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-28">Goals</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-56">Goals Specific</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-56">Realization Goals Status</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-48">Target</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-40">Aktual</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-center px-3 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-28">% Achievement</th>
+              <th className="bg-gray-50 border-b border-gray-200 border-l border-gray-200 text-left px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 w-64">Achievement Target Status</th>
             </tr>
           </thead>
           <tbody>
             {goals.map((goal, idx) => {
               const entry = getEntry(goal.id);
+              const isTidakTerwujud = entry.realizationStatus === "Tidak Terwujud";
               return (
-                <React.Fragment key={goal.id}>
-                  <tr className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
+                <tr key={goal.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
                     {/* Goals */}
-                    <td className="border-t border-gray-100 px-4 py-3 align-top">
-                      <span className="font-semibold text-[11px] text-gray-700 leading-tight">{goal.label}</span>
+                    <td className="border-t border-gray-100 px-3.5 py-3 align-top">
+                      <span className="font-semibold text-[11px] text-[#1A284F] leading-tight">{goal.label}</span>
+                    </td>
+                    {/* Goals Specific */}
+                    <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top">
+                      <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-wrap">{goal.specific || "—"}</p>
+                    </td>
+                    {/* Realization Goals Status */}
+                    <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top">
+                      {editable ? (
+                        <select
+                          value={entry.realizationStatus}
+                          onChange={(e) => {
+                            const nextReal = e.target.value as GoalRealizationStatus;
+                            updateEntry(goal.id, {
+                              realizationStatus: nextReal,
+                              ...(nextReal === "Terwujud"
+                                ? { realizationFactor: "", realizationReason: "" }
+                                : nextReal === "Tidak Terwujud"
+                                ? { achievementPct: "0", status: "Tidak Tercapai" }
+                                : {}),
+                            });
+                          }}
+                          className={`text-[11px] rounded-lg px-2.5 py-1.5 border outline-none cursor-pointer font-semibold w-full ${
+                            entry.realizationStatus === "Terwujud"
+                              ? "bg-teal-50 border-teal-200 text-teal-800"
+                              : entry.realizationStatus === "Tidak Terwujud"
+                              ? "bg-amber-50 border-amber-300 text-amber-800"
+                              : "bg-gray-50 border-gray-200 text-gray-400"
+                          }`}
+                        >
+                          <option value="">— Pilih Realisasi —</option>
+                          <option value="Terwujud">Terwujud</option>
+                          <option value="Tidak Terwujud">Tidak Terwujud</option>
+                        </select>
+                      ) : entry.realizationStatus ? (
+                        <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${
+                          entry.realizationStatus === "Terwujud" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${entry.realizationStatus === "Terwujud" ? "bg-teal-500" : "bg-amber-500"}`} />
+                          {entry.realizationStatus}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-gray-300 italic">—</span>
+                      )}
+
+                      {entry.realizationStatus === "Terwujud" && (
+                        renderEvidenceList(goal.id, entry.realizationEvidenceFiles ?? [], "realizationEvidenceFiles", realEvidenceRefs)
+                      )}
+
+                      {entry.realizationStatus === "Tidak Terwujud" && (
+                        <div className="flex flex-col gap-1.5 mt-2">
+                          {editable ? (
+                            <select
+                              value={entry.realizationFactor}
+                              onChange={(e) => updateEntry(goal.id, { realizationFactor: e.target.value as GoalReasonFactor })}
+                              className="text-[11px] rounded-lg px-2 py-1 border border-amber-300 bg-white text-amber-900 font-semibold outline-none"
+                            >
+                              <option value="">— Pilih Faktor Penyebab * —</option>
+                              <option value="Faktor Internal">Faktor Internal</option>
+                              <option value="Faktor Eksternal">Faktor Eksternal (Wajib Evidence)</option>
+                            </select>
+                          ) : entry.realizationFactor ? (
+                            <span className="inline-flex w-fit px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
+                              {entry.realizationFactor}
+                            </span>
+                          ) : null}
+                          {editable ? (
+                            <textarea
+                              rows={2}
+                              value={entry.realizationReason}
+                              onChange={(e) => updateEntry(goal.id, { realizationReason: e.target.value })}
+                              placeholder="Jelaskan alasan goal tidak terwujud..."
+                              className="text-[11px] border border-amber-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-amber-400 bg-amber-50/30 resize-none w-full"
+                            />
+                          ) : entry.realizationReason ? (
+                            <p className="text-[11px] text-amber-900 bg-amber-50 rounded-lg px-2.5 py-1.5">{entry.realizationReason}</p>
+                          ) : null}
+                          {renderEvidenceList(
+                            goal.id,
+                            entry.realizationEvidenceFiles ?? [],
+                            "realizationEvidenceFiles",
+                            realEvidenceRefs,
+                            entry.realizationFactor === "Faktor Eksternal" ? "Wajib · Eksternal" : undefined,
+                          )}
+                        </div>
+                      )}
                     </td>
                     {/* Target — read only */}
-                    <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top">
+                    <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top">
                       <span className="text-[11px] text-gray-500 leading-relaxed italic">{goal.target || "—"}</span>
                     </td>
-                    {/* Actual */}
-                    <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top">
+                    {/* Aktual */}
+                    <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top">
                       {editable ? (
-                        <input
-                          type="text"
+                        <textarea
+                          rows={2}
                           value={entry.actual}
                           onChange={(e) => updateEntry(goal.id, { actual: e.target.value })}
                           placeholder="Masukkan nilai aktual..."
-                          className="w-full text-[11px] border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-[#1A284F] bg-white"
+                          className="w-full text-[11px] border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-[#1A284F] bg-white resize-none"
                         />
                       ) : (
                         <span className="text-[11px] text-gray-700">{entry.actual || <span className="italic text-gray-300">—</span>}</span>
                       )}
                     </td>
-                    {/* Status */}
-                    <td className="border-t border-gray-100 border-l border-gray-100 px-4 py-3 align-top">
+                    {/* % Achievement */}
+                    <td className="border-t border-gray-100 border-l border-gray-100 px-3 py-3 align-top text-center">
+                      {editable ? (
+                        <div className="inline-flex items-center border rounded-lg overflow-hidden bg-white border-gray-200 focus-within:border-[#1A284F]">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            disabled={isTidakTerwujud}
+                            value={isTidakTerwujud ? "0" : entry.achievementPct}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === "") {
+                                updateEntry(goal.id, { achievementPct: "" });
+                                return;
+                              }
+                              const clamped = Math.max(0, Math.min(100, Number(raw)));
+                              updateEntry(goal.id, { achievementPct: String(clamped) });
+                            }}
+                            placeholder="0"
+                            className={`w-14 text-center text-xs font-bold py-1.5 px-1 outline-none ${isTidakTerwujud ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "text-[#1A284F]"}`}
+                          />
+                          <span className="pr-2 text-[11px] font-semibold text-gray-400">%</span>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-slate-100 text-[#1A284F] font-bold text-[11px]">
+                          {entry.achievementPct !== "" ? `${entry.achievementPct}%` : "—"}
+                        </span>
+                      )}
+                      {isTidakTerwujud && (
+                        <p className="text-[9px] text-amber-700 font-semibold mt-1">Otomatis 0% (Tidak Terwujud)</p>
+                      )}
+                    </td>
+                    {/* Achievement Target Status */}
+                    <td className="border-t border-gray-100 border-l border-gray-100 px-3.5 py-3 align-top">
                       {editable ? (
                         <select
                           value={entry.status}
-                          onChange={(e) => updateEntry(goal.id, { status: e.target.value as GoalAchievementStatus, alasanTidakTercapai: "", evidenceFiles: [] })}
+                          disabled={isTidakTerwujud}
+                          onChange={(e) => updateEntry(goal.id, { status: e.target.value as GoalAchievementStatus })}
                           className={`text-[11px] rounded-lg px-2.5 py-1.5 border outline-none cursor-pointer font-semibold w-full ${
                             entry.status === "Tercapai"
                               ? "bg-green-50 border-green-200 text-green-700"
                               : entry.status === "Tidak Tercapai"
                               ? "bg-red-50 border-red-200 text-red-700"
                               : "bg-gray-50 border-gray-200 text-gray-400"
-                          }`}
+                          } ${isTidakTerwujud ? "opacity-80 cursor-not-allowed" : ""}`}
                         >
                           <option value="">— Pilih Status</option>
                           <option value="Tercapai">Tercapai</option>
@@ -764,108 +1000,89 @@ function TargetVsActualSection({
                           <span className="text-[11px] text-gray-300 italic">—</span>
                         )
                       )}
+
+                      {entry.status === "Tercapai" && (
+                        renderEvidenceList(goal.id, entry.evidenceFiles ?? [], "evidenceFiles", evidenceRefs, "Wajib")
+                      )}
+
+                      {entry.status === "Tidak Tercapai" && (
+                        <div className="flex flex-col gap-1.5 mt-2">
+                          {editable ? (
+                            <select
+                              value={entry.achievementFactor}
+                              onChange={(e) => updateEntry(goal.id, { achievementFactor: e.target.value as GoalReasonFactor })}
+                              className="text-[11px] rounded-lg px-2 py-1 border border-rose-200 bg-white text-rose-800 font-semibold outline-none"
+                            >
+                              <option value="">— Pilih Faktor Penyebab * —</option>
+                              <option value="Faktor Internal">Faktor Internal</option>
+                              <option value="Faktor Eksternal">Faktor Eksternal</option>
+                            </select>
+                          ) : entry.achievementFactor ? (
+                            <span className="inline-flex w-fit px-2 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                              {entry.achievementFactor}
+                            </span>
+                          ) : null}
+                          {editable ? (
+                            <textarea
+                              rows={2}
+                              value={entry.alasanTidakTercapai}
+                              onChange={(e) => updateEntry(goal.id, { alasanTidakTercapai: e.target.value })}
+                              placeholder="Tuliskan alasan mengapa target tidak tercapai..."
+                              className="text-[11px] border border-rose-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-rose-400 bg-rose-50/30 resize-none w-full"
+                            />
+                          ) : (
+                            <p className="text-[11px] text-rose-700 leading-relaxed bg-rose-50 rounded-lg px-2.5 py-1.5">
+                              {entry.alasanTidakTercapai || <span className="italic text-gray-300">—</span>}
+                            </p>
+                          )}
+                          {renderEvidenceList(goal.id, entry.evidenceFiles ?? [], "evidenceFiles", evidenceRefs)}
+                          <div className="flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5 text-[10px] text-amber-800 leading-snug">
+                            <Info className="w-3 h-3 text-amber-600 shrink-0 mt-0.5" />
+                            <span>Tanpa lampiran evidence yang sesuai, nilai maksimal dari Approver pada goal ini adalah <strong>20%</strong>.</span>
+                          </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
-                  {/* Conditional sub-row: Alasan or Evidence */}
-                  {entry.status !== "" && (
-                    <tr className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
-                      <td colSpan={4} className="border-t border-dashed border-gray-100 px-4 pb-3 pt-0">
-                        <div className="ml-0 flex flex-col gap-2">
-                          {entry.status === "Tidak Tercapai" && (
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[10px] font-bold uppercase tracking-wide text-red-500">Alasan Tidak Tercapai</label>
-                              {editable ? (
-                                <textarea
-                                  rows={2}
-                                  value={entry.alasanTidakTercapai}
-                                  onChange={(e) => updateEntry(goal.id, { alasanTidakTercapai: e.target.value })}
-                                  placeholder="Tuliskan alasan mengapa target tidak tercapai..."
-                                  className="text-xs border border-red-200 rounded-lg px-3 py-2 outline-none focus:border-red-400 bg-red-50/30 resize-none w-full max-w-xl"
-                                />
-                              ) : (
-                                <p className="text-xs text-red-700 leading-relaxed bg-red-50 rounded-lg px-3 py-2 min-h-[36px] max-w-xl">
-                                  {entry.alasanTidakTercapai || <span className="italic text-gray-300">—</span>}
-                                </p>
-                              )}
-                            </div>
-                          )}
-
-                          {entry.status === "Tercapai" && (
-                            <div className="flex flex-col gap-1.5">
-                              <div className="flex items-center justify-between max-w-xl">
-                                <label className="text-[10px] font-bold uppercase tracking-wide text-green-700">Upload Evidence</label>
-                                {editable && (
-                                  <button
-                                    type="button"
-                                    onClick={() => evidenceRefs.current[goal.id]?.click()}
-                                    className="flex items-center gap-1 text-[10px] font-semibold text-green-700 hover:text-green-900 transition-colors"
-                                  >
-                                    <Upload className="w-3 h-3" />Upload
-                                  </button>
-                                )}
-                              </div>
-                              <input
-                                ref={(el) => { evidenceRefs.current[goal.id] = el; }}
-                                type="file"
-                                accept=".jpg,.jpeg,.png,.pdf,.xlsx,.xls"
-                                multiple
-                                className="hidden"
-                                onChange={(e) => { handleEvidenceUpload(goal.id, e.target.files); e.target.value = ""; }}
-                              />
-                              {entry.evidenceFiles.length === 0 ? (
-                                editable ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => evidenceRefs.current[goal.id]?.click()}
-                                    className="flex flex-col items-center gap-1.5 w-full max-w-xl py-3 border-2 border-dashed border-green-200 rounded-lg text-green-500 hover:bg-green-50 transition-colors"
-                                  >
-                                    <Upload className="w-4 h-4" />
-                                    <span className="text-[10px] font-semibold">Upload bukti (PDF, JPG, PNG, Excel)</span>
-                                  </button>
-                                ) : (
-                                  <p className="text-xs text-gray-400 italic">Belum ada evidence.</p>
-                                )
-                              ) : (
-                                <div className="flex flex-col gap-1 max-w-xl">
-                                  {entry.evidenceFiles.map((f, fi) => (
-                                    <div key={fi} className="flex items-center gap-2 px-2.5 py-1.5 bg-green-50 rounded-lg border border-green-100">
-                                      <Paperclip className="w-3 h-3 text-green-500 shrink-0" />
-                                      <span className="text-[11px] text-gray-700 flex-1 truncate">{f.name}</span>
-                                      <span className="text-[10px] text-gray-400 shrink-0">{formatSize(f.size)}</span>
-                                      {editable && (
-                                        <button
-                                          type="button"
-                                          onClick={() => updateEntry(goal.id, { evidenceFiles: entry.evidenceFiles.filter((_, ei) => ei !== fi) })}
-                                          className="ml-1 text-gray-400 hover:text-red-500 transition-colors"
-                                        >
-                                          <X className="w-3 h-3" />
-                                        </button>
-                                      )}
-                                    </div>
-                                  ))}
-                                  {editable && (
-                                    <button
-                                      type="button"
-                                      onClick={() => evidenceRefs.current[goal.id]?.click()}
-                                      className="flex items-center gap-1 text-[10px] text-green-600 hover:text-green-800 font-semibold mt-0.5 self-start transition-colors"
-                                    >
-                                      <Plus className="w-3 h-3" />Tambah file
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      {previewFile && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onClick={() => setPreviewFile(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3.5 bg-[#1A284F] text-white flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <FileText className="w-4 h-4 shrink-0" />
+                <span className="text-sm font-bold truncate">{previewFile.name}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {(previewFile.url || previewFile.dataUrl) && (
+                  <a href={previewFile.url || previewFile.dataUrl} download={previewFile.name} className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-white/15 hover:bg-white/25 text-xs font-semibold text-white">
+                    <Download className="w-3.5 h-3.5" /> Download
+                  </a>
+                )}
+                <button type="button" onClick={() => setPreviewFile(null)} className="text-white/80 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-5 bg-gray-100 flex items-center justify-center min-h-[380px]">
+              {(previewFile.url || previewFile.dataUrl) ? (
+                previewFile.type?.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp)$/i.test(previewFile.name) ? (
+                  <img src={previewFile.url || previewFile.dataUrl} alt={previewFile.name} className="max-h-[70vh] max-w-full object-contain rounded-xl bg-white p-2 shadow" />
+                ) : (
+                  <iframe src={previewFile.url || previewFile.dataUrl} title={previewFile.name} className="w-full h-[70vh] rounded-xl bg-white border border-gray-200" />
+                )
+              ) : (
+                <p className="text-xs text-gray-500">Pratinjau file tidak tersedia.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1084,10 +1301,28 @@ function SmartGoalsCheckInWorkspace({
     setTargetActuals(
       effectiveSource.map((g) => {
         const st = savedCheckIn.find((x) => x.goalId === g.id);
-        return {
+        const apMap = (st?.actionPlanStatuses as Record<number, LocalStatus> | undefined) ?? {};
+        const autoReal = deriveAutoRealizationFromActionPlans(g, apMap);
+        const rawPct =
+          st?.achievementPct != null && Number.isFinite(Number(st.achievementPct))
+            ? String(st.achievementPct)
+            : String(st?.achievement ?? "").replace("%", "").trim();
+        return applyGoalRealizationAndAchievementRules({
           goalId: g.id,
+          realizationStatus: (autoReal ?? (st?.realizationStatus as GoalRealizationStatus) ?? ""),
+          realizationFactor: (st?.realizationFactor as GoalReasonFactor) ?? "",
+          realizationReason: st?.realizationReason ?? "",
+          realizationEvidenceFiles: (st?.realizationEvidenceFiles ?? []).map((f) => ({
+            name: f.name,
+            size: f.size,
+            type: f.type || "application/octet-stream",
+            url: f.url,
+            dataUrl: f.url || f.dataUrl,
+          })),
           actual: st?.actual ?? "",
+          achievementPct: rawPct,
           status: (st?.targetAchievementStatus as GoalAchievementStatus) ?? "",
+          achievementFactor: (st?.achievementFactor as GoalReasonFactor) ?? "",
           alasanTidakTercapai: st?.alasanTidakTercapai ?? "",
           evidenceFiles: (st?.evidenceFiles ?? []).map((f) => ({
             name: f.name,
@@ -1096,7 +1331,7 @@ function SmartGoalsCheckInWorkspace({
             url: f.url,
             dataUrl: f.url || f.dataUrl,
           })),
-        };
+        });
       }),
     );
   };
@@ -1126,19 +1361,36 @@ function SmartGoalsCheckInWorkspace({
   const updateEntry = (goalId: number, updated: CheckInEntry) =>
     setEntries((prev) => {
       const next = prev.map((e) => e.goalId === goalId ? updated : e);
-      // Simpan draft tanpa men-trigger submitWorkflowModule / notifikasi
-      persistEntries(next, targetActuals, false);
+      const targetGoal = goals?.find((g) => g.id === goalId);
+      let nextTas = targetActuals;
+      if (targetGoal) {
+        const autoReal = deriveAutoRealizationFromActionPlans(targetGoal, updated.actionPlanStatuses);
+        if (autoReal) {
+          nextTas = targetActuals.map((ta) =>
+            ta.goalId === goalId
+              ? applyGoalRealizationAndAchievementRules({ ...ta, realizationStatus: autoReal })
+              : ta,
+          );
+          setTargetActuals(nextTas);
+        }
+      }
+      // Simpan draft ke Supabase tanpa men-trigger submitWorkflowModule / notifikasi
+      persistEntries(next, nextTas, false);
       return next;
     });
 
   // Persist helper
   const persistEntries = (ents: CheckInEntry[], tas: TargetActualEntry[], submitWorkflow = false) => {
+    const prevSaved = loadCheckInEntries(ownerUser.employeeId);
     const stored: StoredCheckInEntry[] = ents.map((e) => {
       const ta = tas.find((t) => t.goalId === e.goalId);
+      const prevOne = prevSaved.find((p) => p.goalId === e.goalId);
+      const parsedPct = ta?.achievementPct !== undefined && ta.achievementPct !== "" ? Number(ta.achievementPct) : null;
       return {
         goalId: e.goalId,
         actual: ta?.actual || e.actual,
-        achievement: e.achievement,
+        achievement: parsedPct !== null && Number.isFinite(parsedPct) ? `${parsedPct}%` : e.achievement,
+        achievementPct: parsedPct !== null && Number.isFinite(parsedPct) ? parsedPct : null,
         kendala: e.kendala,
         rencanaLanjut: e.rencanaLanjut,
         actionPlanStatuses: e.actionPlanStatuses as Record<number, string>,
@@ -1154,9 +1406,15 @@ function SmartGoalsCheckInWorkspace({
         actionPlanEvidence: Object.fromEntries(
           Object.entries(e.actionPlanExtras).map(([k, v]) => [Number(k), (v as ActionPlanExtra).evidence])
         ),
+        realizationStatus: ta?.realizationStatus ?? "",
+        realizationFactor: ta?.realizationFactor ?? "",
+        realizationReason: ta?.realizationReason ?? "",
+        realizationEvidenceFiles: ta?.realizationEvidenceFiles ?? [],
         targetAchievementStatus: ta?.status ?? "",
+        achievementFactor: ta?.achievementFactor ?? "",
         alasanTidakTercapai: ta?.alasanTidakTercapai ?? "",
         evidenceFiles: ta?.evidenceFiles ?? [],
+        inappropriateEvidenceByRole: prevOne?.inappropriateEvidenceByRole ?? {},
       };
     });
     saveCheckInEntries(stored, { submitWorkflow, employeeId: ownerUser.employeeId });
@@ -1220,14 +1478,35 @@ function SmartGoalsCheckInWorkspace({
       });
 
       if (!ta?.actual?.trim()) {
-        missing.push(`${goal.label} (Target vs Actual): Nilai Actual wajib diisi`);
+        missing.push(`${goal.label} (Goals Realization & Achievement): Nilai Aktual wajib diisi`);
+      }
+      if (!ta?.realizationStatus) {
+        missing.push(`${goal.label} (Goals Realization & Achievement): Realization Goals Status wajib dipilih`);
+      } else if (ta.realizationStatus === "Tidak Terwujud") {
+        if (!ta.realizationFactor) {
+          missing.push(`${goal.label} (Realization Goals Status): Faktor penyebab (Internal/Eksternal) wajib dipilih`);
+        }
+        if (!ta.realizationReason?.trim()) {
+          missing.push(`${goal.label} (Realization Goals Status): Alasan Tidak Terwujud wajib diisi`);
+        }
+        if (ta.realizationFactor === "Faktor Eksternal" && (ta.realizationEvidenceFiles?.length ?? 0) === 0) {
+          missing.push(`${goal.label} (Realization Goals Status): Evidence wajib diupload untuk Faktor Eksternal`);
+        }
+      }
+      if (ta?.achievementPct === undefined || String(ta.achievementPct).trim() === "") {
+        missing.push(`${goal.label} (Goals Realization & Achievement): % Achievement wajib diisi`);
       }
       if (!ta?.status) {
-        missing.push(`${goal.label} (Target vs Actual): Status pencapaian wajib dipilih`);
-      } else if (ta.status === "Tidak Tercapai" && !ta.alasanTidakTercapai.trim()) {
-        missing.push(`${goal.label} (Target vs Actual): Alasan Tidak Tercapai wajib diisi`);
+        missing.push(`${goal.label} (Achievement Target Status): Status pencapaian wajib dipilih`);
+      } else if (ta.status === "Tidak Tercapai") {
+        if (!ta.achievementFactor) {
+          missing.push(`${goal.label} (Achievement Target Status): Faktor penyebab (Internal/Eksternal) wajib dipilih`);
+        }
+        if (!ta.alasanTidakTercapai.trim()) {
+          missing.push(`${goal.label} (Achievement Target Status): Alasan Tidak Tercapai wajib diisi`);
+        }
       } else if (ta.status === "Tercapai" && (ta.evidenceFiles?.length ?? 0) === 0) {
-        missing.push(`${goal.label} (Target vs Actual): Evidence wajib diupload`);
+        missing.push(`${goal.label} (Achievement Target Status): Evidence wajib diupload`);
       }
     }
 

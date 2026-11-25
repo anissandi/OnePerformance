@@ -46,22 +46,29 @@ import {
   verifyEmployeePasswordLogin,
   type LoginMethodOption,
 } from "../store/loginManagementStore";
+import {
+  MASTER_COMPANY_UPDATED_EVENT,
+  getMasterCompanyLocations,
+  refreshMasterCompanyCatalogFromBackend,
+} from "./hr/settings/masterCompanyStore";
 
 function getUnitLogo(code: string): string {
-  if (code === "PSJ" || code === "PSG" || code === "PSKE") return logoPs;
+  const up = code.toUpperCase();
+  if (up === "PSJ" || up === "PSG" || up === "PSKE" || up.startsWith("PS")) return logoPs;
   if (code === "RSTM") return logoRstm;
   if (code === "GHS") return logoGhs;
   return logoRsup;
 }
 
-const locations = [
-  ...COMPANY_UNIT_LOCATIONS.map((loc) => ({
+function buildLoginLocations() {
+  const list = getMasterCompanyLocations();
+  return (list.length > 0 ? list : [...COMPANY_UNIT_LOCATIONS]).map((loc) => ({
     code: loc.code,
     company: loc.company,
     name: loc.fullName,
     logo: getUnitLogo(loc.code),
-  })),
-];
+  }));
+}
 
 const METHOD_LABELS: Record<LoginMethodOption, string> = {
   otp_telegram: "OTP Telegram",
@@ -76,7 +83,27 @@ export function LoginPage() {
   const { getUnitLoginConfig } = useLoginManagement();
   const [step, setStep] = useState<"select-company" | "login">("select-company");
   const [locOpen, setLocOpen] = useState(false);
+  const [locations, setLocations] = useState(() => buildLoginLocations());
   const [selectedLoc, setSelectedLoc] = useState(locations[0]);
+
+  useEffect(() => {
+    void refreshMasterCompanyCatalogFromBackend().then(() => {
+      const next = buildLoginLocations();
+      setLocations(next);
+      setSelectedLoc((prev) => next.find((l) => l.company === prev?.company) ?? next[0]);
+    });
+    const onMasterSync = () => {
+      const next = buildLoginLocations();
+      setLocations(next);
+      setSelectedLoc((prev) => next.find((l) => l.company === prev?.company) ?? next[0]);
+    };
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, onMasterSync);
+    window.addEventListener("pa-db-hydrated", onMasterSync);
+    return () => {
+      window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, onMasterSync);
+      window.removeEventListener("pa-db-hydrated", onMasterSync);
+    };
+  }, []);
   const [employeeId, setEmployeeId] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
@@ -328,7 +355,7 @@ export function LoginPage() {
                 <div className="mb-5 w-full max-w-xl rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-2.5 text-xs text-amber-800 flex items-start gap-2 shadow-sm">
                   <Clock className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
                   <span>
-                    Sesi login 30 menit Anda telah berakhir karena tidak aktif di halaman Sistem PA. Silakan pilih perusahaan dan login kembali.
+                    Sesi login Anda telah berakhir karena tidak aktif di halaman One Performance, Silahkan login kembali.
                   </span>
                 </div>
               )}
@@ -527,7 +554,7 @@ export function LoginPage() {
             <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800 flex items-start gap-2">
               <Clock className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
               <span>
-                Sesi login 30 menit Anda telah berakhir karena tidak aktif di halaman Sistem PA. Silakan login kembali.
+                Sesi login Anda telah berakhir karena tidak aktif di halaman One Performance, Silahkan login kembali.
               </span>
             </div>
           )}

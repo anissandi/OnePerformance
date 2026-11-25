@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Building2, CheckCircle2, Clock, Eye, Filter, Layers, RotateCcw, Settings, ShieldAlert, UserCheck, X } from "lucide-react";
+import { Building2, CheckCircle2, ChevronDown, ChevronRight, Clock, Eye, Filter, Layers, RotateCcw, Settings, ShieldAlert, UserCheck, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   acknowledgeSoyApproval,
@@ -25,8 +25,8 @@ import {
   isDirectorRoleOrGrouping,
 } from "../../store/authStore";
 import { hasRolePermission } from "../hr/settings/AccessManagement";
-import { BellCurveTagButton, GradeBellCurveModal } from "../../components/GradeBellCurveModal";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
+import { resolveGradeColorHex } from "../shared/scoringWeightStore";
 
 const STATUS_TONE: Record<SoyStatus, string> = {
   Pending: "bg-amber-50 text-amber-700 border-amber-200",
@@ -44,25 +44,32 @@ function pct(v: string) {
   return parseFloat(String(v).replace("%", "")) || 0;
 }
 
-const GRADE_TONE: Record<string, string> = {
-  "A+": "#7C3AED",
-  A: "#2563EB",
-  B: "#059669",
-  C: "#D97706",
-  D: "#EA580C",
-  E: "#DC2626",
+const DEFAULT_SCORING_GRADE_TONE: Record<string, string> = {
+  "A+": "#10B981",
+  A: "#3B82F6",
+  B: "#F59E0B",
+  C: "#EF4444",
+  D: "#DC2626",
+  E: "#991B1B",
 };
-const gradeTone = (g: string) => GRADE_TONE[g] ?? "#1A284F";
+const gradeTone = (g: string, companyName?: string) =>
+  resolveGradeColorHex(g, companyName) ?? DEFAULT_SCORING_GRADE_TONE[g] ?? "#1A284F";
 
 const UNIT_PILL_PALETTES = [
   "bg-sky-50 text-sky-700 border-sky-200",
-  "bg-violet-50 text-violet-700 border-violet-200",
   "bg-emerald-50 text-emerald-700 border-emerald-200",
   "bg-amber-50 text-amber-800 border-amber-200",
-  "bg-rose-50 text-rose-700 border-rose-200",
   "bg-teal-50 text-teal-700 border-teal-200",
-  "bg-indigo-50 text-indigo-700 border-indigo-200",
+  "bg-blue-50 text-blue-700 border-blue-200",
   "bg-orange-50 text-orange-700 border-orange-200",
+  "bg-cyan-50 text-cyan-700 border-cyan-200",
+];
+
+const SOFT_ROW_PALETTE = [
+  "bg-[#F6FAFF] hover:bg-[#EDF4FC]",
+  "bg-[#F4FBF9] hover:bg-[#EBF6F3]",
+  "bg-[#FFFBF4] hover:bg-[#FDF3E3]",
+  "bg-[#F8F9FC] hover:bg-[#EFF2F9]",
 ];
 
 const SECTION_HEAD_TONE: Record<string, string> = {
@@ -82,13 +89,22 @@ function GradeHead({ grade }: { grade: string }) {
   );
 }
 
-function ProportionTable({ title, rows, grades, tone = "division", selectedRowId, onRowClick }: {
+function ProportionTable({
+  title,
+  rows,
+  grades,
+  tone = "division",
+  selectedRowId,
+  actionTagLabel,
+  onActionTagClick,
+}: {
   title: string;
   rows: Array<{ id: string; label: string; parent?: string; hc: number; sharePct?: string; calcs: number[] }>;
   grades: SoyApprovalRecord["snapshot"]["calibrationGrades"];
   tone?: "unit" | "division" | "department";
   selectedRowId?: string | null;
-  onRowClick?: (rowId: string) => void;
+  actionTagLabel?: string;
+  onActionTagClick?: (rowId: string) => void;
 }) {
   const total = rows.reduce((s, r) => s + r.hc, 0);
   const colTotals = grades.map((_, gi) => rows.reduce((s, r) => s + (r.calcs[gi] ?? 0), 0));
@@ -121,23 +137,37 @@ function ProportionTable({ title, rows, grades, tone = "division", selectedRowId
               rows.map((r, ri) => {
                 const rowSum = r.calcs.reduce((a, b) => a + b, 0);
                 const isSelected = Boolean(selectedRowId && selectedRowId === r.id);
+                const tagPalette = UNIT_PILL_PALETTES[ri % UNIT_PILL_PALETTES.length];
                 return (
                 <tr
                   key={r.id}
-                  onClick={onRowClick ? () => onRowClick(r.id) : undefined}
                   className={`border-t border-gray-100 transition-colors ${
-                    onRowClick ? "cursor-pointer" : ""
-                  } ${
                     isSelected
-                      ? "bg-[#EBF2FA] hover:bg-[#E1ECF8]"
-                      : ri % 2 === 1
-                      ? "bg-gray-50/40 hover:bg-indigo-50/30"
-                      : "hover:bg-indigo-50/30"
+                      ? "bg-[#E2EEFB] hover:bg-[#D7E7F8]"
+                      : SOFT_ROW_PALETTE[ri % SOFT_ROW_PALETTE.length]
                   }`}
                 >
                   <td className="px-4 py-2.5">
-                    <span className="font-semibold text-gray-800">{r.label}</span>
-                    {r.parent && <span className="block text-[10px] text-gray-400">{r.parent}</span>}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div>
+                        <span className="font-semibold text-gray-800">{r.label}</span>
+                        {r.parent && <span className="block text-[10px] text-gray-400">{r.parent}</span>}
+                      </div>
+                      {actionTagLabel && onActionTagClick && (
+                        <button
+                          type="button"
+                          onClick={() => onActionTagClick(r.id)}
+                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? "bg-[#1A284F] text-white border-[#1A284F] shadow-2xs"
+                              : `${tagPalette} hover:opacity-90`
+                          }`}
+                        >
+                          {actionTagLabel}
+                          {isSelected ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     <span className="inline-flex min-w-[34px] justify-center rounded-md bg-[#1A284F]/[0.06] px-2 py-0.5 font-bold tabular-nums text-[#1A284F]">{r.hc}</span>
@@ -189,9 +219,10 @@ export function CalibrationSettingApproval() {
   const [records, setRecords] = useState<Record<string, SoyApprovalRecord>>(() => loadGroupSoyApprovals());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [unitFilterId, setUnitFilterId] = useState<string>("ALL");
+  const [drillUnitId, setDrillUnitId] = useState<string | null>(null);
+  const [drillDivId, setDrillDivId] = useState<string | null>(null);
   const [action, setAction] = useState<"Approved" | "Revision" | "Mengetahui" | null>(null);
   const [note, setNote] = useState("");
-  const [bellOpen, setBellOpen] = useState(false);
   const [authTick, setAuthTick] = useState(0);
   const [isHydratingSoy, setIsHydratingSoy] = useState(true);
 
@@ -235,6 +266,8 @@ export function CalibrationSettingApproval() {
 
   useEffect(() => {
     setUnitFilterId("ALL");
+    setDrillUnitId(null);
+    setDrillDivId(null);
   }, [selected?.unitId]);
 
   const getGroupRole = (rec: SoyApprovalRecord) => resolveGroupSoyRoleForUser(activeUser, rec.unitName, false);
@@ -340,41 +373,50 @@ export function CalibrationSettingApproval() {
     const idx = Math.max(0, list.findIndex((r) => r.unitId === unitId));
     return UNIT_PILL_PALETTES[idx % UNIT_PILL_PALETTES.length];
   };
-  const gradeCardTones: AnalyticsCardTone[] = ["plum", "navy", "emerald", "terracotta", "rose", "slate"];
+  const gradeCardTones: AnalyticsCardTone[] = ["emerald", "navy", "terracotta", "rose", "rose", "slate"];
 
-  // Baris Proporsi per Divisi & Proporsi per Departement sesuai filter Unit Usaha (atau gabungan Group)
+  // CALIBRATION.6: Tabel Proporsi per Divisi muncul hanya saat tag "Lihat Divisi" pada baris Unit Usaha diklik (diurutkan A-Z)
+  const activeDrillUnit = useMemo(
+    () => (drillUnitId ? memberUnitsAsCompany.find((u) => u.id === drillUnitId) ?? null : null),
+    [drillUnitId, memberUnitsAsCompany],
+  );
+
   const divisionTableRows = useMemo(() => {
-    if (!groupAlloc) return [];
-    const targetUnits = filteredUnit ? [filteredUnit] : memberUnitsAsCompany;
-    return targetUnits.flatMap((u) => {
-      const uAlloc = groupAlloc.perUnitAlloc[u.id];
-      return u.divisionProportions.map((d) => ({
-        id: `${u.id}::${d.id}`,
+    if (!groupAlloc || !activeDrillUnit) return [];
+    const uAlloc = groupAlloc.perUnitAlloc[activeDrillUnit.id];
+    return [...activeDrillUnit.divisionProportions]
+      .sort((a, b) => a.divisi.localeCompare(b.divisi, "id"))
+      .map((d) => ({
+        id: d.id,
         label: d.divisi,
-        parent: filteredUnit ? undefined : u.name,
         hc: d.hc,
+        sharePct: uAlloc && uAlloc.totalHC > 0 ? `${((d.hc / uAlloc.totalHC) * 100).toFixed(1)}%` : "0.0%",
         calcs: uAlloc?.divMatrix[d.id] ?? [],
       }));
-    });
-  }, [groupAlloc, filteredUnit, memberUnitsAsCompany]);
+  }, [groupAlloc, activeDrillUnit]);
 
+  const activeDrillDiv = useMemo(
+    () => (activeDrillUnit && drillDivId ? activeDrillUnit.divisionProportions.find((d) => d.id === drillDivId) ?? null : null),
+    [activeDrillUnit, drillDivId],
+  );
+
+  // CALIBRATION.6: Tabel Proporsi per Departemen muncul hanya saat tag "Lihat Departemen" pada baris Divisi diklik (diurutkan A-Z)
   const departmentTableRows = useMemo(() => {
-    if (!groupAlloc) return [];
-    const targetUnits = filteredUnit ? [filteredUnit] : memberUnitsAsCompany;
-    return targetUnits.flatMap((u) => {
-      const uAlloc = groupAlloc.perUnitAlloc[u.id];
-      return u.departemenenProportions.map((dep) => {
-        const divLabel = u.divisionProportions.find((d) => d.id === dep.divisiId)?.divisi ?? "";
-        return {
-          id: `${u.id}::${dep.id}`,
-          label: dep.departemen,
-          parent: filteredUnit ? divLabel : `${u.name} · ${divLabel}`,
-          hc: dep.hc,
-          calcs: uAlloc?.deptMatrix[dep.id] ?? [],
-        };
-      });
-    });
-  }, [groupAlloc, filteredUnit, memberUnitsAsCompany]);
+    if (!groupAlloc || !activeDrillUnit || !activeDrillDiv) return [];
+    const uAlloc = groupAlloc.perUnitAlloc[activeDrillUnit.id];
+    const depts = activeDrillUnit.departemenenProportions.filter((dep) => dep.divisiId === activeDrillDiv.id);
+    const sibHc = depts.reduce((s, x) => s + x.hc, 0);
+    return [...depts]
+      .sort((a, b) => a.departemen.localeCompare(b.departemen, "id"))
+      .map((dep) => ({
+        id: dep.id,
+        label: dep.departemen,
+        parent: activeDrillDiv.divisi,
+        hc: dep.hc,
+        sharePct: sibHc > 0 ? `${((dep.hc / sibHc) * 100).toFixed(1)}%` : "0.0%",
+        calcs: uAlloc?.deptMatrix[dep.id] ?? [],
+      }));
+  }, [groupAlloc, activeDrillUnit, activeDrillDiv]);
 
   if (!canUserAccessCalibrationSoyApproval(activeUser)) {
     return (
@@ -429,9 +471,6 @@ export function CalibrationSettingApproval() {
                         title={r.status}
                       />
                     </button>
-                    {active && (
-                      <BellCurveTagButton onClick={() => setBellOpen(true)} label="Grade Distribution (Bell Curve)" />
-                    )}
                   </React.Fragment>
                 );
               })}
@@ -574,14 +613,21 @@ export function CalibrationSettingApproval() {
                 />
               </div>
 
-              {/* Proporsi per Unit Usaha (tampil saat melihat cakupan Group) */}
+              {/* CALIBRATION.6: Proporsi per Unit Usaha dengan tag warna "Lihat Divisi" -> Proporsi per Divisi (A-Z) -> tag "Lihat Departemen" -> Proporsi per Departemen (A-Z) */}
               {groupAlloc && memberUnitsAsCompany.length > 0 && (
                 <ProportionTable
                   title={`Proporsi per Unit Usaha — ${selected.unitName}`}
                   tone="unit"
                   grades={activeGrades}
-                  selectedRowId={unitFilterId === "ALL" ? null : unitFilterId}
-                  onRowClick={(uid) => setUnitFilterId(unitFilterId === uid ? "ALL" : uid)}
+                  selectedRowId={drillUnitId}
+                  actionTagLabel="Lihat Divisi"
+                  onActionTagClick={(uid) => {
+                    setDrillUnitId((prev) => {
+                      const next = prev === uid ? null : uid;
+                      setDrillDivId(null);
+                      return next;
+                    });
+                  }}
                   rows={memberUnitsAsCompany.map((u) => ({
                     id: u.id,
                     label: u.name,
@@ -592,18 +638,25 @@ export function CalibrationSettingApproval() {
                 />
               )}
 
-              <ProportionTable
-                title={`Proporsi per Divisi — ${activeScopeLabel}`}
-                tone="division"
-                grades={activeGrades}
-                rows={divisionTableRows}
-              />
-              <ProportionTable
-                title={`Proporsi per Departement — ${activeScopeLabel}`}
-                tone="department"
-                grades={activeGrades}
-                rows={departmentTableRows}
-              />
+              {activeDrillUnit && (
+                <ProportionTable
+                  title={`Proporsi per Divisi — ${activeDrillUnit.name} (A–Z)`}
+                  tone="division"
+                  grades={activeGrades}
+                  selectedRowId={drillDivId}
+                  actionTagLabel="Lihat Departemen"
+                  onActionTagClick={(divId) => setDrillDivId((prev) => (prev === divId ? null : divId))}
+                  rows={divisionTableRows}
+                />
+              )}
+              {activeDrillUnit && activeDrillDiv && (
+                <ProportionTable
+                  title={`Proporsi per Departemen — ${activeDrillDiv.divisi} (${activeDrillUnit.name}) (A–Z)`}
+                  tone="department"
+                  grades={activeGrades}
+                  rows={departmentTableRows}
+                />
+              )}
 
               <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
                 <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Riwayat</p>
@@ -671,20 +724,6 @@ export function CalibrationSettingApproval() {
         </div>
       )}
 
-      {bellOpen && selected && activeGrades.length > 0 && (
-        <GradeBellCurveModal
-          mode="single"
-          title={`Grade Distribution (Bell Curve) — ${activeScopeLabel}`}
-          subtitle={`Proporsi & kuota grade HC Awal Tahun (SOY) · Total HC ${activeTotalHC}`}
-          rows={activeGrades.map((g, gi) => ({
-            grade: g.grade,
-            color: gradeTone(g.grade),
-            target: pct(g.proporsi),
-            targetCount: activeGradeTargets[gi] ?? 0,
-          }))}
-          onClose={() => setBellOpen(false)}
-        />
-      )}
 
       {action && selected && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setAction(null)}>

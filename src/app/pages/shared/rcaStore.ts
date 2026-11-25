@@ -195,7 +195,7 @@ export function submitRCAsForMonths(employeeId: string, monthLabels: string[]): 
   const modifiedRows: StoredRCASubmission[] = [];
   const today = formatTodayDDMMYYYY();
   const next = all.map((r) => {
-    const owned = Boolean(r.employeeId) && normalizeEmployeeId(r.employeeId) === normEmpId;
+    const owned = Boolean(r.employeeId) && normalizeEmployeeId(r.employeeId ?? "") === normEmpId;
     if (!owned || !months.has(r.monthLabel)) return r;
     if (isAllActionPlansCompleted(r)) {
       const closedRow = { ...r, employeeId: normEmpId, approvalStatus: "Closed", submittedDate: today };

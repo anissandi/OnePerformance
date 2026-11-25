@@ -6,6 +6,7 @@ import type { ManagedUser } from "./authStore";
  * Disimpan di backend (pa_kv_state) per pemberi delegasi agar berlaku lintas perangkat & sesi.
  */
 export const DELEGATION_KEY = "pa_approval_delegations_v2";
+export const TAKE_OVER_KEY = "pa_approval_takeovers_v1";
 export const DELEGATION_EVENT = "pa-delegations-updated";
 
 export interface DelegationAccess {
@@ -56,10 +57,92 @@ const EMPTY_DELEGATED_FLAGS: DelegatedModuleFlags = {
   approveMeasurement: false,
 };
 
+export interface TakeOverRecord {
+  /** Kunci = Employee ID bawahan yang di-take-over (uppercase) */
+  id: string;
+  subordinateEmployeeId: string;
+  takeOverByEmployeeId: string;
+  reason?: string;
+  active: boolean;
+  updatedAt: string;
+  updatedBy: string;
+  history: Array<{ at: string; by: string; action: string }>;
+}
+
 let _cachedDelegationsRaw: string | null | undefined = undefined;
 let _cachedDelegationsMap: Record<string, DelegationRecord> = {};
 let _cachedActiveDelegations: DelegationRecord[] = [];
 let _cachedDelegateFlagsByKey = new Map<string, DelegatedModuleFlags>();
+let _cachedTakeOversRaw: string | null | undefined = undefined;
+let _cachedTakeOversMap: Record<string, TakeOverRecord> = {};
+
+export function loadTakeOvers(): Record<string, TakeOverRecord> {
+  const rawStr = safeGetLocalRaw(TAKE_OVER_KEY);
+  if (_cachedTakeOversRaw === rawStr) {
+    return _cachedTakeOversMap;
+  }
+  const raw = loadPersistedState<Record<string, TakeOverRecord>>(TAKE_OVER_KEY, {});
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    _cachedTakeOversRaw = rawStr;
+    _cachedTakeOversMap = {};
+    return {};
+  }
+  const out: Record<string, TakeOverRecord> = {};
+  for (const [k, rec] of Object.entries(raw)) {
+    if (!rec || typeof rec !== "object") continue;
+    out[k] = {
+      ...rec,
+      active: Boolean(rec.active),
+      history: Array.isArray(rec.history) ? rec.history : [],
+    };
+  }
+  _cachedTakeOversRaw = rawStr;
+  _cachedTakeOversMap = out;
+  _cachedDelegateFlagsByKey = new Map();
+  return out;
+}
+
+export function saveTakeOver(
+  record: TakeOverRecord,
+  actor: { employeeId: string; name: string },
+  action: string,
+): TakeOverRecord {
+  const key = norm(record.subordinateEmployeeId);
+  const next: TakeOverRecord = {
+    ...record,
+    id: key,
+    subordinateEmployeeId: key,
+    takeOverByEmployeeId: norm(record.takeOverByEmployeeId),
+    updatedAt: new Date().toISOString(),
+    updatedBy: actor.name || actor.employeeId,
+    history: [...(record.history ?? []), { at: new Date().toISOString(), by: actor.name || actor.employeeId, action }].slice(-30),
+  };
+  const local = { ...loadTakeOvers(), [key]: next };
+  safeSetLocalJson(TAKE_OVER_KEY, local);
+  _cachedTakeOversRaw = undefined;
+  _cachedDelegateFlagsByKey = new Map();
+  void mergeKvMapRecord(TAKE_OVER_KEY, key, next);
+  void syncToSupabase({
+    audit: {
+      userId: actor.employeeId,
+      userName: actor.name,
+      action: "Update",
+      module: "Approval Management",
+      subModule: "Take Over Approval",
+      description: `${action} — Take Over ${key} oleh ${next.takeOverByEmployeeId || "-"} (${next.active ? "Aktif" : "Nonaktif"})`,
+    },
+  });
+  queueMicrotask(() => window.dispatchEvent(new Event(DELEGATION_EVENT)));
+  return next;
+}
+
+/** Daftar Employee ID bawahan yang saat ini sedang di-Take Over secara aktif oleh `superiorEmployeeId`. */
+export function getActiveTakenOverSubordinateIds(superiorEmployeeId: string): string[] {
+  if (!superiorEmployeeId) return [];
+  return Object.values(loadTakeOvers())
+    .filter((r) => r.active && Boolean(r.takeOverByEmployeeId) && sameEmp(r.takeOverByEmployeeId, superiorEmployeeId))
+    .map((r) => r.subordinateEmployeeId);
+}
 
 export function loadDelegations(): Record<string, DelegationRecord> {
   const rawStr = safeGetLocalRaw(DELEGATION_KEY);
@@ -194,10 +277,15 @@ export function getActiveDelegatorIdsForDelegate(
   moduleType: string,
   phase?: "setting" | "measurement",
 ): string[] {
-  if (!delegateEmployeeId || !moduleType) return [];
-  return Object.values(loadDelegations())
+  if (!delegateEmployeeId) return [];
+  const fromDelegations = moduleType
+    ? Object.values(loadDelegations())
     .filter((d) => sameEmp(d.delegateEmployeeId, delegateEmployeeId) && isDelegationEffective(d, moduleType, phase))
-    .map((d) => d.delegatorEmployeeId);
+    .map((d) => d.delegatorEmployeeId)
+    : [];
+  // Gabungkan bawahan yang di-Take Over aktif oleh atasan ini (berlaku untuk seluruh modul Approval & Assessment)
+  const fromTakeOvers = getActiveTakenOverSubordinateIds(delegateEmployeeId);
+  return Array.from(new Set([...fromDelegations, ...fromTakeOvers]));
 }
 
 /** Employee ID delegasi aktif milik approver `delegatorEmployeeId` untuk modul tsb. */
@@ -237,6 +325,11 @@ export function resolveActingApproverLabel(
   if (!target) return viewer.name;
   const ref = stage === "approver1" ? target.regNoAp1 : target.regNoAp2;
   if (userMatchesRef(viewer, ref)) return viewer.name;
+  const takenOverIds = getActiveTakenOverSubordinateIds(viewer.employeeId);
+  const takenSub = allUsers.find(
+    (u) => takenOverIds.some((id) => sameEmp(id, u.employeeId)) && userMatchesRef(u, ref),
+  );
+  if (takenSub) return `${viewer.name} | Take Over atas nama ${takenSub.name}`;
   const delegatorIds = getActiveDelegatorIdsForDelegate(viewer.employeeId, moduleType, phase);
   const delegator = allUsers.find(
     (u) => delegatorIds.some((id) => sameEmp(id, u.employeeId)) && userMatchesRef(u, ref),
@@ -299,7 +392,8 @@ export function getReceivedWorkspaceDelegations(
 export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): DelegatedModuleFlags {
   if (!delegateEmployeeId) return EMPTY_DELEGATED_FLAGS;
   loadDelegations();
-  if (_cachedActiveDelegations.length === 0) return EMPTY_DELEGATED_FLAGS;
+  const activeTakeOvers = getActiveTakenOverSubordinateIds(delegateEmployeeId);
+  if (_cachedActiveDelegations.length === 0 && activeTakeOvers.length === 0) return EMPTY_DELEGATED_FLAGS;
   const cacheKey = norm(delegateEmployeeId);
   const cached = _cachedDelegateFlagsByKey.get(cacheKey);
   if (cached) return cached;
@@ -308,8 +402,8 @@ export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): Dele
     kpiTracking: false,
     smartGoalsSetting: false,
     smartGoalsMeasurement: false,
-    approveSetting: false,
-    approveMeasurement: false,
+    approveSetting: activeTakeOvers.length > 0,
+    approveMeasurement: activeTakeOvers.length > 0,
   };
   for (const rec of _cachedActiveDelegations) {
     if (!sameEmp(rec.delegateEmployeeId, delegateEmployeeId)) continue;

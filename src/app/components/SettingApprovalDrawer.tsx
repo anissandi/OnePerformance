@@ -832,8 +832,6 @@ function KPIContent({ employeeId }: { employeeId: string }) {
     void fetchKpiAttachmentsForEmployee(employeeId).then((remoteAtts) => {
       if (!cancelled && remoteAtts.length > 0) {
         setKpiAttachments(remoteAtts);
-        const firstPdf = remoteAtts.find((a) => a.mimeType === "application/pdf" || /\.pdf$/i.test(a.name || ""));
-        if (firstPdf) setEmbeddedPdfId((prev) => prev ?? firstPdf.id);
       }
     });
     void fetchEmployeeKpiSettingsLive<StoredOwnerKpiItem>(employeeId).then((remoteItems) => {

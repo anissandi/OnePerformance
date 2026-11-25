@@ -1,5 +1,5 @@
 import { loadPersistedState, safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
-import { canonicalizeCompanyUnitName, getActiveUser } from "../../store/authStore";
+import { canonicalizeCompanyUnitName, getActiveUser, resolveEffectiveUserGrouping, type ManagedUser } from "../../store/authStore";
 
 export const BUILTIN_WEIGHT_COLUMNS = [
   { key: "operasional", label: "Operasional", groupName: "Operasional" },
@@ -262,6 +262,20 @@ export function getModuleWeightPercent(
   if (!raw || raw === "-") return 0;
   const num = parseFloat(String(raw).replace("%", "").trim());
   return Number.isFinite(num) ? num : fallbackPct;
+}
+
+export function resolveEmployeeModuleWeightPercent(
+  user?: Partial<ManagedUser> | null,
+  indikator = "Managerial Skill",
+  fallbackPct = 20,
+): number {
+  const active = user ?? getActiveUser();
+  const company = String(active?.company ?? "").trim();
+  const grouping = active && "employeeId" in active && active.employeeId
+    ? resolveEffectiveUserGrouping(active as ManagedUser)
+    : active?.groupings;
+  const pct = getModuleWeightPercent(company, grouping, indikator, fallbackPct);
+  return pct > 0 ? pct : fallbackPct;
 }
 
 export function getModuleWeightFraction(

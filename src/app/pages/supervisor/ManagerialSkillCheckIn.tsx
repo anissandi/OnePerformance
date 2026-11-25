@@ -1,9 +1,12 @@
 import { useState, useEffect } from "react";
-import { X, CheckCircle2, FileCheck } from "lucide-react";
-import { saveMSSelfRatings, loadMSSelfRatings } from "../shared/msStore";
+import { X, CheckCircle2, FileCheck, Lock } from "lucide-react";
+import { saveMSSelfRatings, saveMSDraftRatings, loadMSSelfRatings } from "../shared/msStore";
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import { formatTodayDDMMYYYY } from "../../utils/dateFormat";
+import { useAuthStore } from "../../store/authStore";
+import { resolveEmployeeModuleWeightPercent, SCORE_WEIGHT_EVENT } from "../shared/scoringWeightStore";
+import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -107,8 +110,6 @@ export function saveMasterMSItems(items: MSItem[]): void {
   });
 }
 
-const PERCENTAGE = 20;
-
 // ─── Indicator Modal ──────────────────────────────────────────────────────────
 
 function IndicatorModal({ item, onClose }: { item: MSItem; onClose: () => void }) {
@@ -199,46 +200,91 @@ function SuccessModal({ onClose }: { onClose: () => void }) {
 type Ratings = Record<number, number | null>;
 
 export function SupervisorManagerialSkillCheckIn() {
+  const { activeUser } = useAuthStore();
   const [msItems, setMsItems] = useState<MSItem[]>(() => loadMasterMSItems());
   const [ratings, setRatings] = useState<Ratings>(() => {
-    const stored = loadMSSelfRatings();
+    const stored = loadMSSelfRatings(activeUser.employeeId);
     return stored ? stored.ratings as Ratings : {};
   });
   const [saved, setSaved] = useState(false);
   const [modalItem, setModalItem] = useState<MSItem | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    const onHydrated = () => setMsItems(loadMasterMSItems());
+    const onHydrated = () => {
+      setMsItems(loadMasterMSItems());
+      const stored = loadMSSelfRatings(activeUser.employeeId);
+      if (stored) setRatings(stored.ratings as Ratings);
+      setTick((t) => t + 1);
+    };
     window.addEventListener("pa-db-hydrated", onHydrated);
-    return () => window.removeEventListener("pa-db-hydrated", onHydrated);
-  }, []);
+    window.addEventListener("appraisal-updated", onHydrated);
+    window.addEventListener(SCORE_WEIGHT_EVENT, onHydrated);
+    return () => {
+      window.removeEventListener("pa-db-hydrated", onHydrated);
+      window.removeEventListener("appraisal-updated", onHydrated);
+      window.removeEventListener(SCORE_WEIGHT_EVENT, onHydrated);
+    };
+  }, [activeUser.employeeId]);
+
+  void tick;
+  const moduleWeightPct = resolveEmployeeModuleWeightPercent(activeUser, "Managerial Skill", 20);
+  const storedSelf = loadMSSelfRatings(activeUser.employeeId);
+  const wfRec = loadWorkflowRecords().find(
+    (r) =>
+      r.year === "2026" &&
+      r.phase === "measurement" &&
+      r.module === "Managerial Skill" &&
+      r.employeeId === normalizeEmployeeId(activeUser.employeeId),
+  );
+  const isRevision =
+    wfRec?.decisions.approver1?.status === "Revision" ||
+    wfRec?.decisions.approver2?.status === "Revision";
+  const isSubmittedLocked = Boolean(
+    storedSelf && !storedSelf.isDraft && storedSelf.submittedAt && !isRevision,
+  );
 
   const totalScore = msItems.reduce((sum, item) => sum + (ratings[item.no] ?? 0), 0);
   const rated = msItems.filter((item) => ratings[item.no] != null).length;
   const allRated = rated === msItems.length;
+  const avgScore = rated > 0 ? totalScore / rated : 0;
+  const weightedSelfScore = (avgScore / 5) * moduleWeightPct;
 
   const setRating = (no: number, val: number) => {
+    if (isSubmittedLocked) return;
     setSaved(false);
     setRatings((prev) => ({ ...prev, [no]: val }));
   };
 
-  const saveForm = () => setSaved(true);
+  const saveForm = () => {
+    if (isSubmittedLocked) return;
+    const cleanRatings = Object.fromEntries(
+      Object.entries(ratings).filter(([, v]) => v != null).map(([k, v]) => [Number(k), Number(v)]),
+    );
+    saveMSDraftRatings(cleanRatings, totalScore);
+    setSaved(true);
+  };
 
   const resetForm = () => {
+    if (isSubmittedLocked) return;
     setRatings({});
     setSaved(false);
+    saveMSDraftRatings({}, 0);
   };
 
   const handleConfirmSubmit = () => {
+    if (isSubmittedLocked) return;
     setShowConfirm(false);
     setShowSuccess(true);
     saveMSSelfRatings({
       ratings: ratings as Record<number, number>,
       totalScore,
       submittedAt: formatTodayDDMMYYYY(),
+      isDraft: false,
     });
+    setTick((t) => t + 1);
   };
 
   return (
@@ -257,7 +303,7 @@ export function SupervisorManagerialSkillCheckIn() {
       <div className="flex items-center justify-between bg-[#1A284F] text-white px-5 py-3 rounded-lg mb-4 shrink-0">
         <span className="text-sm font-bold tracking-wide">KEPEMIMPINAN DAN KETERAMPILAN MANAJERIAL (MANAGERIAL SKILLS)</span>
         <span className="text-xs font-semibold bg-[#C69A45] text-white px-3 py-1 rounded whitespace-nowrap">
-          ({PERCENTAGE}%) Nilai Total
+          ({moduleWeightPct}%) Nilai Rata-Rata
         </span>
       </div>
 
@@ -303,10 +349,13 @@ export function SupervisorManagerialSkillCheckIn() {
                         {[1,2,3,4,5].map((n) => (
                           <button
                             key={n}
+                            disabled={isSubmittedLocked}
                             onClick={() => setRating(item.no, n)}
                             className={`w-8 h-8 rounded border text-xs font-semibold transition-colors ${
                               selected === n
                                 ? "bg-[#1A284F] text-white border-[#1A284F]"
+                                : isSubmittedLocked
+                                ? "border-gray-200 text-gray-300 cursor-not-allowed bg-gray-50"
                                 : "border-gray-300 text-gray-600 hover:border-[#1A284F] hover:text-[#1A284F]"
                             }`}
                           >
@@ -322,10 +371,13 @@ export function SupervisorManagerialSkillCheckIn() {
               {/* Total row */}
               <tr className="bg-gray-50 border-t border-gray-200">
                 <td colSpan={3} className="py-3 px-4 text-sm font-bold text-gray-800 border-r border-gray-200 text-right">
-                  ({PERCENTAGE}%) Nilai Total
+                  ({moduleWeightPct}%) Nilai Rata-Rata
                 </td>
                 <td className="py-3 px-4 text-center font-bold text-[#1A284F]">
-                  {totalScore}
+                  <div>{rated > 0 ? avgScore.toFixed(2) : "0.00"} <span className="text-xs font-normal text-gray-400">/ 5.00</span></div>
+                  <div className="text-[11px] font-semibold text-emerald-700 mt-0.5">
+                    Konversi Bobot: {weightedSelfScore.toFixed(2)}%
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -335,18 +387,26 @@ export function SupervisorManagerialSkillCheckIn() {
 
       {/* Sticky bottom bar */}
       <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-4 py-3 flex items-center justify-between z-10 gap-4">
-        {saved ? (
+        {isSubmittedLocked ? (
+          <div className="flex-1 flex items-center gap-2.5 bg-blue-50/70 border border-blue-200 rounded-lg px-4 py-2.5">
+            <Lock className="w-4 h-4 text-[#1A284F] shrink-0" />
+            <p className="text-sm font-medium text-[#1A284F]">
+              Form Managerial Skill telah disubmit pada <span className="font-bold">{storedSelf?.submittedAt}</span> dan bersifat read-only selama proses evaluasi Approver. Nilai Rata-Rata Pribadi: <span className="font-bold">{avgScore.toFixed(2)}</span> ({weightedSelfScore.toFixed(2)}%).
+            </p>
+          </div>
+        ) : saved ? (
           <>
             <div className="flex-1 flex items-center gap-2 bg-green-50 border border-green-200 rounded px-4 py-2.5">
               <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
               <p className="text-sm font-medium text-green-800">
-                Form berhasil disimpan. Total Nilai: <span className="font-bold">{totalScore}</span>
+                Draft berhasil disimpan ke database. Nilai Rata-Rata: <span className="font-bold">{avgScore.toFixed(2)}</span> ({weightedSelfScore.toFixed(2)}%)
               </p>
             </div>
             <button onClick={resetForm} className="px-5 py-2 border border-gray-300 rounded text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shrink-0">Reset</button>
             <button
               onClick={() => setShowConfirm(true)}
-              className="px-6 py-2 bg-[#C69A45] text-white rounded text-sm font-semibold hover:bg-[#b38a3a] transition-colors shrink-0"
+              disabled={!allRated}
+              className="px-6 py-2 bg-[#C69A45] text-white rounded text-sm font-semibold hover:bg-[#b38a3a] transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Submit Form
             </button>
@@ -355,13 +415,13 @@ export function SupervisorManagerialSkillCheckIn() {
           <>
             <p className="text-sm text-gray-500">
               <span className="font-semibold text-gray-800">{rated}</span> dari{" "}
-              <span className="font-semibold text-gray-800">{MS_ITEMS.length}</span> kompetensi telah dinilai
+              <span className="font-semibold text-gray-800">{msItems.length}</span> kompetensi telah dinilai
             </p>
             <div className="flex items-center gap-3">
               <button onClick={resetForm} className="px-5 py-2 border border-gray-300 rounded text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Reset</button>
               <button
                 onClick={saveForm}
-                disabled={!allRated}
+                disabled={rated === 0}
                 className="px-5 py-2 bg-[#1A284F] text-white rounded text-sm font-medium hover:bg-[#131d3b] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Save

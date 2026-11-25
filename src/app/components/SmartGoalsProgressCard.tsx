@@ -12,18 +12,25 @@ interface Props {
   getActionPlanStatus: (goalId: string | number, apId: string | number) => string;
   /** Status Target vs Actual: Tercapai | Tidak Tercapai | "" */
   getGoalStatus: (goalId: string | number) => string;
+  /** Status Realization Goals: Terwujud | Tidak Terwujud | "" */
+  getRealizationStatus?: (goalId: string | number) => string;
   /** "dark" = kartu gradasi biru penuh, "light" = hanya header biru dongker. */
   variant?: "dark" | "light";
 }
 
-export function computeSmartGoalsProgress({ goals, getActionPlanStatus, getGoalStatus }: Omit<Props, "variant">) {
+export function computeSmartGoalsProgress({ goals, getActionPlanStatus, getGoalStatus, getRealizationStatus }: Omit<Props, "variant">) {
   let tercapai = 0, tidakTercapai = 0, belumDinilai = 0;
+  let terwujud = 0, tidakTerwujud = 0, belumRealisasi = 0;
   let selesai = 0, sedang = 0, belum = 0, batal = 0, kosong = 0;
   goals.forEach((g) => {
     const gs = getGoalStatus(g.id);
     if (gs === "Tercapai") tercapai++;
     else if (gs === "Tidak Tercapai") tidakTercapai++;
     else belumDinilai++;
+    const rs = getRealizationStatus ? getRealizationStatus(g.id) : "";
+    if (rs === "Terwujud") terwujud++;
+    else if (rs === "Tidak Terwujud") tidakTerwujud++;
+    else belumRealisasi++;
     g.actionPlanIds.forEach((apId) => {
       const s = getActionPlanStatus(g.id, apId);
       if (s === "Selesai") selesai++;
@@ -43,8 +50,10 @@ export function computeSmartGoalsProgress({ goals, getActionPlanStatus, getGoalS
   return {
     totalGoals, totalAPs, closedGoals, openGoals, closedAPs, openAPs,
     goalsPct: totalGoals ? Math.round((closedGoals / totalGoals) * 100) : 0,
+    realizationPct: totalGoals ? Math.round((terwujud / totalGoals) * 100) : 0,
     apPct: totalAPs ? Math.round((closedAPs / totalAPs) * 100) : 0,
     goalBreakdown: { tercapai, tidakTercapai, belumDinilai },
+    realizationBreakdown: { terwujud, tidakTerwujud, belumRealisasi },
     apBreakdown: { selesai, sedang, belum, batal, kosong },
   };
 }
@@ -89,7 +98,9 @@ export function SmartGoalsProgressCard({ variant: _variant = "light", ...rest }:
             <div className="w-full h-1.5 rounded-full bg-sky-100 overflow-hidden">
               <div className="h-full bg-sky-600 rounded-full transition-all" style={{ width: `${p.goalsPct}%` }} />
             </div>
-            <span className="text-[10px] font-medium text-slate-500">{p.goalsPct}% Tercapai</span>
+            <span className="text-[10px] font-medium text-slate-500">
+              {rest.getRealizationStatus ? `${p.realizationPct}% Terwujud · ${p.goalsPct}% Tercapai` : `${p.goalsPct}% Tercapai`}
+            </span>
           </div>
         </div>
 
@@ -132,6 +143,12 @@ export function SmartGoalsProgressCard({ variant: _variant = "light", ...rest }:
             </span>
           </div>
           <div className="flex flex-col gap-1.5">
+            {rest.getRealizationStatus && (
+              <div className="grid grid-cols-2 gap-1.5 pb-1 border-b border-indigo-100/80">
+                <StatusItem name="Terwujud" value={p.realizationBreakdown.terwujud} dot="bg-teal-500" tone="text-teal-700" />
+                <StatusItem name="Tidak Terwujud" value={p.realizationBreakdown.tidakTerwujud} dot="bg-amber-500" tone="text-amber-700" />
+              </div>
+            )}
             <StatusItem name="Tercapai" value={p.goalBreakdown.tercapai} dot="bg-emerald-500" tone="text-emerald-700" />
             <StatusItem name="Tidak Tercapai" value={p.goalBreakdown.tidakTercapai} dot="bg-rose-500" tone="text-rose-600" />
             {p.goalBreakdown.belumDinilai > 0 && (

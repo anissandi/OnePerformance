@@ -3,6 +3,7 @@ import {
   computeKPIAchievement,
   computePolaritasAchievementPct,
   computeTotal2026,
+  doesKpiSubRowRequireRca,
   findMatchingRcaForSubItem,
   parseBobotDecimal,
   type KPIItem,
@@ -10,6 +11,7 @@ import {
 import type { MonthEntry } from "../pages/employee/KPIPage";
 import type { StoredRCASubmission } from "../pages/shared/rcaStore";
 import type { EditedKpiCellDiff } from "../pages/shared/appraisalWorkflowStore";
+import { computeKpiColorBandAchievementPct } from "../utils/kpiNumberAndPeriod";
 import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -84,13 +86,11 @@ export function KPITableView({
     const spec = sub.compute;
 
     if (spec.type === "color_band") {
-      const flagRaw = (cells[monthId]?.[`${kpi.no}__${spec.flagIdx}`] ?? "").trim();
-      if (!flagRaw) return "—";
-      if (flagRaw === "100" || flagRaw === "100%") return "100.0%";
-      if (flagRaw === "75" || flagRaw === "75%") return "75.0%";
-      if (flagRaw === "0" || flagRaw === "0%") return "0.0%";
-      const fn = parseNum(flagRaw);
-      return fn !== null ? `${fn.toFixed(1)}%` : "—";
+      const actBand = (cells[monthId]?.[`${kpi.no}__${spec.actualIdx}`] ?? "").trim();
+      const tgtBand = (cells[monthId]?.[`${kpi.no}__${spec.targetIdx}`] || resolveFallbackTarget(kpi, monthId)).trim();
+      if (!actBand) return "—";
+      const pct = computeKpiColorBandAchievementPct(actBand, tgtBand);
+      return pct !== null ? `${pct.toFixed(1)}%` : "—";
     }
     
     if (spec.type === "ratio") {
@@ -299,15 +299,23 @@ export function KPITableView({
                         ? editedCellsDiff?.[`${m.id}::${kpi.no}__${subIdx}`]
                         : undefined;
                       const cellColorCls = isComputed ? getPctColor(val) : "";
-                      const numVal = isComputed ? parseNum(val) : null;
+                      const getRawForMonth = (idx: number) => {
+                        const raw = cells[m.id]?.[`${kpi.no}__${idx}`] ?? "";
+                        const sr = kpi.subRows[idx];
+                        if (sr && !sr.compute && sr.label.toLowerCase().startsWith("target") && !raw) {
+                          return resolveFallbackTarget(kpi, m.id);
+                        }
+                        return raw;
+                      };
+                      const needsRca = isItemComputed && doesKpiSubRowRequireRca(kpi, subIdx, getRawForMonth, val);
                       const matchedRCA =
-                        isItemComputed && numVal !== null && numVal < 100
+                        needsRca
                           ? findMatchingRcaForSubItem(rcaSubmissions, kpi, subIdx, m)
                           : isItemComputed
                           ? findMatchingRcaForSubItem(rcaSubmissions, kpi, subIdx, m)
                           : undefined;
                       const showRcaTrigger =
-                        isItemComputed && ((numVal !== null && numVal < 100) || Boolean(matchedRCA));
+                        isItemComputed && (needsRca || Boolean(matchedRCA));
 
                       return (
                         <td key={m.id} className={`border border-gray-200 text-center py-1.5 px-1.5 ${

@@ -303,9 +303,8 @@ export function computePolaritasAchievementPct(
       return actual === 0 ? 0 : Math.max(0, (hi / actual) * 100);
     }
     if (targetNum === 0) return actual === 0 ? 100 : 0;
-    if (actual === targetNum) return 100;
-    if (actual < targetNum) return Math.max(0, (actual / targetNum) * 100);
-    return actual === 0 ? 0 : Math.max(0, (targetNum / actual) * 100);
+    // Perhitungan % Pencapaian normal: (Actual / Target) * 100%
+    return Math.max(0, (actual / targetNum) * 100);
   }
   if (effectivePol === "Minimize") {
     if (targetNum === 0) return actual <= 0 ? 100 : 0;
@@ -313,6 +312,47 @@ export function computePolaritasAchievementPct(
   }
   if (targetNum === 0) return actual >= 0 ? 100 : 0;
   return Math.max(0, (actual / targetNum) * 100);
+}
+
+/**
+ * Menentukan apakah suatu baris komputasi KPI Tracking memicu kewajiban RCA:
+ * - Polaritas Stabilize (target angka tunggal): toleransi ±5% (0.95*T <= actual <= 1.05*T) TIDAK memicu RCA;
+ *   di luar ±5% (< 95% atau > 105% dari target) memicu RCA.
+ * - Polaritas Maximize / Minimize / lainnya: memicu RCA apabila % Pencapaian < 100%.
+ */
+export function doesKpiSubRowRequireRca(
+  kpi: KPIItem,
+  subIdx: number,
+  getRaw: (idx: number) => string,
+  computedValStr?: string,
+): boolean {
+  const sub = kpi.subRows[subIdx];
+  if (!sub?.compute || sub.compute.type === "avg") return false;
+  const spec = sub.compute;
+  const effectivePol: Polaritas = spec.type === "ratio" && spec.minimize ? "Minimize" : kpi.polaritas;
+  if (effectivePol === "Stabilize" && spec.type === "ratio") {
+    const rawTarget = getRaw(spec.targetIdx).trim();
+    const rangeMatch = rawTarget
+      .replace(/,/g, "")
+      .match(/^\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*$/);
+    const actual = parseNum(getRaw(spec.actualIdx));
+    if (actual === null) return false;
+    if (rangeMatch) {
+      const a = parseFloat(rangeMatch[1]);
+      const b = parseFloat(rangeMatch[2]);
+      const lo = Math.min(a, b);
+      const hi = Math.max(a, b);
+      return actual < lo || actual > hi;
+    }
+    const target = parseNum(rawTarget);
+    if (target === null) return false;
+    if (target === 0) return actual !== 0;
+    const tolerance = Math.abs(target) * 0.05;
+    return Math.abs(actual - target) > tolerance + 1e-9;
+  }
+  const valStr = computedValStr ?? computeCell(kpi.subRows, getRaw, subIdx, kpi.polaritas);
+  const n = parseNum(valStr);
+  return n !== null && n < 100;
 }
 
 /**
@@ -2660,12 +2700,16 @@ function EditRequestModal({
   ownerUser,
   kpiItems,
   months,
+  isBusinessWorkspace = false,
+  isCurrentTabValidated = false,
   onCancel,
   onConfirm,
 }: {
   ownerUser: ManagedUser;
   kpiItems: KPIItem[];
   months: MonthEntry[];
+  isBusinessWorkspace?: boolean;
+  isCurrentTabValidated?: boolean;
   onCancel: () => void;
   onConfirm: (targets: { kpiNo: string; monthId: string }[], reason: string) => void;
 }) {
@@ -2673,6 +2717,19 @@ function EditRequestModal({
   const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
   const [reason, setReason] = useState("");
   const chainInfo = resolveKpiTrackingEditChain(ownerUser);
+  const monthStatusMap = (() => {
+    const map = new Map<string, KpiMonthState>();
+    if (isBusinessWorkspace) {
+      months.forEach((m) => {
+        map.set(m.label, isCurrentTabValidated ? "validated" : "pending");
+      });
+      return map;
+    }
+    for (const entry of getKpiMonthStatuses(ownerUser.employeeId)) {
+      map.set(entry.label, entry.state);
+    }
+    return map;
+  })();
 
   const toggleKpi = (no: string) =>
     setSelectedKpis((prev) => (prev.includes(no) ? prev.filter((x) => x !== no) : [...prev, no]));
@@ -2816,25 +2873,55 @@ function EditRequestModal({
           <div className="flex flex-col gap-2">
             <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">
               Pilih Bulan yang ingin diedit{" "}
-              <span className="text-red-500 normal-case font-normal">* wajib pilih</span>
+              <span className="text-red-500 normal-case font-normal">* wajib pilih (hanya bulan berstatus Validated)</span>
             </p>
             <div className="flex flex-wrap gap-2">
               {months.map((m) => {
                 const active = selectedMonths.includes(m.id);
-                return (
+                const mState = monthStatusMap.get(m.label) ?? "not_submitted";
+                const isValidatedMonth = mState === "validated";
+                const isPendingMonth = mState === "pending";
+                const btnNode = (
                   <button
                     key={m.id}
-                    onClick={() => toggleMonth(m.id)}
+                    type="button"
+                    disabled={!isValidatedMonth}
+                    onClick={() => {
+                      if (!isValidatedMonth) return;
+                      toggleMonth(m.id);
+                    }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                      active
-                        ? "bg-[#1A284F] text-white border-[#1A284F]"
-                        : "bg-white text-gray-600 border-gray-200 hover:border-[#1A284F] hover:text-[#1A284F]"
+                      !isValidatedMonth
+                        ? isPendingMonth
+                          ? "bg-amber-50 text-amber-700 border-amber-300 cursor-not-allowed opacity-85"
+                          : "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                        : active
+                        ? "bg-emerald-600 text-white border-emerald-600 ring-2 ring-emerald-200"
+                        : "bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100"
                     }`}
                   >
                     {displayMonth(m.label)}
                   </button>
                 );
+                if (!isValidatedMonth) {
+                  return (
+                    <Tooltip key={m.id}>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">{btnNode}</span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="bg-[#1A284F] text-white text-[11px] px-2.5 py-1.5 rounded-lg shadow-lg z-[80]">
+                        status belum submit/dalam proses approval
+                      </TooltipContent>
+                    </Tooltip>
+                  );
+                }
+                return btnNode;
               })}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-[10px] text-gray-500 pt-0.5">
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Validated (Dapat dipilih)</span>
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400" /> Dalam proses approval (Read-only)</span>
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> Belum disubmit (Read-only)</span>
             </div>
           </div>
 
@@ -3126,10 +3213,17 @@ function KPITable({
                     <div className="flex flex-col items-center gap-1">
                       <span className={`font-bold ${getPctColor(val)}`}>{val || "—"}</span>
                       {(() => {
-                        const n = parseNum(val);
                         // Hide RCA tag on "% Pencapaian Total" (avg of multiple sub-rows)
                         if (sub.compute?.type === "avg") return null;
-                        if (n !== null && n < 100) {
+                        const getRawForCell = (idx: number) => {
+                          const cellVal = cells[m.id]?.[ck(kpi.no, idx)] ?? "";
+                          const sRow = kpi.subRows[idx];
+                          if (sRow && !sRow.compute && sRow.label.toLowerCase().startsWith("target") && !cellVal) {
+                            return resolveKpiMonthTarget(kpi, m.label);
+                          }
+                          return cellVal;
+                        };
+                        if (doesKpiSubRowRequireRca(kpi, si, getRawForCell, val)) {
                           const subMeta = getKpiSubItemMeta(kpi, si, m.id);
                           const rcaKey = subMeta.rcaKey;
                           // Derive status: inline rcaMap entry (proper status check), then stored, then none
@@ -5091,7 +5185,8 @@ function KPIWorkspace({
             return storedVal;
           };
           const n = parseNum(computeCell(kpi.subRows, getRaw, si, kpi.polaritas));
-          if (n === null || n >= 100) return;
+          void n;
+          if (!doesKpiSubRowRequireRca(kpi, si, getRaw)) return;
           const subMeta = getKpiSubItemMeta(kpi, si, m.id);
           const inlineEntry = rcaMap[subMeta.rcaKey] ?? (!subMeta.isMultiItem ? rcaMap[subMeta.legacyRcaKey] : undefined);
           const status: RCAStatus = inlineEntry
@@ -5973,6 +6068,8 @@ function KPIWorkspace({
           ownerUser={activeUser}
           kpiItems={isBusinessWorkspace ? businessTrackingItems : trackingKpiItems}
           months={months}
+          isBusinessWorkspace={isBusinessWorkspace}
+          isCurrentTabValidated={isCurrentTabValidated}
           onCancel={() => setShowEditRequest(false)}
           onConfirm={(targets, reason) => {
             const activeList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
@@ -6258,8 +6355,8 @@ export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCA
         if (!sub.compute || sub.compute.type === "avg") continue;
         const getRaw = (idx: number) => mCells[ck(kpi.no, idx)] ?? "";
         const val = computeCell(kpi.subRows, getRaw, si, kpi.polaritas);
-        const n = parseNum(val);
-        if (n === null || n >= 100) continue;
+        if (!doesKpiSubRowRequireRca(kpi, si, getRaw, val)) continue;
+        const n = parseNum(val) ?? 0;
 
         const subMeta = getKpiSubItemMeta(kpi, si, m.id);
         const rcaKey = subMeta.rcaKey;

@@ -1526,7 +1526,7 @@ export function BODCalibrationApproval() {
                             <RotateCcw className="w-3 h-3" /> Revision
                           </span>
                         )}
-                        {row.decisionStatus === "pending" && (
+                        {(row.decisionStatus as string) === "pending" && (
                           <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
                             <Clock className="w-3 h-3" /> Pending
                           </span>

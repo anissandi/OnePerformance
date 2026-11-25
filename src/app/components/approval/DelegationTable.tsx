@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Ban, Check, ChevronDown, Eye, Filter, Pencil, PlayCircle, RotateCcw, Search, X } from "lucide-react";
+import { Ban, Check, ChevronDown, Eye, Filter, Pencil, PlayCircle, RotateCcw, Search, ShieldCheck, UserCog, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   canUserAccessEmployeeData,
@@ -9,6 +9,7 @@ import {
   isUserEligibleForDelegation,
   loadManagedUsers,
   normalizeApproverPair,
+  resolveEffectiveUserGrouping,
   saveManagedUsers,
   useAuthStore,
   type ManagedUser,
@@ -17,9 +18,12 @@ import {
   DELEGATION_EVENT,
   blankDelegation,
   loadDelegations,
+  loadTakeOvers,
   saveDelegation,
+  saveTakeOver,
   type DelegationAccess,
   type DelegationRecord,
+  type TakeOverRecord,
 } from "../../store/delegationStore";
 import { pushEmployeeNotification } from "../../store/notificationStore";
 
@@ -30,8 +34,12 @@ const findByRef = (users: ManagedUser[], ref?: string) =>
 function useLiveData() {
   const { activeUser, allUsers } = useAuthStore();
   const [delegations, setDelegations] = useState(() => loadDelegations());
+  const [takeOvers, setTakeOvers] = useState(() => loadTakeOvers());
   useEffect(() => {
-    const r = () => setDelegations(loadDelegations());
+    const r = () => {
+      setDelegations(loadDelegations());
+      setTakeOvers(loadTakeOvers());
+    };
     window.addEventListener(DELEGATION_EVENT, r);
     window.addEventListener("pa-db-hydrated", r);
     return () => {
@@ -39,7 +47,7 @@ function useLiveData() {
       window.removeEventListener("pa-db-hydrated", r);
     };
   }, []);
-  return { activeUser, allUsers: allUsers.filter((u) => u.status === "Active"), delegations };
+  return { activeUser, allUsers: allUsers.filter((u) => u.status === "Active"), delegations, takeOvers };
 }
 
 function uniqSorted(values: Array<string | undefined>): string[] {
@@ -370,14 +378,34 @@ const ACCESS_TAG_THEMES: Record<keyof DelegationAccess, { active: string; inacti
  * Hanya karyawan ber-grouping Ka./Wa.Ka.Bagian ke atas yang boleh memberi & menerima delegasi.
  * Kandidat penerima delegasi hanya dari Unit Usaha pemberi delegasi dan bukan ber-role Employee.
  */
+function getHierarchyRankForTakeOver(u: ManagedUser): number {
+  const r = String(u.role ?? "").trim();
+  const g = resolveEffectiveUserGrouping(u).toLowerCase();
+  if (r === "BOD") return 7;
+  if (r === "Director" || r === "DirectorNonOpr" || g.includes("direktur") || g.includes("director")) return 6;
+  if (r === "GM" || r === "vGM" || g === "gm / vgm") return 5;
+  if (r === "Division" || g.includes("ka./wa.ka.div")) return 4;
+  if (r === "Departement" || g.includes("ka./wa.ka.dept")) return 3;
+  if (r === "Supervisor" || r === "Coordinator" || r === "HR Unit" || g.includes("ka./wa.ka.bagian") || g.includes("ka./wa.ka.seksi")) return 2;
+  return 1; // Employee / Operasional (tidak dapat di-Take Over)
+}
+
+function isEligibleSubordinateForTakeOver(sub: ManagedUser): boolean {
+  // Minimal level bawahan yang bisa di-take over adalah role Supervisor (bukan Employee / Operasional murni)
+  if (sub.role === "Employee" && getHierarchyRankForTakeOver(sub) < 2) return false;
+  return getHierarchyRankForTakeOver(sub) >= 2;
+}
+
 export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "approvals" } = {}) {
-  const { activeUser, allUsers, delegations } = useLiveData();
+  const { activeUser, allUsers, delegations, takeOvers } = useLiveData();
   const isAdmin = isAdminOrHrIcfRole(activeUser.role);
+  const [subMode, setSubMode] = useState<"delegation" | "takeover">("delegation");
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("");
   const [divisionFilter, setDivisionFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [positionFilter, setPositionFilter] = useState("");
+  const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
 
   const isSelf = (u: ManagedUser) => lc(u.employeeId) === lc(activeUser.employeeId);
   // - Approvals → Delegation: hanya baris milik user yang login (memilih sendiri penerima delegasinya)
@@ -503,8 +531,263 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
     }
   }
 
+  // Pool bawahan yang dapat di-Take Over (minimal role Supervisor ke atas & berada di bawah wewenang atasan)
+  const takeOverSubordinates = useMemo(() => {
+    const viewerRank = getHierarchyRankForTakeOver(activeUser);
+    return allUsers
+      .filter((sub) => {
+        if (lc(sub.employeeId) === lc(activeUser.employeeId)) return false;
+        if (!isEligibleSubordinateForTakeOver(sub)) return false;
+        if (isAdmin) return true;
+        const subRank = getHierarchyRankForTakeOver(sub);
+        if (viewerRank <= subRank) return false;
+        return canUserAccessEmployeeData(activeUser, sub.employeeId, allUsers);
+      })
+      .filter((u) => !unitFilter || u.company === unitFilter)
+      .filter((u) => !divisionFilter || u.division === divisionFilter)
+      .filter((u) => !departmentFilter || u.department === departmentFilter)
+      .filter((u) => !positionFilter || u.position === positionFilter)
+      .filter(
+        (u) =>
+          !search ||
+          [u.name, u.employeeId, u.regNo, u.company, u.division, u.department, u.position, u.role].some((v) =>
+            lc(v).includes(lc(search)),
+          ),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allUsers, activeUser, isAdmin, unitFilter, divisionFilter, departmentFilter, positionFilter, search]);
+
+  function handleUpdateTakeOver(
+    sub: ManagedUser,
+    nextTakeOverByEmpId: string,
+    nextActive: boolean,
+    reasonText?: string,
+  ) {
+    const key = sub.employeeId.toUpperCase();
+    const prev = takeOvers[key];
+    if (nextActive && !nextTakeOverByEmpId) {
+      toast.error("Pilih Atasan Pengambil Alih (Take Over Oleh) terlebih dahulu.");
+      return;
+    }
+    if (nextTakeOverByEmpId && lc(nextTakeOverByEmpId) === lc(sub.employeeId)) {
+      toast.error("Tidak dapat melakukan Take Over ke orang yang sama.");
+      return;
+    }
+    const superiorUser = allUsers.find((u) => lc(u.employeeId) === lc(nextTakeOverByEmpId));
+    if (superiorUser && getHierarchyRankForTakeOver(superiorUser) <= getHierarchyRankForTakeOver(sub) && !isAdminOrHrIcfRole(superiorUser.role)) {
+      toast.error("Pengambil alih (Take Over) harus memiliki level jabatan/role di atas bawahan terkait.");
+      return;
+    }
+    const rec: TakeOverRecord = {
+      id: key,
+      subordinateEmployeeId: sub.employeeId,
+      takeOverByEmployeeId: nextTakeOverByEmpId,
+      reason: reasonText ?? prev?.reason ?? "",
+      active: nextActive,
+      updatedAt: prev?.updatedAt ?? "",
+      updatedBy: prev?.updatedBy ?? "",
+      history: prev?.history ?? [],
+    };
+    const saved = saveTakeOver(rec, activeUser, nextActive ? "Start Take Over" : "Stop Take Over");
+    if (nextActive && (!prev?.active || prev.takeOverByEmployeeId !== saved.takeOverByEmployeeId)) {
+      pushEmployeeNotification({
+        employeeIds: [sub.employeeId, saved.takeOverByEmployeeId],
+        title: "Take Over Peran Approval Aktif",
+        summary: `${superiorUser?.name || saved.takeOverByEmployeeId} mengambil alih sementara peran Approval & Assessment milik ${sub.name}${saved.reason ? ` (${saved.reason})` : ""}.`,
+        category: "Approval",
+        moduleName: "Delegation",
+        ctaLabel: "Buka Approvals",
+        ctaRoute: "/approvals",
+        senderName: activeUser.name,
+      });
+      toast.success(`Take Over peran approval ${sub.name} oleh ${superiorUser?.name || saved.takeOverByEmployeeId} diaktifkan.`);
+    } else if (!nextActive && prev?.active) {
+      toast.success(`Take Over untuk ${sub.name} dihentikan.`);
+    }
+  }
+
   return (
     <div className="space-y-4">
+      {/* Sub-Tabs: Delegasi Approval vs Take Over Bawahan */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 pb-2.5">
+        <button
+          type="button"
+          onClick={() => setSubMode("delegation")}
+          className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition-all cursor-pointer ${
+            subMode === "delegation"
+              ? "bg-[#2F5597] text-white border-[#2F5597] shadow-2xs"
+              : "bg-[#EBF2FA]/70 text-[#2F5597] border-[#C9DCF0] hover:bg-[#EBF2FA]"
+          }`}
+        >
+          <UserCog className="h-3.5 w-3.5" />
+          Delegasi Approval
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubMode("takeover")}
+          className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition-all cursor-pointer ${
+            subMode === "takeover"
+              ? "bg-[#248277] text-white border-[#248277] shadow-2xs"
+              : "bg-[#E6F3F1]/70 text-[#1D6863] border-[#B8DDD8] hover:bg-[#E6F3F1]"
+          }`}
+        >
+          <ShieldCheck className="h-3.5 w-3.5" />
+          Take Over Peran Bawahan
+          {Object.values(takeOvers).filter((t) => t.active).length > 0 && (
+            <span className="rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-extrabold text-[#1D6863]">
+              {Object.values(takeOvers).filter((t) => t.active).length} Aktif
+            </span>
+          )}
+        </button>
+      </div>
+
+      {subMode === "takeover" ? (
+        <>
+          <div className="flex items-start gap-2 rounded-2xl border border-[#B8DDD8] bg-[#F4FAF9] px-4 py-3 text-xs text-[#1D6863]">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              <strong>Take Over (Kebalikan dari Delegasi):</strong> Atasan dapat mengambil alih sementara peran Approval &amp; Assessment milik bawahannya (minimal level <strong>Supervisor</strong> ke atas, contoh Kepala Departemen mengambil alih Kepala Bagian yang berhalangan/sakit) agar pengajuan dari karyawan ke bawahan tersebut tetap berjalan.
+            </span>
+          </div>
+          <OrgFilterBar
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Cari nama bawahan (min. Supervisor), ID, divisi, departemen…"
+            unitOptions={uniqSorted(allUsers.map((u) => u.company))}
+            divisionOptions={uniqSorted(allUsers.map((u) => u.division))}
+            departmentOptions={uniqSorted(allUsers.map((u) => u.department))}
+            positionOptions={uniqSorted(allUsers.map((u) => u.position))}
+            unitFilter={unitFilter}
+            onUnitChange={(v) => { setUnitFilter(v); setDivisionFilter(""); setDepartmentFilter(""); setPositionFilter(""); }}
+            divisionFilter={divisionFilter}
+            onDivisionChange={(v) => { setDivisionFilter(v); setDepartmentFilter(""); setPositionFilter(""); }}
+            departmentFilter={departmentFilter}
+            onDepartmentChange={(v) => { setDepartmentFilter(v); setPositionFilter(""); }}
+            positionFilter={positionFilter}
+            onPositionChange={setPositionFilter}
+            onReset={() => { setSearch(""); setUnitFilter(""); setDivisionFilter(""); setDepartmentFilter(""); setPositionFilter(""); }}
+            hideSectionFilter
+          />
+          <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
+            <table className="w-full text-xs">
+              <thead className="bg-[#1A284F] text-white">
+                <tr>
+                  {[
+                    "No",
+                    "Aksi",
+                    "ID Karyawan",
+                    "Nama Bawahan",
+                    "Role",
+                    "Unit Usaha",
+                    "Divisi / Departemen",
+                    "Jabatan",
+                    "Di-Take Over Oleh (Atasan)",
+                    "Alasan / Keterangan",
+                    "Status",
+                  ].map((h) => (
+                    <th key={h} className="whitespace-nowrap px-3 py-2.5 text-left font-semibold">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {takeOverSubordinates.map((sub, idx) => {
+                  const rec = takeOvers[sub.employeeId.toUpperCase()];
+                  const isAct = Boolean(rec?.active);
+                  const effectiveSuperiorId =
+                    rec?.takeOverByEmployeeId || (mode === "approvals" && !isAdmin ? activeUser.employeeId : "");
+                  const subRank = getHierarchyRankForTakeOver(sub);
+                  const superiorCandidates = allUsers.filter(
+                    (cand) =>
+                      lc(cand.employeeId) !== lc(sub.employeeId) &&
+                      isSameCompanyUnit(cand.company, sub.company) &&
+                      getHierarchyRankForTakeOver(cand) > subRank,
+                  );
+                  const reasonVal = reasonDrafts[sub.employeeId] ?? rec?.reason ?? "";
+                  return (
+                    <tr key={sub.employeeId} className={`border-t border-gray-100 transition-colors ${isAct ? "bg-teal-50/50" : "hover:bg-slate-50/60"}`}>
+                      <td className="px-3 py-2.5">{idx + 1}</td>
+                      <td className="px-3 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleUpdateTakeOver(
+                              sub,
+                              effectiveSuperiorId,
+                              !isAct,
+                              reasonVal,
+                            )
+                          }
+                          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                            isAct
+                              ? "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                              : "bg-[#248277] text-white hover:opacity-90"
+                          }`}
+                        >
+                          {isAct ? <Ban className="h-3.5 w-3.5" /> : <PlayCircle className="h-3.5 w-3.5" />}
+                          {isAct ? "Stop" : "Take Over"}
+                        </button>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 font-mono font-semibold text-[#1A284F]">{sub.employeeId}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-gray-900">{sub.name}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5">
+                        <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700">{sub.role}</span>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5">{sub.company}</td>
+                      <td className="px-3 py-2.5">{sub.division || "-"} · {sub.department || "-"}</td>
+                      <td className="px-3 py-2.5">{sub.position || "-"}</td>
+                      <td className="px-3 py-2.5">
+                        {mode === "approvals" && !isAdmin ? (
+                          <span className="font-semibold text-[#1A284F]">{activeUser.name} ({activeUser.position})</span>
+                        ) : (
+                          <EmployeePicker
+                            value={effectiveSuperiorId}
+                            options={superiorCandidates}
+                            lookupPool={allUsers}
+                            onChange={(empId) => handleUpdateTakeOver(sub, empId, Boolean(empId && isAct), reasonVal)}
+                          />
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 min-w-[180px]">
+                        <input
+                          type="text"
+                          value={reasonVal}
+                          onChange={(e) => setReasonDrafts((p) => ({ ...p, [sub.employeeId]: e.target.value }))}
+                          onBlur={() => {
+                            if (rec && reasonVal !== (rec.reason ?? "")) {
+                              handleUpdateTakeOver(sub, effectiveSuperiorId, isAct, reasonVal);
+                            }
+                          }}
+                          placeholder="Mis. Sakit / Cuti mendadak..."
+                          className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-[#1A284F]"
+                        />
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5">
+                        {isAct ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">
+                            Aktif Di-Take Over
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-500">
+                            Normal
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {takeOverSubordinates.length === 0 && (
+                  <tr>
+                    <td colSpan={11} className="py-10 text-center text-gray-400">
+                      Tidak ada bawahan ber-level Supervisor ke atas dalam cakupan wewenang Anda.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+      <>
       {mode === "approvals" ? (
         <div className="flex items-start gap-2 rounded-2xl border border-sky-200/80 bg-sky-50/60 px-4 py-3 text-xs text-sky-900">
           <Eye className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -659,6 +942,8 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
         Delegasi aktif membuat karyawan yang ditunjuk menerima akses modul, notifikasi, serta task approval sesuai tag modul yang aktif (tag <strong>Approve</strong> wajib aktif untuk persetujuan),
         dan nama approver tercatat sebagai <strong>"Nama Delegasi | atas nama Nama Pemberi Delegasi"</strong>.
       </p>
+      </>
+      )}
     </div>
   );
 }

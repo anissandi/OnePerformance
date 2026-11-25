@@ -115,12 +115,12 @@ export interface KpiPeriodBlockSpec {
  * - Jika `blockedMonths` belum ada (kompatibilitas mundur): gunakan `periodicTargetBlock` / deteksi data lama.
  */
 export function resolveEffectiveBlockedMonthSet(kpi: KpiPeriodBlockSpec): Set<number> {
-  const normPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
-  if (!isPeriodicTrackingType(normPeriod)) return new Set<number>();
-
   if (Array.isArray(kpi.blockedMonths)) {
     return new Set<number>(normalizeBlockedMonths(kpi.blockedMonths));
   }
+
+  const normPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
+  if (!isPeriodicTrackingType(normPeriod)) return new Set<number>();
 
   const activeSet = new Set(getActiveMonthIndicesForPeriod(normPeriod));
   if (kpi.periodicTargetBlock === true) {

@@ -16,8 +16,10 @@ import { TargetEditRequestsSection } from "../../components/TargetEditRequestsSe
 import { loadSubmittedGoals } from "../shared/smartGoalsStore";
 import { applyOverrides, resolveDynamicApprovalRowsForUser, saveOverride } from "../shared/approvalsStore";
 import {
+  COMPANY_UNIT_LOCATIONS,
   getAllowedApprovalTypesForUser,
   getScopedFilterOptionsForUser,
+  isAdminOrHrIcfRole,
   loadManagedUsers,
   useAuthStore,
 } from "../../store/authStore";
@@ -26,6 +28,7 @@ import {
   approveKpiTrackingEditRequest,
   getKpiTrackingEditApprovalRowsForViewer,
   KPI_TRACKING_EDIT_EVENT,
+  loadKpiTrackingEditRequests,
   refreshKpiTrackingEditRequestsFromBackend,
   rejectKpiTrackingEditRequest,
   reviseKpiTrackingEditRequest,
@@ -68,7 +71,8 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
   const location = useLocation();
   const { tab } = useParams();
   const { activeUser, lockedUnits: authLockedUnits } = useAuthStore();
-  const effectiveLockedUnits = lockedUnits ?? authLockedUnits;
+  const isGlobalAdmin = isAdminOrHrIcfRole(activeUser.role);
+  const effectiveLockedUnits = isGlobalAdmin ? undefined : (lockedUnits ?? authLockedUnits);
   const scopedFilterMeta = getScopedFilterOptionsForUser(activeUser);
   const mainTab: MainTab = /\/setting(\/|$)/.test(location.pathname) ? "setting" : "checkin";
   const moduleTypes = getAllowedApprovalTypesForUser(activeUser, mainTab);
@@ -150,7 +154,7 @@ export function HRApprovals({ lockedUnits }: { lockedUnits?: string[] } = {}) {
     Array.from(new Set(vals.map((v) => (v ?? "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "id"));
 
   const dynamicFilterOpts: ApprovalFilterOptions = {
-    companyUnit: effectiveLockedUnits ?? DEFAULT_COMPANY_UNITS,
+    companyUnit: effectiveLockedUnits ?? uniqSorted([...COMPANY_UNIT_LOCATIONS.map((c) => c.company), ...DEFAULT_COMPANY_UNITS, ...activeRows.map((r) => r.companyUnit)]),
     year: ["2026"],
     month: MONTHS,
     division: uniqSorted([...scopedFilterMeta.divisions, ...allManaged.map((u) => u.division), ...activeRows.map((r) => r.division)]),
@@ -428,7 +432,9 @@ function ApprovalsTable({
   };
 
   const filtered = data.filter((row) => {
-    const matchTab    = activeTab === "Pending Task" ? PENDING_STATUSES.has(row.status) : HISTORY_STATUSES.has(row.status);
+    const matchTab    = activeTab === "Pending Task"
+      ? (!row.globalHistoryOnly && PENDING_STATUSES.has(row.status))
+      : (row.globalHistoryOnly || HISTORY_STATUSES.has(row.status));
     const q           = search.trim().toLowerCase();
     const matchSearch = !q ||
       row.name.toLowerCase().includes(q) ||
@@ -474,8 +480,8 @@ function ApprovalsTable({
   useEffect(() => setCurrentPage(1), [activeTab, search, selectedCompanyUnits, selectedYears, selectedMonths, selectedDivisions, selectedDepartments, selectedBagians, sortCol, sortDir]);
 
   const typeScopedData = initialType ? data.filter((r) => r.type === initialType) : data;
-  const pendingCount = typeScopedData.filter((r) => PENDING_STATUSES.has(r.status)).length;
-  const historyCount = typeScopedData.filter((r) => HISTORY_STATUSES.has(r.status)).length;
+  const pendingCount = typeScopedData.filter((r) => !r.globalHistoryOnly && PENDING_STATUSES.has(r.status)).length;
+  const historyCount = typeScopedData.filter((r) => r.globalHistoryOnly || HISTORY_STATUSES.has(r.status)).length;
 
   const handleAcceptEdit = (row: ApprovalRow) => {
     if (row.no.startsWith("KPITREDIT::")) {
