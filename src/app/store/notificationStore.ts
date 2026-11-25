@@ -514,7 +514,12 @@ export function resolveModuleShortcutSubpath(
     if (lower === "project outside job scope") return "/approvals/measurement/project";
     if (lower === "inter-departement feedback") return "/approvals/measurement/inter-department-feedback";
     if (lower === "management interview") return "/approvals/management-interview";
-    if (lower === "calibration") return "/approvals/calibration";
+    if (lower === "calibration") {
+      if (titleLower.includes("soy") || titleLower.includes("setting") || titleLower.includes("awal tahun")) {
+        return "/approvals/calibration/setting";
+      }
+      return "/approvals/calibration";
+    }
     return "/approvals/measurement";
   }
 

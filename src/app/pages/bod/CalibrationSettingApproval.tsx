@@ -6,6 +6,7 @@ import {
   decideSoyApproval,
   formatActorWithPosition,
   loadGroupSoyApprovals,
+  refreshGroupSoyApprovalsFromBackend,
   resolveGroupSoyRoleForUser,
   SOY_EVENT,
   type SoyApprovalRecord,
@@ -192,8 +193,16 @@ export function CalibrationSettingApproval() {
   const [note, setNote] = useState("");
   const [bellOpen, setBellOpen] = useState(false);
   const [authTick, setAuthTick] = useState(0);
+  const [isHydratingSoy, setIsHydratingSoy] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+    void refreshGroupSoyApprovalsFromBackend().then((latest) => {
+      if (!cancelled) {
+        setRecords(latest);
+        setIsHydratingSoy(false);
+      }
+    });
     const refresh = () => {
       setRecords(loadGroupSoyApprovals());
       setAuthTick((t) => t + 1);
@@ -202,6 +211,7 @@ export function CalibrationSettingApproval() {
     window.addEventListener("pa-db-hydrated", refresh);
     window.addEventListener("pa-auth-updated", refresh);
     return () => {
+      cancelled = true;
       window.removeEventListener(SOY_EVENT, refresh);
       window.removeEventListener("pa-db-hydrated", refresh);
       window.removeEventListener("pa-auth-updated", refresh);
@@ -392,7 +402,9 @@ export function CalibrationSettingApproval() {
 
       {list.length === 0 ? (
         <div className="rounded-xl border border-gray-100 bg-white p-12 text-center text-sm text-gray-400">
-          Belum ada pengajuan Calibration Setting (SOY) Group dalam kewenangan Anda.
+          {isHydratingSoy
+            ? "Memuat data pengajuan Calibration Setting (SOY)..."
+            : "Belum ada pengajuan Calibration Setting (SOY) Group dalam kewenangan Anda."}
         </div>
       ) : (
         <div className="flex w-full flex-col gap-4">

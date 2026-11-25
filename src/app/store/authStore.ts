@@ -2528,6 +2528,14 @@ export function hasExplicitSoyCalibrationRole(user: ManagedUser | null | undefin
 export function canUserAccessCalibrationSoyApproval(user: ManagedUser | null | undefined): boolean {
   if (!user) return false;
   if (hasExplicitSoyCalibrationRole(user)) return true;
+  if (
+    user.calibrationRoleByUnit &&
+    typeof user.calibrationRoleByUnit === "object" &&
+    Object.values(user.calibrationRoleByUnit).some((v) => v === "approver" || v === "mengetahui" || v === "readonly")
+  ) {
+    return true;
+  }
+  if (isDirectorRoleOrGrouping(user)) return true;
   return canRoleAccessCalibrationApproval(user.role);
 }
 

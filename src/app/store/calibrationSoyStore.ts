@@ -1,4 +1,11 @@
-import { savePersistedState, syncToSupabase } from "../services/supabaseClient";
+import {
+  refreshKvKeysFromBackend,
+  safeGetLocalRaw,
+  safeSetLocalJson,
+  savePersistedState,
+  selectRowsFromSupabase,
+  syncToSupabase,
+} from "../services/supabaseClient";
 import {
   canonicalizeCompanyUnitName,
   getActiveUser,
@@ -108,7 +115,7 @@ export interface SoyApprovalRecord {
 
 export function loadSoyApprovals(): Record<string, SoyApprovalRecord> {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SOY_APPROVAL_KEY) ?? "{}");
+    const parsed = JSON.parse(safeGetLocalRaw(SOY_APPROVAL_KEY) ?? "{}");
     if (!parsed || typeof parsed !== "object") return {};
     const out: Record<string, SoyApprovalRecord> = {};
     for (const [k, rec] of Object.entries(parsed as Record<string, SoyApprovalRecord>)) {
@@ -164,6 +171,64 @@ export function loadGroupSoyApprovals(): Record<string, SoyApprovalRecord> {
     }
   }
   return out;
+}
+
+/**
+ * Tarik data terbaru pengajuan Group SOY dari Supabase (`pa_kv_state` & `pa_calibration_settings`)
+ * agar saat user membuka halaman /approvals/calibration/setting dari notifikasi maupun lintas browser/sesi,
+ * data pengajuan Group selalu langsung terhidrasi penuh.
+ */
+export async function refreshGroupSoyApprovalsFromBackend(): Promise<Record<string, SoyApprovalRecord>> {
+  try {
+    const [kvMap, calRows] = await Promise.all([
+      refreshKvKeysFromBackend([SOY_APPROVAL_KEY, GROUP_CALIBRATION_SETTINGS_KEY]),
+      selectRowsFromSupabase<{ unit_id?: string; unit_name?: string; data?: unknown }>(
+        "pa_calibration_settings",
+        "select=unit_id,unit_name,data&unit_id=in.(soy-approval:group-rsup,soy-approval:group-sambu,group-rsup,group-sambu)&limit=10",
+      ),
+    ]);
+
+    const merged: Record<string, SoyApprovalRecord> = { ...loadSoyApprovals() };
+    const remoteKv = kvMap?.[SOY_APPROVAL_KEY];
+    if (remoteKv && typeof remoteKv === "object") {
+      for (const [k, v] of Object.entries(remoteKv as Record<string, SoyApprovalRecord>)) {
+        if (v && typeof v === "object" && "status" in v) {
+          merged[k] = v;
+        }
+      }
+    }
+    for (const row of calRows ?? []) {
+      const d = row?.data as Partial<SoyApprovalRecord> | undefined;
+      if (d && typeof d === "object" && d.status && (d.groupSnapshot || d.isGroupRecord)) {
+        const gMeta = CALIBRATION_GROUPS.find(
+          (g) =>
+            row.unit_id === `soy-approval:${g.id}` ||
+            row.unit_id === g.id ||
+            d.unitId === g.id ||
+            d.unitName === g.name,
+        );
+        if (gMeta) {
+          const existing = merged[gMeta.id];
+          const existingTs = existing?.decidedAt || existing?.submittedAt || "";
+          const incomingTs = d.decidedAt || d.submittedAt || "";
+          if (!existing || incomingTs >= existingTs) {
+            merged[gMeta.id] = {
+              ...(d as SoyApprovalRecord),
+              unitId: gMeta.id,
+              unitName: gMeta.name,
+              isGroupRecord: true,
+            };
+          }
+        }
+      }
+    }
+
+    safeSetLocalJson(SOY_APPROVAL_KEY, merged);
+    window.dispatchEvent(new Event(SOY_EVENT));
+  } catch {
+    // ignore network failure, fallback to local state
+  }
+  return loadGroupSoyApprovals();
 }
 
 export function getGroupSoyApproval(groupIdOrName: string): SoyApprovalRecord | undefined {
@@ -231,7 +296,7 @@ function save(map: Record<string, SoyApprovalRecord>) {
 /** Snapshot karyawan aktif per unit saat HC Awal Tahun di-submit (dasar Eliminasi HC EOY). */
 export function loadSoyEmployeeSnapshot(): Record<string, ManagedUser[]> {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SOY_SNAPSHOT_KEY) ?? "{}");
+    const parsed = JSON.parse(safeGetLocalRaw(SOY_SNAPSHOT_KEY) ?? "{}");
     if (!parsed || typeof parsed !== "object") return {};
     const out: Record<string, ManagedUser[]> = {};
     for (const [k, list] of Object.entries(parsed as Record<string, ManagedUser[]>)) {
@@ -241,6 +306,26 @@ export function loadSoyEmployeeSnapshot(): Record<string, ManagedUser[]> {
   } catch {
     return {};
   }
+}
+
+function getPureGroupIdsForUser(user: ManagedUser): CalibrationGroupId[] {
+  const candidates = [user.company, ...(user.managedUnits ?? [])].filter(Boolean);
+  const matched = new Set<CalibrationGroupId>();
+  for (const raw of candidates) {
+    const canon = canonicalizeCompanyUnitName(raw);
+    const low = canon.toLowerCase();
+    for (const grp of CALIBRATION_GROUPS) {
+      if (
+        grp.name.toLowerCase() === low ||
+        grp.unitNames.some((u) => canonicalizeCompanyUnitName(u) === canon)
+      ) {
+        matched.add(grp.id);
+      }
+    }
+    if (/sambu|guntung|kuala enok/.test(low)) matched.add("group-sambu");
+    else if (/rsup|rstm|ghs|asd/.test(low)) matched.add("group-rsup");
+  }
+  return Array.from(matched);
 }
 
 /**
@@ -274,9 +359,12 @@ export function resolveGroupSoyRoleForUser(
     }
   }
 
+  const pureGroups = getPureGroupIdsForUser(user);
+  const belongsToTargetGroup = gMeta ? pureGroups.includes(gMeta.id) : false;
+
   if (isDirectorRoleOrGrouping(user)) {
-    const dirUnits = getGroupCompaniesForUnit(user.company, user.managedUnits).map(canonicalizeCompanyUnitName);
-    if (unitNamesInGroup.some((u) => dirUnits.includes(canonicalizeCompanyUnitName(u)))) {
+    // Jika Director berada pada Group ini (atau tidak dikunci ke group spesifik), berikan hak Approve
+    if (belongsToTargetGroup || pureGroups.length === 0) {
       return "approve";
     }
     return null;
@@ -292,8 +380,7 @@ export function resolveGroupSoyRoleForUser(
 
   if (isAdminOrHrIcfRole(user.role)) return includeGlobalAdmins ? "view" : null;
   if (user.role === "BOD") {
-    const bodUnits = getGroupCompaniesForUnit(user.company, user.managedUnits).map(canonicalizeCompanyUnitName);
-    if (bodUnits.length === 0 || unitNamesInGroup.some((u) => bodUnits.includes(canonicalizeCompanyUnitName(u)))) {
+    if (pureGroups.length === 0 || belongsToTargetGroup) {
       return "view";
     }
   }
@@ -393,7 +480,7 @@ export function submitGroupSoyForApproval(groupSnap: SoyGroupSnapshot): SoyAppro
 
   void syncToSupabase({
     kind: "calibration-setting",
-    unitId: groupSnap.id,
+    unitId: `soy-approval:${groupSnap.id}`,
     unitName: groupSnap.name,
     data: record,
     audit: {
@@ -450,9 +537,27 @@ export function submitGroupSoyForApproval(groupSnap: SoyGroupSnapshot): SoyAppro
   const activeEmployees = loadManagedUsers();
   for (const u of groupSnap.units) {
     const canonName = canonicalizeCompanyUnitName(u.name);
-    empSnap[canonName] = activeEmployees.filter(
-      (emp) => canonicalizeCompanyUnitName(emp.company) === canonName && emp.status === "Active" && !isExcludedFromAppraisalCalibration(emp),
-    );
+    empSnap[canonName] = activeEmployees
+      .filter(
+        (emp) =>
+          canonicalizeCompanyUnitName(emp.company) === canonName &&
+          emp.status === "Active" &&
+          !isExcludedFromAppraisalCalibration(emp),
+      )
+      .map((emp) => ({
+        id: emp.id,
+        employeeId: emp.employeeId,
+        name: emp.name,
+        company: emp.company,
+        division: emp.division,
+        department: emp.department,
+        bagian: emp.bagian,
+        position: emp.position,
+        grade: emp.grade,
+        role: emp.role,
+        groupings: emp.groupings,
+        status: emp.status,
+      }));
   }
   savePersistedState(SOY_SNAPSHOT_KEY, empSnap);
   return record;
@@ -535,7 +640,7 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
 
   void syncToSupabase({
     kind: "calibration-setting",
-    unitId: rec.unitId,
+    unitId: rec.isGroupRecord ? `soy-approval:${rec.unitId}` : rec.unitId,
     unitName: rec.unitName,
     data: map[unitId],
     audit: {
@@ -550,7 +655,7 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
   // (baik untuk pengajuan Group -> seluruh Unit Usaha anggota Group, maupun unit tunggal).
   if (status === "Approved" && rec.isGroupRecord && rec.groupSnapshot?.units) {
     try {
-      const rawUnits = localStorage.getItem("calibration_hc_settings_2026");
+      const rawUnits = safeGetLocalRaw("calibration_hc_settings_2026");
       if (rawUnits) {
         const parsedUnits = JSON.parse(rawUnits) as Array<Record<string, unknown>>;
         if (Array.isArray(parsedUnits)) {
@@ -590,7 +695,7 @@ export function decideSoyApproval(unitId: string, status: "Approved" | "Revision
           savePersistedState("calibration_hc_settings_2026", updatedUnits);
         }
       }
-      const rawGroups = localStorage.getItem(GROUP_CALIBRATION_SETTINGS_KEY);
+      const rawGroups = safeGetLocalRaw(GROUP_CALIBRATION_SETTINGS_KEY);
       if (rawGroups) {
         const parsedGroups = JSON.parse(rawGroups) as Array<Record<string, unknown>>;
         if (Array.isArray(parsedGroups)) {
@@ -682,6 +787,12 @@ export function resetSoyApproval(unitId?: string): void {
   if (map[unitId]) {
     delete map[unitId];
     save(map);
+    void syncToSupabase({
+      kind: "calibration-setting",
+      unitId: `soy-approval:${unitId}`,
+      unitName: unitId,
+      data: {},
+    });
   } else {
     window.dispatchEvent(new Event(SOY_EVENT));
   }

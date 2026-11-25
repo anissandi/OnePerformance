@@ -13,7 +13,7 @@ import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, Dot,
 } from "recharts";
-import { loadPersistedState, safeSetLocalRaw, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
+import { loadPersistedState, safeGetLocalRaw, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
 import { canonicalizeCompanyUnitName, isExcludedFromAppraisalCalibration, loadManagedUsers, useAuthStore } from "../../store/authStore";
 import { archiveUsers, EOY_ARCHIVE_REASON, loadArchivedUsers } from "../../store/archiveStore";
 import {
@@ -23,6 +23,7 @@ import {
   getGroupSoyApproval,
   getSoyApproval,
   loadSoyEmployeeSnapshot,
+  refreshGroupSoyApprovalsFromBackend,
   resetSoyApproval,
   SOY_EVENT,
   submitGroupSoyForApproval,
@@ -3042,10 +3043,9 @@ export function CalibrationSetting() {
   const [companyUnits, setCompanyUnits] = useState<CompanyUnit[]>(() => {
     try {
       const saved =
-        localStorage.getItem("calibration_hc_settings_2026") ??
-        localStorage.getItem("calibration_submitted_units");
+        safeGetLocalRaw("calibration_hc_settings_2026") ??
+        safeGetLocalRaw("calibration_submitted_units");
       const base: CompanyUnit[] = saved ? JSON.parse(saved) : defaultCompanyUnits;
-      const needsInitialSoyReset = !localStorage.getItem("pa_cal_soy_reset_2026_v1");
       // Pastikan ke-8 Company Units lengkap
       const mergedBase = defaultCompanyUnits.map((def) => {
         const existing = base.find(
@@ -3053,27 +3053,7 @@ export function CalibrationSetting() {
         );
         return existing ? { ...def, ...existing, id: def.id, name: def.name, code: def.code } : def;
       });
-      const normalized = mergedBase.map((u) => {
-        const clean = needsInitialSoyReset
-          ? {
-              ...u,
-              beginningHC: undefined,
-              beginningGrades: undefined,
-              beginningCustomQuotas: undefined,
-              yearEndStatus: undefined,
-              yearEndUpdatedAt: undefined,
-            }
-          : u;
-        return applyImportedEmployeesDistribution(clean);
-      });
-      if (needsInitialSoyReset) {
-        safeSetLocalRaw("pa_cal_soy_reset_2026_v1", "1");
-        localStorage.removeItem("calibration_submitted_units");
-        localStorage.removeItem("calibration_submitted_at");
-        resetSoyApproval();
-        savePersistedState("calibration_hc_settings_2026", normalized);
-      }
-      return normalized;
+      return mergedBase.map((u) => applyImportedEmployeesDistribution(u));
     } catch {
       return defaultCompanyUnits.map((u) => applyImportedEmployeesDistribution(u));
     }
@@ -3122,6 +3102,7 @@ export function CalibrationSetting() {
 
   const [soyTick, setSoyTick] = useState(0);
   useEffect(() => {
+    void refreshGroupSoyApprovalsFromBackend().then(() => setSoyTick((t) => t + 1));
     const refresh = () => setSoyTick((t) => t + 1);
     window.addEventListener(SOY_EVENT, refresh);
     window.addEventListener("pa-db-hydrated", refresh);
@@ -3164,7 +3145,7 @@ export function CalibrationSetting() {
       },
     });
     savePersistedState("calibration_hc_settings_2026", finalUnits);
-    if (localStorage.getItem("calibration_submitted_units")) {
+    if (safeGetLocalRaw("calibration_submitted_units")) {
       savePersistedState("calibration_submitted_units", finalUnits);
     }
     // Sinkronkan juga masing-masing Company Unit anggota Group ke tabel pa_calibration_settings di Supabase

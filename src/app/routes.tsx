@@ -831,6 +831,16 @@ export const router = createBrowserRouter([
     ],
   },
   {
+    path: "/approvals",
+    Component: AppLayout,
+    ErrorBoundary: RouteErrorFallback,
+    children: [
+      { path: "calibration/setting", Component: CalibrationSettingApproval },
+      { path: "calibration/adjustment", Component: BODCalibrationApproval },
+      { path: "calibration", Component: BODCalibrationApproval },
+    ],
+  },
+  {
     path: "*",
     Component: LoginPage,
     ErrorBoundary: RouteErrorFallback,
