@@ -1527,45 +1527,59 @@ function RCAListTable({ rows, isClosed, onViewDetail, onDelete }: {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200/90 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-100 bg-gray-50/70">
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide w-36">Action</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide w-12">No</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Period</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">KPI Indicator</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Target (Monthly)</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Actual (Monthly)</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Total APs</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Outstanding APs</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide w-40">Progress APs (%)</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Submitted Date</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Approval Status</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Last Approved Date</th>
+              <tr className="border-b border-slate-200 bg-[#1A284F] text-white">
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide w-40">Action</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide w-12">No</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Period</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">KPI Indicator</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Target (Monthly)</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Actual (Monthly)</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Total APs</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Outstanding APs</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide w-40">Progress APs (%)</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Submitted Date</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Approval Status</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide">Last Approved Date</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
+              {rows.map((row, rowIdx) => {
                 const total = totalAPs(row.rcaData);
                 const outstanding = row.rcaData.reduce((s, it) =>
                   s + it.masalahBlocks.reduce((ss, b) =>
                     ss + b.actionPlans.filter((a) => a.status !== "Selesai" && a.status !== "Dibatalkan").length, 0), 0);
                 const pct = computeProgressAPs(row.rcaData, isClosed);
+                const extraSoftRowCls = isClosed
+                  ? rowIdx % 2 === 0
+                    ? "bg-white hover:bg-emerald-50/55"
+                    : "bg-[#F3FAF6]/85 hover:bg-emerald-50/70"
+                  : rowIdx % 2 === 0
+                  ? "bg-white hover:bg-sky-50/60"
+                  : "bg-[#F4F7FC]/85 hover:bg-sky-50/75";
                 return (
-                  <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                  <tr key={row.id} className={`border-b border-slate-100 transition-colors ${extraSoftRowCls}`}>
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-1.5">
-                        <button onClick={() => onViewDetail(row)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-700 border border-gray-200 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors">
-                          <Eye className="w-3.5 h-3.5" /> View Detail
+                        <button
+                          type="button"
+                          onClick={() => onViewDetail(row)}
+                          className="group/view inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#EBF2FA] text-[#1D4ED8] border border-[#93C5FD] hover:bg-[#1D4ED8] hover:text-white hover:border-[#1D4ED8] shadow-2xs transition-all whitespace-nowrap cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-blue-600 group-hover/view:text-white transition-colors shrink-0" />
+                          View Detail
                         </button>
                         {onDelete && (
-                          <button onClick={() => setPendingDelete(row)}
-                            className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                            title="Hapus baris ini">
-                            <Trash2 className="w-3.5 h-3.5" />
+                          <button
+                            type="button"
+                            onClick={() => setPendingDelete(row)}
+                            className="group/del p-1.5 rounded-lg bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-600 hover:text-white hover:border-rose-600 shadow-2xs transition-all shrink-0 cursor-pointer"
+                            title="Hapus baris ini"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600 group-hover/del:text-white transition-colors" />
                           </button>
                         )}
                       </div>
@@ -1814,6 +1828,7 @@ export function RCAPage() {
         module="KPI"
         phase="measurement"
         title="History Catatan Approver"
+        defaultOpen={false}
       />
 
       {detailRow && (
@@ -1967,6 +1982,7 @@ export function AppraisalRCASection() {
         module="KPI"
         phase="measurement"
         title="History Catatan Approver"
+        defaultOpen={false}
       />
       {detailRow && (
         <DetailDrawer

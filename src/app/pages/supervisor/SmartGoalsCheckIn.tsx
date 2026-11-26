@@ -4,7 +4,7 @@ import { SmartGoalsProgressCard } from "../../components/SmartGoalsProgressCard"
 import { ApproverNotesHistory } from "../../components/ApproverNotesHistory";
 import {
   CheckCircle2, Send, Eye, Edit3, AlertCircle, Paperclip, X, Plus,
-  ChevronDown, ChevronUp, Star, Info, TrendingUp, Target, Activity, Upload, Clock, RotateCcw, Lock, Download, FileText,
+  ChevronDown, ChevronUp, Star, Info, TrendingUp, Target, Activity, Upload, Clock, RotateCcw, Lock, Download, FileText, MessageSquare,
 } from "lucide-react";
 import type { SmartGoal } from "../employee/SMARTGoals";
 import { ROWS, SAMPLE_GOALS } from "../employee/SMARTGoals";
@@ -1102,6 +1102,8 @@ function PenilaianAkhirSection({
   approver1Score: string | null;
   approver2Score: string | null;
 }) {
+  const [notesOpen, setNotesOpen] = useState(false);
+  const hasAnyNote = Boolean(approver1Note.trim() || approver2Note.trim());
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
       <div className="flex items-center px-5 py-3 bg-gradient-to-r from-sky-50 via-indigo-50/70 to-slate-50 border-b border-sky-200 gap-3">
@@ -1120,33 +1122,53 @@ function PenilaianAkhirSection({
             )}
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500 flex items-center justify-between">
-              <span>Catatan Approver 1</span>
-              {approver1Score && <span className="text-indigo-700 font-bold">Nilai: {approver1Score}</span>}
-            </label>
-            <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5 min-h-[48px]">
-              {approver1Note ? (
-                <span className="text-xs text-gray-700 leading-relaxed">{approver1Note}</span>
-              ) : (
-                <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
+        <div className="rounded-xl border border-slate-200 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setNotesOpen((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 px-4 py-2.5 bg-slate-50 hover:bg-slate-100/80 transition-colors text-left cursor-pointer"
+          >
+            <span className="inline-flex items-center gap-2 text-xs font-bold text-[#1A284F]">
+              <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+              Catatan Approver
+              {hasAnyNote && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  {[approver1Note.trim(), approver2Note.trim()].filter(Boolean).length}
+                </span>
               )}
+            </span>
+            <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${notesOpen ? "rotate-180" : ""}`} />
+          </button>
+          {notesOpen && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-white border-t border-slate-100">
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500 flex items-center justify-between">
+                  <span>Catatan Approver 1</span>
+                  {approver1Score && <span className="text-indigo-700 font-bold">Nilai: {approver1Score}</span>}
+                </label>
+                <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5 min-h-[48px]">
+                  {approver1Note ? (
+                    <span className="text-xs text-gray-700 leading-relaxed">{approver1Note}</span>
+                  ) : (
+                    <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500 flex items-center justify-between">
+                  <span>Catatan Approver 2</span>
+                  {approver2Score && <span className="text-emerald-700 font-bold">Nilai: {approver2Score}</span>}
+                </label>
+                <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5 min-h-[48px]">
+                  {approver2Note ? (
+                    <span className="text-xs text-gray-700 leading-relaxed">{approver2Note}</span>
+                  ) : (
+                    <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500 flex items-center justify-between">
-              <span>Catatan Approver 2</span>
-              {approver2Score && <span className="text-emerald-700 font-bold">Nilai: {approver2Score}</span>}
-            </label>
-            <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5 min-h-[48px]">
-              {approver2Note ? (
-                <span className="text-xs text-gray-700 leading-relaxed">{approver2Note}</span>
-              ) : (
-                <span className="text-xs text-gray-400 italic">Belum ada catatan</span>
-              )}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
@@ -1768,6 +1790,7 @@ function SmartGoalsCheckInWorkspace({
         module="SMART Goals"
         phase="measurement"
         title="History Catatan Approver"
+        defaultOpen={false}
       />
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}

@@ -1361,6 +1361,7 @@ function SMARTGoalsWorkspace({
         module="SMART Goals"
         phase="setting"
         title="Catatan dari Approver"
+        defaultOpen={false}
       />
 
       {showConfirm && <ConfirmModal onCancel={() => setShowConfirm(false)} onConfirm={handleConfirm} />}

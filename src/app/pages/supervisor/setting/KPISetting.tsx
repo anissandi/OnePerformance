@@ -10469,6 +10469,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           module="KPI"
           phase="setting"
           title="Catatan dari Approver"
+          defaultOpen={false}
         />
       )}
 

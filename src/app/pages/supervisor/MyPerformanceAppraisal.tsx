@@ -230,6 +230,7 @@ function KPITab({ onOpenRcaTab }: { onOpenRcaTab: () => void }) {
         phase="measurement"
         title="History Catatan Approver (per Bulan)"
         monthly
+        defaultOpen={false}
       />
 
       {/* ── History Evidence per Bulan (sesuai KPI tracking months) ── */}

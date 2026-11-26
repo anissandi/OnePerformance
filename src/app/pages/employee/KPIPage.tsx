@@ -20,7 +20,7 @@ import {
   resolveKpiColorBandMeta,
   sanitizeKpiNumericInput,
 } from "../../utils/kpiNumberAndPeriod";
-import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info, RotateCcw } from "lucide-react";
+import { Plus, X, Eye, Send, CheckCircle2, Edit3, Upload, FileText, Paperclip, AlertTriangle, MessageSquare, ChevronDown, ChevronUp, Lock, LockOpen, FileEdit, UserCircle2, ArrowLeft, Info, RotateCcw, Download } from "lucide-react";
 import { loadAllKPIComments, loadKPICommentsForEmployee } from "../shared/kpiCommentsStore";
 import { loadMonthlyNotes } from "../shared/kpiMonthlyNotesStore";
 import { saveEvidenceFiles, loadEvidenceFiles } from "../shared/kpiEvidenceStore";
@@ -3820,6 +3820,8 @@ function fileIcon(type: string) {
 
 function EvidenceUploadSection({
   files,
+  allFilesCount,
+  allFilesTotalBytes,
   onAdd,
   onRemove,
   editable,
@@ -3827,8 +3829,11 @@ function EvidenceUploadSection({
   ownerUser,
   monthLabels,
   uploadMonthLabels,
+  onPreviewFile,
 }: {
   files: EvidenceFile[];
+  allFilesCount?: number;
+  allFilesTotalBytes?: number;
   onAdd: (files: EvidenceFile[]) => void;
   onRemove?: (id: string) => void;
   editable: boolean;
@@ -3837,12 +3842,14 @@ function EvidenceUploadSection({
   monthLabels: string[];
   /** Bulan yang boleh diupload (bulan tracking baru / belum diajukan / revisi) */
   uploadMonthLabels?: string[];
+  onPreviewFile?: (file: EvidenceFile) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const selectable = uploadMonthLabels ?? monthLabels;
   const [selectedMonth, setSelectedMonth] = useState<string>(selectable[selectable.length - 1] ?? "");
   const [open, setOpen] = useState(true);
   const [staged, setStaged] = useState<{ files: EvidenceFile[]; month: string } | null>(null);
+  void allFilesCount;
 
   // Saat bulan tracking baru ditambahkan, otomatis pilih bulan terbaru agar evidence langsung dapat diupload
   const selectableKey = selectable.join("|");
@@ -3856,7 +3863,7 @@ function EvidenceUploadSection({
     if (!raw || !selectedMonth) return;
     const rawArr = Array.from(raw);
     const MAX_TOTAL_BYTES = 10 * 1024 * 1024;
-    const existingTotalBytes = files.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+    const existingTotalBytes = allFilesTotalBytes ?? files.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
     const incomingBytes = rawArr.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
     if (existingTotalBytes + incomingBytes > MAX_TOTAL_BYTES) {
       toast.error("Total ukuran lampiran Evidence Documents melebihi batas maksimal 10 MB.");
@@ -3946,7 +3953,7 @@ function EvidenceUploadSection({
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 bg-gray-50">
           <Paperclip className="w-4 h-4 text-[#1A284F]" />
-          <span className="font-bold text-sm text-[#1A284F]">Evidence Documents</span>
+          <span className="font-bold text-sm text-[#1A284F]">Upload Evidence Documents</span>
           <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#1A284F]/10 text-[#1A284F]">
             {files.length} file{files.length !== 1 ? "s" : ""}
           </span>
@@ -3958,7 +3965,7 @@ function EvidenceUploadSection({
                   : "bg-amber-50 text-amber-700 border-amber-200"
               }`}
             >
-              {monthsWithFiles.length}/{monthLabels.length} bulan terpenuhi (Wajib semua bulan)
+              {monthsWithFiles.length}/{monthLabels.length} bulan aktif terpenuhi
             </span>
           )}
           <button
@@ -4010,7 +4017,11 @@ function EvidenceUploadSection({
 
             {/* File list — wraps horizontally */}
             {files.length === 0 ? (
-              !editable && <p className="text-xs text-gray-400 italic text-center py-2">Belum ada evidence yang diupload.</p>
+              !editable && (
+                <p className="text-xs text-gray-400 italic text-center py-2">
+                  Tidak ada pengajuan evidence aktif (dokumen bulan yang sudah Full Approved tersimpan pada History Evidence Document di bawah).
+                </p>
+              )
             ) : (
               <div className="flex flex-col gap-3">
                 {monthsWithFiles.map((month) => {
@@ -4024,13 +4035,23 @@ function EvidenceUploadSection({
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {monthFiles.map((f) => (
-                          <div key={f.id} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-50 border border-gray-100 hover:border-gray-200 transition-colors max-w-[220px]">
-                            <span className="text-sm shrink-0 leading-none">{fileIcon(f.type)}</span>
+                          <div key={f.id} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-50 border border-gray-100 hover:border-gray-200 transition-colors max-w-[260px]">
+                            <FileText className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                             <a href={f.url || f.dataUrl || "#"} download={f.name}
                               className="text-xs font-medium text-[#1A284F] hover:underline truncate" title={f.name}>
                               {f.name}
                             </a>
                             <span className="text-[10px] text-gray-400 shrink-0 ml-1">{formatBytes(f.size)}</span>
+                            {onPreviewFile && (
+                              <button
+                                type="button"
+                                onClick={() => onPreviewFile(f)}
+                                className="p-0.5 rounded text-blue-600 hover:bg-blue-50 transition-colors shrink-0 cursor-pointer"
+                                title="Lihat Evidence"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             {canDelete && onRemove && (
                               <button type="button" onClick={() => onRemove(f.id)} className="ml-0.5 text-gray-300 hover:text-red-500 transition-colors shrink-0" title="Hapus evidence">
                                 <X className="w-3 h-3" />
@@ -4142,6 +4163,127 @@ function KpiMonthStatusStrip({ statuses }: { statuses: Array<{ label: string; st
   );
 }
 
+function ValidatedEvidenceHistorySection({
+  files,
+  validatedMonthsOrdered,
+  onPreviewFile,
+}: {
+  files: EvidenceFile[];
+  validatedMonthsOrdered: string[];
+  onPreviewFile?: (file: EvidenceFile) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [monthFilter, setMonthFilter] = useState<string>("all");
+  const distinctMonths = Array.from(
+    new Set([
+      ...validatedMonthsOrdered.filter((m) => files.some((f) => f.month === m)),
+      ...files.map((f) => f.month),
+    ]),
+  );
+  const filteredMonths = monthFilter === "all" ? distinctMonths : distinctMonths.filter((m) => m === monthFilter);
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 px-5 py-3.5 bg-[#1e3a5f] text-white cursor-pointer"
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold">
+          <Paperclip className="w-4 h-4 text-emerald-300" />
+          History Evidence Document (Bulan Full Approved / Validated)
+          <span className="ml-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium">
+            {files.length} file{files.length !== 1 ? "s" : ""}
+          </span>
+        </span>
+        <ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="p-4 space-y-3">
+          {distinctMonths.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {["all", ...distinctMonths].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMonthFilter(m)}
+                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                    monthFilter === m
+                      ? "bg-[#1e3a5f] text-white border-[#1e3a5f]"
+                      : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  {m === "all" ? "Semua Bulan" : m}
+                </button>
+              ))}
+            </div>
+          )}
+          {files.length === 0 ? (
+            <p className="py-6 text-center text-sm text-gray-400">
+              Belum ada dokumen evidence dari bulan yang sudah Full Approved (Validated).
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {filteredMonths.map((month) => {
+                const monthFiles = files.filter((f) => f.month === month);
+                return (
+                  <div key={month} className="rounded-lg border border-slate-100 bg-slate-50/50 p-3 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        {month} · Validated
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        {monthFiles.length} file{monthFiles.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {monthFiles.map((f) => {
+                        const href = f.url || f.dataUrl || "";
+                        return (
+                          <div
+                            key={f.id}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-slate-200 max-w-[290px]"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span className="text-xs font-medium text-slate-800 truncate flex-1" title={f.name}>
+                              {f.name}
+                            </span>
+                            <span className="text-[10px] text-slate-400 shrink-0">{formatBytes(f.size)}</span>
+                            {onPreviewFile && (
+                              <button
+                                type="button"
+                                onClick={() => onPreviewFile(f)}
+                                className="p-1 rounded text-blue-600 hover:bg-blue-50 transition-colors shrink-0 cursor-pointer"
+                                title="Lihat Evidence"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {href && (
+                              <a
+                                href={href}
+                                download={f.name}
+                                className="p-1 rounded text-slate-500 hover:text-[#1A284F] hover:bg-slate-100 transition-colors shrink-0"
+                                title="Download Evidence"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </a>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function KPIHistorySection({ employeeId }: { employeeId?: string }) {
   const empId = employeeId ?? getActiveUser().employeeId;
   return (
@@ -4151,6 +4293,7 @@ function KPIHistorySection({ employeeId }: { employeeId?: string }) {
       phase="measurement"
       title="History Catatan Approver (per Bulan)"
       monthly
+      defaultOpen={false}
     />
   );
 }
@@ -4687,6 +4830,7 @@ function KPIWorkspace({
   }, [submitted, submittedDate, activeUser.employeeId]);
 
   const [evidenceFiles, setEvidenceFiles] = useState<EvidenceFile[]>(() => loadEvidenceFiles(activeUser.employeeId));
+  const [previewOwnerEvidence, setPreviewOwnerEvidence] = useState<EvidenceFile | null>(null);
 
   // Simpan evidence di luar state updater (menghindari setState saat render & event sinkronisasi yang menimpa list)
   const addEvidence = (files: EvidenceFile[]) => {
@@ -5916,17 +6060,102 @@ function KPIWorkspace({
       {/* Sisi owner: tabel RCA disembunyikan; riwayat RCA diakses melalui tag RCA (kuning) pada tabel KPI */}
 
       <EvidenceUploadSection
-        files={evidenceFiles}
+        files={
+          editRequestApproved
+            ? evidenceFiles
+            : evidenceFiles.filter((f) => !validatedMonthLabels.has(f.month))
+        }
+        allFilesCount={evidenceFiles.length}
+        allFilesTotalBytes={evidenceFiles.reduce((sum, item) => sum + (Number(item.size) || 0), 0)}
         onAdd={addEvidence}
         onRemove={canDelete ? removeEvidence : undefined}
         canDelete={canDelete && !submitted && !isLockedByDeadline}
         ownerUser={activeUser}
         editable={!isViewOnly && (canCreate || canEdit) && ((!isLockedByDeadline && evidenceUploadMonths.length > 0) || editRequestApproved)}
-        monthLabels={months.map((m) => m.label)}
+        monthLabels={
+          editRequestApproved
+            ? months.map((m) => m.label)
+            : months.map((m) => m.label).filter((lbl) => !validatedMonthLabels.has(lbl))
+        }
         uploadMonthLabels={editRequestApproved ? months.map((m) => m.label) : evidenceUploadMonths}
+        onPreviewFile={(file) => setPreviewOwnerEvidence(file)}
+      />
+
+      <ValidatedEvidenceHistorySection
+        files={evidenceFiles.filter((f) => validatedMonthLabels.has(f.month))}
+        validatedMonthsOrdered={kpiMonthStatuses.filter((m) => m.state === "validated").map((m) => m.label)}
+        onPreviewFile={(file) => setPreviewOwnerEvidence(file)}
       />
 
       <KPIHistorySection employeeId={activeUser.employeeId} />
+
+      {previewOwnerEvidence && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPreviewOwnerEvidence(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3.5 bg-[#1A284F] text-white">
+              <div className="flex items-center gap-2 min-w-0">
+                <Paperclip className="w-4 h-4 text-sky-300 shrink-0" />
+                <span className="text-sm font-bold truncate">{previewOwnerEvidence.name}</span>
+                <span className="text-[11px] bg-white/15 px-2 py-0.5 rounded-full shrink-0">
+                  {previewOwnerEvidence.month}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {(previewOwnerEvidence.url || previewOwnerEvidence.dataUrl) && (
+                  <a
+                    href={previewOwnerEvidence.url || previewOwnerEvidence.dataUrl}
+                    download={previewOwnerEvidence.name}
+                    className="flex items-center gap-1.5 text-xs font-semibold bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPreviewOwnerEvidence(null)}
+                  className="p-1.5 rounded-lg hover:bg-white/15 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-gray-100 p-4 flex items-center justify-center min-h-[380px]">
+              {(previewOwnerEvidence.url || previewOwnerEvidence.dataUrl) ? (
+                previewOwnerEvidence.type?.startsWith("image/") ||
+                /\.(jpg|jpeg|png|gif|webp)$/i.test(previewOwnerEvidence.name) ? (
+                  <img
+                    src={previewOwnerEvidence.url || previewOwnerEvidence.dataUrl}
+                    alt={previewOwnerEvidence.name}
+                    className="max-w-full max-h-[72vh] object-contain rounded-lg shadow"
+                  />
+                ) : previewOwnerEvidence.type === "application/pdf" || /\.pdf$/i.test(previewOwnerEvidence.name) ? (
+                  <iframe
+                    src={previewOwnerEvidence.url || previewOwnerEvidence.dataUrl}
+                    title={previewOwnerEvidence.name}
+                    className="w-full h-[72vh] rounded-lg bg-white border border-gray-200"
+                  />
+                ) : (
+                  <div className="bg-white rounded-xl border border-gray-200 p-8 text-center max-w-md space-y-2">
+                    <FileText className="w-10 h-10 text-[#1A284F] mx-auto" />
+                    <p className="text-sm font-bold text-gray-800 break-all">{previewOwnerEvidence.name}</p>
+                    <p className="text-xs text-gray-500">
+                      Bulan: {previewOwnerEvidence.month} · Ukuran: {formatBytes(previewOwnerEvidence.size)}
+                    </p>
+                  </div>
+                )
+              ) : (
+                <p className="text-xs text-gray-500">Pratinjau tidak tersedia untuk dokumen ini.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
 
       {showAddModal && (

@@ -2,7 +2,8 @@
 import { loadAppraisalSelf } from "../pages/shared/appraisalFormStore";
 import { SmartGoalsProgressCard } from "./SmartGoalsProgressCard";
 import { loadMSSelfRatings, loadAllMSApprovers } from "../pages/shared/msStore";
-import { normalizeEmployeeId, workflowAlias, loadWorkflowRecords } from "../pages/shared/appraisalWorkflowStore";
+import { getKpiMonthStatuses, normalizeEmployeeId, workflowAlias, loadWorkflowRecords } from "../pages/shared/appraisalWorkflowStore";
+import { ApproverNotesHistory } from "./ApproverNotesHistory";
 import React, { useState } from "react";
 import { useLanguage } from "../context/LangContext";
 import {
@@ -417,6 +418,7 @@ function KPIReview({ row }: { row: ApprovalRow }) {
   const [highlightedRcaMonth, setHighlightedRcaMonth] = useState<string | null>(null);
   const [showRcaTable, setShowRcaTable] = useState<boolean>(true);
   const [previewEvFile, setPreviewEvFile] = useState<StoredEvidenceFile | null>(null);
+  const [validatedEvHistoryOpen, setValidatedEvHistoryOpen] = useState<boolean>(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -455,6 +457,18 @@ function KPIReview({ row }: { row: ApprovalRow }) {
 
   const ownerMonths = trackingSnap.months;
   const ownerCellsMap = trackingSnap.cellsMap;
+  const validatedMonthSet = React.useMemo(
+    () => new Set(getKpiMonthStatuses(row.employeeId).filter((m) => m.state === "validated").map((m) => m.label)),
+    [row.employeeId, trackingSnap],
+  );
+  const currentSubmissionEvidenceFiles = React.useMemo(
+    () => evidenceFiles.filter((f) => !validatedMonthSet.has(f.month)),
+    [evidenceFiles, validatedMonthSet],
+  );
+  const validatedHistoryEvidenceFiles = React.useMemo(
+    () => evidenceFiles.filter((f) => validatedMonthSet.has(f.month)),
+    [evidenceFiles, validatedMonthSet],
+  );
   const editedCellsDiff = React.useMemo(() => {
     const normId = normalizeEmployeeId(row.employeeId);
     const wf = loadWorkflowRecords().find(
@@ -521,27 +535,31 @@ function KPIReview({ row }: { row: ApprovalRow }) {
         />
       )}
 
-      {/* ── Evidence Documents Section ───────────────────────────────────────── */}
+      {/* ── Evidence Documents Section (Bulan Pengajuan Saat Ini) ─────────────── */}
       <div className="border-t border-gray-200 pt-5 flex flex-col gap-3 mt-2">
         <div className="flex items-center gap-2">
           <Paperclip className="w-4 h-4 text-[#1A284F]" />
-          <h4 className="font-bold text-[#1A284F] text-sm">Evidence Documents</h4>
-          {evidenceFiles.length > 0 && (
+          <h4 className="font-bold text-[#1A284F] text-sm">Evidence Documents (Bulan Pengajuan)</h4>
+          {currentSubmissionEvidenceFiles.length > 0 && (
             <span className="ml-auto text-xs bg-blue-50 text-[#1A284F] border border-[#1A284F]/20 px-2 py-0.5 rounded-full font-semibold">
-              {evidenceFiles.length} file{evidenceFiles.length !== 1 ? "s" : ""}
+              {currentSubmissionEvidenceFiles.length} file{currentSubmissionEvidenceFiles.length !== 1 ? "s" : ""}
             </span>
           )}
         </div>
-        {evidenceFiles.length === 0 ? (
+        {currentSubmissionEvidenceFiles.length === 0 ? (
           <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-5 flex flex-col items-center gap-1">
             <Paperclip className="w-6 h-6 text-gray-300 mb-1" />
-            <p className="text-xs text-gray-400 italic">No evidence documents uploaded by employee.</p>
+            <p className="text-xs text-gray-400 italic">
+              {validatedHistoryEvidenceFiles.length > 0
+                ? "Tidak ada lampiran bulan baru (dokumen bulan yang sudah Full Approved tersimpan di History Evidence Document di bawah)."
+                : "Belum ada dokumen evidence yang diupload karyawan."}
+            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-3">
             {/* Group by month */}
-            {Array.from(new Set(evidenceFiles.map((f) => f.month))).map((month) => {
-              const monthFiles = evidenceFiles.filter((f) => f.month === month);
+            {Array.from(new Set(currentSubmissionEvidenceFiles.map((f) => f.month))).map((month) => {
+              const monthFiles = currentSubmissionEvidenceFiles.filter((f) => f.month === month);
               return (
                 <div key={month} className="flex flex-col gap-1.5">
                   <span className="text-[11px] font-bold uppercase tracking-widest text-[#1A284F] bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-full w-fit">
@@ -583,6 +601,86 @@ function KPIReview({ row }: { row: ApprovalRow }) {
           </div>
         )}
       </div>
+
+      {/* ── History Evidence Document (Bulan Full Approved / Validated) — Default Collapse ── */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setValidatedEvHistoryOpen((v) => !v)}
+          className="w-full flex items-center justify-between gap-3 px-5 py-3.5 bg-[#1e3a5f] text-white cursor-pointer"
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold">
+            <Paperclip className="w-4 h-4 text-emerald-300" />
+            History Evidence Document (Bulan Full Approved / Validated)
+            <span className="ml-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium">
+              {validatedHistoryEvidenceFiles.length} file{validatedHistoryEvidenceFiles.length !== 1 ? "s" : ""}
+            </span>
+          </span>
+          <ChevronDown className={`w-4 h-4 transition-transform ${validatedEvHistoryOpen ? "rotate-180" : ""}`} />
+        </button>
+        {validatedEvHistoryOpen && (
+          <div className="p-4">
+            {validatedHistoryEvidenceFiles.length === 0 ? (
+              <p className="py-5 text-center text-xs text-gray-400 italic">
+                Belum ada dokumen evidence pada bulan yang sudah Full Approved (Validated).
+              </p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {Array.from(new Set(validatedHistoryEvidenceFiles.map((f) => f.month))).map((month) => {
+                  const monthFiles = validatedHistoryEvidenceFiles.filter((f) => f.month === month);
+                  return (
+                    <div key={month} className="rounded-lg border border-slate-100 bg-slate-50/50 p-3 flex flex-col gap-1.5">
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 w-fit">
+                        {month} · Validated
+                      </span>
+                      <div className="flex flex-col gap-1.5">
+                        {monthFiles.map((file) => {
+                          const fileHref = file.url || file.dataUrl || "";
+                          return (
+                            <div key={file.id} className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-gray-200">
+                              <Paperclip className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span className="text-[11px] text-gray-700 flex-1 truncate font-medium">{file.name}</span>
+                              <span className="text-[10px] text-gray-400 shrink-0 mr-1">{formatEvidenceSize(file.size)}</span>
+                              <button
+                                type="button"
+                                onClick={() => setPreviewEvFile(file)}
+                                className="p-1 rounded hover:bg-blue-50 text-blue-600 hover:text-[#1A284F] transition-colors shrink-0 cursor-pointer"
+                                title="Lihat Evidence"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+                              {fileHref ? (
+                                <a
+                                  href={fileHref}
+                                  download={file.name}
+                                  className="p-1 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700 transition-colors shrink-0"
+                                  title="Download"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                </a>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── History Catatan Approver (per Bulan) — Default Collapse ── */}
+      <ApproverNotesHistory
+        employeeId={row.employeeId}
+        module="KPI"
+        phase="measurement"
+        title="History Catatan Approver (per Bulan)"
+        monthly
+        defaultOpen={false}
+      />
 
       {/* Modal Preview Evidence KPI */}
       {previewEvFile && (
@@ -3100,8 +3198,8 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
             {/* Komentar & History Komentar Approver (untuk modul selain SMART Goals, dan DISEMBUNYIKAN pada Checker HR Unit) */}
             {row.type !== "SMART Goals" && !isCheckerStage && (
               <div className="space-y-4">
-                {/* History Komentar Approver 1 — tampil untuk Approver 2 dan Validator HR ICF */}
-                {(workflowStage === "approver2" || isValidatorStage) && (
+                {/* History Komentar Approver 1 — tampil untuk Approver 2 dan Validator HR ICF (untuk KPI sudah tampil terkelompok per bulan di History Catatan Approver di atas) */}
+                {row.type !== "KPI" && (workflowStage === "approver2" || isValidatorStage) && (
                   <div className="border border-blue-200 rounded-2xl overflow-hidden bg-blue-50/40 shadow-sm">
                     <div className="px-4 py-2.5 flex items-center justify-between gap-2 bg-blue-50 border-b border-blue-100">
                       <div className="flex items-center gap-2">
@@ -3121,7 +3219,7 @@ function StandardReviewDrawer({ row, reviewerRole, onClose, onApprove, onRevisio
                 )}
 
                 {/* History Komentar Approver 2 — tampil untuk Validator HR ICF (atau saat Approver 1 melihat History setelah A2 selesai) */}
-                {(isValidatorStage || (workflowStage === "approver1" && effectiveReadOnly && Boolean(prevA2CommentText))) && (
+                {row.type !== "KPI" && (isValidatorStage || (workflowStage === "approver1" && effectiveReadOnly && Boolean(prevA2CommentText))) && (
                   <div className="border border-purple-200 rounded-2xl overflow-hidden bg-purple-50/40 shadow-sm">
                     <div className="px-4 py-2.5 flex items-center justify-between gap-2 bg-purple-50 border-b border-purple-100">
                       <div className="flex items-center gap-2">

@@ -40,7 +40,7 @@ export function ApproverNotesHistory({
   phase,
   title = "Catatan dari Approver",
   monthly = false,
-  defaultOpen = true,
+  defaultOpen = false,
 }: Props) {
   const [tick, setTick] = React.useState(0);
   const [open, setOpen] = React.useState(defaultOpen);

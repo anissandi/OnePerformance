@@ -345,7 +345,7 @@ export function ViewProfile() {
   const [selectedYear, setSelectedYear] = useState<number>(CURRENT_YEAR);
   const [yearOpen, setYearOpen] = useState(false);
   const [tick, setTick] = useState(0);
-  const [summaryNoteOpen, setSummaryNoteOpen] = useState(true);
+  const [summaryNoteOpen, setSummaryNoteOpen] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | undefined>(() =>
     getUserProfilePhoto(activeUser.employeeId),
@@ -509,8 +509,8 @@ export function ViewProfile() {
   const formatApproverDisplay = (u: typeof profileAp1User, rawRef?: string): string => {
     const ref = String(rawRef ?? "").trim();
     if (u) {
-      const idTag = u.employeeId || u.regNo || "";
-      return idTag ? `${u.name} (${idTag})` : u.name;
+      const posTag = String(u.position ?? "").trim();
+      return posTag ? `${u.name} (${posTag})` : u.name;
     }
     return ref && ref !== "—" ? ref : "-";
   };
@@ -989,9 +989,7 @@ export function ViewProfile() {
                 <div>
                   <h1 className="text-xl font-bold text-gray-900">{activeUser.name || USER.name}</h1>
                   <p className="text-sm text-gray-500">
-                    <span className="font-semibold text-[#1A284F]">{activeUser.employeeId || USER.employeeId}</span>
-                    {" | "}
-                    {activeUser.position || USER.position}
+                    {valOrDash(activeUser.position)}
                   </p>
                   <div className="flex items-center gap-2 mt-1.5">
                     <span
