@@ -1,6 +1,7 @@
 // Shared Master KPI store (KPI Variable & KPI Format) — persisted to Supabase (pa_master_catalogs & pa_kv_state)
 
 import { safeGetLocalRaw, savePersistedState } from "../../../services/supabaseClient";
+import { getMasterCompanyGroups, getMasterCompanyLocations } from "./masterCompanyStore";
 
 const KEY = "master_kpi_data";
 export const MASTER_KPI_FORMATS_KEY = "master_kpi_formats_v1";
@@ -151,6 +152,10 @@ function normalizeMasterTrackingPeriods(list?: string[]): string[] {
 
 export function loadMasterKpi(): MasterKpiStore {
   try {
+    const dynScopes = [
+      ...getMasterCompanyGroups().map((g) => g.name),
+      ...getMasterCompanyLocations().map((l) => l.company),
+    ];
     const stored = safeGetLocalRaw(KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as Partial<MasterKpiStore>;
@@ -159,8 +164,13 @@ export function loadMasterKpi(): MasterKpiStore {
         : DEFAULTS.perspektif;
       return {
         scope: Array.isArray(parsed.scope) && parsed.scope.length > 0
-          ? Array.from(new Set(parsed.scope.map((s) => (s.trim().toUpperCase() === "ASD" ? "PT RSUP ASD" : s))))
-          : DEFAULTS.scope,
+          ? Array.from(
+              new Set([
+                ...parsed.scope.map((s) => (s.trim().toUpperCase() === "ASD" ? "PT RSUP ASD" : s)),
+                ...dynScopes,
+              ]),
+            )
+          : Array.from(new Set([...DEFAULTS.scope, ...dynScopes])),
         section: Array.isArray(parsed.section) && parsed.section.length > 0 ? parsed.section : DEFAULTS.section,
         personalSection:
           Array.isArray(parsed.personalSection) && parsed.personalSection.length > 0
@@ -191,7 +201,14 @@ export function loadMasterKpi(): MasterKpiStore {
       };
     }
   } catch { /* ignore */ }
-  return DEFAULTS;
+  const dynScopes = [
+    ...getMasterCompanyGroups().map((g) => g.name),
+    ...getMasterCompanyLocations().map((l) => l.company),
+  ];
+  return {
+    ...DEFAULTS,
+    scope: Array.from(new Set([...DEFAULTS.scope, ...dynScopes])),
+  };
 }
 
 export function saveMasterKpi(data: MasterKpiStore): void {

@@ -72,18 +72,30 @@ export function loadUnitCustomWeightColumns(companyName: string): CustomScoreWei
   const canon = canonicalizeCompanyUnitName(companyName);
   const list = map[canon] ?? (canon === "PT RSUP ASD" ? map["ASD"] : undefined) ?? map[companyName] ?? [];
   if (!Array.isArray(list)) return [];
-  return list.filter((c): c is CustomScoreWeightColumn => Boolean(c && typeof c.key === "string" && typeof c.label === "string"));
+  return list
+    .filter((c): c is CustomScoreWeightColumn => Boolean(c && typeof c.key === "string" && typeof c.label === "string"))
+    .map((c) => {
+      const normLbl = c.label.trim().toLowerCase().replace(/\s*\/\s*/g, "/") === "gm/vgm" ? "GM / VGM" : c.label;
+      const normGrp = (c.groupName || c.label).trim().toLowerCase().replace(/\s*\/\s*/g, "/") === "gm/vgm" ? "GM / VGM" : (c.groupName || c.label);
+      return { ...c, label: normLbl, groupName: normGrp };
+    });
 }
 
 export function saveUnitCustomWeightColumns(companyName: string, cols: readonly CustomScoreWeightColumn[]): void {
   const canon = canonicalizeCompanyUnitName(companyName);
   const saved = loadAllCustomColumnsMap();
   if (canon === "PT RSUP ASD") delete saved["ASD"];
-  const cleaned = cols.map((c) => ({
-    key: c.key || toCustomGroupingColumnKey(c.groupName || c.label),
-    label: c.label.trim(),
-    groupName: (c.groupName || c.label).trim(),
-  }));
+  const cleaned = cols.map((c) => {
+    const rawLabel = c.label.trim();
+    const rawGroup = (c.groupName || c.label).trim();
+    const label = rawLabel.toLowerCase().replace(/\s*\/\s*/g, "/") === "gm/vgm" ? "GM / VGM" : rawLabel;
+    const groupName = rawGroup.toLowerCase().replace(/\s*\/\s*/g, "/") === "gm/vgm" ? "GM / VGM" : rawGroup;
+    return {
+      key: c.key || toCustomGroupingColumnKey(groupName || label),
+      label,
+      groupName,
+    };
+  });
   const next = { ...saved, [canon]: cleaned };
   savePersistedState(CUSTOM_COLS_KEY, next, {
     kind: "kv-state",

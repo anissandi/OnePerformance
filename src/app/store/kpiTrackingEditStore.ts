@@ -5,6 +5,7 @@ import {
   getActiveUser,
   isAdminOrHrIcfRole,
   loadManagedUsers,
+  resolveUniqueUserByApproverRef,
   shouldBypassCheckerForSubmission,
   type ManagedUser,
 } from "./authStore";
@@ -71,17 +72,7 @@ export interface KpiTrackingEditRequest {
 }
 
 function resolveUserByRef(allUsers: ManagedUser[], ref?: string): ManagedUser | undefined {
-  const clean = String(ref ?? "").trim().toLowerCase();
-  if (!clean) return undefined;
-  const cleanNum = clean.replace(/^(?:emp-?|e)0*/i, "");
-  return allUsers.find(
-    (u) =>
-      u.status === "Active" &&
-      ((u.regNo ?? "").trim().toLowerCase() === clean ||
-        u.employeeId.trim().toLowerCase() === clean ||
-        u.name.trim().toLowerCase() === clean ||
-        Boolean(cleanNum && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === cleanNum)),
-  );
+  return resolveUniqueUserByApproverRef(allUsers, ref, true);
 }
 
 export function resolveKpiTrackingEditChain(

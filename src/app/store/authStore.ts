@@ -21,7 +21,7 @@ export type AppUserRole =
   | "Supervisor"
   | "Departement"
   | "Division"
-  | "vGM"
+  | "VGM"
   | "Coordinator"
   | "GM"
   | "HR Unit"
@@ -40,7 +40,7 @@ export type UserGrouping =
   | "Ka./Wa.Ka.Bagian"
   | "Ka./Wa.Ka.Dept"
   | "Ka./Wa.Ka.Div ke atas"
-  | "GM / vGM"
+  | "GM / VGM"
   | "Direktur / Director"
   | string;
 
@@ -225,8 +225,14 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     }
     soyCalibrationRoleByUnit = nextSoyCal;
   }
+  const normalizedRole =
+    String(user.role ?? "").trim().toLowerCase() === "vgm" ? "VGM" : user.role;
+  const normalizedGroupings =
+    normGroupKey(user.groupings) === "gm/vgm" ? "GM / VGM" : user.groupings;
   return {
     ...user,
+    role: normalizedRole,
+    groupings: normalizedGroupings,
     company,
     regNoAp1,
     regNoAp2,
@@ -454,6 +460,19 @@ function getApproverAdjacencyForUsers(allUsers: ManagedUser[]): ApproverAdjacenc
   const byEmp = new Map<string, ManagedUser[]>();
   const byName = new Map<string, ManagedUser[]>();
   const byEmpNum = new Map<string, ManagedUser[]>();
+  // Hitung frekuensi nama & seluruh ID resmi agar fallback nama HANYA dipakai jika:
+  // 1) referensi bukan Reg No / Employee ID siapa pun, DAN
+  // 2) hanya ada tepat 1 karyawan dengan nama tsb (mencegah tabrakan nama atasan yang sama!).
+  const nameFreq = new Map<string, number>();
+  const knownIds = new Set<string>();
+  for (const u of allUsers) {
+    const r = (u.regNo ?? "").trim().toLowerCase();
+    const e = u.employeeId.trim().toLowerCase();
+    const n = u.name.trim().toLowerCase();
+    if (r) knownIds.add(r);
+    if (e) knownIds.add(e);
+    if (n) nameFreq.set(n, (nameFreq.get(n) ?? 0) + 1);
+  }
   const pushIdx = (map: Map<string, ManagedUser[]>, key: string, u: ManagedUser) => {
     if (!key) return;
     const list = map.get(key);
@@ -467,7 +486,9 @@ function getApproverAdjacencyForUsers(allUsers: ManagedUser[]): ApproverAdjacenc
       if (!ap) continue;
       pushIdx(byReg, ap, cand);
       pushIdx(byEmp, ap, cand);
-      pushIdx(byName, ap, cand);
+      if (!knownIds.has(ap) && (nameFreq.get(ap) ?? 0) === 1) {
+        pushIdx(byName, ap, cand);
+      }
       if (/^(?:emp-?|e)\d+$/i.test(ap)) {
         pushIdx(byEmpNum, normEmpNum(ap), cand);
       }
@@ -476,6 +497,67 @@ function getApproverAdjacencyForUsers(allUsers: ManagedUser[]): ApproverAdjacenc
   const built: ApproverAdjacencyIndex = { byReg, byEmp, byName, byEmpNum };
   _approverAdjByUsersRef.set(allUsers, built);
   return built;
+}
+
+/**
+ * Resolusi ketat user atasan berdasarkan `Reg No` atau `Employee ID` (mencegah tabrakan nama atasan yang sama).
+ * Fallback nama HANYA diizinkan apabila referensi tidak cocok ke Reg No / Employee ID siapa pun DAN
+ * di seluruh sistem hanya ada tepat 1 karyawan dengan nama tersebut.
+ */
+export function resolveUniqueUserByApproverRef(
+  allUsers: ManagedUser[],
+  refValue?: string | null,
+  onlyActive = false,
+): ManagedUser | undefined {
+  const ref = String(refValue ?? "").trim().toLowerCase();
+  if (!ref) return undefined;
+  const pool = onlyActive ? allUsers.filter((u) => u.status === "Active") : allUsers;
+  const byRegOrEmp = pool.find(
+    (u) => (u.regNo ?? "").trim().toLowerCase() === ref || u.employeeId.trim().toLowerCase() === ref,
+  );
+  if (byRegOrEmp) return byRegOrEmp;
+  if (/^(?:emp-?|e)\d+$/i.test(ref)) {
+    const refNum = normEmpNum(ref);
+    if (refNum) {
+      const byNum = pool.find(
+        (u) => /^(?:emp-?|e)\d+$/i.test(u.employeeId.trim()) && normEmpNum(u.employeeId) === refNum,
+      );
+      if (byNum) return byNum;
+    }
+  }
+  const nameMatches = allUsers.filter((u) => u.name.trim().toLowerCase() === ref);
+  if (nameMatches.length === 1) {
+    const single = nameMatches[0];
+    if (!onlyActive || single.status === "Active") return single;
+  }
+  return undefined;
+}
+
+export function doesUserMatchApproverRef(
+  user: ManagedUser,
+  refValue?: string | null,
+  allUsers?: ManagedUser[],
+): boolean {
+  const ref = String(refValue ?? "").trim().toLowerCase();
+  if (!ref) return false;
+  const reg = (user.regNo ?? "").trim().toLowerCase();
+  const emp = user.employeeId.trim().toLowerCase();
+  if ((reg !== "" && ref === reg) || (emp !== "" && ref === emp)) return true;
+  if (/^(?:emp-?|e)\d+$/i.test(ref) && /^(?:emp-?|e)\d+$/i.test(emp)) {
+    const refNum = normEmpNum(ref);
+    if (refNum && normEmpNum(emp) === refNum) return true;
+  }
+  const nm = user.name.trim().toLowerCase();
+  if (nm && nm === ref) {
+    const list = allUsers ?? loadManagedUsers();
+    const anyIdCollision = list.some(
+      (u) => (u.regNo ?? "").trim().toLowerCase() === ref || u.employeeId.trim().toLowerCase() === ref,
+    );
+    if (anyIdCollision) return false;
+    const sameNameCount = list.filter((u) => u.name.trim().toLowerCase() === ref).length;
+    return sameNameCount === 1;
+  }
+  return false;
 }
 
 export function isExcludedFromAppraisalCalibration(user?: { role?: string; groupings?: string; position?: string; company?: string } | null): boolean {
@@ -533,7 +615,7 @@ export function inferGroupingFromPosition(position: string): UserGrouping {
     return "Direktur / Director";
   }
   if (/\bv?gm\b|general manager/i.test(p)) {
-    return "GM / vGM";
+    return "GM / VGM";
   }
   if (/bod|koordinator|divisi/i.test(p)) {
     return "Ka./Wa.Ka.Div ke atas";
@@ -570,6 +652,7 @@ export function isUserApprover(user: ManagedUser, allUsers = loadManagedUsers())
     user.role === "Director" ||
     user.role === "DirectorNonOpr" ||
     user.role === "GM" ||
+    user.role === "VGM" ||
     user.role === "vGM" ||
     user.role === "Coordinator" ||
     user.role === "Division" ||
@@ -639,7 +722,7 @@ export function resolveGroupingForCompanyAndPosition(
     }
     if (v === "gm/vgm" || v === "level gm/vgm") {
       const configuredGroups = loadAccessGroups();
-      return configuredGroups.find((g) => normGroupKey(g) === "gm/vgm") ?? "GM / vGM";
+      return configuredGroups.find((g) => normGroupKey(g) === "gm/vgm") ?? "GM / VGM";
     }
     const configuredGroups = loadAccessGroups();
     const exactGroup = configuredGroups.find((g) => normGroupKey(g) === v);
@@ -738,7 +821,7 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
       return "director_group";
     }
     if (configuredTier === "gm_unit") {
-      const lv = user.role === "vGM" || user.role === "Coordinator" ? "vgm_unit" : "gm_unit";
+      const lv = user.role === "VGM" || user.role === "vGM" || user.role === "Coordinator" ? "vgm_unit" : "gm_unit";
       _authorityMemoByUser.set(user, lv);
       return lv;
     }
@@ -762,7 +845,7 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
   let roleLevel: HierarchyAuthorityLevel = "operational";
   if (user.role === "Director" || user.role === "DirectorNonOpr") roleLevel = "director_group";
   else if (user.role === "GM") roleLevel = "gm_unit";
-  else if (user.role === "vGM" || user.role === "Coordinator") roleLevel = "vgm_unit";
+  else if (user.role === "VGM" || user.role === "vGM" || user.role === "Coordinator") roleLevel = "vgm_unit";
   else if (user.role === "HR Unit") roleLevel = "hr_unit";
   else if (user.role === "Division") roleLevel = "division";
   else if (user.role === "Departement") roleLevel = "department";
@@ -771,7 +854,7 @@ export function resolveUserAuthorityLevel(user: ManagedUser): HierarchyAuthority
   if (configuredTier === "director_group" || effectiveGrouping === "Direktur / Director") {
     groupLevel = "director_group";
   } else if (configuredTier === "gm_unit") {
-    groupLevel = user.role === "vGM" || user.role === "Coordinator" ? "vgm_unit" : "gm_unit";
+    groupLevel = user.role === "VGM" || user.role === "vGM" || user.role === "Coordinator" ? "vgm_unit" : "gm_unit";
   } else if (
     configuredTier === "division" ||
     configuredTier === "department" ||
@@ -806,6 +889,7 @@ export function isUserEligibleForDelegation(user: ManagedUser): boolean {
     user.role === "Director" ||
     user.role === "DirectorNonOpr" ||
     user.role === "GM" ||
+    user.role === "VGM" ||
     user.role === "vGM" ||
     user.role === "Coordinator"
   ) {
@@ -849,24 +933,16 @@ function normEmpNum(val?: string): string {
 
 /**
  * Mengumpulkan seluruh ID karyawan (lowercase) yang berada dalam rantai Approver 1 / Approver 2
- * (baik langsung maupun bertingkat/transitif, termasuk delegasi approval aktif) dari user yang login,
- * tanpa dibatasi Unit Usaha, Divisi, Departemen, Bagian, atau Jabatan.
+ * (baik langsung maupun bertingkat/transitif) MURNI milik `user` sendiri berdasarkan Reg No / Employee ID,
+ * TANPA memasukkan bawahan dari Delegation atau Take Over agar tidak pernah bocor ke /summary, /monitoring,
+ * /team-performance, maupun hitungan Appraisal Analytics.
  */
 export function getTransitiveApproverSubordinateIds(
   user: ManagedUser,
   allUsers = loadManagedUsers(),
 ): Set<string> {
   const transitiveSubIds = new Set<string>();
-  const kpiIdentities = resolveApproverIdentities(user, "KPI", undefined, allUsers);
-  const sgIdentities = resolveApproverIdentities(user, "SMART Goals", undefined, allUsers);
-  const seenSeed = new Set<string>();
-  const seedIdentities = [...kpiIdentities, ...sgIdentities].filter((u) => {
-    const k = u.employeeId.toLowerCase();
-    if (seenSeed.has(k)) return false;
-    seenSeed.add(k);
-    return true;
-  });
-  const queue: ManagedUser[] = seedIdentities.length > 0 ? [...seedIdentities] : [user];
+  const queue: ManagedUser[] = [user];
   const visited = new Set<string>(queue.map((u) => u.employeeId.toLowerCase()));
   const adj = getApproverAdjacencyForUsers(allUsers);
   let head = 0;
@@ -1188,12 +1264,7 @@ export function resolveWorkflowStageForTarget(
   // Identitas approver: diri sendiri + pemberi delegasi aktif untuk modul ini (Approvals → Delegation).
   // Siapa pun yang ditunjuk sebagai AP1/AP2 dapat melakukan approval tanpa dibatasi role/grouping/unit.
   const identities = moduleType && !isSelf ? resolveApproverIdentities(viewer, moduleType, phase, allUsers) : [viewer];
-  const matchesRef = (u: ManagedUser, ref: string) => {
-    const reg = (u.regNo ?? "").trim().toLowerCase();
-    const emp = u.employeeId.trim().toLowerCase();
-    const nm = u.name.trim().toLowerCase();
-    return Boolean(ref) && ((reg !== "" && ref === reg) || (emp !== "" && ref === emp) || (nm !== "" && ref === nm));
-  };
+  const matchesRef = (u: ManagedUser, ref: string) => doesUserMatchApproverRef(u, ref, allUsers);
   const isAp1 = Boolean(target && identities.some((u) => matchesRef(u, ap1)));
   const isAp2 = Boolean(target && identities.some((u) => matchesRef(u, ap2)));
   const isHrUnitChecker = Boolean(
@@ -1332,8 +1403,8 @@ export function getScopedFilterOptionsForUser(
     admin: "Administrator / HR ICF (Semua Unit Usaha)",
     bod: "Board of Directors (Semua Unit Group)",
     director_group: `Level Direktur Group (${groupName} — ${groupUnitsCount} Unit Usaha, GM, Divisi, Dept, Bagian & All Posisi)`,
-    gm_unit: `Level GM/vGM (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
-    vgm_unit: `Level ${user.role === "Coordinator" ? "Coordinator" : "GM/vGM"} (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
+    gm_unit: `Level GM/VGM (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
+    vgm_unit: `Level ${user.role === "Coordinator" ? "Coordinator" : "GM/VGM"} (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
     hr_unit: checkerLabel,
     division: `Level Divisi (${user.division} — ${user.company})`,
     department: `Level Departemen (${user.department} · ${user.division})`,
@@ -1360,22 +1431,22 @@ export function canUserAccessEmployeeData(
   if (isAdminOrHrIcfRole(viewer.role) || viewer.role === "BOD") {
     return true;
   }
-  const q = targetEmployeeIdOrName.trim().toLowerCase().replace(/^emp-?0*/i, "");
-  const viewerNum = viewer.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
-  if (
-    viewer.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-    viewer.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-    (q && viewerNum === q)
-  ) {
+  const targetClean = targetEmployeeIdOrName.trim().toLowerCase();
+  if (!targetClean) return false;
+  const uniqueNameCount = allUsers.filter((u) => u.name.trim().toLowerCase() === targetClean).length;
+  const isUniqueName = uniqueNameCount === 1;
+  if (doesUserMatchApproverRef(viewer, targetClean, allUsers) || (isUniqueName && viewer.name.trim().toLowerCase() === targetClean)) {
     return true;
   }
   const allowed = getAuthorizedSubordinates(viewer, allUsers);
   return allowed.some((u) => {
-    const uNum = u.employeeId.trim().toLowerCase().replace(/^e0*/i, "");
     return (
-      u.employeeId.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-      u.name.toLowerCase() === targetEmployeeIdOrName.trim().toLowerCase() ||
-      (q && uNum === q)
+      u.employeeId.trim().toLowerCase() === targetClean ||
+      ((u.regNo ?? "").trim().toLowerCase() !== "" && (u.regNo ?? "").trim().toLowerCase() === targetClean) ||
+      (isUniqueName && u.name.trim().toLowerCase() === targetClean) ||
+      (/^(?:emp-?|e)\d+$/i.test(targetClean) &&
+        /^(?:emp-?|e)\d+$/i.test(u.employeeId.trim()) &&
+        normEmpNum(u.employeeId) === normEmpNum(targetClean))
     );
   });
 }
@@ -1980,6 +2051,7 @@ export function resolvePortalPathForRole(role: AppUserRole, _position = "", grou
   if (
     role === "Supervisor" ||
     role === "GM" ||
+    role === "VGM" ||
     role === "vGM" ||
     role === "Coordinator" ||
     role === "Division" ||
@@ -2128,6 +2200,20 @@ export function getAllowedApprovalTypesForUser(
   // Setiap Approver (Supervisor, GM, Director, dll.) dapat memiliki bawahan lintas grouping
   // (termasuk pengajuan Inter-Department Feedback, Project, RCA, Appraisal Form, dll.);
   // filter kewenangan per karyawan sudah dijaga ketat di resolveDynamicApprovalRowsForUser.
+  // Namun jika user TIDAK memiliki bawahan sendiri (murni hanya penerima Delegasi / Take Over),
+  // tampilkan HANYA tab modul yang benar-benar didelegasikan / di-take-over kepadanya!
+  const allUsers = loadManagedUsers();
+  const ownSubs = getStrictSubordinateUsers(user, allUsers).filter(
+    (s) => s.status === "Active" && s.employeeId.trim().toLowerCase() !== user.employeeId.trim().toLowerCase(),
+  );
+  const delegFlags = getDelegatedModuleFlagsForUser(user.employeeId);
+  const hasAnyDelegOrTakeOverApproval = delegFlags.approveSetting || delegFlags.approveMeasurement;
+  if (ownSubs.length === 0 && hasAnyDelegOrTakeOverApproval) {
+    const delegatedTypes = mode === "setting" ? delegFlags.approvedSettingTypes : delegFlags.approvedCheckinTypes;
+    if (delegatedTypes.length > 0) {
+      return baseList.filter((t) => delegatedTypes.includes(t));
+    }
+  }
   return baseList;
 }
 
@@ -2468,6 +2554,7 @@ export function useAuthStore() {
   const isHrUnitLocked =
     activeUser.role === "HR Unit" ||
     activeUser.role === "GM" ||
+    activeUser.role === "VGM" ||
     activeUser.role === "vGM" ||
     activeUser.role === "Coordinator";
   const lockedUnits = getEffectiveLockedUnitsForUser(activeUser, allUsers);

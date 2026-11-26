@@ -38,6 +38,7 @@ import {
   isAdminOrHrIcfRole,
   loadManagedUsers,
   resolveEffectiveUserGrouping,
+  resolveUniqueUserByApproverRef,
   type ManagedUser,
   type WorkflowStageRole,
 } from "../store/authStore";
@@ -82,16 +83,7 @@ interface Props {
 }
 
 function resolveUserByRef(allUsers: ManagedUser[], refValue?: string): ManagedUser | undefined {
-  const ref = (refValue ?? "").trim().toLowerCase();
-  if (!ref) return undefined;
-  const refNum = ref.replace(/^(?:emp-?|e)0*/i, "");
-  return allUsers.find(
-    (u) =>
-      (u.regNo ?? "").trim().toLowerCase() === ref ||
-      u.employeeId.trim().toLowerCase() === ref ||
-      u.name.trim().toLowerCase() === ref ||
-      Boolean(refNum && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === refNum),
-  );
+  return resolveUniqueUserByApproverRef(allUsers, refValue);
 }
 
 // ─── RCA Review Preview ────────────────────────────────────────────────────────

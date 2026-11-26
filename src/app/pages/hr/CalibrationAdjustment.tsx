@@ -36,6 +36,7 @@ import {
   type DivisionProportion,
 } from "./CalibrationSetting";
 import { getSoyApproval, loadSoyEmployeeSnapshot, SOY_EVENT } from "../../store/calibrationSoyStore";
+import { MASTER_COMPANY_UPDATED_EVENT, getMasterCompanyLocations } from "./settings/masterCompanyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -281,7 +282,7 @@ const makeUnit = (id: string, name: string, code: string, industry: string): Com
   bagianProportions: [],
 });
 
-const defaultCompanyUnits: CompanyUnit[] = [
+const FALLBACK_ADJ_UNITS: CompanyUnit[] = [
   makeUnit("1", "PT RSUP (Industry)",          "RSUP-IND", "Industry"),
   makeUnit("2", "PT RSUP (Perkebunan)",        "RSUP-PKB", "Perkebunan"),
   makeUnit("3", "PT Pulau Sambu (Jakarta)",    "PS-JKT",   "Jakarta"),
@@ -292,6 +293,22 @@ const defaultCompanyUnits: CompanyUnit[] = [
   makeUnit("8", "PT RSUP ASD",                 "RSUP-ASD", ""),
 ];
 
+function getDynamicAdjustmentUnits(): CompanyUnit[] {
+  const locs = getMasterCompanyLocations();
+  if (locs.length === 0) return FALLBACK_ADJ_UNITS;
+  return locs.map((loc, idx) => {
+    const legacy = FALLBACK_ADJ_UNITS.find((u) => u.name === loc.company);
+    return makeUnit(legacy?.id ?? loc.unitId ?? `u-${idx + 1}`, loc.company, loc.code, legacy?.industry ?? "");
+  });
+}
+
+const defaultCompanyUnits: CompanyUnit[] = new Proxy([] as CompanyUnit[], {
+  get(_target, prop, receiver) {
+    const list = getDynamicAdjustmentUnits();
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function gradeCalcs(hc: number, grades: CalibrationGrade[]): number[] {
@@ -3143,7 +3160,7 @@ function loadFromSetting(): { units: CompanyUnit[]; submittedAt: string | null }
     const submitted: any[] = JSON.parse(raw);
     const units = defaultCompanyUnits.map(def => {
       const synced = applyImportedEmployeesDistribution(def);
-      const src = submitted.find(s => s.id === def.id);
+      const src = submitted.find(s => s.id === def.id || s.name === def.name);
       if (!src) return synced;
       return {
         ...synced,
@@ -3192,6 +3209,12 @@ export function CalibrationAdjustment({ lockedUnits }: { lockedUnits?: string[] 
     loadPersistedState<PageMode>("pa_calibration_adj_mode_v1", "edit")
   );
   const [showConfirm, setShowConfirm]   = useState(false);
+
+  useEffect(() => {
+    const onMasterUpdated = () => setLoadedSetting(loadFromSetting());
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, onMasterUpdated);
+    return () => window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, onMasterUpdated);
+  }, []);
 
   const baseAdjustmentPath = useMemo(
     () => location.pathname.replace(/\/(distribusi|proporsi)\/?$/i, ""),

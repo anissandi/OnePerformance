@@ -11,7 +11,7 @@ import {
 import type { MonthEntry } from "../pages/employee/KPIPage";
 import type { StoredRCASubmission } from "../pages/shared/rcaStore";
 import type { EditedKpiCellDiff } from "../pages/shared/appraisalWorkflowStore";
-import { computeKpiColorBandAchievementPct } from "../utils/kpiNumberAndPeriod";
+import { computeKpiColorBandAchievementPct, parseStabilizeRange } from "../utils/kpiNumberAndPeriod";
 import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -98,8 +98,7 @@ export function KPITableView({
       const targetKey = `${kpi.no}__${spec.targetIdx}`;
       const rawTarget = (cells[monthId]?.[targetKey] || resolveFallbackTarget(kpi, monthId)).trim();
       const target = parseNum(rawTarget);
-      const isRangeStabilize =
-        kpi.polaritas === "Stabilize" && /^\s*-?\d+(?:\.\d+)?\s*[-–]\s*-?\d+(?:\.\d+)?\s*$/.test(rawTarget.replace(/,/g, ""));
+      const isRangeStabilize = kpi.polaritas === "Stabilize" && parseStabilizeRange(rawTarget) !== null;
       if (target === null && !isRangeStabilize) return "—";
       const actual = parseNum(cells[monthId]?.[actualKey] ?? "");
       if (actual === null) return "0%";

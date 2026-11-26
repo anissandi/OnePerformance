@@ -13,6 +13,7 @@ import { fetchYearEndVerificationLive } from "../../services/supabaseClient";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 import { evaluateEmployeeKPITracking } from "../employee/KPIPage";
 import { ANALYTICS_CARD_TONES, AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
+import { MASTER_COMPANY_UPDATED_EVENT, getMasterCompanyLocations } from "./settings/masterCompanyStore";
 
 interface VerificationCompanyUnit {
   id: string;
@@ -21,7 +22,7 @@ interface VerificationCompanyUnit {
   industry: string;
 }
 
-const VERIFICATION_COMPANY_UNITS: VerificationCompanyUnit[] = [
+const FALLBACK_VERIFICATION_UNITS: VerificationCompanyUnit[] = [
   { id: "1", name: "PT RSUP (Industry)",          code: "RSUP-IND", industry: "Industry" },
   { id: "2", name: "PT RSUP (Perkebunan)",        code: "RSUP-PKB", industry: "Perkebunan" },
   { id: "3", name: "PT Pulau Sambu (Jakarta)",    code: "PS-JKT",   industry: "Jakarta" },
@@ -32,6 +33,27 @@ const VERIFICATION_COMPANY_UNITS: VerificationCompanyUnit[] = [
   { id: "8", name: "PT RSUP ASD",                 code: "RSUP-ASD", industry: "" },
 ];
 
+function getDynamicVerificationUnits(): VerificationCompanyUnit[] {
+  const locs = getMasterCompanyLocations();
+  if (locs.length === 0) return FALLBACK_VERIFICATION_UNITS;
+  return locs.map((loc, idx) => {
+    const legacy = FALLBACK_VERIFICATION_UNITS.find((u) => u.name === loc.company);
+    return {
+      id: legacy?.id ?? loc.unitId ?? `u-${idx + 1}`,
+      name: loc.company,
+      code: loc.code,
+      industry: legacy?.industry ?? "",
+    };
+  });
+}
+
+const VERIFICATION_COMPANY_UNITS: VerificationCompanyUnit[] = new Proxy([] as VerificationCompanyUnit[], {
+  get(_target, prop, receiver) {
+    const list = getDynamicVerificationUnits();
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 type ModuleStatus = "complete" | "incomplete" | "pending" | "na";
 type OverallStatus = "Complete" | "Incomplete" | "Pending";
 
@@ -289,12 +311,13 @@ function ConfirmModal({ open, title, message, confirmLabel, confirmCls, icon, on
 
 export function YearEndVerification() {
   const { lockedUnits } = useAuthStore();
+  const [tick, setTick] = useState(0);
   const availableCompanyUnits = useMemo(
     () =>
       lockedUnits && lockedUnits.length > 0
         ? VERIFICATION_COMPANY_UNITS.filter((u) => lockedUnits.includes(u.name))
-        : VERIFICATION_COMPANY_UNITS,
-    [lockedUnits],
+        : [...VERIFICATION_COMPANY_UNITS],
+    [lockedUnits, tick],
   );
   const [selectedUnit,   setSelectedUnit]   = useState<VerificationCompanyUnit | null>(null);
   const [search,         setSearch]         = useState("");
@@ -309,7 +332,6 @@ export function YearEndVerification() {
   const navigate = useNavigate();
   const [workflow, setWorkflow] = useState(loadWorkflowRecords);
   const [feedback, setFeedback] = useState(loadFeedbackSubmissions);
-  const [tick, setTick] = useState(0);
   useEffect(() => {
     void fetchYearEndVerificationLive().then((remote) => {
       if (remote) {
@@ -333,6 +355,7 @@ export function YearEndVerification() {
     window.addEventListener("pa-db-hydrated", refresh);
     window.addEventListener("year-end-updated", refresh);
     window.addEventListener(ARCHIVE_UPDATED_EVENT, refresh);
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, refresh);
     return () => {
       window.removeEventListener("appraisal-updated", refresh);
       window.removeEventListener("feedback-updated", refresh);
@@ -341,6 +364,7 @@ export function YearEndVerification() {
       window.removeEventListener("pa-db-hydrated", refresh);
       window.removeEventListener("year-end-updated", refresh);
       window.removeEventListener(ARCHIVE_UPDATED_EVENT, refresh);
+      window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, refresh);
     };
   }, []);
   const currentEmployees = useMemo(() => {

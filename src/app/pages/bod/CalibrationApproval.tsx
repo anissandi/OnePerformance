@@ -31,6 +31,7 @@ import {
   type CompanyUnit as SettingCompanyUnit,
 } from "../hr/CalibrationSetting";
 import { EXCEL_THEME, exportStyledXLSX, type StyledExcelCell } from "../../utils/excelUtils";
+import { MASTER_COMPANY_UPDATED_EVENT, getMasterCompanyLocations } from "../hr/settings/masterCompanyStore";
 
 // ─── Grade helpers ─────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ type CompanyUnit = {
   submittedAt: string;
 };
 
-const COMPANY_UNITS: CompanyUnit[] = [
+const FALLBACK_BOD_UNITS: CompanyUnit[] = [
   { id: "1", name: "PT RSUP (Industry)",          code: "RSUP-IND", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "2", name: "PT RSUP (Perkebunan)",        code: "RSUP-PKB", totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "3", name: "PT RSTM",                     code: "RSTM",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
@@ -61,6 +62,30 @@ const COMPANY_UNITS: CompanyUnit[] = [
   { id: "7", name: "PT Pulau Sambu (Guntung)",    code: "PSG",      totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
   { id: "8", name: "PT Pulau Sambu (Kuala Enok)", code: "PSKE",     totalHC: 0, submittedBy: "HR ICF", submittedAt: "—" },
 ];
+
+function buildDynamicBodCompanyUnits(): CompanyUnit[] {
+  const locs = getMasterCompanyLocations();
+  if (locs.length === 0) return FALLBACK_BOD_UNITS;
+  return locs.map((loc, idx) => {
+    const legacy = FALLBACK_BOD_UNITS.find((u) => u.name === loc.company);
+    return {
+      id: legacy?.id ?? loc.unitId ?? `u-${idx + 1}`,
+      name: loc.company,
+      code: loc.code,
+      totalHC: 0,
+      submittedBy: "HR ICF",
+      submittedAt: "—",
+    };
+  });
+}
+
+const COMPANY_UNITS: CompanyUnit[] = new Proxy([] as CompanyUnit[], {
+  get(_target, prop, receiver) {
+    const list = buildDynamicBodCompanyUnits();
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
 // ─── Grade distribution (live) ──────────────────────────────────────
 
@@ -408,10 +433,12 @@ export function BODCalibrationApproval() {
     };
     window.addEventListener("pa-db-hydrated", onHydrated);
     window.addEventListener("pa-auth-updated", onHydrated);
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, onHydrated);
     window.addEventListener(SOY_EVENT, onHydrated);
     return () => {
       window.removeEventListener("pa-db-hydrated", onHydrated);
       window.removeEventListener("pa-auth-updated", onHydrated);
+      window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, onHydrated);
       window.removeEventListener(SOY_EVENT, onHydrated);
     };
   }, []);

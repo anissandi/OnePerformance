@@ -799,7 +799,8 @@ export function ScoresCalibration() {
     const fromAccess = loadAccessGroups();
     const fromUsers = loadManagedUsers()
       .flatMap((u) => [String(u.groupings ?? "").trim(), String(resolveEffectiveUserGrouping(u) ?? "").trim()])
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((g) => (g.toLowerCase().replace(/\s*\/\s*/g, "/") === "gm/vgm" ? "GM / VGM" : g));
     return Array.from(new Set([...fromAccess, ...fromUsers]));
   });
 
@@ -808,7 +809,8 @@ export function ScoresCalibration() {
       const fromAccess = loadAccessGroups();
       const fromUsers = loadManagedUsers()
         .flatMap((u) => [String(u.groupings ?? "").trim(), String(resolveEffectiveUserGrouping(u) ?? "").trim()])
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((g) => (g.toLowerCase().replace(/\s*\/\s*/g, "/") === "gm/vgm" ? "GM / VGM" : g));
       setAllSystemGroupings(Array.from(new Set([...fromAccess, ...fromUsers])));
     };
     const refreshUnits = () => {
@@ -838,11 +840,12 @@ export function ScoresCalibration() {
   ) => {
     const trimmed = groupName.trim();
     if (!trimmed) return;
-    const colKey = toCustomGroupingColumnKey(trimmed);
-    const newCol: CustomScoreWeightColumn = { key: colKey, label: trimmed, groupName: trimmed };
+    const canonTrimmed = trimmed.toLowerCase().replace(/\s*\/\s*/g, "/") === "gm/vgm" ? "GM / VGM" : trimmed;
+    const colKey = toCustomGroupingColumnKey(canonTrimmed);
+    const newCol: CustomScoreWeightColumn = { key: colKey, label: canonTrimmed, groupName: canonTrimmed };
 
-    registerCustomGroupingInAccessSystem(trimmed);
-    setAllSystemGroupings((prev) => (prev.some((g) => g.toLowerCase() === trimmed.toLowerCase()) ? prev : [...prev, trimmed]));
+    registerCustomGroupingInAccessSystem(canonTrimmed);
+    setAllSystemGroupings((prev) => (prev.some((g) => g.toLowerCase() === canonTrimmed.toLowerCase()) ? prev : [...prev, canonTrimmed]));
 
     setCompanyUnits((prev) =>
       prev.map((u) => {

@@ -36,6 +36,12 @@ import {
 } from "../ModuleActivation";
 import { formatTodayDDMMYYYY } from "../../../utils/dateFormat";
 import { formatBlockedMonthsBadgeText, isKnownKpiColorBandValue, resolveKpiColorBandMeta } from "../../../utils/kpiNumberAndPeriod";
+import {
+  MASTER_COMPANY_UPDATED_EVENT,
+  getMasterCompanyGroups,
+  getMasterCompanyLocations,
+  getMasterUnitsByGroupUidOrName,
+} from "../settings/masterCompanyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -607,46 +613,44 @@ function GMKPITable({ items }: { items: KPISetting[] }) {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-const COMPANY_UNITS_BIZ = [
-  "PT RSUP (Industry)",
-  "PT RSUP (Perkebunan)",
-  "PT Pulau Sambu (Jakarta)",
-  "PT Pulau Sambu (Guntung)",
-  "PT Pulau Sambu (Kuala Enok)",
-  "PT RSTM",
-  "PT GHS",
-  "PT RSUP ASD",
-];
+const COMPANY_UNITS_BIZ: string[] = new Proxy([] as string[], {
+  get(_target, prop, receiver) {
+    const list = getMasterCompanyLocations().map((l) => l.company);
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
 const CURRENT_YEAR = 2026;
 const YEAR_OPTIONS = [2026];
-const BUSINESS_GROUPS = ["RSUP Group", "Sambu Group"] as const;
 
 export function HRSettingKPIPage() {
   const { activeUser } = useAuthStore();
+  const [masterTick, setMasterTick] = useState(0);
   const isDirector = isDirectorRoleOrGrouping(activeUser);
   const isValidator = isAdminOrHrIcfRole(activeUser.role) || Boolean(activeUser.isHrIcfValidator);
   const isKpiBizChecker = canUserAccessKpiBusinessChecker(activeUser);
   const isPureChecker = isKpiBizChecker && !isDirector && !isValidator;
   const canCheckerSeeGroupTab = !isPureChecker || canKpiBusinessCheckerHandleScope(activeUser, "group");
   const canCheckerSeeUnitTab = !isPureChecker || COMPANY_UNITS_BIZ.some((u) => canKpiBusinessCheckerHandleScope(activeUser, "unit", u));
-  const allowedGroups = React.useMemo<Array<"RSUP Group" | "Sambu Group">>(() => {
+  const allowedGroups = React.useMemo<string[]>(() => {
     if (isDirector && !isValidator && !isKpiBizChecker) {
-      return [getGroupNameForUnit(activeUser.company) as "RSUP Group" | "Sambu Group"];
+      return [getGroupNameForUnit(activeUser.company)];
     }
-    return [...BUSINESS_GROUPS] as Array<"RSUP Group" | "Sambu Group">;
-  }, [isDirector, isValidator, isKpiBizChecker, activeUser.company]);
+    const dynGroups = getMasterCompanyGroups().map((g) => g.name);
+    return dynGroups.length > 0 ? dynGroups : ["RSUP Group", "Sambu Group"];
+  }, [isDirector, isValidator, isKpiBizChecker, activeUser.company, masterTick]);
   const allowedUnits = React.useMemo(
     () =>
       isDirector
         ? getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits)
         : isPureChecker
         ? COMPANY_UNITS_BIZ.filter((u) => canKpiBusinessCheckerHandleScope(activeUser, "unit", u))
-        : COMPANY_UNITS_BIZ,
-    [isDirector, isPureChecker, activeUser],
+        : [...COMPANY_UNITS_BIZ],
+    [isDirector, isPureChecker, activeUser, masterTick],
   );
   const [items] = useState<KPISetting[]>(CORPORATE_KPI);
-  const [selectedGroup, setSelectedGroup] = useState<"RSUP Group" | "Sambu Group">(
+  const [selectedGroup, setSelectedGroup] = useState<string>(
     () => allowedGroups[0] ?? getGroupNameForUnit(activeUser.company),
   );
   const [companyUnit, setCompanyUnit] = useState(() => allowedUnits[0] ?? "PT RSUP (Industry)");
@@ -700,14 +704,15 @@ export function HRSettingKPIPage() {
 
   useEffect(() => {
     // Pastikan data KPI Business & Lampiran selalu terbaru dari Supabase sejak halaman dibuka
+    const groupNames = getMasterCompanyGroups().map((g) => g.name);
+    const targetGroups = groupNames.length > 0 ? groupNames : ["RSUP Group", "Sambu Group"];
     void Promise.all([
       refreshKvKeysFromBackend([
         "pa_kpi_business_status_v1",
         "pa_kpi_business_by_scope_v1",
         "pa_kpi_attachments_v1",
       ]),
-      fetchBusinessKpiLive("corporate-RSUP Group"),
-      fetchBusinessKpiLive("corporate-Sambu Group"),
+      ...targetGroups.map((g) => fetchBusinessKpiLive(`corporate-${g}`)),
     ]).finally(() => {
       setBizRefreshTick((t) => t + 1);
     });
@@ -725,14 +730,17 @@ export function HRSettingKPIPage() {
     const onSync = () => {
       setChecklist(loadKpiValidationChecklist(String(selectedYear)));
       setBizRefreshTick((t) => t + 1);
+      setMasterTick((t) => t + 1);
     };
     window.addEventListener("pa-module-activation-updated", onSync);
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, onSync);
     window.addEventListener("pa-db-hydrated", onSync);
     window.addEventListener("pa-auth-updated", onSync);
     window.addEventListener("appraisal-updated", onSync);
     window.addEventListener("storage", onSync);
     return () => {
       window.removeEventListener("pa-module-activation-updated", onSync);
+      window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, onSync);
       window.removeEventListener("pa-db-hydrated", onSync);
       window.removeEventListener("pa-auth-updated", onSync);
       window.removeEventListener("appraisal-updated", onSync);
@@ -875,9 +883,14 @@ export function HRSettingKPIPage() {
 
   const findOwnerAndValidators = () => {
     const users = loadManagedUsers();
+    const unitsInSelectedGroup = getMasterUnitsByGroupUidOrName(selectedGroup);
     const targetGroupUnits =
       kpiTab === "group"
-        ? (selectedGroup === "Sambu Group" ? [...SAMBU_GROUP_COMPANIES] : [...RSUP_GROUP_COMPANIES])
+        ? (unitsInSelectedGroup.length > 0
+            ? unitsInSelectedGroup
+            : selectedGroup === "Sambu Group"
+            ? [...SAMBU_GROUP_COMPANIES]
+            : [...RSUP_GROUP_COMPANIES])
         : getGroupCompaniesForUnit(companyUnit);
     const gmIds = users
       .filter((u) => u.status === "Active" && u.role === "GM" && isSameCompanyUnit(u.company, companyUnit))

@@ -10,6 +10,10 @@ import {
   selectRowsFromSupabase,
   syncToSupabase,
 } from "../../../services/supabaseClient";
+import logoRsup from "@/imports/logo-rsup.png";
+import logoPs from "@/imports/logo-ps.png";
+import logoRstm from "@/imports/logo-rstm.png";
+import logoGhs from "@/imports/logo-ghs.png";
 
 export const MASTER_COMPANY_CATALOG_KEY = "master_company_units_v1";
 export const MASTER_COMPANY_UPDATED_EVENT = "pa-master-company-updated";
@@ -28,6 +32,10 @@ export interface MasterCompanyUnitRow {
   fullName?: string;
   /** Urutan tampilan Card Login di halaman `/login` (1 = paling kiri atas, dst.) */
   loginOrder?: number;
+  /** URL logo Unit Usaha (bawaan atau hasil unggah ke Supabase Storage `pa-evidence`) */
+  logoUrl?: string;
+  /** Penanda eksplisit bahwa logo Unit Usaha telah dihapus oleh Admin/HR ICF */
+  logoCleared?: boolean;
   /** Riwayat nama lama unit usaha agar referensi historis otomatis dipetakan ke nama terbaru */
   aliases?: string[];
   /** Riwayat nama lama group */
@@ -50,6 +58,8 @@ export interface DynamicCompanyLocation {
   company: string;
   fullName: string;
   loginOrder: number;
+  logoUrl: string;
+  logoCleared: boolean;
 }
 
 export interface DynamicCompanyGroup {
@@ -64,6 +74,46 @@ export interface DynamicCompanyGroup {
   units: MasterCompanyUnitRow[];
 }
 
+export function getDefaultMasterUnitLogo(abbUnitOrCode?: string | null, companyUnit?: string | null): string {
+  const up = String(abbUnitOrCode ?? "").trim().toUpperCase();
+  const comp = String(companyUnit ?? "").trim().toUpperCase();
+  if (
+    up === "PSJ" ||
+    up === "PSG" ||
+    up === "PSKE" ||
+    up.startsWith("PS-") ||
+    up.startsWith("PS ") ||
+    comp.includes("PULAU SAMBU")
+  ) {
+    return logoPs;
+  }
+  if (up === "RSTM" || comp.includes("RSTM") || comp.includes("TRANSMANDIRI")) {
+    return logoRstm;
+  }
+  if (up === "GHS" || comp.includes("GHS") || comp.includes("HASRATMAKMUR")) {
+    return logoGhs;
+  }
+  if (
+    up.includes("RSUP") ||
+    up === "ASD" ||
+    comp.includes("RSUP") ||
+    comp.includes("RIAU SAKTI") ||
+    comp.includes("AGRONOMI")
+  ) {
+    return logoRsup;
+  }
+  return "";
+}
+
+export function resolveEffectiveMasterUnitLogo(
+  row: Pick<MasterCompanyUnitRow, "abbUnit" | "companyUnit" | "logoUrl" | "logoCleared">,
+): string {
+  if (row.logoCleared) return "";
+  const custom = String(row.logoUrl ?? "").trim();
+  if (custom) return custom;
+  return getDefaultMasterUnitLogo(row.abbUnit, row.companyUnit);
+}
+
 export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
   {
     uid: "unit-psj",
@@ -76,6 +126,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "PSJ",
     fullName: "PT. Pulau Sambu (Jakarta)",
     loginOrder: 1,
+    logoUrl: logoPs,
+    logoCleared: false,
     aliases: ["PT. Pulau Sambu (Jakarta)"],
   },
   {
@@ -89,6 +141,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "PSG",
     fullName: "PT. Pulau Sambu (Guntung)",
     loginOrder: 2,
+    logoUrl: logoPs,
+    logoCleared: false,
     aliases: ["PT. Pulau Sambu (Guntung)"],
   },
   {
@@ -102,6 +156,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "PSKE",
     fullName: "PT. Pulau Sambu (Kuala Enok)",
     loginOrder: 3,
+    logoUrl: logoPs,
+    logoCleared: false,
     aliases: ["PT. Pulau Sambu (Kuala Enok)"],
   },
   {
@@ -115,6 +171,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "RSUP IND",
     fullName: "PT. Riau Sakti United Plantations (Industry)",
     loginOrder: 4,
+    logoUrl: logoRsup,
+    logoCleared: false,
     aliases: ["PT. Riau Sakti United Plantations (Industry)", "RSUP-IND"],
   },
   {
@@ -128,6 +186,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "RSUP PKB",
     fullName: "PT. Riau Sakti United Plantations (Perkebunan)",
     loginOrder: 5,
+    logoUrl: logoRsup,
+    logoCleared: false,
     aliases: ["PT. Riau Sakti United Plantations (Perkebunan)", "RSUP-PKB"],
   },
   {
@@ -141,6 +201,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "RSTM",
     fullName: "PT. Riau Sakti Transmandiri",
     loginOrder: 6,
+    logoUrl: logoRstm,
+    logoCleared: false,
     aliases: ["PT. Riau Sakti Transmandiri"],
   },
   {
@@ -154,6 +216,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "GHS",
     fullName: "PT. Guntung Hasratmakmur",
     loginOrder: 7,
+    logoUrl: logoGhs,
+    logoCleared: false,
     aliases: ["PT. Guntung Hasratmakmur"],
   },
   {
@@ -167,6 +231,8 @@ export const DEFAULT_MASTER_COMPANY_ROWS: MasterCompanyUnitRow[] = [
     abbUnit: "RSUP ASD",
     fullName: "Agronomi Service Division",
     loginOrder: 8,
+    logoUrl: logoRsup,
+    logoCleared: false,
     aliases: ["ASD", "RSUP ASD", "PT. RSUP ASD", "PT RSUP (ASD)", "RSUP-ASD"],
   },
 ];
@@ -204,20 +270,28 @@ export function loadMasterCompanyCatalog(): MasterCompanyCatalog {
       const parsed = JSON.parse(raw) as Partial<MasterCompanyCatalog>;
       if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0) {
         _cachedCatalog = {
-          rows: parsed.rows.map((r, idx) => ({
-            uid: r.uid || `unit-${idx + 1}`,
-            groupUid: r.groupUid || `group-${makeGroupSlug(r.companyGroup || "group")}`,
-            companyGroup: String(r.companyGroup ?? "").trim(),
-            idGroup: String(r.idGroup ?? "").trim(),
-            abbGroup: String(r.abbGroup ?? "").trim(),
-            companyUnit: String(r.companyUnit ?? "").trim(),
-            idUnit: String(r.idUnit ?? "").trim(),
-            abbUnit: String(r.abbUnit ?? "").trim(),
-            fullName: r.fullName ? String(r.fullName).trim() : String(r.companyUnit ?? "").trim(),
-            loginOrder: typeof r.loginOrder === "number" && Number.isFinite(r.loginOrder) ? r.loginOrder : idx + 1,
-            aliases: Array.isArray(r.aliases) ? r.aliases : [],
-            groupAliases: Array.isArray(r.groupAliases) ? r.groupAliases : [],
-          })),
+          rows: parsed.rows.map((r, idx) => {
+            const abbUnit = String(r.abbUnit ?? "").trim();
+            const companyUnit = String(r.companyUnit ?? "").trim();
+            const logoCleared = Boolean(r.logoCleared);
+            const customLogo = String(r.logoUrl ?? "").trim();
+            return {
+              uid: r.uid || `unit-${idx + 1}`,
+              groupUid: r.groupUid || `group-${makeGroupSlug(r.companyGroup || "group")}`,
+              companyGroup: String(r.companyGroup ?? "").trim(),
+              idGroup: String(r.idGroup ?? "").trim(),
+              abbGroup: String(r.abbGroup ?? "").trim(),
+              companyUnit,
+              idUnit: String(r.idUnit ?? "").trim(),
+              abbUnit,
+              fullName: r.fullName ? String(r.fullName).trim() : companyUnit,
+              loginOrder: typeof r.loginOrder === "number" && Number.isFinite(r.loginOrder) ? r.loginOrder : idx + 1,
+              logoUrl: logoCleared ? "" : (customLogo || getDefaultMasterUnitLogo(abbUnit, companyUnit)),
+              logoCleared,
+              aliases: Array.isArray(r.aliases) ? r.aliases : [],
+              groupAliases: Array.isArray(r.groupAliases) ? r.groupAliases : [],
+            };
+          }),
           updatedAt: parsed.updatedAt,
         };
         return _cachedCatalog;
@@ -300,6 +374,8 @@ export function getMasterCompanyLocations(): DynamicCompanyLocation[] {
       company: r.companyUnit,
       fullName: r.fullName || r.companyUnit,
       loginOrder: sortedIdx + 1,
+      logoUrl: resolveEffectiveMasterUnitLogo(r),
+      logoCleared: Boolean(r.logoCleared),
     }));
 }
 
@@ -501,6 +577,10 @@ export function saveMasterCompanyCatalog(
     }
     aliasesSet.delete(row.companyUnit.trim());
     groupAliasesSet.delete(row.companyGroup.trim());
+    const logoCleared = Boolean(row.logoCleared);
+    const cleanedLogo = logoCleared
+      ? ""
+      : (String(row.logoUrl ?? "").trim() || getDefaultMasterUnitLogo(row.abbUnit, row.companyUnit));
     return {
       ...row,
       companyGroup: row.companyGroup.trim(),
@@ -511,6 +591,8 @@ export function saveMasterCompanyCatalog(
       abbUnit: row.abbUnit.trim(),
       fullName: (row.fullName || row.companyUnit).trim(),
       loginOrder: typeof row.loginOrder === "number" && Number.isFinite(row.loginOrder) ? row.loginOrder : (prev?.loginOrder ?? idx + 1),
+      logoUrl: cleanedLogo,
+      logoCleared,
       aliases: Array.from(aliasesSet),
       groupAliases: Array.from(groupAliasesSet),
     };

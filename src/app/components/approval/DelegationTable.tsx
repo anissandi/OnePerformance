@@ -16,6 +16,7 @@ import {
   type ManagedUser,
 } from "../../store/authStore";
 import {
+  ALL_TAKE_OVER_MODULE_KEYS,
   DELEGATION_EVENT,
   blankDelegation,
   loadDelegations,
@@ -24,6 +25,7 @@ import {
   saveTakeOver,
   type DelegationAccess,
   type DelegationRecord,
+  type TakeOverModuleKey,
   type TakeOverRecord,
 } from "../../store/delegationStore";
 import { pushEmployeeNotification } from "../../store/notificationStore";
@@ -410,7 +412,7 @@ function getHierarchyRankForTakeOver(u: ManagedUser): number {
   const g = resolveEffectiveUserGrouping(u).toLowerCase();
   if (r === "BOD") return 7;
   if (r === "Director" || r === "DirectorNonOpr" || g.includes("direktur") || g.includes("director")) return 6;
-  if (r === "GM" || r === "vGM" || g === "gm / vgm") return 5;
+  if (r === "GM" || r === "VGM" || r === "vGM" || g === "gm / vgm") return 5;
   if (r === "Division" || g.includes("ka./wa.ka.div")) return 4;
   if (r === "Departement" || g.includes("ka./wa.ka.dept")) return 3;
   if (r === "Supervisor" || r === "Coordinator" || r === "HR Unit" || g.includes("ka./wa.ka.bagian") || g.includes("ka./wa.ka.seksi")) return 2;
@@ -422,6 +424,17 @@ function isEligibleSubordinateForTakeOver(sub: ManagedUser): boolean {
   if (sub.role === "Employee" && getHierarchyRankForTakeOver(sub) < 2) return false;
   return getHierarchyRankForTakeOver(sub) >= 2;
 }
+
+const TAKE_OVER_MODULE_OPTIONS: Array<{ key: TakeOverModuleKey; label: string }> = [
+  { key: "kpiSetting", label: "KPI Setting" },
+  { key: "kpiTracking", label: "KPI Tracking" },
+  { key: "smartGoalsSetting", label: "SMART Setting" },
+  { key: "smartGoalsMeasurement", label: "SMART Meas." },
+  { key: "appraisalForm", label: "Appraisal Form" },
+  { key: "managerialSkill", label: "Managerial Skill" },
+  { key: "project", label: "Project OJS" },
+  { key: "feedback", label: "Feedback" },
+];
 
 export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "approvals" } = {}) {
   const { activeUser, allUsers, userByRefMap, delegations, takeOvers } = useLiveData();
@@ -435,6 +448,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
   const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
   const [selectedSelfSubId, setSelectedSelfSubId] = useState<string>("");
   const [selfReasonDraft, setSelfReasonDraft] = useState<string>("");
+  const [selfTakeOverModules, setSelfTakeOverModules] = useState<TakeOverModuleKey[]>(() => [...ALL_TAKE_OVER_MODULE_KEYS]);
   const [pageSize, setPageSize] = useState<number>(20);
   const [page, setPage] = useState<number>(1);
 
@@ -699,9 +713,16 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
     nextTakeOverByEmpId: string,
     nextActive: boolean,
     reasonText?: string,
+    customModules?: TakeOverModuleKey[],
   ) {
     const key = sub.employeeId.toUpperCase();
     const prev = takeOvers[key];
+    const resolvedModules =
+      customModules ?? (Array.isArray(prev?.modules) && prev.modules.length > 0 ? prev.modules : [...ALL_TAKE_OVER_MODULE_KEYS]);
+    if (nextActive && resolvedModules.length === 0) {
+      toast.error("Pilih minimal 1 modul approval yang ingin di-Take Over.");
+      return;
+    }
     if (nextActive && !nextTakeOverByEmpId) {
       toast.error("Pilih Atasan Pengambil Alih (Take Over Oleh) terlebih dahulu.");
       return;
@@ -720,6 +741,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
       subordinateEmployeeId: sub.employeeId,
       takeOverByEmployeeId: nextTakeOverByEmpId,
       reason: reasonText ?? prev?.reason ?? "",
+      modules: resolvedModules,
       active: nextActive,
       updatedAt: prev?.updatedAt ?? "",
       updatedBy: prev?.updatedBy ?? "",
@@ -801,6 +823,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                       "Divisi / Departemen",
                       "Jabatan",
                       "Pilih Bawahan yang Di-Take Over",
+                      "Modul Approval yang Di-Take Over",
                       "Alasan / Keterangan",
                       "Bawahan Sedang Di-Take Over",
                     ].map((h) => (
@@ -821,7 +844,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                             toast.error("Pilih bawahan yang akan di-Take Over terlebih dahulu.");
                             return;
                           }
-                          handleUpdateTakeOver(subUser, activeUser.employeeId, true, selfReasonDraft);
+                          handleUpdateTakeOver(subUser, activeUser.employeeId, true, selfReasonDraft, selfTakeOverModules);
                           setSelectedSelfSubId("");
                           setSelfReasonDraft("");
                         }}
@@ -850,6 +873,31 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                         onChange={setSelectedSelfSubId}
                       />
                     </td>
+                    <td className="px-3 py-3 min-w-[250px]">
+                      <div className="flex flex-wrap gap-1">
+                        {TAKE_OVER_MODULE_OPTIONS.map((opt) => {
+                          const checked = selfTakeOverModules.includes(opt.key);
+                          return (
+                            <button
+                              key={opt.key}
+                              type="button"
+                              onClick={() =>
+                                setSelfTakeOverModules((prev) =>
+                                  prev.includes(opt.key) ? prev.filter((k) => k !== opt.key) : [...prev, opt.key],
+                                )
+                              }
+                              className={`px-2 py-0.5 rounded-md border text-[10px] font-semibold transition-colors cursor-pointer ${
+                                checked
+                                  ? "bg-[#E6F3F1] text-[#1D6863] border-[#8ECEC7]"
+                                  : "bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100"
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </td>
                     <td className="px-3 py-3 min-w-[190px]">
                       <input
                         type="text"
@@ -872,6 +920,11 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                               <div className="min-w-0">
                                 <p className="text-[11px] font-bold text-[#1D6863] truncate">
                                   {sub?.name || rec.subordinateEmployeeId} ({sub?.role || "-"})
+                                </p>
+                                <p className="text-[10px] text-teal-700/80 truncate">
+                                  {(rec.modules?.length ?? 8) >= TAKE_OVER_MODULE_OPTIONS.length
+                                    ? "Semua Modul Approval"
+                                    : TAKE_OVER_MODULE_OPTIONS.filter((o) => rec.modules?.includes(o.key)).map((o) => o.label).join(", ")}
                                 </p>
                                 {rec.reason && <p className="text-[10px] text-slate-500 truncate">{rec.reason}</p>}
                               </div>
@@ -940,6 +993,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                     "Divisi / Departemen",
                     "Jabatan",
                     "Di-Take Over Oleh (Atasan)",
+                    "Modul Approval",
                     "Alasan / Keterangan",
                     "Status",
                   ].map((h) => (
@@ -1001,6 +1055,39 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                             onChange={(empId) => handleUpdateTakeOver(sub, empId, Boolean(empId && isAct), reasonVal)}
                           />
                       </td>
+                      <td className="px-3 py-2.5 min-w-[230px]">
+                        <div className="flex flex-wrap gap-1">
+                          {TAKE_OVER_MODULE_OPTIONS.map((opt) => {
+                            const curMods = rec?.modules?.length ? rec.modules : ALL_TAKE_OVER_MODULE_KEYS;
+                            const checked = curMods.includes(opt.key);
+                            return (
+                              <button
+                                key={opt.key}
+                                type="button"
+                                onClick={() => {
+                                  const nextMods = checked
+                                    ? curMods.filter((k) => k !== opt.key)
+                                    : [...curMods, opt.key];
+                                  if (nextMods.length === 0) {
+                                    toast.warning("Minimal 1 modul harus tetap dipilih.");
+                                    return;
+                                  }
+                                  if (rec || effectiveSuperiorId) {
+                                    handleUpdateTakeOver(sub, effectiveSuperiorId, isAct, reasonVal, nextMods);
+                                  }
+                                }}
+                                className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer ${
+                                  checked
+                                    ? "bg-[#E6F3F1] text-[#1D6863] border-[#8ECEC7]"
+                                    : "bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100"
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </td>
                       <td className="px-3 py-2.5 min-w-[180px]">
                         <input
                           type="text"
@@ -1031,7 +1118,7 @@ export function DelegationTable({ mode = "settings" }: { mode?: "settings" | "ap
                 })}
                 {takeOverSubordinates.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="py-10 text-center text-gray-400">
+                    <td colSpan={12} className="py-10 text-center text-gray-400">
                       Tidak ada bawahan ber-level Supervisor ke atas dalam cakupan wewenang Anda.
                     </td>
                   </tr>

@@ -16,6 +16,7 @@ import {
   normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
+  parseStabilizeRange,
   resolveKpiColorBandMeta,
   sanitizeKpiNumericInput,
 } from "../../utils/kpiNumberAndPeriod";
@@ -290,21 +291,17 @@ export function computePolaritasAchievementPct(
 ): number {
   const effectivePol: Polaritas = specMinimize ? "Minimize" : polaritas;
   if (effectivePol === "Stabilize") {
-    const rangeMatch = String(targetRaw ?? "")
-      .replace(/,/g, "")
-      .match(/^\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*$/);
-    if (rangeMatch) {
-      const a = parseFloat(rangeMatch[1]);
-      const b = parseFloat(rangeMatch[2]);
-      const lo = Math.min(a, b);
-      const hi = Math.max(a, b);
+    const range = parseStabilizeRange(targetRaw);
+    if (range) {
+      const { lo, hi } = range;
       if (actual >= lo && actual <= hi) return 100;
       if (actual < lo) return lo === 0 ? 0 : Math.max(0, (actual / lo) * 100);
       return actual === 0 ? 0 : Math.max(0, (hi / actual) * 100);
     }
     if (targetNum === 0) return actual === 0 ? 100 : 0;
-    // Perhitungan % Pencapaian normal: (Actual / Target) * 100%
-    return Math.max(0, (actual / targetNum) * 100);
+    if (actual === targetNum) return 100;
+    if (actual < targetNum) return Math.max(0, (actual / targetNum) * 100);
+    return actual === 0 ? 0 : Math.max(0, (targetNum / actual) * 100);
   }
   if (effectivePol === "Minimize") {
     if (targetNum === 0) return actual <= 0 ? 100 : 0;
@@ -332,23 +329,17 @@ export function doesKpiSubRowRequireRca(
   const effectivePol: Polaritas = spec.type === "ratio" && spec.minimize ? "Minimize" : kpi.polaritas;
   if (effectivePol === "Stabilize" && spec.type === "ratio") {
     const rawTarget = getRaw(spec.targetIdx).trim();
-    const rangeMatch = rawTarget
-      .replace(/,/g, "")
-      .match(/^\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*$/);
+    const range = parseStabilizeRange(rawTarget);
     const actual = parseNum(getRaw(spec.actualIdx));
     if (actual === null) return false;
-    if (rangeMatch) {
-      const a = parseFloat(rangeMatch[1]);
-      const b = parseFloat(rangeMatch[2]);
-      const lo = Math.min(a, b);
-      const hi = Math.max(a, b);
+    if (range) {
+      const { lo, hi } = range;
       return actual < lo || actual > hi;
     }
     const target = parseNum(rawTarget);
     if (target === null) return false;
     if (target === 0) return actual !== 0;
-    const tolerance = Math.abs(target) * 0.05;
-    return Math.abs(actual - target) > tolerance + 1e-9;
+    return Math.abs(actual - target) > 1e-9;
   }
   const valStr = computedValStr ?? computeCell(kpi.subRows, getRaw, subIdx, kpi.polaritas);
   const n = parseNum(valStr);
@@ -479,8 +470,7 @@ function computeCell(
   if (spec.type === "ratio") {
     const rawTarget = getRaw(spec.targetIdx);
     const target = parseNum(rawTarget);
-    const isRangeStabilize =
-      polaritas === "Stabilize" && /^\s*-?\d+(?:\.\d+)?\s*[-–]\s*-?\d+(?:\.\d+)?\s*$/.test(rawTarget.replace(/,/g, ""));
+    const isRangeStabilize = polaritas === "Stabilize" && parseStabilizeRange(rawTarget) !== null;
     if (target === null && !isRangeStabilize) return "—"; // target belum diisi → tidak dapat dihitung
     const actual = parseNum(getRaw(spec.actualIdx));
     if (actual === null) return "0%";           // actual belum diisi → 0%
@@ -539,20 +529,41 @@ export function computeTotal2026(
       const monthData = activeMonths
         .map((m) => {
           const rawTarget = (allCells[m.id]?.[ck(kpi.no, spec.targetIdx)] ?? "") || resolveKpiMonthTarget(kpi, m.label);
-          const isRangeStabilize =
-            kpi.polaritas === "Stabilize" && /^\s*-?\d+(?:\.\d+)?\s*[-–]\s*-?\d+(?:\.\d+)?\s*$/.test(rawTarget.replace(/,/g, ""));
+          const range = kpi.polaritas === "Stabilize" ? parseStabilizeRange(rawTarget) : null;
+          const isRangeStabilize = range !== null;
           const target = parseNum(rawTarget);
           if (target === null && !isRangeStabilize) return null;
           const actual = parseNum(allCells[m.id]?.[ck(kpi.no, spec.actualIdx)] ?? "");
-          return { actual, target: target ?? 0, rawTarget, hasActual: actual !== null };
+          return { actual, target: target ?? 0, rawTarget, range, hasActual: actual !== null };
         })
-        .filter((v): v is { actual: number | null; target: number; rawTarget: string; hasActual: boolean } => v !== null);
+        .filter((v): v is { actual: number | null; target: number; rawTarget: string; range: ReturnType<typeof parseStabilizeRange>; hasActual: boolean } => v !== null);
       if (!monthData.length) return "—";
 
       // If any configured month has no actual → 0%
       if (monthData.some((v) => !v.hasActual)) return "0%";
 
       const actuals = monthData.map((v) => v.actual as number);
+
+      if (!kpi.subRowTargets && kpi.polaritas === "Stabilize" && monthData.every((v) => v.range !== null)) {
+        let ytdAct: number;
+        let ytdRangeRaw: string;
+        if (kpi.formula === "Jumlah") {
+          ytdAct = actuals.reduce((s, v) => s + v, 0);
+          const sumLo = monthData.reduce((s, v) => s + v.range!.lo, 0);
+          const sumHi = monthData.reduce((s, v) => s + v.range!.hi, 0);
+          ytdRangeRaw = `${sumLo}-${sumHi}`;
+        } else if (kpi.formula === "Nilai Akhir") {
+          ytdAct = actuals[actuals.length - 1];
+          ytdRangeRaw = monthData[monthData.length - 1].rawTarget;
+        } else {
+          ytdAct = actuals.reduce((s, v) => s + v, 0) / actuals.length;
+          const avgLo = monthData.reduce((s, v) => s + v.range!.lo, 0) / monthData.length;
+          const avgHi = monthData.reduce((s, v) => s + v.range!.hi, 0) / monthData.length;
+          ytdRangeRaw = `${avgLo}-${avgHi}`;
+        }
+        const pct = computePolaritasAchievementPct(ytdAct, ytdRangeRaw, 0, "Stabilize", spec.minimize);
+        return formatPct(pct);
+      }
 
       if (!kpi.subRowTargets) {
         // Simple KPI: YTD actual / YTD target sesuai Formula Setahun (Jumlah / Nilai Akhir / Rata-Rata)

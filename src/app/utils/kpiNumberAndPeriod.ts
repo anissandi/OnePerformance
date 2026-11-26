@@ -192,11 +192,36 @@ export function isPercentSatuan(satuan?: string | null): boolean {
 
 /**
  * Menambahkan simbol "%" secara otomatis setelah input angka apabila Satuan = "%"
- * (mis. mengetik "50" otomatis menjadi "50%", termasuk mendukung Backspace & pengetikan lanjutan).
+ * (mendukung angka tunggal "50%" maupun rentang Stabilize bawah-atas seperti "1.5%-2.5%" atau "15%-25%").
  */
 export function applyAutoPercentInput(nextRaw: string, prevRaw = ""): string {
   const cleaned = sanitizeKpiNumericInput(nextRaw);
   if (!cleaned.trim()) return "";
+
+  // Dukung pengetikan rentang bawah-atas (contoh: "1.5%-2.5%" atau "15-25") saat Satuan = "%"
+  const rangeDashMatch = cleaned.match(/^\s*([+-]?\d[\d.,%\s]*?)\s*([-–])\s*([\d.,%\s+-]*)$/);
+  if (rangeDashMatch) {
+    const leftDigits = rangeDashMatch[1].replace(/%/g, "").trim();
+    const rightDigits = rangeDashMatch[3].replace(/%/g, "").trim();
+    if (leftDigits && /\d/.test(leftDigits)) {
+      if (!rightDigits || !/\d/.test(rightDigits)) {
+        // User baru mengetik tanda pemisah rentang "-" (mis. dari "1.5%" mengetik "-" menjadi "1.5-%" atau "1.5%-")
+        if (prevRaw.endsWith("-") && !cleaned.includes("-")) {
+          return `${leftDigits}%`;
+        }
+        return `${leftDigits}%-`;
+      }
+      // Jika user menekan Backspace tepat pada "%" di ujung kanan rentang "1.5%-2.5%"
+      if (prevRaw.endsWith("%") && cleaned === prevRaw.slice(0, -1)) {
+        const trimmedRight = rightDigits.slice(0, -1).trim();
+        if (!trimmedRight || !/\d/.test(trimmedRight)) {
+          return `${leftDigits}%-`;
+        }
+        return `${leftDigits}%-${trimmedRight}%`;
+      }
+      return `${leftDigits}%-${rightDigits}%`;
+    }
+  }
 
   // Jika user menekan Backspace tepat saat kursor berada setelah simbol "%" di akhir nilai sebelumnya
   if (prevRaw.endsWith("%") && cleaned === prevRaw.slice(0, -1)) {
@@ -214,13 +239,24 @@ export function applyAutoPercentInput(nextRaw: string, prevRaw = ""): string {
   return withoutPct;
 }
 
-/** Sinkronkan akhiran "%" pada nilai yang sudah terisi ketika pilihan Satuan berubah ke/dari "%". */
+/**
+ * Sinkronkan akhiran "%" pada nilai ketika Satuan dipilih "%".
+ * Catatan penting: ketika `shouldHavePercent === false`, JANGAN menghapus simbol "%" yang memang sudah
+ * diketik eksplisit oleh user agar nilai seperti "100%" pada satuan non-% tetap tersimpan utuh "100%".
+ */
 export function syncPercentSuffixOnValue(raw: string, shouldHavePercent: boolean): string {
   const trimmed = String(raw ?? "").trim();
   if (!trimmed) return "";
+  if (!shouldHavePercent) {
+    return trimmed;
+  }
+  const rangeMatch = trimmed.match(/^\s*([+-]?\d[\d.,]*)\s*%?\s*[-–]\s*([+-]?\d[\d.,]*)\s*%?\s*$/);
+  if (rangeMatch) {
+    return `${rangeMatch[1].trim()}%-${rangeMatch[2].trim()}%`;
+  }
   const withoutPct = trimmed.replace(/%/g, "").trim();
   if (!withoutPct) return "";
-  if (shouldHavePercent && /\d/.test(withoutPct)) {
+  if (/\d/.test(withoutPct)) {
     return `${withoutPct}%`;
   }
   return withoutPct;
@@ -350,6 +386,33 @@ export function parseFlexibleKpiNumber(raw?: string | number | null): number | n
   return isNeg ? -num : num;
 }
 
+export interface ParsedStabilizeRange {
+  lo: number;
+  hi: number;
+  hasPercent: boolean;
+  rawLo: string;
+  rawHi: string;
+}
+
+/**
+ * Mengurai target rentang bawah-atas pada Polaritas Stabilize:
+ * mendukung "15-25", "85-90", "1.5%-2.5%", "1,5%-2,5%", "15 - 25", maupun rentang angka bertanda.
+ */
+export function parseStabilizeRange(raw?: string | null): ParsedStabilizeRange | null {
+  const str = String(raw ?? "").trim();
+  if (!str || str === "—" || str === "-") return null;
+  const m = str.match(/^\s*([+-]?\d[\d.,]*\s*%?)\s*[-–]\s*([+-]?\d[\d.,]*\s*%?)\s*$/);
+  if (!m) return null;
+  const rawLo = m[1].trim();
+  const rawHi = m[2].trim();
+  const n1 = parseFlexibleKpiNumber(rawLo);
+  const n2 = parseFlexibleKpiNumber(rawHi);
+  if (n1 === null || n2 === null) return null;
+  const lo = Math.min(n1, n2);
+  const hi = Math.max(n1, n2);
+  const hasPercent = rawLo.includes("%") || rawHi.includes("%");
+  return { lo, hi, hasPercent, rawLo, rawHi };
+}
 function detectPreferredStyle(samples: string[]): {
   style: "id" | "en" | "plain";
   useThousands: boolean;

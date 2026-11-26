@@ -8,7 +8,7 @@ import {
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
   ChevronRight, Award,
   BarChart2, Star, Activity, MessageSquare, Clock, CheckCircle2, ChevronDown, Users,
-  StickyNote, UserCheck, Target, ClipboardCheck, Sparkles, Camera, Trash2,
+  StickyNote, UserCheck, Target, ClipboardCheck, Sparkles, Camera, Trash2, IdCard, Layers, GitBranch, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -25,6 +25,7 @@ import {
   getActiveUser,
   loadManagedUsers,
   resolveEffectiveUserGrouping,
+  resolveUniqueUserByApproverRef,
   resolveUserAllowedModules,
   useAuthStore,
   type AppraisalModuleName,
@@ -469,9 +470,50 @@ export function ViewProfile() {
     });
   }, [activeUser, selectedYear, isCurrent, liveMe, tick]);
 
-  const effectiveJoinDate = activeUser.joinDate || USER.joinDate;
-  const parsedJoinYear = new Date(effectiveJoinDate).getFullYear();
-  const yearsOfService = Number.isFinite(parsedJoinYear) ? Math.max(0, new Date().getFullYear() - parsedJoinYear) : 0;
+  const allManagedUsersForProfile = useMemo(() => loadManagedUsers(), [tick]);
+  const profileAp1User = useMemo(
+    () => resolveUniqueUserByApproverRef(allManagedUsersForProfile, activeUser.regNoAp1),
+    [allManagedUsersForProfile, activeUser.regNoAp1],
+  );
+  const profileAp2User = useMemo(
+    () => resolveUniqueUserByApproverRef(allManagedUsersForProfile, activeUser.regNoAp2),
+    [allManagedUsersForProfile, activeUser.regNoAp2],
+  );
+  const computedLamaBekerja = useMemo(() => {
+    const raw = String(activeUser.joinDate ?? "").trim();
+    if (!raw || raw === "-" || raw === "—") return "-";
+    let parsed: Date | null = null;
+    const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (dmy) {
+      parsed = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+    } else {
+      const d = new Date(raw);
+      if (!Number.isNaN(d.getTime())) parsed = d;
+    }
+    if (!parsed || Number.isNaN(parsed.getTime())) return "-";
+    const now = new Date();
+    let totalMonths = (now.getFullYear() - parsed.getFullYear()) * 12 + (now.getMonth() - parsed.getMonth());
+    if (now.getDate() < parsed.getDate()) totalMonths -= 1;
+    if (totalMonths < 0) return "0 Bulan";
+    const yrs = Math.floor(totalMonths / 12);
+    const mos = totalMonths % 12;
+    if (yrs > 0 && mos > 0) return `${yrs} Tahun ${mos} Bulan`;
+    if (yrs > 0) return `${yrs} Tahun`;
+    return `${mos} Bulan`;
+  }, [activeUser.joinDate]);
+
+  const valOrDash = (v?: string | null): string => {
+    const s = String(v ?? "").trim();
+    return s && s !== "—" ? s : "-";
+  };
+  const formatApproverDisplay = (u: typeof profileAp1User, rawRef?: string): string => {
+    const ref = String(rawRef ?? "").trim();
+    if (u) {
+      const idTag = u.employeeId || u.regNo || "";
+      return idTag ? `${u.name} (${idTag})` : u.name;
+    }
+    return ref && ref !== "—" ? ref : "-";
+  };
   const profileInitials =
     (activeUser.name || USER.name)
       .split(" ")
@@ -503,18 +545,7 @@ export function ViewProfile() {
     if (!isCurrent) return yearData.summaryNotes;
     const normId = normalizeEmployeeId(activeUser.employeeId);
     const managedUsers = loadManagedUsers();
-    const findUserByRef = (ref?: string) => {
-      const q = (ref ?? "").trim().toLowerCase();
-      if (!q) return undefined;
-      const qNum = q.replace(/^(?:emp-?|e)0*/i, "");
-      return managedUsers.find(
-        (u) =>
-          (u.regNo ?? "").trim().toLowerCase() === q ||
-          u.employeeId.trim().toLowerCase() === q ||
-          u.name.trim().toLowerCase() === q ||
-          (qNum && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === qNum),
-      );
-    };
+    const findUserByRef = (ref?: string) => resolveUniqueUserByApproverRef(managedUsers, ref);
     const ap1User = findUserByRef(activeUser.regNoAp1);
     const ap2User = findUserByRef(activeUser.regNoAp2);
 
@@ -985,18 +1016,84 @@ export function ViewProfile() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mt-4 pt-4 border-t border-slate-100">
             {[
-              { icon: Building2, label: activeUser.company || USER.companyUnit },
-              { icon: Briefcase, label: activeUser.department || USER.department },
-              { icon: MapPin,    label: activeUser.division || USER.location },
-              { icon: Calendar,  label: `Joined ${effectiveJoinDate} · ${yearsOfService} yrs` },
-              { icon: Mail,      label: activeUser.email || USER.email },
-              { icon: Phone,     label: activeUser.telegramNo || USER.phone },
-            ].map(({ icon: Icon, label }, idx) => (
-              <div key={`${idx}-${label}`} className="flex items-center gap-2">
-                <Icon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                <span className="text-xs text-gray-600 truncate">{label}</span>
+              {
+                icon: IdCard,
+                title: "ID Karyawan",
+                value: valOrDash(activeUser.employeeId),
+                iconCls: "bg-blue-50 text-blue-600 border-blue-100",
+              },
+              {
+                icon: Building2,
+                title: "Nama Unit Usaha",
+                value: valOrDash(activeUser.company),
+                iconCls: "bg-indigo-50 text-indigo-600 border-indigo-100",
+              },
+              {
+                icon: Layers,
+                title: "Divisi",
+                value: valOrDash(activeUser.division),
+                iconCls: "bg-violet-50 text-violet-600 border-violet-100",
+              },
+              {
+                icon: Briefcase,
+                title: "Departemen",
+                value: valOrDash(activeUser.department),
+                iconCls: "bg-sky-50 text-sky-600 border-sky-100",
+              },
+              {
+                icon: GitBranch,
+                title: "Bagian",
+                value: valOrDash(activeUser.bagian),
+                iconCls: "bg-teal-50 text-teal-600 border-teal-100",
+              },
+              {
+                icon: UserCheck,
+                title: "Approver 1",
+                value: formatApproverDisplay(profileAp1User, activeUser.regNoAp1),
+                iconCls: "bg-emerald-50 text-emerald-600 border-emerald-100",
+              },
+              {
+                icon: ShieldCheck,
+                title: "Approver 2",
+                value: formatApproverDisplay(profileAp2User, activeUser.regNoAp2),
+                iconCls: "bg-cyan-50 text-cyan-700 border-cyan-100",
+              },
+              {
+                icon: Phone,
+                title: "No. Handphone",
+                value: valOrDash(activeUser.telegramNo),
+                iconCls: "bg-amber-50 text-amber-600 border-amber-100",
+              },
+              {
+                icon: Mail,
+                title: "Email",
+                value: valOrDash(activeUser.email),
+                iconCls: "bg-rose-50 text-rose-600 border-rose-100",
+              },
+              {
+                icon: Calendar,
+                title: "Lama Bekerja",
+                value: computedLamaBekerja,
+                iconCls: "bg-purple-50 text-purple-600 border-purple-100",
+              },
+            ].map(({ icon: Icon, title, value, iconCls }) => (
+              <div
+                key={title}
+                className="flex items-start gap-2.5 rounded-xl border border-slate-100 bg-slate-50/55 px-3 py-2.5 transition-colors hover:bg-slate-50"
+              >
+                <div className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 mt-0.5 ${iconCls}`}>
+                  <Icon className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 leading-tight">
+                    {title}
+                  </p>
+                  <p className="text-xs font-bold text-slate-800 truncate mt-0.5" title={value}>
+                    {value}
+                  </p>
+                </div>
               </div>
             ))}
           </div>

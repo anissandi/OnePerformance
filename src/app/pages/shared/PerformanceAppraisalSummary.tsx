@@ -13,6 +13,7 @@ import {
 } from "../supervisor/managementInterviewScoreStore";
 import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole, loadManagedUsers, useAuthStore } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
+import { getMasterCompanyLocations } from "../hr/settings/masterCompanyStore";
 
 type Role = "hr" | "supervisor";
 
@@ -38,12 +39,9 @@ const DEPT_DEFS: [string, string, string][] = [
 
 const filterOptions = {
   year:        ["2026"],
-  companyUnit: [
-    "All Units",
-    "PT RSUP (Industry)", "PT RSUP (Perkebunan)",
-    "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)",
-    "PT RSTM", "PT GHS", "PT RSUP ASD",
-  ],
+  get companyUnit(): string[] {
+    return ["All Units", ...getMasterCompanyLocations().map((l) => l.company)];
+  },
   division:    ["All Divisions", ...DIV_DEFS.map(d => d.divisi)],
   department:  ["All Departments", ...DEPT_DEFS.map(([,, name]) => name)],
   position:    ["All Positions", "Operasional", "Pengawas", "Kepala Bagian", "Kepala Departemen", "Kepala Divisi"],
@@ -483,6 +481,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   const isUnitScopedRole =
     activeUser.role === "HR Unit" ||
     activeUser.role === "GM" ||
+    activeUser.role === "VGM" ||
     activeUser.role === "vGM" ||
     activeUser.role === "Coordinator";
   const { lockedUnits: authLockedUnits } = useAuthStore();

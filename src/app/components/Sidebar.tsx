@@ -401,6 +401,7 @@ export function Sidebar({ role, collapsed }: { role: string; collapsed: boolean 
       activeUser.role === "Employee" ||
       activeUser.role === "Supervisor" ||
       activeUser.role === "GM" ||
+      activeUser.role === "VGM" ||
       activeUser.role === "vGM" ||
       activeUser.role === "Coordinator" ||
       activeUser.role === "Division" ||

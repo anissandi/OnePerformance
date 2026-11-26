@@ -12,6 +12,7 @@ import {
   isAdminOrHrIcfRole,
   isSameCompanyUnit,
   loadManagedUsers,
+  resolveUniqueUserByApproverRef,
   type ManagedUser,
 } from "./authStore";
 import { pushEmployeeNotification } from "./notificationStore";
@@ -107,17 +108,7 @@ function persistRequest<TItem>(normEmpId: string, req: KpiTargetEditRequest<TIte
 }
 
 function findUserByRef(users: ManagedUser[], ref?: string): ManagedUser | undefined {
-  const r = String(ref ?? "").trim().toLowerCase();
-  if (!r) return undefined;
-  const rNum = r.replace(/^(?:emp-?|e)0*/i, "");
-  return users.find(
-    (u) =>
-      u.status === "Active" &&
-      ((u.regNo ?? "").trim().toLowerCase() === r ||
-        u.employeeId.trim().toLowerCase() === r ||
-        u.name.trim().toLowerCase() === r ||
-        (rNum !== "" && u.employeeId.trim().toLowerCase().replace(/^(?:emp-?|e)0*/i, "") === rNum)),
-  );
+  return resolveUniqueUserByApproverRef(users, ref, true);
 }
 
 function findHrIcfIds(users: ManagedUser[]): string[] {

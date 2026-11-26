@@ -467,8 +467,8 @@ export function parseXLSXMatrix(dataOrFile: ArrayBuffer | Uint8Array): string[][
   const wb = XLSX.read(bytes, { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) return [];
-  const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-  return aoa.map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? "")) : []));
+  const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+  return aoa.map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? "").trim()) : []));
 }
 
 export function parseXLSX(file: File): Promise<{ headers: string[]; rows: string[][] }> {

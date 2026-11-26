@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { RefreshCw, Search, X, Save, ChevronRight, Shield, Plus, Trash2, Layers, CheckCircle2, Edit2 } from "lucide-react";
 import { loadPersistedState, safeGetLocalRaw, savePersistedState, syncToSupabase } from "../../../services/supabaseClient";
+import { MASTER_COMPANY_UPDATED_EVENT, getMasterCompanyGroups } from "./masterCompanyStore";
 
 export type BuiltinRole =
   | "Administrator"
@@ -8,7 +9,7 @@ export type BuiltinRole =
   | "Director"
   | "DirectorNonOpr"
   | "GM"
-  | "vGM"
+  | "VGM"
   | "Coordinator"
   | "Division"
   | "Departement"
@@ -25,26 +26,51 @@ export interface AccessRoleMetadata {
   allowedCompanyUnits?: string[];
 }
 
-export const HIERARCHICAL_COMPANY_GROUPS = [
+export interface HierarchicalCompanyGroupItem {
+  groupName: string;
+  units: string[];
+}
+
+export function getDynamicHierarchicalCompanyGroups(): HierarchicalCompanyGroupItem[] {
+  const groups = getMasterCompanyGroups();
+  if (groups.length > 0) {
+    return groups.map((g) => ({
+      groupName: g.name,
+      units: [...g.unitNames],
+    }));
+  }
+  return [
+    {
+      groupName: "RSUP Group",
+      units: [
+        "PT RSUP (Industry)",
+        "PT RSUP (Perkebunan)",
+        "PT GHS",
+        "PT RSTM",
+        "PT RSUP ASD",
+      ],
+    },
+    {
+      groupName: "Sambu Group",
+      units: [
+        "PT Pulau Sambu (Jakarta)",
+        "PT Pulau Sambu (Guntung)",
+        "PT Pulau Sambu (Kuala Enok)",
+      ],
+    },
+  ];
+}
+
+export const HIERARCHICAL_COMPANY_GROUPS: readonly HierarchicalCompanyGroupItem[] = new Proxy(
+  [] as HierarchicalCompanyGroupItem[],
   {
-    groupName: "RSUP Group",
-    units: [
-      "PT RSUP (Industry)",
-      "PT RSUP (Perkebunan)",
-      "PT GHS",
-      "PT RSTM",
-      "PT RSUP ASD",
-    ],
+    get(_target, prop, receiver) {
+      const list = getDynamicHierarchicalCompanyGroups();
+      const value = Reflect.get(list, prop, receiver);
+      return typeof value === "function" ? value.bind(list) : value;
+    },
   },
-  {
-    groupName: "Sambu Group",
-    units: [
-      "PT Pulau Sambu (Jakarta)",
-      "PT Pulau Sambu (Guntung)",
-      "PT Pulau Sambu (Kuala Enok)",
-    ],
-  },
-] as const;
+);
 
 function HierarchicalCompanyUnitChecklist({
   selectedUnits,
@@ -133,7 +159,7 @@ export type BuiltinGroup =
   | "Ka./Wa.Ka.Bagian"
   | "Ka./Wa.Ka.Dept"
   | "Ka./Wa.Ka.Div ke atas"
-  | "GM / vGM"
+  | "GM / VGM"
   | "Direktur / Director";
 export type GroupName = BuiltinGroup | string;
 export type GroupAuthorityTier = "operational" | "seksi" | "bagian" | "department" | "division" | "gm_unit" | "director_group";
@@ -169,7 +195,7 @@ export const BUILTIN_GROUPS: BuiltinGroup[] = [
   "Ka./Wa.Ka.Bagian",
   "Ka./Wa.Ka.Dept",
   "Ka./Wa.Ka.Div ke atas",
-  "GM / vGM",
+  "GM / VGM",
   "Direktur / Director",
 ];
 
@@ -236,9 +262,9 @@ export const BUILTIN_GROUP_DEFAULTS: Record<BuiltinGroup, AccessGroupConfig> = {
       "Management Interview",
     ],
   },
-  "GM / vGM": {
-    name: "GM / vGM",
-    description: "General Manager (GM) dan Vice General Manager (vGM) Unit Usaha. Melihat seluruh data sesuai Unit Usaha, Divisi, Departemen, Bagian & All Posisi di Unit Usahanya.",
+  "GM / VGM": {
+    name: "GM / VGM",
+    description: "General Manager (GM) dan Vice General Manager (VGM) Unit Usaha. Melihat seluruh data sesuai Unit Usaha, Divisi, Departemen, Bagian & All Posisi di Unit Usahanya.",
     authorityLevel: "gm_unit",
     allowedModules: [
       "KPI (Setting/Measurement)",
@@ -266,7 +292,7 @@ const AUTHORITY_TIER_LABELS: Record<GroupAuthorityTier, string> = {
   bagian: "Level Bagian (Melihat semua posisi di dalam Bagiannya)",
   department: "Level Departemen (Melihat semua posisi & bagian di dalam Departemennya)",
   division: "Level Divisi ke atas (Melihat semua posisi, bagian & departemen di dalam Divisinya)",
-  gm_unit: "Level GM/vGM (Melihat semua data sesuai Unit Usaha, Divisi, Departemen, Bagian & All Posisi di Unit Usahanya)",
+  gm_unit: "Level GM/VGM (Melihat semua data sesuai Unit Usaha, Divisi, Departemen, Bagian & All Posisi di Unit Usahanya)",
   director_group: "Level Direktur Group (Melihat semua Unit Usaha dalam Group [RSUP / Sambu Group], GM, Divisi, Departemen, Bagian & All Posisi)",
 };
 
@@ -1141,7 +1167,7 @@ function applyNewMenuDefaults(role: BuiltinRole, perms: RolePermissions): RolePe
   const isDefaultExecSummaryRole =
     isHrAdmin || role === "BOD" || role === "Director" || role === "DirectorNonOpr";
   const isDefaultDelegationRole =
-    isHrAdmin || role === "BOD" || role === "Director" || role === "DirectorNonOpr" || role === "GM" || role === "vGM" || role === "Coordinator";
+    isHrAdmin || role === "BOD" || role === "Director" || role === "DirectorNonOpr" || role === "GM" || role === "VGM" || role === "Coordinator";
   const calib = perms.approvals_calibration ?? N;
   const baseAnalytics = perms.analytics ?? N;
   return {
@@ -1167,7 +1193,7 @@ export const BUILTIN_DEFAULTS: Record<BuiltinRole, RolePermissions> = {
     ...DEFAULT_DIRECTOR,
   }),
   "GM":            applyNewMenuDefaults("GM", DEFAULT_GM),
-  "vGM":           applyNewMenuDefaults("vGM", DEFAULT_GM),
+  "VGM":           applyNewMenuDefaults("VGM", DEFAULT_GM),
   "Coordinator":   applyNewMenuDefaults("Coordinator", DEFAULT_GM),
   "Division":      applyNewMenuDefaults("Division", DEFAULT_SUPERVISOR),
   "Departement":   applyNewMenuDefaults("Departement", DEFAULT_SUPERVISOR),
@@ -1183,7 +1209,7 @@ export const BUILTIN_ROLES: BuiltinRole[] = [
   "Director",
   "DirectorNonOpr",
   "GM",
-  "vGM",
+  "VGM",
   "Coordinator",
   "Division",
   "Departement",
@@ -1199,6 +1225,7 @@ const ROLE_COLORS: Record<string, string> = {
   "Director":      "bg-rose-100 text-rose-700 border-rose-200",
   "DirectorNonOpr": "bg-pink-100 text-pink-800 border-pink-200",
   "GM":            "bg-indigo-100 text-indigo-700 border-indigo-200",
+  "VGM":           "bg-teal-100 text-teal-800 border-teal-200",
   "vGM":           "bg-teal-100 text-teal-800 border-teal-200",
   "Coordinator":   "bg-teal-100 text-teal-800 border-teal-200",
   "Division":      "bg-sky-100 text-sky-700 border-sky-200",
@@ -1591,7 +1618,7 @@ function loadAccessRoleMetadataMapInternal(): Record<Role, AccessRoleMetadata> {
     "Director":      { excludeFromCalibrationHC: true,  excludeFromVerification: true  },
     "DirectorNonOpr": { excludeFromCalibrationHC: true, excludeFromVerification: true  },
     "GM":            { excludeFromCalibrationHC: false, excludeFromVerification: false },
-    "vGM":           { excludeFromCalibrationHC: false, excludeFromVerification: false },
+    "VGM":           { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "Coordinator":   { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "Division":      { excludeFromCalibrationHC: false, excludeFromVerification: false },
     "Departement":   { excludeFromCalibrationHC: false, excludeFromVerification: false },
@@ -1605,7 +1632,10 @@ function loadAccessRoleMetadataMapInternal(): Record<Role, AccessRoleMetadata> {
   const result: Record<Role, AccessRoleMetadata> = {};
   for (const r of roles) {
     const base = defaults[r] ?? { excludeFromCalibrationHC: false, excludeFromVerification: false };
-    const s = saved?.[r] ?? (r === "Coordinator" ? saved?.["vGM"] : undefined);
+    const s =
+      saved?.[r] ??
+      (r === "VGM" ? saved?.["vGM"] : undefined) ??
+      (r === "Coordinator" ? (saved?.["VGM"] ?? saved?.["vGM"]) : undefined);
     result[r] = s && typeof s === "object"
       ? {
           excludeFromCalibrationHC: Boolean(s.excludeFromCalibrationHC ?? base.excludeFromCalibrationHC),
@@ -1632,8 +1662,9 @@ export function loadAccessRoleMetadataMap(): Record<Role, AccessRoleMetadata> {
 
 export function getRoleMetadata(role: Role): AccessRoleMetadata {
   if (!role) return EMPTY_ROLE_META;
+  const normRole = role.trim().toLowerCase() === "vgm" ? "VGM" : role;
   const map = loadAccessRoleMetadataMap();
-  return map[role] ?? EMPTY_ROLE_META;
+  return map[normRole] ?? EMPTY_ROLE_META;
 }
 function getAllExpandableIds(items: MenuItem[] = MENU_STRUCTURE): string[] {
   const ids: string[] = [];
@@ -1696,7 +1727,7 @@ function buildDefaultPermissionsMap(): Record<Role, RolePermissions> {
     "Director":      deepClone(BUILTIN_DEFAULTS["Director"]),
     "DirectorNonOpr": deepClone(BUILTIN_DEFAULTS["DirectorNonOpr"]),
     "GM":            deepClone(BUILTIN_DEFAULTS["GM"]),
-    "vGM":           deepClone(BUILTIN_DEFAULTS["vGM"]),
+    "VGM":           deepClone(BUILTIN_DEFAULTS["VGM"]),
     "Coordinator":   deepClone(BUILTIN_DEFAULTS["Coordinator"]),
     "Division":      deepClone(BUILTIN_DEFAULTS["Division"]),
     "Departement":   deepClone(BUILTIN_DEFAULTS["Departement"]),
@@ -1716,8 +1747,10 @@ export function loadAccessRoles(): Role[] {
   const merged: Role[] = [...BUILTIN_ROLES];
   if (Array.isArray(saved)) {
     for (const r of saved) {
-      if (r && typeof r === "string" && !merged.includes(r)) {
-        merged.push(r);
+      if (!r || typeof r !== "string") continue;
+      const canon = r.trim().toLowerCase() === "vgm" ? "VGM" : r.trim();
+      if (canon && !merged.some((m) => m.toLowerCase() === canon.toLowerCase())) {
+        merged.push(canon);
       }
     }
   }
@@ -1738,7 +1771,10 @@ export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
 
   for (const role of roles) {
     const base = defaults[role] ? deepClone(defaults[role]) : emptyPermissions();
-    const savedRole = saved?.[role] ?? (role === "Coordinator" ? saved?.["vGM"] : undefined);
+    const savedRole =
+      saved?.[role] ??
+      (role === "VGM" ? saved?.["vGM"] : undefined) ??
+      (role === "Coordinator" ? (saved?.["VGM"] ?? saved?.["vGM"]) : undefined);
     if (savedRole && typeof savedRole === "object") {
       result[role] = { ...base, ...savedRole };
     } else {
@@ -1772,7 +1808,12 @@ export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
 }
 
 export function getRolePermissions(role: Role): RolePermissions {
-  const normalized = role === "HR Admin" ? "Administrator" : role;
+  const normalized =
+    role === "HR Admin"
+      ? "Administrator"
+      : role.trim().toLowerCase() === "vgm"
+      ? "VGM"
+      : role;
   const map = loadRolePermissionsMap();
   return map[normalized] ?? map["Employee"] ?? emptyPermissions();
 }
@@ -1879,7 +1920,7 @@ function buildDefaultGroupConfigsMap(): Record<GroupName, AccessGroupConfig> {
     "Ka./Wa.Ka.Bagian":      deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Bagian"]),
     "Ka./Wa.Ka.Dept":        deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Dept"]),
     "Ka./Wa.Ka.Div ke atas": deepClone(BUILTIN_GROUP_DEFAULTS["Ka./Wa.Ka.Div ke atas"]),
-    "GM / vGM":              deepClone(BUILTIN_GROUP_DEFAULTS["GM / vGM"]),
+    "GM / VGM":              deepClone(BUILTIN_GROUP_DEFAULTS["GM / VGM"]),
     "Direktur / Director":   deepClone(BUILTIN_GROUP_DEFAULTS["Direktur / Director"]),
   };
 }
@@ -1944,8 +1985,8 @@ export function getGroupConfig(group: GroupName): AccessGroupConfig {
   const exact = map[trimmed];
   if (exact) return exact;
   const gNorm = normGroupLookupKey(trimmed);
-  if ((gNorm === "gm/vgm" || gNorm === "level gm/vgm") && map["GM / vGM"]) {
-    return map["GM / vGM"];
+  if ((gNorm === "gm/vgm" || gNorm === "level gm/vgm") && map["GM / VGM"]) {
+    return map["GM / VGM"];
   }
   if (/^(direktur|director)$/i.test(trimmed) && map["Direktur / Director"]) {
     return map["Direktur / Director"];
@@ -1971,10 +2012,12 @@ export function useAccessManagement() {
   useEffect(() => {
     const onUpdate = () => setTick((t) => t + 1);
     window.addEventListener(ACCESS_UPDATED_EVENT, onUpdate);
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, onUpdate);
     window.addEventListener("pa-db-hydrated", onUpdate);
     window.addEventListener("storage", onUpdate);
     return () => {
       window.removeEventListener(ACCESS_UPDATED_EVENT, onUpdate);
+      window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, onUpdate);
       window.removeEventListener("pa-db-hydrated", onUpdate);
       window.removeEventListener("storage", onUpdate);
     };

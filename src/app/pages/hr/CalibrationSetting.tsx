@@ -182,7 +182,7 @@ const makeUnit = (id: string, name: string, code: string, industry: string): Com
   bagianProportions: [],
 });
 
-const defaultCompanyUnits: CompanyUnit[] = [
+const STATIC_FALLBACK_COMPANY_UNITS: CompanyUnit[] = [
   makeUnit("1", "PT RSUP (Industry)",          "RSUP-IND", "Industry"),
   makeUnit("2", "PT RSUP (Perkebunan)",        "RSUP-PKB", "Perkebunan"),
   makeUnit("6", "PT RSTM",                     "RSTM",     ""),
@@ -192,6 +192,22 @@ const defaultCompanyUnits: CompanyUnit[] = [
   makeUnit("4", "PT Pulau Sambu (Guntung)",    "PS-GTG",   "Guntung"),
   makeUnit("5", "PT Pulau Sambu (Kuala Enok)", "PS-KE",    "Kuala Enok"),
 ];
+
+function buildDynamicDefaultCompanyUnits(): CompanyUnit[] {
+  const locs = getMasterCompanyLocations();
+  if (locs.length === 0) return STATIC_FALLBACK_COMPANY_UNITS;
+  return locs.map((loc, idx) => {
+    const legacy = STATIC_FALLBACK_COMPANY_UNITS.find(
+      (s) => canonicalizeCompanyUnitName(s.name) === canonicalizeCompanyUnitName(loc.company),
+    );
+    return makeUnit(
+      legacy?.id ?? loc.unitId ?? `unit-${idx + 1}`,
+      loc.company,
+      loc.code,
+      legacy?.industry ?? "",
+    );
+  });
+}
 
 const makeDefaultGroupSettings = (): CalibrationGroupSetting[] =>
   CALIBRATION_GROUPS.map((g) => ({
@@ -582,7 +598,7 @@ export function loadCalibrationOrgOptions(companyNames?: string[]): {
       localStorage.getItem("calibration_submitted_units") ??
       localStorage.getItem("calibration_hc_settings_2026");
     const savedUnits: CompanyUnit[] = raw ? JSON.parse(raw) : [];
-    const baseUnits = defaultCompanyUnits.map((def) => {
+    const baseUnits = buildDynamicDefaultCompanyUnits().map((def) => {
       const synced = applyImportedEmployeesDistribution(def);
       const saved = savedUnits.find((s) => s.id === def.id || s.name === def.name);
       return {
@@ -3082,13 +3098,13 @@ export function CalibrationSetting() {
   });
 
   const [companyUnits, setCompanyUnits] = useState<CompanyUnit[]>(() => {
+    const dynDefs = buildDynamicDefaultCompanyUnits();
     try {
       const saved =
         safeGetLocalRaw("calibration_hc_settings_2026") ??
         safeGetLocalRaw("calibration_submitted_units");
-      const base: CompanyUnit[] = saved ? JSON.parse(saved) : defaultCompanyUnits;
-      // Pastikan ke-8 Company Units lengkap
-      const mergedBase = defaultCompanyUnits.map((def) => {
+      const base: CompanyUnit[] = saved ? JSON.parse(saved) : dynDefs;
+      const mergedBase = dynDefs.map((def) => {
         const existing = base.find(
           (u) => u.id === def.id || canonicalizeCompanyUnitName(u.name) === canonicalizeCompanyUnitName(def.name),
         );
@@ -3096,13 +3112,13 @@ export function CalibrationSetting() {
       });
       return mergedBase.map((u) => applyImportedEmployeesDistribution(u));
     } catch {
-      return defaultCompanyUnits.map((u) => applyImportedEmployeesDistribution(u));
+      return dynDefs.map((u) => applyImportedEmployeesDistribution(u));
     }
   });
 
   useEffect(() => {
     const syncDynamicMasterUnits = () => {
-      const dynLocations = getMasterCompanyLocations();
+      const dynDefs = buildDynamicDefaultCompanyUnits();
       setGroupSettings((prev) =>
         CALIBRATION_GROUPS.map((def) => {
           const found = prev.find((p) => p.id === def.id || p.slug === def.slug || p.name === def.name);
@@ -3120,25 +3136,17 @@ export function CalibrationSetting() {
               };
         }),
       );
-      if (dynLocations.length > 0) {
-        setCompanyUnits((prev) => {
-          const next = [...prev];
-          let added = false;
-          for (const loc of dynLocations) {
-            const exists = next.some(
-              (u) => canonicalizeCompanyUnitName(u.name) === canonicalizeCompanyUnitName(loc.company),
+      if (dynDefs.length > 0) {
+        setCompanyUnits((prev) =>
+          dynDefs.map((def) => {
+            const existing = prev.find(
+              (u) => u.id === def.id || canonicalizeCompanyUnitName(u.name) === canonicalizeCompanyUnitName(def.name),
             );
-            if (!exists) {
-              next.push(
-                applyImportedEmployeesDistribution(
-                  makeUnit(loc.unitId || `u-${next.length + 1}`, loc.company, loc.code, ""),
-                ),
-              );
-              added = true;
-            }
-          }
-          return added ? next : prev;
-        });
+            return applyImportedEmployeesDistribution(
+              existing ? { ...def, ...existing, id: def.id, name: def.name, code: def.code } : def,
+            );
+          }),
+        );
       }
     };
     syncDynamicMasterUnits();
@@ -3163,7 +3171,7 @@ export function CalibrationSetting() {
         loadPersistedState<CompanyUnit[] | null>("calibration_hc_settings_2026", null) ??
         loadPersistedState<CompanyUnit[] | null>("calibration_submitted_units", null);
       if (Array.isArray(saved) && saved.length > 0) {
-        const merged = defaultCompanyUnits.map((def) => {
+        const merged = buildDynamicDefaultCompanyUnits().map((def) => {
           const ex = saved.find((u) => u.id === def.id || canonicalizeCompanyUnitName(u.name) === canonicalizeCompanyUnitName(def.name));
           return applyImportedEmployeesDistribution(ex ? { ...def, ...ex, id: def.id, name: def.name, code: def.code } : def);
         });

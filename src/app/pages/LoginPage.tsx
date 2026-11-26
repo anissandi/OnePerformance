@@ -20,10 +20,6 @@ import {
 import { ImageWithFallback } from "@/app/components/figma/ImageWithFallback";
 import logoSG from "@/imports/Logo_Sambu_Group_transparent.png";
 import worldMap from "@/imports/image-3.png";
-import logoRsup from "@/imports/logo-rsup.png";
-import logoPs from "@/imports/logo-ps.png";
-import logoRstm from "@/imports/logo-rstm.png";
-import logoGhs from "@/imports/logo-ghs.png";
 import {
   COMPANY_UNIT_LOCATIONS,
   SESSION_EXPIRED_NOTICE_KEY,
@@ -48,25 +44,22 @@ import {
 } from "../store/loginManagementStore";
 import {
   MASTER_COMPANY_UPDATED_EVENT,
+  getDefaultMasterUnitLogo,
   getMasterCompanyLocations,
   refreshMasterCompanyCatalogFromBackend,
 } from "./hr/settings/masterCompanyStore";
 
-function getUnitLogo(code: string): string {
-  const up = code.toUpperCase();
-  if (up === "PSJ" || up === "PSG" || up === "PSKE" || up.startsWith("PS")) return logoPs;
-  if (code === "RSTM") return logoRstm;
-  if (code === "GHS") return logoGhs;
-  return logoRsup;
-}
-
-function buildLoginLocations() {
+function buildLoginLocations(): Array<{ code: string; company: string; name: string; logo: string }> {
   const list = getMasterCompanyLocations();
   return (list.length > 0 ? list : [...COMPANY_UNIT_LOCATIONS]).map((loc) => ({
     code: loc.code,
     company: loc.company,
     name: loc.fullName,
-    logo: getUnitLogo(loc.code),
+    logo: "logoCleared" in loc && Boolean((loc as { logoCleared?: boolean }).logoCleared)
+      ? ""
+      : ("logoUrl" in loc && typeof (loc as { logoUrl?: unknown }).logoUrl === "string" && (loc as { logoUrl?: string }).logoUrl)
+      ? String((loc as { logoUrl?: string }).logoUrl)
+      : getDefaultMasterUnitLogo(loc.code, loc.company),
   }));
 }
 
@@ -378,16 +371,22 @@ export function LoginPage() {
                     }}
                     className="group bg-white/75 hover:bg-white/95 backdrop-blur-md rounded-2xl border border-white/90 shadow-md hover:shadow-lg px-5 py-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer"
                   >
-                    <div
-                      className="w-14 h-14 mb-3 flex items-center justify-center transition-transform duration-300 group-hover:scale-105"
-                      style={{ clipPath: "polygon(50% 6%, 94% 88%, 6% 88%)" }}
-                    >
-                      <img
-                        src={loc.logo}
-                        alt={loc.code}
-                        className="w-full h-full object-contain"
-                      />
-                    </div>
+                    {loc.logo ? (
+                      <div
+                        className="w-14 h-14 mb-3 flex items-center justify-center transition-transform duration-300 group-hover:scale-105"
+                        style={{ clipPath: "polygon(50% 6%, 94% 88%, 6% 88%)" }}
+                      >
+                        <img
+                          src={loc.logo}
+                          alt={loc.code}
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-14 h-14 mb-3 rounded-2xl bg-[#1A284F]/10 border border-[#1A284F]/15 flex items-center justify-center transition-transform duration-300 group-hover:scale-105">
+                        <Building2 className="w-6 h-6 text-[#1A284F]" />
+                      </div>
+                    )}
                     <div className="text-xs font-bold text-[#1A284F] uppercase tracking-wide leading-snug">
                       {loc.name}
                     </div>
@@ -425,12 +424,16 @@ export function LoginPage() {
                     Ganti Perusahaan
                   </button>
                   <div className="flex items-center gap-2">
-                    <div
-                      className="w-6 h-6 shrink-0"
-                      style={{ clipPath: "polygon(50% 6%, 94% 88%, 6% 88%)" }}
-                    >
-                      <img src={selectedLoc.logo} alt={selectedLoc.code} className="w-full h-full object-contain" />
-                    </div>
+                    {selectedLoc.logo ? (
+                      <div
+                        className="w-6 h-6 shrink-0"
+                        style={{ clipPath: "polygon(50% 6%, 94% 88%, 6% 88%)" }}
+                      >
+                        <img src={selectedLoc.logo} alt={selectedLoc.code} className="w-full h-full object-contain" />
+                      </div>
+                    ) : (
+                      <Building2 className="w-4 h-4 text-[#1A284F] shrink-0" />
+                    )}
                     <span className="text-xs font-bold text-[#1A284F]">{selectedLoc.code}</span>
                   </div>
                 </div>

@@ -12,6 +12,7 @@ import {
   type AppraisalModuleName,
 } from "../../../store/authStore";
 import { ACCESS_UPDATED_EVENT } from "../settings/AccessManagement";
+import { MASTER_COMPANY_UPDATED_EVENT, getMasterCompanyLocations } from "../settings/masterCompanyStore";
 
 let _monEpoch = 1;
 let _cachedMonSig = "";
@@ -30,6 +31,7 @@ if (typeof window !== "undefined") {
   };
   window.addEventListener("pa-auth-updated", bump);
   window.addEventListener(ACCESS_UPDATED_EVENT, bump);
+  window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, bump);
   window.addEventListener("pa-db-hydrated", bump);
   window.addEventListener("pa-employees-imported", bump);
   window.addEventListener("storage", bump);
@@ -76,6 +78,7 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
         allowed.includes("Managerial Skill") ||
         u.role === "Supervisor" ||
         u.role === "GM" ||
+        u.role === "VGM" ||
         u.role === "vGM" ||
         u.role === "Coordinator" ||
         u.role === "Division" ||
@@ -139,20 +142,26 @@ export const SUPERVISOR_TEAM_EMPLOYEES: MonitoringEmployee[] = new Proxy([] as M
   },
 });
 
-const ALL_COMPANY_UNITS = [
-  "PT RSUP (Industry)",
-  "PT RSUP (Perkebunan)",
-  "PT Pulau Sambu (Jakarta)",
-  "PT Pulau Sambu (Guntung)",
-  "PT Pulau Sambu (Kuala Enok)",
-  "PT RSTM",
-  "PT GHS",
-  "PT RSUP ASD",
-];
+function getAllMasterUnitsList(): string[] {
+  const dyn = getMasterCompanyLocations().map((l) => l.company);
+  return dyn.length > 0
+    ? dyn
+    : [
+        "PT RSUP (Industry)",
+        "PT RSUP (Perkebunan)",
+        "PT Pulau Sambu (Jakarta)",
+        "PT Pulau Sambu (Guntung)",
+        "PT Pulau Sambu (Kuala Enok)",
+        "PT RSTM",
+        "PT GHS",
+        "PT RSUP ASD",
+      ];
+}
 
 function getScopedCompanyUnits(): string[] {
   const activeUser = getActiveUser();
-  const sig = `${_monEpoch}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}`;
+  const allUnits = getAllMasterUnitsList();
+  const sig = `${_monEpoch}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}|${allUnits.join(",")}`;
   if (_cachedUnitsList && _cachedUnitsSig === sig) {
     return _cachedUnitsList;
   }
@@ -166,13 +175,13 @@ function getScopedCompanyUnits(): string[] {
       return u;
     }
     _cachedUnitsSig = sig;
-    _cachedUnitsList = ALL_COMPANY_UNITS;
-    return ALL_COMPANY_UNITS;
+    _cachedUnitsList = allUnits;
+    return allUnits;
   }
   const visibleUnits = new Set(getMonitoringEmployees().map((e) => e.unit).filter(Boolean));
   const ordered = [
-    ...ALL_COMPANY_UNITS.filter((u) => visibleUnits.has(u)),
-    ...Array.from(visibleUnits).filter((u) => !ALL_COMPANY_UNITS.includes(u)),
+    ...allUnits.filter((u) => visibleUnits.has(u)),
+    ...Array.from(visibleUnits).filter((u) => !allUnits.includes(u)),
   ];
   const finalUnits = ordered.length > 0 ? ordered : [activeUser.company].filter(Boolean);
   _cachedUnitsSig = sig;

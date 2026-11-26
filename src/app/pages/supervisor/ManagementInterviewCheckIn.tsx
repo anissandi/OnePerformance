@@ -12,21 +12,19 @@ import {
 import { uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { isAdminOrHrIcfRole, isSameCompanyUnit, loadManagedUsers, useAuthStore } from "../../store/authStore";
 import { pushEmployeeNotification } from "../../store/notificationStore";
+import { getMasterCompanyLocations } from "../hr/settings/masterCompanyStore";
 import { toast } from "sonner";
 import { Download, Search, Send } from "lucide-react";
 
 // ── Master data ───────────────────────────────────────────────────────────────
 
-const COMPANY_UNITS = [
-  "PT RSUP (Industry)",
-  "PT RSUP (Perkebunan)",
-  "PT Pulau Sambu (Jakarta)",
-  "PT Pulau Sambu (Guntung)",
-  "PT Pulau Sambu (Kuala Enok)",
-  "PT RSTM",
-  "PT GHS",
-  "PT RSUP ASD",
-];
+const COMPANY_UNITS: string[] = new Proxy([] as string[], {
+  get(_target, prop, receiver) {
+    const list = getMasterCompanyLocations().map((l) => l.company);
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
 interface PersonOption { value: string; position: string; }
 

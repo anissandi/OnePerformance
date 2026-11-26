@@ -72,6 +72,7 @@ import {
   normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
+  parseStabilizeRange,
   resolveEffectiveBlockedMonthSet,
   resolveKpiColorBandMeta,
   sanitizeKpiNumericInput,
@@ -131,7 +132,14 @@ function computeColorTarget2026(
 function computeTarget2026(
   mt: Record<string, string>,
   formula: string,
-  opts?: { trackingPeriod?: string; periodicTargetBlock?: boolean; blockedMonths?: number[]; baselineSample?: string; satuan?: string },
+  opts?: {
+    trackingPeriod?: string;
+    periodicTargetBlock?: boolean;
+    blockedMonths?: number[];
+    baselineSample?: string;
+    satuan?: string;
+    polaritas?: string;
+  },
 ): string {
   const forcePct = isPercentSatuan(opts?.satuan);
   const activeIndices = getActiveMonthIndicesForKpi({
@@ -144,19 +152,51 @@ function computeTarget2026(
   if (formula === "Nilai Akhir") {
     const lastKey = activeKeys[activeKeys.length - 1] ?? "Dec-26";
     const rawLast = String(mt[lastKey] ?? "").trim();
-    return forcePct ? syncPercentSuffixOnValue(rawLast, true) : rawLast;
+    if (!rawLast) return "";
+    return forcePct || rawLast.includes("%") ? syncPercentSuffixOnValue(rawLast, forcePct || rawLast.endsWith("%")) : rawLast;
   }
   const rawInputs = activeKeys.map((m) => String(mt[m] ?? "").trim()).filter(Boolean);
+  if (rawInputs.length === 0) return "";
+
+  // Penanganan khusus rentang bawah-atas (min-max) untuk Polaritas Stabilize (contoh: "15-25", "85-90", "1.5%-2.5%")
+  const parsedRanges = rawInputs.map((s) => parseStabilizeRange(s));
+  if (parsedRanges.every((r): r is NonNullable<typeof r> => r !== null)) {
+    const anyPct = forcePct || parsedRanges.some((r) => r.hasPercent);
+    // Jika seluruh bulan aktif memiliki rentang yang persis sama, pertahankan untuk Rata-Rata
+    const firstNorm = syncPercentSuffixOnValue(rawInputs[0], anyPct);
+    const allIdentical = rawInputs.every((s) => syncPercentSuffixOnValue(s, anyPct) === firstNorm);
+    if (formula === "Rata-Rata" && allIdentical) {
+      return firstNorm;
+    }
+    const loSamples = parsedRanges.map((r) => r.rawLo);
+    const hiSamples = parsedRanges.map((r) => r.rawHi);
+    const sumLo = parsedRanges.reduce((acc, r) => acc + r.lo, 0);
+    const sumHi = parsedRanges.reduce((acc, r) => acc + r.hi, 0);
+    if (formula === "Jumlah") {
+      const fmtLo = formatComputedKpiNumber(sumLo, loSamples, { forcePercent: anyPct });
+      const fmtHi = formatComputedKpiNumber(sumHi, hiSamples, { forcePercent: anyPct });
+      return fmtLo && fmtHi ? `${fmtLo}-${fmtHi}` : "";
+    }
+    if (formula === "Rata-Rata") {
+      const avgLo = sumLo / parsedRanges.length;
+      const avgHi = sumHi / parsedRanges.length;
+      const fmtLo = formatComputedKpiNumber(avgLo, loSamples, { forcePercent: anyPct });
+      const fmtHi = formatComputedKpiNumber(avgHi, hiSamples, { forcePercent: anyPct });
+      return fmtLo && fmtHi ? `${fmtLo}-${fmtHi}` : "";
+    }
+  }
+
   const vals = rawInputs
     .map((s) => parseFlexibleKpiNumber(s))
     .filter((v): v is number => v !== null);
   if (vals.length === 0) return "";
   const sum = vals.reduce((s, v) => s + v, 0);
+  const anyInputHasPct = forcePct || rawInputs.some((s) => s.endsWith("%"));
   const samples = opts?.baselineSample ? [...rawInputs, opts.baselineSample] : rawInputs;
-  if (formula === "Jumlah") return formatComputedKpiNumber(sum, samples, { forcePercent: forcePct });
+  if (formula === "Jumlah") return formatComputedKpiNumber(sum, samples, { forcePercent: anyInputHasPct });
   if (formula === "Rata-Rata") {
     const avg = sum / vals.length;
-    return formatComputedKpiNumber(avg, samples, { forcePercent: forcePct });
+    return formatComputedKpiNumber(avg, samples, { forcePercent: anyInputHasPct });
   }
   return "";
 }
@@ -1488,21 +1528,32 @@ function BobotExceededModal({ violation, onClose }: { violation: BobotViolation;
 // ─── Modals ───────────────────────────────────────────────────────────────────
 
 function ConfirmModal({ onCancel, onConfirm, validateMode = false }: { onCancel: () => void; onConfirm: () => void; validateMode?: boolean }) {
+  void validateMode;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full mx-4 text-center">
-        <div className="w-14 h-14 rounded-full bg-[#1A284F]/10 flex items-center justify-center mx-auto mb-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 p-7 max-w-md w-full mx-4 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-[#1A284F]/10 border border-[#1A284F]/15 flex items-center justify-center mx-auto mb-4">
           <Send className="w-6 h-6 text-[#1A284F]" />
         </div>
-        <h3 className="font-bold text-gray-900 text-lg mb-1">Action Confirmation</h3>
-        <p className="text-gray-500 text-sm mb-6">
-          {validateMode
-            ? "Are you sure you want to submit the KPI Setting for validation?"
-            : "Are you sure you want to submit the KPI Setting for approval?"}
+        <h3 className="font-bold text-[#1A284F] text-lg mb-2">Konfirmasi Submit KPI Setting</h3>
+        <p className="text-slate-600 text-sm leading-relaxed mb-6">
+          Apakah Anda yakin mengirimkan data KPI setting ini?
         </p>
         <div className="flex gap-3 justify-center">
-          <button onClick={onCancel} className="px-6 py-2 rounded-full border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">Cancel</button>
-          <button onClick={onConfirm} className="px-6 py-2 rounded-full bg-[#1A284F] text-white text-sm font-semibold hover:bg-[#131d3b] transition-colors">Submit</button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-5 py-2.5 rounded-xl border border-rose-200 bg-rose-50/70 text-sm font-semibold text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer"
+          >
+            Batalkan
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 shadow-xs transition-colors cursor-pointer"
+          >
+            Ya, Yakin
+          </button>
         </div>
       </div>
     </div>
@@ -1984,6 +2035,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
           blockedMonths: item.blockedMonths,
           baselineSample: item.baseline2025,
           satuan: item.satuan,
+          polaritas: item.polaritas,
         });
       return { ...item, monthlyTargets: mt, target2026: computed || item.target2026 };
     })
@@ -2022,6 +2074,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
             blockedMonths: item.blockedMonths,
             baselineSample: item.baseline2025,
             satuan: item.satuan,
+            polaritas: item.polaritas,
           });
         return { ...item, monthlyTargets: mt, target2026: t2026 || item.target2026 };
       })
@@ -2645,6 +2698,7 @@ function MonthlyTargetTable({
   onBlockedMonthsChange,
   baselineSample,
   satuan,
+  polaritas,
   softOrangeHighlight = false,
   softYellowHighlight = false,
   softYellowSourceLabel,
@@ -2666,11 +2720,13 @@ function MonthlyTargetTable({
   ) => void;
   baselineSample?: string;
   satuan?: string;
+  polaritas?: Polaritas | string;
   softOrangeHighlight?: boolean;
   softYellowHighlight?: boolean;
   softYellowSourceLabel?: string;
 }) {
   const pctSatuan = isPercentSatuan(satuan);
+  const isStabilize = polaritas === "Stabilize";
   const normPeriod = normalizeTrackingPeriod(trackingPeriod);
   const isPeriodic = isPeriodicTrackingType(normPeriod);
   const blockedIdxSet = resolveEffectiveBlockedMonthSet({
@@ -2712,6 +2768,7 @@ function MonthlyTargetTable({
       ...opts,
       baselineSample,
       satuan,
+      polaritas,
     });
   };
 
@@ -2804,6 +2861,11 @@ function MonthlyTargetTable({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <label className={`text-[11px] font-bold uppercase tracking-wide ${softYellowHighlight ? "text-amber-800" : softOrangeHighlight ? "text-orange-800" : "text-gray-500"}`}>Monthly Target</label>
+          {isStabilize && !colorMode && !ratioMode && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+              Polaritas Stabilize: isi rentang bawah–atas (contoh: {pctSatuan ? "1.5%-2.5% atau 15%-25%" : "15-25 atau 85-90"})
+            </span>
+          )}
           {isPeriodic && hasPresetPeriodRule && (
               <button
                 type="button"
@@ -2965,7 +3027,12 @@ function MonthlyTargetTable({
                         handleChange(key, rawNext);
                         if (pctSatuan) {
                           const nextPreview = applyAutoPercentInput(rawNext, cellVal);
-                          if (nextPreview.endsWith("%")) {
+                          if (nextPreview.endsWith("%-")) {
+                            const pos = nextPreview.length;
+                            window.requestAnimationFrame(() => {
+                              try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                            });
+                          } else if (nextPreview.endsWith("%")) {
                             const pos = Math.max(0, nextPreview.length - 1);
                             window.requestAnimationFrame(() => {
                               try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
@@ -2973,7 +3040,7 @@ function MonthlyTargetTable({
                           }
                         }
                       }}
-                      placeholder={pctSatuan ? "—%" : "—"}
+                      placeholder={isStabilize ? (pctSatuan ? "min%-max%" : "min-max") : pctSatuan ? "—%" : "—"}
                       className={`w-full text-xs text-center border rounded-md px-1 py-1.5 outline-none focus:border-[#1A284F] ${isCellEmptyYellow ? "border-yellow-300 bg-yellow-50/75" : isActivePeriodicCell ? "border-teal-300 bg-white font-semibold text-[#1A284F]" : i === 11 ? "border-amber-200 bg-amber-50/60" : "border-gray-200 bg-white"}`}
                     />
                   </td>
@@ -3023,6 +3090,7 @@ const PERSONAL_SECTION_OPTIONS = [
 ];
 
 const LIHAT_KPI_ATASAN_ROLES = new Set([
+  "VGM",
   "vGM",
   "Coordinator",
   "Division",
@@ -3817,6 +3885,7 @@ export function AddKPIModal({
     !forDivision &&
     !canLihatKpiGroup &&
     (targetOwner.role === "GM" ||
+      targetOwner.role === "VGM" ||
       targetOwner.role === "vGM" ||
       targetOwnerAuthLevel === "gm_unit" ||
       targetOwnerAuthLevel === "vgm_unit");
@@ -3862,13 +3931,14 @@ export function AddKPIModal({
 
   const set = (key: keyof typeof form, val: string) => setForm((p) => {
     const next = { ...p, [key]: val } as typeof form;
-    if (key === "formula") {
-      next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val, {
+    if (key === "formula" || key === "polaritas") {
+      next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, key === "formula" ? val : p.formula, {
         trackingPeriod: p.trackingPeriod,
         periodicTargetBlock: p.periodicTargetBlock,
         blockedMonths: p.blockedMonths,
         baselineSample: p.baseline2025,
         satuan: p.satuan,
+        polaritas: key === "polaritas" ? val : p.polaritas,
       });
     }
     return next;
@@ -3911,6 +3981,7 @@ export function AddKPIModal({
               blockedMonths: nextBlockedList,
               baselineSample: p.baseline2025,
               satuan: p.satuan,
+              polaritas: p.polaritas,
             });
       return {
         ...p,
@@ -4120,16 +4191,14 @@ export function AddKPIModal({
     if (!hideCascading && sectionCascadeType) onSectionCascade?.(form.section, sectionCascadeType);
     const derivedTracking = normalizeTrackingPeriod(form.trackingPeriod, form.satuan);
     const pinnedSectionBobot = `${formatPctNum(sectionLimit)}%`;
-    const effectiveBlocked = isPeriodicTrackingType(derivedTracking)
-      ? Array.from(
-          resolveEffectiveBlockedMonthSet({
-            trackingPeriod: derivedTracking,
-            periodicTargetBlock: form.periodicTargetBlock,
-            blockedMonths: form.blockedMonths,
-            monthlyTargets: form.monthlyTargets,
-          }),
-        ).sort((a, b) => a - b)
-      : [];
+    const effectiveBlocked = Array.from(
+      resolveEffectiveBlockedMonthSet({
+        trackingPeriod: derivedTracking,
+        periodicTargetBlock: isPeriodicTrackingType(derivedTracking) ? form.periodicTargetBlock : false,
+        blockedMonths: form.blockedMonths,
+        monthlyTargets: form.monthlyTargets,
+      }),
+    ).sort((a, b) => a - b);
     onAdd({
       ...form,
       sectionBobot: pinnedSectionBobot,
@@ -4527,14 +4596,22 @@ export function AddKPIModal({
                     Object.entries(p.monthlyTargets ?? {}).forEach(([mk, mv]) => {
                       nextMt[mk] = syncPercentSuffixOnValue(mv, wantPct);
                     });
+                    const nextBase = syncPercentSuffixOnValue(p.baseline2025, wantPct);
                     const nextTgt = computeTarget2026(nextMt, p.formula, {
                       trackingPeriod: p.trackingPeriod,
                       periodicTargetBlock: p.periodicTargetBlock,
                       blockedMonths: p.blockedMonths,
-                      baselineSample: p.baseline2025,
+                      baselineSample: nextBase,
                       satuan: v,
+                      polaritas: p.polaritas,
                     });
-                    return { ...p, satuan: v, monthlyTargets: nextMt, target2026: nextTgt || syncPercentSuffixOnValue(p.target2026, wantPct) };
+                    return {
+                      ...p,
+                      satuan: v,
+                      baseline2025: nextBase,
+                      monthlyTargets: nextMt,
+                      target2026: nextTgt || syncPercentSuffixOnValue(p.target2026, wantPct),
+                    };
                   })
                 }
                 unitOptions={master.satuan}
@@ -4664,7 +4741,20 @@ export function AddKPIModal({
                     type="text"
                     inputMode="decimal"
                     value={form.baseline2025}
-                    onChange={(e) => set("baseline2025", sanitizeKpiNumericInput(e.target.value))}
+                    onChange={(e) => {
+                      const el = e.currentTarget;
+                      const pct = isPercentSatuan(form.satuan);
+                      const formatted = pct
+                        ? applyAutoPercentInput(el.value, form.baseline2025)
+                        : sanitizeKpiNumericInput(el.value);
+                      set("baseline2025", formatted);
+                      if (pct && formatted.endsWith("%")) {
+                        const pos = Math.max(0, formatted.length - 1);
+                        window.requestAnimationFrame(() => {
+                          try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                        });
+                      }
+                    }}
                     placeholder="Contoh: 10.000 / 10,5 / 10.00,01"
                     className={inputCls}
                   />
@@ -4693,6 +4783,7 @@ export function AddKPIModal({
                 blockedMonths={form.blockedMonths}
                 baselineSample={form.baseline2025}
                 satuan={form.satuan}
+                polaritas={form.polaritas}
                 onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
                   setForm((p) => ({
                     ...p,
@@ -5214,13 +5305,14 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
 
   const set = (key: keyof CorporateKPIForm, val: string) => setForm((p) => {
     const next = { ...p, [key]: val } as CorporateKPIForm;
-    if (key === "formula") {
-      next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, val, {
+    if (key === "formula" || key === "polaritas") {
+      next.target2026 = computeTarget2026(p.monthlyTargets ?? {}, key === "formula" ? val : p.formula, {
         trackingPeriod: p.trackingPeriod,
         periodicTargetBlock: p.periodicTargetBlock,
         blockedMonths: p.blockedMonths,
         baselineSample: p.baseline2025,
         satuan: p.satuan,
+        polaritas: key === "polaritas" ? val : p.polaritas,
       });
     }
     return next;
@@ -5263,6 +5355,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               blockedMonths: nextBlockedList,
               baselineSample: p.baseline2025,
               satuan: p.satuan,
+              polaritas: p.polaritas,
             });
       return {
         ...p,
@@ -5450,16 +5543,14 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
       return;
     }
     const derivedTracking = normalizeTrackingPeriod(form.trackingPeriod, form.satuan);
-    const effectiveCorpBlocked = isPeriodicTrackingType(derivedTracking)
-      ? Array.from(
-          resolveEffectiveBlockedMonthSet({
-            trackingPeriod: derivedTracking,
-            periodicTargetBlock: form.periodicTargetBlock,
-            blockedMonths: form.blockedMonths,
-            monthlyTargets: form.monthlyTargets,
-          }),
-        ).sort((a, b) => a - b)
-      : [];
+    const effectiveCorpBlocked = Array.from(
+      resolveEffectiveBlockedMonthSet({
+        trackingPeriod: derivedTracking,
+        periodicTargetBlock: isPeriodicTrackingType(derivedTracking) ? form.periodicTargetBlock : false,
+        blockedMonths: form.blockedMonths,
+        monthlyTargets: form.monthlyTargets,
+      }),
+    ).sort((a, b) => a - b);
     onAdd({
       ...form,
       sectionBobot: `${formatPctNum(sectionLimit)}%`,
@@ -5780,14 +5871,22 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                     Object.entries(p.monthlyTargets ?? {}).forEach(([mk, mv]) => {
                       nextMt[mk] = syncPercentSuffixOnValue(mv, wantPct);
                     });
+                    const nextBase = syncPercentSuffixOnValue(p.baseline2025, wantPct);
                     const nextTgt = computeTarget2026(nextMt, p.formula, {
                       trackingPeriod: p.trackingPeriod,
                       periodicTargetBlock: p.periodicTargetBlock,
                       blockedMonths: p.blockedMonths,
-                      baselineSample: p.baseline2025,
+                      baselineSample: nextBase,
                       satuan: v,
+                      polaritas: p.polaritas,
                     });
-                    return { ...p, satuan: v, monthlyTargets: nextMt, target2026: nextTgt || syncPercentSuffixOnValue(p.target2026, wantPct) };
+                    return {
+                      ...p,
+                      satuan: v,
+                      baseline2025: nextBase,
+                      monthlyTargets: nextMt,
+                      target2026: nextTgt || syncPercentSuffixOnValue(p.target2026, wantPct),
+                    };
                   })
                 }
                 unitOptions={master.satuan}
@@ -5926,7 +6025,20 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                       type="text"
                       inputMode="decimal"
                       value={form.baseline2025}
-                      onChange={(e) => set("baseline2025", sanitizeKpiNumericInput(e.target.value))}
+                      onChange={(e) => {
+                        const el = e.currentTarget;
+                        const pct = isPercentSatuan(form.satuan);
+                        const formatted = pct
+                          ? applyAutoPercentInput(el.value, form.baseline2025)
+                          : sanitizeKpiNumericInput(el.value);
+                        set("baseline2025", formatted);
+                        if (pct && formatted.endsWith("%")) {
+                          const pos = Math.max(0, formatted.length - 1);
+                          window.requestAnimationFrame(() => {
+                            try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                          });
+                        }
+                      }}
                       placeholder="Contoh: 10.000 / 10,5 / 10.00,01"
                       className={inputCls}
                     />
@@ -5954,6 +6066,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 blockedMonths={form.blockedMonths}
                 baselineSample={form.baseline2025}
                 satuan={form.satuan}
+                polaritas={form.polaritas}
                 onTogglePeriodicBlock={(nextBlocked, nextMt, computed) =>
                   setForm((p) => ({
                     ...p,
@@ -6184,6 +6297,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                         blockedMonths,
                         baselineSample: baseline2025,
                         satuan: item.satuan,
+                        polaritas: item.polaritas,
                       }),
                     );
                   }}
@@ -6207,7 +6321,20 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                   type="text"
                   inputMode="decimal"
                   value={baseline2025}
-                  onChange={(e) => setBaseline2025(sanitizeKpiNumericInput(e.target.value))}
+                  onChange={(e) => {
+                    const el = e.currentTarget;
+                    const pct = isPercentSatuan(item.satuan);
+                    const formatted = pct
+                      ? applyAutoPercentInput(el.value, baseline2025)
+                      : sanitizeKpiNumericInput(el.value);
+                    setBaseline2025(formatted);
+                    if (pct && formatted.endsWith("%")) {
+                      const pos = Math.max(0, formatted.length - 1);
+                      window.requestAnimationFrame(() => {
+                        try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                      });
+                    }
+                  }}
                   className={inputCls}
                   placeholder="Contoh: 10.000 / 10,5 / 10.00,01"
                 />
@@ -6250,6 +6377,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                       blockedMonths: nextBlockedList,
                       baselineSample: baseline2025,
                       satuan: item.satuan,
+                      polaritas: item.polaritas,
                     });
                 setTrackingPeriod(nextPeriod);
                 setPeriodicTargetBlock(nextBlock);
@@ -6274,6 +6402,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             blockedMonths={blockedMonths}
             baselineSample={baseline2025}
             satuan={item.satuan}
+            polaritas={item.polaritas}
             onTogglePeriodicBlock={(nextBlocked, nextMt, computed) => {
               setPeriodicTargetBlock(nextBlocked);
               setMonthlyTargets(nextMt);

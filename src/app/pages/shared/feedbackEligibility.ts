@@ -17,7 +17,7 @@ const normalize = (value: string | undefined) => value?.trim().replace(/\s+/g, "
 /**
  * Validasi kelayakan pemberi feedback berdasarkan Role penerima:
  * - Director / DirectorNonOpr: tidak boleh satu Group
- * - GM / vGM: tidak boleh satu Unit Usaha
+ * - GM / VGM: tidak boleh satu Unit Usaha
  * - Division: tidak boleh satu Divisi (pada Unit Usaha yang sama)
  * - Coordinator, HR Unit, Supervisor, Employee (dan lainnya): tidak boleh satu Departemen
  */
@@ -40,10 +40,10 @@ export function feedbackEligibilityError(recipient: FeedbackOrganization, giver:
     return "";
   }
 
-  // 2) Role GM / vGM -> tidak boleh satu Unit Usaha
+  // 2) Role GM / VGM -> tidak boleh satu Unit Usaha
   if (rRole === "gm" || rRole === "vgm" || rGroup === "gm / vgm") {
     if (normalize(recipient.companyUnit) === normalize(giver.companyUnit)) {
-      return "Untuk role GM / vGM, pemberi feedback tidak boleh berasal dari Unit Usaha yang sama.";
+      return "Untuk role GM / VGM, pemberi feedback tidak boleh berasal dari Unit Usaha yang sama.";
     }
     return "";
   }

@@ -43,6 +43,7 @@ import {
   Radar,
 } from "recharts";
 import { useLanguage } from "../../context/LangContext";
+import { getMasterCompanyLocations } from "./settings/masterCompanyStore";
 import type { Employee, CalibrationTarget } from "../../data/mockEmployees";
 import {
   getLiveTransactionalEmployees, GRADE_ORDER,
@@ -1534,7 +1535,9 @@ function ScoreGradeDistributionDashboard({
 
 
 const filterOptions = {
-  companyUnit: ["All Units", "PT RSUP (Industry)", "PT RSUP (Perkebunan)", "PT Pulau Sambu (Jakarta)", "PT Pulau Sambu (Guntung)", "PT Pulau Sambu (Kuala Enok)", "PT RSTM", "PT GHS", "PT RSUP ASD"],
+  get companyUnit(): string[] {
+    return ["All Units", ...getMasterCompanyLocations().map((l) => l.company)];
+  },
   module: ["All Modules", "KPI (Setting)", "SMART Goals (Setting)", "Appraisal Form", "KPI (Tracking)", "SMART Goals (Tracking)", "Project OJS", "Managerial Skill", "Management Interview", "Inter-Department Feedback"],
   year: ["2026"],
   month: ["All Months", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],

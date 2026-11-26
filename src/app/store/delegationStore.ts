@@ -46,6 +46,8 @@ type DelegatedModuleFlags = {
   smartGoalsMeasurement: boolean;
   approveSetting: boolean;
   approveMeasurement: boolean;
+  approvedSettingTypes: string[];
+  approvedCheckinTypes: string[];
 };
 
 const EMPTY_DELEGATED_FLAGS: DelegatedModuleFlags = {
@@ -55,7 +57,30 @@ const EMPTY_DELEGATED_FLAGS: DelegatedModuleFlags = {
   smartGoalsMeasurement: false,
   approveSetting: false,
   approveMeasurement: false,
+  approvedSettingTypes: [],
+  approvedCheckinTypes: [],
 };
+
+export type TakeOverModuleKey =
+  | "kpiSetting"
+  | "kpiTracking"
+  | "smartGoalsSetting"
+  | "smartGoalsMeasurement"
+  | "appraisalForm"
+  | "managerialSkill"
+  | "project"
+  | "feedback";
+
+export const ALL_TAKE_OVER_MODULE_KEYS: TakeOverModuleKey[] = [
+  "kpiSetting",
+  "kpiTracking",
+  "smartGoalsSetting",
+  "smartGoalsMeasurement",
+  "appraisalForm",
+  "managerialSkill",
+  "project",
+  "feedback",
+];
 
 export interface TakeOverRecord {
   /** Kunci = Employee ID bawahan yang di-take-over (uppercase) */
@@ -63,6 +88,8 @@ export interface TakeOverRecord {
   subordinateEmployeeId: string;
   takeOverByEmployeeId: string;
   reason?: string;
+  /** Daftar modul approval yang di-take-over (jika kosong/tidak diset pada data lama, berlaku semua modul approval) */
+  modules?: TakeOverModuleKey[];
   active: boolean;
   updatedAt: string;
   updatedBy: string;
@@ -92,6 +119,7 @@ export function loadTakeOvers(): Record<string, TakeOverRecord> {
     if (!rec || typeof rec !== "object") continue;
     out[k] = {
       ...rec,
+      modules: Array.isArray(rec.modules) && rec.modules.length > 0 ? rec.modules : [...ALL_TAKE_OVER_MODULE_KEYS],
       active: Boolean(rec.active),
       history: Array.isArray(rec.history) ? rec.history : [],
     };
@@ -136,11 +164,55 @@ export function saveTakeOver(
   return next;
 }
 
+export function takeOverModuleKeysFor(moduleType: string, phase?: "setting" | "measurement"): TakeOverModuleKey[] {
+  const m = moduleType.trim().toLowerCase();
+  if (!m) return [...ALL_TAKE_OVER_MODULE_KEYS];
+  if (m === "kpi" || m.startsWith("kpi")) {
+    if (phase === "setting" || m.includes("setting")) return ["kpiSetting"];
+    if (phase === "measurement" || m.includes("tracking") || m.includes("measurement")) return ["kpiTracking"];
+    return ["kpiSetting", "kpiTracking"];
+  }
+  if (m === "rca" || m.startsWith("rca")) return ["kpiTracking"];
+  if (m.startsWith("smart")) {
+    if (phase === "setting" || m.includes("setting")) return ["smartGoalsSetting"];
+    if (phase === "measurement" || m.includes("measurement") || m.includes("tracking") || m.includes("check")) return ["smartGoalsMeasurement"];
+    return ["smartGoalsSetting", "smartGoalsMeasurement"];
+  }
+  if (m.includes("appraisal")) return ["appraisalForm"];
+  if (m.includes("managerial")) return ["managerialSkill"];
+  if (m.includes("project")) return ["project"];
+  if (m.includes("feedback") || m.includes("inter")) return ["feedback"];
+  return [];
+}
+
+export function isTakeOverEffectiveForModule(
+  rec: TakeOverRecord | undefined,
+  moduleType?: string,
+  phase?: "setting" | "measurement",
+): boolean {
+  if (!rec || !rec.active || !rec.takeOverByEmployeeId) return false;
+  const mods = Array.isArray(rec.modules) && rec.modules.length > 0 ? rec.modules : ALL_TAKE_OVER_MODULE_KEYS;
+  if (!moduleType) return mods.length > 0;
+  const keys = takeOverModuleKeysFor(moduleType, phase);
+  if (keys.length === 0) return false;
+  return keys.some((k) => mods.includes(k));
+}
+
 /** Daftar Employee ID bawahan yang saat ini sedang di-Take Over secara aktif oleh `superiorEmployeeId`. */
-export function getActiveTakenOverSubordinateIds(superiorEmployeeId: string): string[] {
+export function getActiveTakenOverSubordinateIds(
+  superiorEmployeeId: string,
+  moduleType?: string,
+  phase?: "setting" | "measurement",
+): string[] {
   if (!superiorEmployeeId) return [];
   return Object.values(loadTakeOvers())
-    .filter((r) => r.active && Boolean(r.takeOverByEmployeeId) && sameEmp(r.takeOverByEmployeeId, superiorEmployeeId))
+    .filter(
+      (r) =>
+        r.active &&
+        Boolean(r.takeOverByEmployeeId) &&
+        sameEmp(r.takeOverByEmployeeId, superiorEmployeeId) &&
+        isTakeOverEffectiveForModule(r, moduleType, phase),
+    )
     .map((r) => r.subordinateEmployeeId);
 }
 
@@ -284,7 +356,7 @@ export function getActiveDelegatorIdsForDelegate(
     .map((d) => d.delegatorEmployeeId)
     : [];
   // Gabungkan bawahan yang di-Take Over aktif oleh atasan ini (berlaku untuk seluruh modul Approval & Assessment)
-  const fromTakeOvers = getActiveTakenOverSubordinateIds(delegateEmployeeId);
+  const fromTakeOvers = getActiveTakenOverSubordinateIds(delegateEmployeeId, moduleType || undefined, phase);
   return Array.from(new Set([...fromDelegations, ...fromTakeOvers]));
 }
 
@@ -298,15 +370,24 @@ export function getActiveDelegateIdsForDelegator(
   return isDelegationEffective(rec, moduleType, phase) ? [rec!.delegateEmployeeId] : [];
 }
 
-function userMatchesRef(user: ManagedUser, ref?: string): boolean {
+function userMatchesRef(user: ManagedUser, ref?: string, allUsers?: ManagedUser[]): boolean {
   const r = String(ref ?? "").trim().toLowerCase();
   if (!r) return false;
-  return (
+  if (
     (user.regNo ?? "").trim().toLowerCase() === r ||
     user.employeeId.trim().toLowerCase() === r ||
-    user.name.trim().toLowerCase() === r ||
-    (numKey(r) !== "" && numKey(user.employeeId) === numKey(r))
-  );
+    (/^(?:emp-?|e)\d+$/i.test(r) && /^(?:emp-?|e)\d+$/i.test(user.employeeId.trim()) && numKey(r) !== "" && numKey(user.employeeId) === numKey(r))
+  ) {
+    return true;
+  }
+  if (user.name.trim().toLowerCase() === r && allUsers) {
+    const idCollision = allUsers.some(
+      (u) => (u.regNo ?? "").trim().toLowerCase() === r || u.employeeId.trim().toLowerCase() === r,
+    );
+    if (idCollision) return false;
+    return allUsers.filter((u) => u.name.trim().toLowerCase() === r).length === 1;
+  }
+  return false;
 }
 
 /**
@@ -324,15 +405,15 @@ export function resolveActingApproverLabel(
 ): string {
   if (!target) return viewer.name;
   const ref = stage === "approver1" ? target.regNoAp1 : target.regNoAp2;
-  if (userMatchesRef(viewer, ref)) return viewer.name;
-  const takenOverIds = getActiveTakenOverSubordinateIds(viewer.employeeId);
+  if (userMatchesRef(viewer, ref, allUsers)) return viewer.name;
+  const takenOverIds = getActiveTakenOverSubordinateIds(viewer.employeeId, moduleType, phase);
   const takenSub = allUsers.find(
-    (u) => takenOverIds.some((id) => sameEmp(id, u.employeeId)) && userMatchesRef(u, ref),
+    (u) => takenOverIds.some((id) => sameEmp(id, u.employeeId)) && userMatchesRef(u, ref, allUsers),
   );
   if (takenSub) return `${viewer.name} | Take Over atas nama ${takenSub.name}`;
   const delegatorIds = getActiveDelegatorIdsForDelegate(viewer.employeeId, moduleType, phase);
   const delegator = allUsers.find(
-    (u) => delegatorIds.some((id) => sameEmp(id, u.employeeId)) && userMatchesRef(u, ref),
+    (u) => delegatorIds.some((id) => sameEmp(id, u.employeeId)) && userMatchesRef(u, ref, allUsers),
   );
   return delegator ? `${viewer.name} | atas nama ${delegator.name}` : viewer.name;
 }
@@ -392,18 +473,35 @@ export function getReceivedWorkspaceDelegations(
 export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): DelegatedModuleFlags {
   if (!delegateEmployeeId) return EMPTY_DELEGATED_FLAGS;
   loadDelegations();
-  const activeTakeOvers = getActiveTakenOverSubordinateIds(delegateEmployeeId);
-  if (_cachedActiveDelegations.length === 0 && activeTakeOvers.length === 0) return EMPTY_DELEGATED_FLAGS;
+  const allTakeOvers = Object.values(loadTakeOvers()).filter(
+    (r) => r.active && Boolean(r.takeOverByEmployeeId) && sameEmp(r.takeOverByEmployeeId, delegateEmployeeId),
+  );
+  if (_cachedActiveDelegations.length === 0 && allTakeOvers.length === 0) return EMPTY_DELEGATED_FLAGS;
   const cacheKey = norm(delegateEmployeeId);
   const cached = _cachedDelegateFlagsByKey.get(cacheKey);
   if (cached) return cached;
-  const out = {
+  const settingTypeSet = new Set<string>();
+  const checkinTypeSet = new Set<string>();
+  for (const toRec of allTakeOvers) {
+    const mods = Array.isArray(toRec.modules) && toRec.modules.length > 0 ? toRec.modules : ALL_TAKE_OVER_MODULE_KEYS;
+    if (mods.includes("kpiSetting")) settingTypeSet.add("KPI");
+    if (mods.includes("smartGoalsSetting")) settingTypeSet.add("SMART Goals");
+    if (mods.includes("kpiTracking")) checkinTypeSet.add("KPI");
+    if (mods.includes("smartGoalsMeasurement")) checkinTypeSet.add("SMART Goals");
+    if (mods.includes("appraisalForm")) checkinTypeSet.add("Appraisal Form");
+    if (mods.includes("managerialSkill")) checkinTypeSet.add("Managerial Skill");
+    if (mods.includes("project")) checkinTypeSet.add("Project");
+    if (mods.includes("feedback")) checkinTypeSet.add("Inter-Department Feedback");
+  }
+  const out: DelegatedModuleFlags = {
     kpiSetting: false,
     kpiTracking: false,
     smartGoalsSetting: false,
     smartGoalsMeasurement: false,
-    approveSetting: activeTakeOvers.length > 0,
-    approveMeasurement: activeTakeOvers.length > 0,
+    approveSetting: settingTypeSet.size > 0,
+    approveMeasurement: checkinTypeSet.size > 0,
+    approvedSettingTypes: [],
+    approvedCheckinTypes: [],
   };
   for (const rec of _cachedActiveDelegations) {
     if (!sameEmp(rec.delegateEmployeeId, delegateEmployeeId)) continue;
@@ -414,10 +512,26 @@ export function getDelegatedModuleFlagsForUser(delegateEmployeeId: string): Dele
       if (rec.smartGoalsMeasurement) out.smartGoalsMeasurement = true;
     }
     if (rec.access?.approve) {
-      if (rec.kpiSetting || rec.smartGoalsSetting) out.approveSetting = true;
-      if (rec.kpiTracking || rec.smartGoalsMeasurement) out.approveMeasurement = true;
+      if (rec.kpiSetting) {
+        out.approveSetting = true;
+        settingTypeSet.add("KPI");
+      }
+      if (rec.smartGoalsSetting) {
+        out.approveSetting = true;
+        settingTypeSet.add("SMART Goals");
+      }
+      if (rec.kpiTracking) {
+        out.approveMeasurement = true;
+        checkinTypeSet.add("KPI");
+      }
+      if (rec.smartGoalsMeasurement) {
+        out.approveMeasurement = true;
+        checkinTypeSet.add("SMART Goals");
+      }
     }
   }
+  out.approvedSettingTypes = Array.from(settingTypeSet);
+  out.approvedCheckinTypes = Array.from(checkinTypeSet);
   _cachedDelegateFlagsByKey.set(cacheKey, out);
   return out;
 }

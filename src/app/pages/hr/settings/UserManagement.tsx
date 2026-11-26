@@ -69,6 +69,7 @@ const ROLE_BADGE: Record<string, string> = {
   "Supervisor":     "bg-blue-50 text-blue-700",
   "Departement":    "bg-cyan-50 text-cyan-800",
   "Division":       "bg-sky-50 text-sky-700",
+  "VGM":            "bg-teal-50 text-teal-800",
   "vGM":            "bg-teal-50 text-teal-800",
   "Coordinator":    "bg-teal-50 text-teal-800",
   "GM":             "bg-indigo-50 text-indigo-700",
@@ -82,7 +83,8 @@ const ROLE_BADGE: Record<string, string> = {
 
 function RoleBadge({ role }: { role: Role }) {
   if (!role) return <span className="text-gray-300">—</span>;
-  return <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${ROLE_BADGE[role] ?? "bg-gray-100 text-gray-600"}`}>{role}</span>;
+  const displayRole = role.trim().toLowerCase() === "vgm" ? "VGM" : role;
+  return <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${ROLE_BADGE[displayRole] ?? "bg-gray-100 text-gray-600"}`}>{displayRole}</span>;
 }
 
 function StatusBadge({ status }: { status: Status }) {

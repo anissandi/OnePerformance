@@ -295,6 +295,7 @@ export function DataSyncPage() {
             if (v === "bod") return "BOD";
             if (v === "director" || v === "direktur") return "Director";
             if (v === "gm" || v === "general manager") return "GM";
+            if (v === "vgm" || v === "vice general manager" || v === "wakil general manager") return "VGM";
             if (v === "supervisor" || v === "approver") return "Supervisor";
             if (v === "employee" || v === "staff" || v === "karyawan") return "Employee";
             return val.trim() as AppUserRole;

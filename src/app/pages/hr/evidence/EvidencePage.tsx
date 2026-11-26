@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { useAuthStore } from "../../../store/authStore";
 import { EvidenceViewerModal } from "../../../components/EvidenceViewerModal";
 import { buildZip, fetchFileBytes, safePathSegment, type ZipEntry } from "../../../utils/zipFolder";
+import { MASTER_COMPANY_UPDATED_EVENT, getMasterCompanyLocations } from "../settings/masterCompanyStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,16 +40,13 @@ interface EvidenceRow {
 
 // ─── Reference values (consistent with HR Approvals / Monitoring pages) ───────
 
-const COMPANY_UNITS = [
-  "PT RSUP (Industry)",
-  "PT RSUP (Perkebunan)",
-  "PT Pulau Sambu (Jakarta)",
-  "PT Pulau Sambu (Guntung)",
-  "PT Pulau Sambu (Kuala Enok)",
-  "PT RSTM",
-  "PT GHS",
-  "PT RSUP ASD",
-];
+const COMPANY_UNITS: string[] = new Proxy([] as string[], {
+  get(_target, prop, receiver) {
+    const list = getMasterCompanyLocations().map((l) => l.company);
+    const value = Reflect.get(list, prop, receiver);
+    return typeof value === "function" ? value.bind(list) : value;
+  },
+});
 
 const DIVISIONS = [
   "Divisi Produksi & Operasional",
@@ -184,9 +182,11 @@ export function EvidencePage({ type }: { type: EvidenceType }) {
   useEffect(() => {
     const refresh = () => setUploadedList(loadUploadedEvidenceList());
     window.addEventListener("pa-evidence-updated", refresh);
+    window.addEventListener(MASTER_COMPANY_UPDATED_EVENT, refresh);
     window.addEventListener("pa-db-hydrated", refresh);
     return () => {
       window.removeEventListener("pa-evidence-updated", refresh);
+      window.removeEventListener(MASTER_COMPANY_UPDATED_EVENT, refresh);
       window.removeEventListener("pa-db-hydrated", refresh);
     };
   }, []);
