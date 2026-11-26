@@ -478,35 +478,29 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
   const activeUser = getActiveUser();
   const scopedMeta = getScopedFilterOptionsForUser(activeUser);
   const isGlobalViewer = isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD";
-  const isUnitScopedRole =
-    activeUser.role === "HR Unit" ||
-    activeUser.role === "GM" ||
-    activeUser.role === "VGM" ||
-    activeUser.role === "vGM" ||
-    activeUser.role === "Coordinator";
   const { lockedUnits: authLockedUnits } = useAuthStore();
   const globalLockedUnits = isGlobalViewer ? (lockedUnits ?? authLockedUnits) : undefined;
   const supervisorAllowedIds = useMemo(
     () =>
       new Set(
-        !isGlobalViewer || role === "supervisor" || isUnitScopedRole
+        !isGlobalViewer
           ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
           : [],
       ),
-    [isGlobalViewer, role, isUnitScopedRole, activeUser, refreshTick],
+    [isGlobalViewer, activeUser, refreshTick],
   );
 
   const liveEmployees = useMemo(() => getLiveTransactionalEmployees(), [refreshTick]);
   const visibleBaseEmployees = useMemo(
     () =>
       liveEmployees.filter((emp) => {
-        if (!isGlobalViewer || role === "supervisor" || isUnitScopedRole) {
+        if (!isGlobalViewer) {
           return supervisorAllowedIds.has(emp.id.toLowerCase());
         }
         if (globalLockedUnits && !globalLockedUnits.includes(emp.companyUnit)) return false;
         return true;
       }),
-    [liveEmployees, isGlobalViewer, role, isUnitScopedRole, supervisorAllowedIds, globalLockedUnits],
+    [liveEmployees, isGlobalViewer, supervisorAllowedIds, globalLockedUnits],
   );
   const approvedSettingKeySet = useMemo(() => {
     const set = new Set<string>();
@@ -737,7 +731,7 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
               ? "Consolidated appraisal results for all employees with completed approvals"
               : "Appraisal results for employees under your hierarchical & approval authority"}
           </p>
-          {(role === "supervisor" || isUnitScopedRole) && (
+          {!isGlobalViewer && (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-[#1A284F] border border-blue-200">
               Cakupan Wewenang: {scopedMeta.authorityLabel}
             </span>

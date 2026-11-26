@@ -468,11 +468,13 @@ export function SupervisorCalibration() {
   useEffect(() => {
     const onRefresh = () => setTick((t) => t + 1);
     window.addEventListener("pa-auth-updated", onRefresh);
+    window.addEventListener("pa-employees-imported", onRefresh);
     window.addEventListener("appraisal-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
     window.addEventListener("storage", onRefresh);
     return () => {
       window.removeEventListener("pa-auth-updated", onRefresh);
+      window.removeEventListener("pa-employees-imported", onRefresh);
       window.removeEventListener("appraisal-updated", onRefresh);
       window.removeEventListener("pa-db-hydrated", onRefresh);
       window.removeEventListener("storage", onRefresh);

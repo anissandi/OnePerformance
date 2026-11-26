@@ -1,11 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { MessageSquare, CheckCircle2, Calendar, Users, X, Eye, Building2, ClipboardEdit, Save, AlertCircle, Info } from "lucide-react";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { getEntries, subscribe, updateEntry, type ScheduleEntry } from "../interviewScheduleStore";
 import { NAME_TO_EMP_ID, setPenilai1Score } from "../managementInterviewScoreStore";
 import { setMIPenilaiResult } from "../managementInterviewResultStore";
 import { loadPersistedState, mergeKvMapRecord, savePersistedState } from "../../../services/supabaseClient";
-import { getActiveUser, loadManagedUsers, resolveEffectiveUserGrouping, type ManagedUser } from "../../../store/authStore";
+import {
+  getActiveUser,
+  getAuthorizedSubordinates,
+  isAdminOrHrIcfRole,
+  loadManagedUsers,
+  resolveEffectiveUserGrouping,
+  type ManagedUser,
+} from "../../../store/authStore";
 import { getModuleWeightFraction } from "../../shared/scoringWeightStore";
 import { getLiveTransactionalEmployees, type Employee } from "../../../data/mockEmployees";
 import { Award, Sparkles } from "lucide-react";
@@ -776,27 +783,48 @@ function ScheduleDetailModal({ entry, onClose }: { entry: ScheduleEntry; onClose
 // ── Main component ────────────────────────────────────────────────────────────
 export function SupervisorMonitoringManagementInterview({ hideAssess = false }: { hideAssess?: boolean } = {}) {
   const activeUser = getActiveUser();
-  const [schedEntries, setSchedEntries] = useState<ScheduleEntry[]>(getEntries);
+  const [rawSchedEntries, setRawSchedEntries] = useState<ScheduleEntry[]>(getEntries);
   const [assessmentsMap, setAssessmentsMap] = useState<Record<string, ParticipantScore[]>>(() =>
     loadSavedAssessmentsMap(),
   );
+  const [authTick, setAuthTick] = useState(0);
   const [viewEntry, setViewEntry]       = useState<ScheduleEntry | null>(null);
   const [assessEntry, setAssessEntry]   = useState<{ entry: ScheduleEntry; readOnly: boolean } | null>(null);
 
   useEffect(() => {
     const refreshAll = () => {
-      setSchedEntries(getEntries());
+      setRawSchedEntries(getEntries());
       setAssessmentsMap(loadSavedAssessmentsMap());
+      setAuthTick((t) => t + 1);
     };
     const unsub = subscribe(refreshAll);
     window.addEventListener("pa-db-hydrated", refreshAll);
     window.addEventListener("appraisal-updated", refreshAll);
+    window.addEventListener("pa-auth-updated", refreshAll);
     return () => {
       unsub();
       window.removeEventListener("pa-db-hydrated", refreshAll);
       window.removeEventListener("appraisal-updated", refreshAll);
+      window.removeEventListener("pa-auth-updated", refreshAll);
     };
   }, []);
+
+  const schedEntries = useMemo(() => {
+    if (isAdminOrHrIcfRole(activeUser.role) || activeUser.role === "BOD") {
+      return rawSchedEntries;
+    }
+    const authorizedUsers = getAuthorizedSubordinates(activeUser);
+    const allowedNames = new Set(authorizedUsers.map((u) => u.name.trim().toLowerCase()).filter(Boolean));
+    const allowedIds = new Set(authorizedUsers.map((u) => u.employeeId.trim().toLowerCase()).filter(Boolean));
+    return rawSchedEntries.filter((entry) => {
+      if (isUserAppointedInterviewer(activeUser, entry.interviewers)) return true;
+      const participants = [...(entry.addedUsers ?? []), ...(entry.otherUsers ?? [])];
+      return participants.some((p) => {
+        const clean = String(p ?? "").trim().toLowerCase();
+        return Boolean(clean && (allowedNames.has(clean) || allowedIds.has(clean)));
+      });
+    });
+  }, [rawSchedEntries, activeUser, authTick]);
 
   return (
     <div className="w-full flex flex-col gap-6">
@@ -807,7 +835,10 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
           <span className="px-2.5 py-0.5 rounded-full bg-[#1A284F] text-white text-xs font-bold">2026</span>
           <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">My Team</span>
         </div>
-        <p className="text-gray-500 text-sm">{TEAM_UNIT} · {TEAM_DIV}</p>
+        <p className="text-gray-500 text-sm">
+          {activeUser.company || TEAM_UNIT}
+          {activeUser.division ? ` · ${activeUser.division}` : ""}
+        </p>
         {!hideAssess && (
           <div className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-800">
             <Info className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
@@ -992,7 +1023,7 @@ export function SupervisorMonitoringManagementInterview({ hideAssess = false }: 
           entry={assessEntry.entry}
           readOnly={assessEntry.readOnly}
           onSubmitted={() => {
-            setSchedEntries(getEntries());
+            setRawSchedEntries(getEntries());
             setAssessmentsMap(loadSavedAssessmentsMap());
           }}
           onClose={() => setAssessEntry(null)}

@@ -416,6 +416,7 @@ interface ApproverAdjacencyIndex {
   byEmpNum: Map<string, ManagedUser[]>;
 }
 const _approverAdjByUsersRef = new WeakMap<ManagedUser[], ApproverAdjacencyIndex>();
+const _chainDistByUsersRef = new WeakMap<ManagedUser[], Map<string, Map<string, number>>>();
 
 function bumpAuthComputedEpoch(): void {
   _authComputedEpoch++;
@@ -932,23 +933,32 @@ function normEmpNum(val?: string): string {
 }
 
 /**
- * Mengumpulkan seluruh ID karyawan (lowercase) yang berada dalam rantai Approver 1 / Approver 2
- * (baik langsung maupun bertingkat/transitif) MURNI milik `user` sendiri berdasarkan Reg No / Employee ID,
- * TANPA memasukkan bawahan dari Delegation atau Take Over agar tidak pernah bocor ke /summary, /monitoring,
- * /team-performance, maupun hitungan Appraisal Analytics.
+ * Menghitung jarak rantai approval (`hop`) dari `user` ke seluruh bawahannya melalui
+ * `Reg No AP1` / `Reg No AP2` secara ketat (`Reg No` / `Employee ID` unik, tanpa Delegation/Take Over):
+ * - `hop === 1`: bawahan langsung (`user` tercatat eksplisit sebagai `Reg No AP1` atau `Reg No AP2` pada bawahan tsb).
+ * - `hop >= 2`: bawahan tidak langsung / berjenjang (mis. Wakil Manager Div -> Manager Dept B -> Kepala Shift).
  */
-export function getTransitiveApproverSubordinateIds(
+function getApprovalChainDistances(
   user: ManagedUser,
   allUsers = loadManagedUsers(),
-): Set<string> {
-  const transitiveSubIds = new Set<string>();
-  const queue: ManagedUser[] = [user];
-  const visited = new Set<string>(queue.map((u) => u.employeeId.toLowerCase()));
+): Map<string, number> {
+  let perUserCache = _chainDistByUsersRef.get(allUsers);
+  if (!perUserCache) {
+    perUserCache = new Map();
+    _chainDistByUsersRef.set(allUsers, perUserCache);
+  }
+  const selfKey = `${user.employeeId.trim().toLowerCase()}::${(user.regNo ?? "").trim().toLowerCase()}`;
+  const cached = perUserCache.get(selfKey);
+  if (cached) return cached;
+
+  const distances = new Map<string, number>();
+  const queue: Array<{ u: ManagedUser; dist: number }> = [{ u: user, dist: 0 }];
+  const visited = new Set<string>([user.employeeId.trim().toLowerCase()]);
   const adj = getApproverAdjacencyForUsers(allUsers);
   let head = 0;
 
   while (head < queue.length) {
-    const curr = queue[head++]!;
+    const { u: curr, dist } = queue[head++]!;
     const reg = (curr.regNo ?? "").trim().toLowerCase();
     const emp = curr.employeeId.trim().toLowerCase();
     const empNum = normEmpNum(curr.employeeId);
@@ -962,32 +972,56 @@ export function getTransitiveApproverSubordinateIds(
     for (const bucket of bucketList) {
       if (!bucket) continue;
       for (const cand of bucket) {
-        const candKey = cand.employeeId.toLowerCase();
-        if (visited.has(candKey)) continue;
+        const candKey = cand.employeeId.trim().toLowerCase();
+        if (!candKey || visited.has(candKey)) continue;
         visited.add(candKey);
-        transitiveSubIds.add(candKey);
-        queue.push(cand);
+        const nextHop = dist + 1;
+        distances.set(candKey, nextHop);
+        queue.push({ u: cand, dist: nextHop });
       }
     }
   }
-  transitiveSubIds.delete(user.employeeId.toLowerCase());
-  return transitiveSubIds;
+  distances.delete(user.employeeId.trim().toLowerCase());
+  perUserCache.set(selfKey, distances);
+  return distances;
 }
 
 /**
- * Kewenangan Akses Data Berjenjang (Bagian I Poin 4):
- * Menggabungkan:
- * 1. Rantai Approval (Reg No AP1 / Reg No AP2, langsung maupun transitif/bertingkat), DAN
- * 2. Hirarki Jabatan Struktural:
- *    - Direktur pada Group (mis. RSUP Group: PT RSUP (Industry), PT RSUP (Perkebunan), PT RSTM, PT GHS, ASD)
- *    - GM pada Unit Usahanya
- *    - Level Divisi pada seluruh posisi, bagian, dan departemen dalam Divisinya
- *    - Level Departemen pada seluruh posisi dan bagian dalam Departemennya
- *    - Level Bagian pada seluruh posisi dalam Bagiannya
+ * Mengumpulkan seluruh ID karyawan (lowercase) yang berada dalam rantai Approver 1 / Approver 2
+ * (baik langsung maupun bertingkat/transitif) MURNI milik `user` sendiri berdasarkan Reg No / Employee ID,
+ * TANPA memasukkan bawahan dari Delegation atau Take Over agar tidak pernah bocor ke /summary, /monitoring,
+ * /team-performance, maupun hitungan Appraisal Analytics.
+ */
+export function getTransitiveApproverSubordinateIds(
+  user: ManagedUser,
+  allUsers = loadManagedUsers(),
+): Set<string> {
+  return new Set<string>(getApprovalChainDistances(user, allUsers).keys());
+}
+
+/**
+ * Kewenangan Akses Data Tim (`/summary`, `/monitoring`, `/calibration/team-performance`, `Appraisal Analytics`):
+ * 1. Role Global (`Administrator`, `HR Admin`, `HR ICF`, `BOD`): melihat seluruh karyawan aktif (sesuai `roleAllowedUnits` jika dibatasi).
+ * 2. Seluruh Role Lainnya (termasuk `Director`, `GM`, `VGM`, `Division`, `Departement`, `HR Unit`, `Supervisor`, `Employee`):
+ *    - Murni dikunci berdasarkan **Rantai Approval Berkaitan (Langsung maupun Tidak Langsung via `Reg No AP1` / `Reg No AP2`)** + diri sendiri (`isSelf`).
+ *    - Kesamaan nama Group, Unit Usaha, Divisi, Departemen, atau Bagian TIDAK lagi membuka akses tanpa ikatan rantai approval.
+ *    - Pengaman Anti-Peer: rekan satu Departemen/Divisi dengan Posisi sama atau Level Grouping setara/lebih tinggi (`targetRank >= myRank`),
+ *      termasuk ketika kolom `Bagian` kosong (`-`), diblokir dari saling melihat KECUALI tercatat sebagai `AP1`/`AP2` langsung (`hop === 1`).
  */
 export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadManagedUsers()): ManagedUser[] {
   const level = resolveUserAuthorityLevel(user);
   if (level === "admin" || level === "bod") {
+    const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
+    if (roleAllowedUnits.length > 0) {
+      const allowedCanonSet = new Set(
+        [...roleAllowedUnits, ...(user.managedUnits ?? [])].map((u) => normOrgName(canonicalizeCompanyUnitName(u))).filter(Boolean),
+      );
+      return allUsers.filter(
+        (u) =>
+          u.employeeId.trim().toLowerCase() === user.employeeId.trim().toLowerCase() ||
+          allowedCanonSet.has(normOrgName(canonicalizeCompanyUnitName(u.company))),
+      );
+    }
     return allUsers;
   }
   if (_authorizedSubsMemoEpoch !== _authComputedEpoch) {
@@ -999,167 +1033,59 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     perUsersMap = new Map();
     _authorizedSubsMemo.set(allUsers, perUsersMap);
   }
-  const userMemoKey = `${user.employeeId.toLowerCase()}|${user.role}|${user.groupings ?? ""}|${user.company}|${user.division}|${user.department}|${user.bagian ?? ""}|${(user.managedUnits ?? []).join(",")}|${(user.checkerUnits ?? []).join(",")}`;
+  const userMemoKey = `${user.employeeId.toLowerCase()}|${user.regNo ?? ""}|${user.role}|${user.groupings ?? ""}|${user.position}|${user.company}|${user.division}|${user.department}|${user.bagian ?? ""}|${user.regNoAp1 ?? ""}|${user.regNoAp2 ?? ""}`;
   const cachedSubs = perUsersMap.get(userMemoKey);
   if (cachedSubs) return cachedSubs;
 
   const myRank = HIERARCHY_RANK[level];
-  const roleAllowedUnits = getRoleAllowedCompanyUnits(user.role);
-  const directorGroupUnits = new Set(
-    (roleAllowedUnits.length > 0
-      ? [...roleAllowedUnits, ...(user.managedUnits ?? [])]
-      : getGroupCompaniesForUnit(user.company, user.managedUnits)
-    ).map(normOrgName),
-  );
+  const myPosNorm = normOrgName(user.position);
+  const myCompNorm = normOrgName(canonicalizeCompanyUnitName(user.company));
+  const myDeptNorm = normOrgName(user.department);
+  const selfEmpLower = user.employeeId.trim().toLowerCase();
 
-  // 1. Collect transitive AP1 / AP2 subordinate chain
-  const transitiveSubIds = getTransitiveApproverSubordinateIds(user, allUsers);
-
-  // 2. Collect structural hierarchy scope
-  const calInvolvedUnits =
-    isDirectorRoleOrGrouping(user) &&
-    user.calibrationRoleByUnit &&
-    typeof user.calibrationRoleByUnit === "object"
-      ? Object.entries(user.calibrationRoleByUnit)
-          .filter(([, v]) => v === "approver" || v === "mengetahui" || v === "readonly")
-          .map(([k]) => k)
-      : [];
-  const checkedUnits = (user.managedUnits ?? []).map(normOrgName).filter(Boolean);
-  const checkedDivs = (user.managedDivisions ?? []).map(normOrgName).filter(Boolean);
-  const checkedDepts = (user.managedDepartments ?? []).map(normOrgName).filter(Boolean);
-  const checkedBagians = (user.managedBagians ?? []).map(normOrgName).filter(Boolean);
-  const hasMultiScope =
-    checkedUnits.length > 0 ||
-    checkedDivs.length > 0 ||
-    checkedDepts.length > 0 ||
-    checkedBagians.length > 0;
-  const checkedUnitSet = new Set<string>(checkedUnits);
-  const checkedDivSet = new Set<string>(checkedDivs);
-  const checkedDeptSet = new Set<string>(checkedDepts);
-  const checkedBagianSet = new Set<string>(checkedBagians);
-
-  const isGroupOrGlobalTier = level === "director_group";
-  const allowedUnits = new Set<string>(
-    [
-      user.company,
-      ...(isGroupOrGlobalTier ? roleAllowedUnits : []),
-      ...(isGroupOrGlobalTier ? calInvolvedUnits : []),
-      ...(user.managedUnits ?? []),
-      ...getEffectiveCheckerUnits(user),
-    ]
-      .map(normOrgName)
-      .filter(Boolean),
-  );
-  const allowedDivisions = new Set<string>(
-    [user.division, ...(user.managedDivisions ?? [])].map(normOrgName).filter(Boolean),
-  );
-  const allowedDepartments = new Set<string>(
-    [user.department, ...(user.managedDepartments ?? [])].map(normOrgName).filter(Boolean),
-  );
-  const allowedBagians = new Set<string>(
-    [user.bagian ?? "", ...(user.managedBagians ?? [])].map(normOrgName).filter(Boolean),
-  );
+  // Kumpulkan rantai approval berkaitan (hop = 1 langsung, hop >= 2 tidak langsung / berjenjang)
+  const chainDistances = getApprovalChainDistances(user, allUsers);
 
   // 0. Semua role kecuali Administrator & HR ICF tidak boleh melihat data/history/summary approver-nya (AP1 & AP2)
-  const myAp1 = (user.regNoAp1 ?? "").trim().toLowerCase();
-  const myAp2 = (user.regNoAp2 ?? "").trim().toLowerCase();
   const isMyApprover = (target: ManagedUser): boolean => {
-    if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return false;
-    const tReg = (target.regNo ?? "").trim().toLowerCase();
-    const tEmp = target.employeeId.trim().toLowerCase();
-    const tName = target.name.trim().toLowerCase();
-    const matchesAp = (ap: string) =>
-      Boolean(ap && ((tReg && tReg === ap) || (tEmp && tEmp === ap) || (tName && tName === ap)));
-    return matchesAp(myAp1) || matchesAp(myAp2);
+    if (target.employeeId.trim().toLowerCase() === selfEmpLower) return false;
+    return (
+      doesUserMatchApproverRef(target, user.regNoAp1, allUsers) ||
+      doesUserMatchApproverRef(target, user.regNoAp2, allUsers)
+    );
   };
 
   const filteredSubs = allUsers.filter((target) => {
-    if (target.employeeId.toLowerCase() === user.employeeId.toLowerCase()) return true;
+    const targetKey = target.employeeId.trim().toLowerCase();
+    if (targetKey === selfEmpLower) return true;
     if (isMyApprover(target)) return false;
-    // 1. Jika user adalah Approver (AP1 / AP2) dari karyawan tsb:
-    //    untuk level berbatas Unit Usaha (seperti GM / vGM, Divisi, Dept, Bagian, dst.), tetap kunci visibilitas data
-    //    hanya di dalam Unit Usaha yang diizinkan (user.company + managedUnits + checkerUnits) agar tidak bocor lintas unit.
-    if (transitiveSubIds.has(target.employeeId.toLowerCase())) {
-      if (isGroupOrGlobalTier) return true;
-      return allowedUnits.has(normOrgName(target.company));
-    }
 
-    const targetLevel = resolveUserAuthorityLevel(target);
-    const targetRank = HIERARCHY_RANK[targetLevel];
-    if (target.role === user.role && targetRank >= myRank) return false;
-    if ((level === "gm_unit" || level === "vgm_unit") && targetRank >= myRank && (targetLevel === "gm_unit" || targetLevel === "vgm_unit")) {
-      // Peer pada level GM/vGM yang sama tidak saling menjadi bawahan (kecuali rantai AP1/AP2 di atas)
-      if (targetRank === myRank) return false;
-    }
-    if (targetRank > myRank) return false;
-
-    // 2. Jika Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian) di-setup di /settings/user-management:
-    // - Ceklist Unit Usaha saja -> semua karyawan di Unit Usaha yang diceklis terlihat
-    // - Ditambah ceklist Divisi -> otomatis hanya melihat sesuai Divisi di Unit Usaha tersebut
-    // - Ditambah ceklist Departemen -> otomatis hanya melihat sesuai Departemen dari Divisi dan Unit Usaha tersebut
-    // - Ditambah ceklist Bagian -> otomatis hanya melihat sesuai Bagian dari Departemen, Divisi, dan Unit Usaha tersebut
-    if (hasMultiScope) {
-      const targetUnit = normOrgName(target.company);
-      const unitMatched =
-        checkedUnitSet.size > 0
-          ? checkedUnitSet.has(targetUnit) || (isGroupOrGlobalTier && roleAllowedUnits.some((u) => normOrgName(u) === targetUnit))
-          : level === "director_group"
-            ? directorGroupUnits.has(targetUnit)
-            : allowedUnits.has(targetUnit);
-      if (!unitMatched) return false;
-      if (checkedDivSet.size > 0 && !checkedDivSet.has(normOrgName(target.division))) return false;
-      if (checkedDeptSet.size > 0 && !checkedDeptSet.has(normOrgName(target.department))) return false;
-      if (checkedBagianSet.size > 0 && !checkedBagianSet.has(normOrgName(target.bagian))) return false;
-      return true;
-    }
-
-    // Cakupan Unit Usaha berbasis Role hanya berlaku pada tier Direktur Group ke atas,
-    // sehingga Groupings seperti GM / vGM tidak pernah bocor keluar dari Unit Usahanya sendiri.
-    if (
-      isGroupOrGlobalTier &&
-      roleAllowedUnits.length > 0 &&
-      roleAllowedUnits.some((u) => normOrgName(u) === normOrgName(target.company))
-    ) {
-      return true;
-    }
-
-    // 1. Level Direktur pada Group: melihat semua unit dalam Group-nya (RSUP Group atau Sambu Group), GM, Divisi, Departemen, Bagian, All Posisi
-    if (level === "director_group") {
-      return directorGroupUnits.has(normOrgName(target.company));
-    }
-
-    // 2. Level GM, vGM & HR Unit: melihat karyawan pada Unit Usahanya sesuai batas hirarki role
-    if (level === "gm_unit" || level === "vgm_unit" || level === "hr_unit") {
-      return allowedUnits.has(normOrgName(target.company));
-    }
-
-    // Pastikan dalam Company Unit yang sama untuk level Divisi ke bawah
-    if (!allowedUnits.has(normOrgName(target.company))) return false;
-
-    // 3. Level Divisi: melihat semua posisi, bagian, departemen dalam Divisinya
-    if (level === "division") {
-      return allowedDivisions.has(normOrgName(target.division));
-    }
-
-    // 4. Level Departemen: melihat semua posisi dan bagian dalam Departemennya
-    if (level === "department") {
-      const sameDiv = !user.division || allowedDivisions.has(normOrgName(target.division));
-      return sameDiv && allowedDepartments.has(normOrgName(target.department));
-    }
-
-    // 5. Level Bagian: melihat semua posisi dalam Bagiannya (wajib cocok Bagian, tidak bocor ke satu Departemen)
-    if (level === "bagian") {
-      const sameDiv = !user.division || allowedDivisions.has(normOrgName(target.division));
-      const sameDept = !user.department || allowedDepartments.has(normOrgName(target.department));
-      if (allowedBagians.size > 0 && target.bagian) {
-        return sameDiv && sameDept && allowedBagians.has(normOrgName(target.bagian));
-      }
+    const hop = chainDistances.get(targetKey);
+    if (hop === undefined) {
+      // Tidak memiliki hubungan approval langsung maupun tidak langsung -> akses ditolak
       return false;
     }
 
-    // Level di bawah Bagian (seksi seperti KASHIFT / operational):
-    // Hanya melihat dirinya sendiri dan karyawan yang berada di dalam rantai Reg No AP1 / Reg No AP2-nya (transitiveSubIds di atas).
-    return false;
+    // Jika user tercatat eksplisit sebagai Reg No AP1 atau Reg No AP2 LANGSUNG (hop === 1) dari target, izinkan
+    if (hop === 1) {
+      return true;
+    }
+
+    // Untuk hubungan tidak langsung (hop >= 2): pasang Guard Anti-Peer agar rekan se-posisi / setara
+    // (termasuk di Departemen yang sama tanpa Bagian) atau jabatan di atasnya tidak saling melihat jika ada anomali data
+    const targetLevel = resolveUserAuthorityLevel(target);
+    const targetRank = HIERARCHY_RANK[targetLevel];
+    if (targetRank > myRank) return false;
+
+    const targetPosNorm = normOrgName(target.position);
+    const targetCompNorm = normOrgName(canonicalizeCompanyUnitName(target.company));
+    const targetDeptNorm = normOrgName(target.department);
+    const sameUnitAndDept = Boolean(myCompNorm && myCompNorm === targetCompNorm && myDeptNorm === targetDeptNorm);
+    const samePosition = Boolean(myPosNorm && myPosNorm === targetPosNorm);
+    if (sameUnitAndDept && (samePosition || targetRank >= myRank)) {
+      return false;
+    }
+    return true;
   });
   perUsersMap.set(userMemoKey, filteredSubs);
   return filteredSubs;
@@ -1365,12 +1291,14 @@ export interface ScopedHierarchyFilterOptions {
 export function getScopedFilterOptionsForUser(
   user = getActiveUser(),
   allUsers = loadManagedUsers(),
+  opts?: { includeCheckerScope?: boolean },
 ): ScopedHierarchyFilterOptions {
   const level = resolveUserAuthorityLevel(user);
   const subs = getStrictSubordinateUsers(user, allUsers);
   const checkerUnits = getEffectiveCheckerUnits(user);
+  const includeChecker = Boolean(opts?.includeCheckerScope);
   const checkerPool =
-    checkerUnits.length > 0
+    includeChecker && checkerUnits.length > 0
       ? allUsers.filter(
           (u) =>
             u.status === "Active" &&
@@ -1383,34 +1311,31 @@ export function getScopedFilterOptionsForUser(
     mergedMap.set(u.employeeId.toLowerCase(), u);
   }
   const mergedSubs = Array.from(mergedMap.values());
-  const pool =
-    level === "gm_unit" || level === "vgm_unit" || level === "director_group"
-      ? [user, ...mergedSubs]
-      : mergedSubs.length > 0
-      ? mergedSubs
-      : [user];
+  const pool = level === "admin" || level === "bod" ? allUsers : [user, ...mergedSubs];
 
   const uniq = (arr: (string | undefined)[]) =>
     Array.from(new Set(arr.map((v) => (v ?? "").trim()).filter(Boolean))).sort();
 
-  const groupName = getGroupNameForUnit(user.company);
-  const groupUnitsCount = getGroupCompaniesForUnit(user.company, user.managedUnits).length;
   const checkerLabel =
     checkerUnits.length > 1
       ? `HR Checker Lintas Unit (${checkerUnits.length} Unit Usaha)`
       : `HR Unit Usaha (${checkerUnits[0] ?? user.company})`;
+  const chainSummaryLabel =
+    subs.length > 0
+      ? `Rantai Approval Langsung & Berjenjang (${subs.length} Bawahan)`
+      : `Data Pribadi (${user.name} — Tanpa Bawahan Rantai Approval)`;
   const LABEL_BY_LEVEL: Record<HierarchyAuthorityLevel, string> = {
     admin: "Administrator / HR ICF (Semua Unit Usaha)",
     bod: "Board of Directors (Semua Unit Group)",
-    director_group: `Level Direktur Group (${groupName} — ${groupUnitsCount} Unit Usaha, GM, Divisi, Dept, Bagian & All Posisi)`,
-    gm_unit: `Level GM/VGM (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
-    vgm_unit: `Level ${user.role === "Coordinator" ? "Coordinator" : "GM/VGM"} (${user.company} — Unit Usaha, Divisi, Dept, Bagian & All Posisi)`,
-    hr_unit: checkerLabel,
-    division: `Level Divisi (${user.division} — ${user.company})`,
-    department: `Level Departemen (${user.department} · ${user.division})`,
-    bagian: `Level Bagian (${user.bagian || user.department} · ${user.department})`,
-    seksi: `Level Seksi (${user.bagian || user.department})`,
-    operational: checkerUnits.length > 0 ? checkerLabel : `Level Individu (${user.name})`,
+    director_group: chainSummaryLabel,
+    gm_unit: chainSummaryLabel,
+    vgm_unit: chainSummaryLabel,
+    hr_unit: includeChecker && checkerUnits.length > 0 ? checkerLabel : chainSummaryLabel,
+    division: chainSummaryLabel,
+    department: chainSummaryLabel,
+    bagian: chainSummaryLabel,
+    seksi: chainSummaryLabel,
+    operational: includeChecker && checkerUnits.length > 0 ? checkerLabel : chainSummaryLabel,
   };
 
   return {
@@ -2287,27 +2212,19 @@ export function getEffectiveLockedUnitsForUser(user: ManagedUser, allUsers = loa
   }
 
   const authorizedUnits = getAuthorizedSubordinates(user, allUsers)
-    .map((u) => u.company)
+    .map((u) => canonicalizeCompanyUnitName(u.company))
     .filter(Boolean);
 
-  if (level === "director_group") {
-    if (roleAllowedUnits.length > 0) {
-      return Array.from(new Set([...roleAllowedUnits, ...extraManaged, ...checkerUnits, ...authorizedUnits]));
-    }
-    return Array.from(new Set([...getGroupCompaniesForUnit(user.company, extraManaged), ...checkerUnits, ...authorizedUnits]));
-  }
-
-  // Untuk Level GM/vGM, Divisi, Departemen, Bagian, Seksi, dan Operasional:
-  // terkunci ketat pada Unit Usaha sendiri (+ managedUnits / checkerUnits eksplisit user tersebut).
-  const strictOwnUnits = Array.from(
-    new Set([user.company, ...extraManaged, ...checkerUnits].map((u) => canonicalizeCompanyUnitName(u)).filter(Boolean)),
+  // Untuk semua non-Admin/HR ICF/BOD, sertakan unit sendiri + unit bawahan sah pada Rantai Approval (+ checkerUnits bila HR Checker)
+  const scopedUnits = Array.from(
+    new Set(
+      [user.company, ...authorizedUnits, ...extraManaged, ...checkerUnits]
+        .map((u) => canonicalizeCompanyUnitName(u))
+        .filter(Boolean),
+    ),
   );
-  if (strictOwnUnits.length > 0) {
-    return strictOwnUnits;
-  }
-
-  if (authorizedUnits.length > 0 || checkerUnits.length > 0) {
-    return Array.from(new Set([...authorizedUnits, ...checkerUnits]));
+  if (scopedUnits.length > 0) {
+    return scopedUnits;
   }
 
   return Array.from(new Set([user.company, ...extraManaged].filter(Boolean)));

@@ -75,7 +75,7 @@ export function SupervisorApprovals() {
   const allowedTypeSet = new Set(moduleTypes);
   const routeType = moduleTypes.find((type) => tabSlug(type) === tab);
   const moduleBase = routeBase(location.pathname, routeType ? tab : undefined);
-  const scopedFilterMeta = getScopedFilterOptionsForUser(activeUser);
+  const scopedFilterMeta = getScopedFilterOptionsForUser(activeUser, undefined, { includeCheckerScope: true });
 
   const buildCheckinRows = () =>
     [

@@ -56,7 +56,7 @@ export interface MonitoringEmployee {
 export function getMonitoringEmployees(): MonitoringEmployee[] {
   const users = loadManagedUsers();
   const activeUser = getActiveUser();
-  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}`;
+  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}`;
   if (_cachedMonList && _cachedMonSig === sig) {
     return _cachedMonList;
   }
@@ -101,7 +101,7 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
 export function getSupervisorScopedMonitoringEmployees(): MonitoringEmployee[] {
   const activeUser = getActiveUser();
   const users = loadManagedUsers();
-  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}`;
+  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}`;
   if (_cachedSupMonList && _cachedSupMonSig === sig) {
     return _cachedSupMonList;
   }
