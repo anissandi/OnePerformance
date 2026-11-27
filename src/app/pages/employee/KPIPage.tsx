@@ -43,6 +43,7 @@ import {
   buildEmployeeIdMatchSet,
   fetchEmployeeKpiSettingsLive,
   fetchEmployeeKpiTrackingLive,
+  fetchEmployeeWorkflowRecordsLive,
   loadPersistedState,
   mergeKvMapRecord,
   safeGetLocalRaw,
@@ -64,7 +65,18 @@ import {
   usesDemoSampleData,
   type ManagedUser,
 } from "../../store/authStore";
-import { cancelSubmittedKpiMeasurement, getKpiMonthStatuses, loadWorkflowRecords, normalizeEmployeeId, readTrackedKpiMonthLabels, submitWorkflowModule, type EditedKpiCellDiff, type KpiMonthState } from "../shared/appraisalWorkflowStore";
+import {
+  cancelSubmittedKpiMeasurement,
+  findBestWorkflowRecordForEmployee,
+  getKpiMonthStatuses,
+  isEmployeeKpiSettingMarkedValidatedInTable,
+  loadWorkflowRecords,
+  normalizeEmployeeId,
+  readTrackedKpiMonthLabels,
+  submitWorkflowModule,
+  type EditedKpiCellDiff,
+  type KpiMonthState,
+} from "../shared/appraisalWorkflowStore";
 import { loadLiveModuleActivationList } from "../hr/ModuleActivation";
 import { ModuleApprovalStatusBar } from "../../components/ModuleApprovalStatusBar";
 import {
@@ -740,14 +752,7 @@ function getRolePrefix(): string {
 function loadSubmitState(employeeId?: string): { submitted: boolean; submittedDate: string } {
   try {
     const targetEmpId = employeeId ?? getActiveUser().employeeId;
-    const normId = normalizeEmployeeId(targetEmpId);
-    const wfRec = loadWorkflowRecords().find(
-      (r) =>
-        r.year === "2026" &&
-        r.module === "KPI" &&
-        r.phase === "measurement" &&
-        (r.employeeId === normId || r.employeeId.toLowerCase() === targetEmpId.toLowerCase()),
-    );
+    const wfRec = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), targetEmpId, "KPI", "measurement", "2026");
     if (wfRec) {
       const evalState = evaluateEmployeeKPITracking(targetEmpId);
       // Jika belum ada bulan aktual yang diisi sama sekali atau belum ada submittedDate yang sah, jangan pernah anggap Submitted
@@ -847,18 +852,24 @@ export interface EmployeeKPITrackingEvaluation {
 /** Apakah karyawan sudah pernah bertransaksi KPI (Setting/Measurement) di backend. */
 export function ownerHasKpiTransactions(employeeId: string): boolean {
   const normId = normalizeEmployeeId(employeeId);
+  const candidates = buildEmployeeIdMatchSet(employeeId);
+  candidates.add(normId);
   try {
-    const snapRaw = localStorage.getItem(`${KPI_STORE_KEY}_${normId}`);
-    const snap = snapRaw ? (JSON.parse(snapRaw) as KPITrackingSnapshot) : null;
-    if (snap && Array.isArray(snap.months) && snap.months.length > 0) return true;
-    const setRaw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
-    const setMap = setRaw ? (JSON.parse(setRaw) as Record<string, unknown[]>) : {};
-    if (Array.isArray(setMap[normId]) && setMap[normId].length > 0) return true;
+    for (const cand of candidates) {
+      const snapRaw = safeGetLocalRaw(`${KPI_STORE_KEY}_${cand}`);
+      const snap = snapRaw ? (JSON.parse(snapRaw) as KPITrackingSnapshot) : null;
+      if (snap && Array.isArray(snap.months) && snap.months.length > 0) return true;
+    }
+    if (resolveEmployeeTrackingKpiItems(employeeId).length > 0) return true;
   } catch {
     // ignore
   }
+  const lowerSet = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
   return loadWorkflowRecords().some(
-    (r) => r.module === "KPI" && normalizeEmployeeId(r.employeeId) === normId,
+    (r) =>
+      r.module === "KPI" &&
+      (lowerSet.has(String(r.employeeId ?? "").trim().toLowerCase()) ||
+        lowerSet.has(normalizeEmployeeId(r.employeeId).toLowerCase())),
   );
 }
 
@@ -985,14 +996,18 @@ export function loadKPITracking(employeeId?: string): KPITrackingSnapshot {
     const activeUser = getActiveUser();
     const targetEmpId = employeeId ?? activeUser.employeeId;
     const normId = normalizeEmployeeId(targetEmpId);
-    const byEmpRaw = safeGetLocalRaw(`${KPI_STORE_KEY}_${normId}`);
-    if (byEmpRaw) {
-      const parsed = JSON.parse(byEmpRaw) as KPITrackingSnapshot;
-      if (parsed && Array.isArray(parsed.months)) {
-        return {
-          months: parsed.months,
-          cellsMap: parsed.cellsMap && typeof parsed.cellsMap === "object" ? parsed.cellsMap : {},
-        };
+    const candidates = [normId, ...Array.from(buildEmployeeIdMatchSet(targetEmpId))];
+    for (const cand of candidates) {
+      if (!cand) continue;
+      const byEmpRaw = safeGetLocalRaw(`${KPI_STORE_KEY}_${cand}`);
+      if (byEmpRaw) {
+        const parsed = JSON.parse(byEmpRaw) as KPITrackingSnapshot;
+        if (parsed && Array.isArray(parsed.months)) {
+          return {
+            months: parsed.months,
+            cellsMap: parsed.cellsMap && typeof parsed.cellsMap === "object" ? parsed.cellsMap : {},
+          };
+        }
       }
     }
   } catch { /* ignore */ }
@@ -4409,6 +4424,7 @@ function KPIWorkspace({
 
   const [view, setView] = useState<PageView>(() => (isViewOnly ? "preview" : "input"));
   const [months, setMonths] = useState<MonthEntry[]>(() => loadKPITracking(activeUser.employeeId).months);
+  const hasUserMutatedTrackingRef = useRef(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -4441,6 +4457,13 @@ function KPIWorkspace({
       setOpenLockNote(ol.note);
       setOpenLockApprovedUntil(ol.approvedUntil);
       setActiveEditRequest(getLatestKpiTrackingEditForEmployee(activeUser.employeeId));
+      if (!hasUserMutatedTrackingRef.current) {
+        const latestSnap = loadKPITracking(activeUser.employeeId);
+        if (latestSnap.months.length > 0) {
+          setMonths(latestSnap.months);
+          setCellsMap(latestSnap.cellsMap);
+        }
+      }
       setWfRefreshTick((v) => v + 1);
     };
     window.addEventListener("focus", sync);
@@ -4460,7 +4483,8 @@ function KPIWorkspace({
       window.removeEventListener("pa-module-activation-updated", sync);
       window.removeEventListener(KPI_TRACKING_EDIT_EVENT, sync);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeUser.employeeId]);
 
   // Deadline lock flow (tersinkron ke pa_open_lock_requests_v1 di Supabase)
   const [showOpenLockModal, setShowOpenLockModal] = useState(false);
@@ -4500,14 +4524,7 @@ function KPIWorkspace({
 
   // Evaluasi apakah minimal 1 Approver nyata sudah memproses KPI Measurement (Checker bukan Bypassed, AP1, AP2, atau Validator)
   const wfMeasurementRec = (() => {
-    const normId = normalizeEmployeeId(activeUser.employeeId);
-    return loadWorkflowRecords().find(
-      (r) =>
-        r.year === "2026" &&
-        r.module === "KPI" &&
-        r.phase === "measurement" &&
-        (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
-    );
+    return findBestWorkflowRecordForEmployee(loadWorkflowRecords(), activeUser.employeeId, "KPI", "measurement", "2026");
   })();
   const hasAtLeastOneRealApprover = Boolean(
     wfMeasurementRec &&
@@ -4521,19 +4538,16 @@ function KPIWorkspace({
 
   // Sesuaikan penguncian KPI Tracking dengan tanggal aktual yang di-setup di Module Activation (/hr/modules)
   const kpiSettingGate = (() => {
-    const normId = normalizeEmployeeId(activeUser.employeeId);
-    const wfSetting = loadWorkflowRecords().find(
-      (r) =>
-        r.year === "2026" &&
-        r.module === "KPI" &&
-        r.phase === "setting" &&
-        (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
-    );
+    const wfSetting = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), activeUser.employeeId, "KPI", "setting", "2026");
     const stVal = wfSetting?.decisions.validator?.status ?? "";
     const stA2 = wfSetting?.decisions.approver2?.status ?? "";
     const stA1 = wfSetting?.decisions.approver1?.status ?? "";
     const stChk = wfSetting?.decisions.checker?.status ?? "";
-    const isVal = Boolean(stVal === "Validated" || stA2 === "Validated");
+    const isVal = Boolean(
+      stVal === "Validated" ||
+        stA2 === "Validated" ||
+        isEmployeeKpiSettingMarkedValidatedInTable(activeUser.employeeId),
+    );
     let statusText = "Belum Disubmit";
     if (isVal) {
       statusText = "Validated";
@@ -4554,39 +4568,23 @@ function KPIWorkspace({
 
   // S5 & KB7 & KB12: Tabel KPI Tracking (Personal, Unit, Group) hanya terisi jika KPI Setting sudah berstatus Validated/Approved
   // dan isinya disinkronkan 100% dengan definisi KPI di KPI Setting.
-  const storedPersonalSettings = (() => {
-    try {
-      const candidates = buildEmployeeIdMatchSet(activeUser.employeeId);
-      candidates.add(normalizeEmployeeId(activeUser.employeeId));
-      const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
-      const map = raw ? (JSON.parse(raw) as Record<string, Array<Record<string, unknown>>>) : {};
-      for (const k of candidates) {
-        if (Array.isArray(map[k]) && map[k].length > 0) return map[k];
-      }
-      const lower = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
-      for (const [k, v] of Object.entries(map)) {
-        if (lower.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) return v;
-      }
-      return [];
-    } catch {
-      return [];
-    }
-  })();
   const trackingKpiItems: KPIItem[] = isKpiSettingValidated
-    ? (storedPersonalSettings.length > 0 ? mapStoredSettingRowsToTrackingItems(storedPersonalSettings) : [])
+    ? resolveEmployeeTrackingKpiItems(activeUser.employeeId)
     : [];
 
-  // Live-hydrate KPI Setting dari tabel Supabase `pa_kpi_settings` bila cache lokal belum tersedia
+  // Live-hydrate status Workflow (`pa_workflow_documents`), KPI Setting (`pa_kpi_settings`), & KPI Tracking (`pa_kpi_trackings`)
+  // langsung per-karyawan dari Supabase (bebas limit 1.000 baris PostgREST & sinkron lintas browser/perangkat)
   React.useEffect(() => {
     if (!activeUser.employeeId) return;
     let cancelled = false;
-    if (storedPersonalSettings.length === 0) {
-      void fetchEmployeeKpiSettingsLive(activeUser.employeeId).then((remoteRows) => {
-        if (!cancelled && remoteRows.length > 0) {
-          setWfRefreshTick((t) => t + 1);
-        }
-      });
-    }
+    void Promise.all([
+      fetchEmployeeWorkflowRecordsLive(activeUser.employeeId),
+      fetchEmployeeKpiSettingsLive(activeUser.employeeId),
+    ]).then(([remoteWf, remoteRows]) => {
+      if (!cancelled && (remoteWf.length > 0 || remoteRows.length > 0)) {
+        setWfRefreshTick((t) => t + 1);
+      }
+    });
     if (months.length === 0) {
       void fetchEmployeeKpiTrackingLive<MonthEntry>(activeUser.employeeId).then((remoteSnap) => {
         if (!cancelled && remoteSnap && remoteSnap.months.length > 0) {
@@ -4603,7 +4601,7 @@ function KPIWorkspace({
 
   const isBusinessSettingApproved = (() => {
     try {
-      const raw = localStorage.getItem("pa_kpi_business_status_v1");
+      const raw = safeGetLocalRaw("pa_kpi_business_status_v1");
       const map = raw ? (JSON.parse(raw) as Record<string, { approved?: boolean }>) : {};
       const key = isDirectorMode ? `corporate-${groupName}` : `unit-${activeUser.company}`;
       return Boolean(map[key]?.approved);
@@ -4613,7 +4611,7 @@ function KPIWorkspace({
   })();
   const storedBusinessSettings = (() => {
     try {
-      const raw = localStorage.getItem("pa_kpi_business_by_scope_v1");
+      const raw = safeGetLocalRaw("pa_kpi_business_by_scope_v1");
       const map = raw ? (JSON.parse(raw) as Record<string, Array<Record<string, unknown>>>) : {};
       const key = isDirectorMode ? `corporate-${groupName}` : `unit-${activeUser.company}`;
       return map[key] ?? [];
@@ -4624,6 +4622,20 @@ function KPIWorkspace({
   const businessTrackingItems: KPIItem[] = isBusinessSettingApproved
     ? (storedBusinessSettings.length > 0 ? mapStoredSettingRowsToTrackingItems(storedBusinessSettings) : [])
     : [];
+
+  // Untuk GM / Director yang memiliki 2 tab: jika KPI (Personal) sudah Validated sementara KPI (Unit/Group) belum disetujui,
+  // otomatis arahkan tampilan awal ke tab KPI (Personal) agar KPI Tracking milik owner langsung tampil.
+  const autoSwitchedDualTabRef = useRef<string>("");
+  React.useEffect(() => {
+    if (!hasDualKpiTabs || forcedTab) return;
+    if (autoSwitchedDualTabRef.current === activeUser.employeeId) return;
+    if (isKpiSettingValidated && !isBusinessSettingApproved) {
+      autoSwitchedDualTabRef.current = activeUser.employeeId;
+      setDirectorKpiTab("personal");
+    } else if (isBusinessSettingApproved) {
+      autoSwitchedDualTabRef.current = activeUser.employeeId;
+    }
+  }, [hasDualKpiTabs, forcedTab, activeUser.employeeId, isKpiSettingValidated, isBusinessSettingApproved]);
 
   const kpiMeasurementModuleInfo = (() => {
     try {
@@ -4750,10 +4762,7 @@ function KPIWorkspace({
   const unsubmittedTrackedMonths = months
     .map((m) => m.label)
     .filter((lbl) => {
-      const normId = normalizeEmployeeId(activeUser.employeeId);
-      const wf = loadWorkflowRecords().find(
-        (r) => r.year === "2026" && r.module === "KPI" && r.phase === "measurement" && r.employeeId === normId,
-      );
+      const wf = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), activeUser.employeeId, "KPI", "measurement", "2026");
       return !(wf?.validatedMonths ?? []).includes(lbl);
     });
   const hasLockedUnsubmittedMonth =
@@ -4783,8 +4792,16 @@ function KPIWorkspace({
     return snap.cellsMap;
   });
 
+  React.useEffect(() => {
+    hasUserMutatedTrackingRef.current = false;
+    const snap = loadKPITracking(activeUser.employeeId);
+    setMonths(snap.months);
+    setCellsMap(snap.cellsMap);
+  }, [activeUser.employeeId]);
+
   // Persist months + cells to Supabase backend per owner employee
   React.useEffect(() => {
+    if (!hasUserMutatedTrackingRef.current) return;
     saveKPITracking({ months, cellsMap }, activeUser);
   }, [months, cellsMap, activeUser.employeeId]);
 
@@ -4845,11 +4862,13 @@ function KPIWorkspace({
     saveEvidenceFiles(next, activeUser.employeeId);
   };
 
-  const updateCell = (monthId: string, key: CellKey, val: string) =>
+  const updateCell = (monthId: string, key: CellKey, val: string) => {
+    hasUserMutatedTrackingRef.current = true;
     setCellsMap((prev) => ({
       ...prev,
       [monthId]: { ...(prev[monthId] ?? {}), [key]: val },
     }));
+  };
 
   const openRCA = (kpi: KPIItem, monthId: string, subIdx?: number) => {
     const month = months.find((m) => m.id === monthId);
@@ -4924,6 +4943,7 @@ function KPIWorkspace({
   const handleCellBlur = (_kpi: KPIItem, _monthId: string) => {};
 
   const addMonth = (entry: MonthEntry) => {
+    hasUserMutatedTrackingRef.current = true;
     setMonths((prev) => [...prev, entry]);
     if (isBusinessWorkspace) {
       setBusinessCellsMap((prev) => {
@@ -4940,6 +4960,7 @@ function KPIWorkspace({
   };
 
   const removeMonth = (id: string) => {
+    hasUserMutatedTrackingRef.current = true;
     setMonths((prev) => prev.filter((m) => m.id !== id));
     if (isBusinessWorkspace) {
       setBusinessCellsMap((prev) => {
@@ -5187,6 +5208,7 @@ function KPIWorkspace({
         });
       }
 
+      hasUserMutatedTrackingRef.current = true;
       setMonths(nextMonths);
       if (isBusinessWorkspace) {
         setBusinessCellsMap(newCellsMap);
@@ -5228,9 +5250,9 @@ function KPIWorkspace({
 
   const [businessCellsMap, setBusinessCellsMap] = useState<Record<string, Record<CellKey, string>>>(() => {
     try {
-      const byScope = JSON.parse(localStorage.getItem("kpi_business_tracking_cells_v2") ?? "{}");
+      const byScope = JSON.parse(safeGetLocalRaw("kpi_business_tracking_cells_v2") ?? "{}");
       if (byScope?.[businessScopeKey]) return byScope[businessScopeKey];
-      const raw = localStorage.getItem("kpi_business_tracking_cells_v1");
+      const raw = safeGetLocalRaw("kpi_business_tracking_cells_v1");
       if (raw) return JSON.parse(raw);
     } catch {
       // ignore

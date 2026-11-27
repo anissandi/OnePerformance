@@ -22,11 +22,19 @@ import {
   usesDemoSampleData,
   type ManagedUser,
 } from "../../../store/authStore";
-import { loadWorkflowRecords, normalizeEmployeeId, submitWorkflowModule } from "../../shared/appraisalWorkflowStore";
 import {
+  findBestWorkflowRecordForEmployee,
+  isEmployeeKpiSettingMarkedValidatedInTable,
+  loadWorkflowRecords,
+  normalizeEmployeeId,
+  submitWorkflowModule,
+} from "../../shared/appraisalWorkflowStore";
+import {
+  buildEmployeeIdMatchSet,
   deleteUploadedEvidenceById,
   fetchBusinessKpiLive,
   fetchEmployeeKpiSettingsLive,
+  fetchEmployeeWorkflowRecordsLive,
   fetchKpiAttachmentsForEmployee,
   mergeKvMapRecord,
   safeGetLocalRaw,
@@ -8730,15 +8738,20 @@ type TabStatus = "idle" | "pending" | "approved" | "pending-target";
 
 function readStoredPersonalKpiItems(employeeId: string): KPISetting[] | null {
   try {
-    const normId = normalizeEmployeeId(employeeId);
+    const candidates = buildEmployeeIdMatchSet(employeeId);
+    candidates.add(normalizeEmployeeId(employeeId));
     const raw = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
     const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
-    if (normId && Object.prototype.hasOwnProperty.call(map, normId) && Array.isArray(map[normId])) {
-      return map[normId];
+    for (const k of candidates) {
+      if (k && Object.prototype.hasOwnProperty.call(map, k) && Array.isArray(map[k]) && map[k].length > 0) {
+        return map[k];
+      }
     }
-    const trimmed = String(employeeId ?? "").trim();
-    if (trimmed && Object.prototype.hasOwnProperty.call(map, trimmed) && Array.isArray(map[trimmed])) {
-      return map[trimmed];
+    const lowerSet = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+    for (const [k, v] of Object.entries(map)) {
+      if (lowerSet.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) {
+        return v;
+      }
     }
   } catch {
     // ignore
@@ -8748,7 +8761,7 @@ function readStoredPersonalKpiItems(employeeId: string): KPISetting[] | null {
 
 function readStoredBusinessKpiItems(scopeKey: string): KPISetting[] | null {
   try {
-    const raw = localStorage.getItem("pa_kpi_business_by_scope_v1");
+    const raw = safeGetLocalRaw("pa_kpi_business_by_scope_v1");
     const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};
     if (Array.isArray(map[scopeKey]) && map[scopeKey].length > 0) return map[scopeKey];
     if (scopeKey === "unit-PT RSUP ASD" && Array.isArray(map["unit-ASD"]) && map["unit-ASD"].length > 0) {
@@ -9310,22 +9323,16 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         storedItems: readStoredBusinessKpiItems(effectiveScopeKey),
       };
     }
-    const normId = normalizeEmployeeId(effectiveOwner.employeeId);
     const storedItems = readStoredPersonalKpiItems(effectiveOwner.employeeId);
-    const rec = loadWorkflowRecords().find(
-      (r) =>
-        r.year === "2026" &&
-        r.module === "KPI" &&
-        r.phase === "setting" &&
-        (r.employeeId === normId || r.employeeId.toLowerCase() === effectiveOwner.employeeId.toLowerCase()),
-    );
-    if (!rec) return { isSub: false, isApp: false, rec: undefined, storedItems };
+    const rec = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), effectiveOwner.employeeId, "KPI", "setting", "2026");
+    const tableValidated = isEmployeeKpiSettingMarkedValidatedInTable(effectiveOwner.employeeId);
+    if (!rec) return { isSub: tableValidated, isApp: tableValidated, rec: undefined, storedItems };
     const chk = rec.decisions.checker?.status ?? "";
     const a1 = rec.decisions.approver1?.status ?? "";
     const a2 = rec.decisions.approver2?.status ?? "";
     const val = rec.decisions.validator?.status ?? "";
     const isRev = chk === "Revision" || a1 === "Revision" || a2 === "Revision" || val === "Revision";
-    const isApp = val === "Validated" || a2 === "Validated";
+    const isApp = val === "Validated" || a2 === "Validated" || (!isRev && tableValidated);
     return { isSub: !isRev, isApp, rec, storedItems };
   };
   const [submitted, setSubmitted]     = useState(() => readPersonalWorkflowState().isSub);
@@ -9404,6 +9411,12 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     const init = readPersonalWorkflowState();
     setItems_(init.storedItems ?? initialItems);
     setKpiAttachments(readAttachmentsForCurrentScope());
+    if (!isCorporate && effectiveOwner.employeeId) {
+      void Promise.all([
+        fetchEmployeeWorkflowRecordsLive(effectiveOwner.employeeId),
+        fetchEmployeeKpiSettingsLive<KPISetting>(effectiveOwner.employeeId),
+      ]);
+    }
     const onSync = () => {
       const st = readPersonalWorkflowState();
       setSubmitted(st.isSub);

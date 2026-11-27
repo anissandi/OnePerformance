@@ -1,10 +1,10 @@
 import type { ApprovalRow } from "../../components/ReviewDrawer";
-import { registerWorkflowRows, workflowAlias, loadWorkflowRecords, saveWorkflowAssessment, saveWorkflowDecision, workflowRowStatus, normalizeEmployeeId } from "./appraisalWorkflowStore";
+import { registerWorkflowRows, workflowAlias, loadWorkflowRecords, saveWorkflowAssessment, saveWorkflowDecision, workflowRowStatus, normalizeEmployeeId, findBestWorkflowRecordForEmployee } from "./appraisalWorkflowStore";
 import { saveAppraisalApprover } from "./appraisalFormStore";
 import { saveMSApproverEntry } from "./msStore";
 import { upsertApprovalDecision } from "./smartGoalsStore";
 import { feedbackRowStatusFor, loadFeedbackSubmissions } from "./interDepartmentFeedbackStore";
-import { safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
+import { buildEmployeeIdMatchSet, safeGetLocalRaw, savePersistedState } from "../../services/supabaseClient";
 import { resolveActingApproverLabel } from "../../store/delegationStore";
 import {
   getActiveUser,
@@ -231,10 +231,28 @@ export function applyOverrides(
     if (record.phase !== phase || record.year !== "2026") continue;
     // Jangan duplikasi modul Project & Inter-Department Feedback; RCA sudah menyatu dalam approval KPI Tracking bulanan
     if (record.module === "Project" || record.module === "Inter-Department Feedback" || record.module === "RCA") continue;
-    if (expanded.some((row) => normalizeEmployeeId(row.employeeId) === record.employeeId && row.type === record.module)) continue;
-    const existingRow = rows.find((row) => normalizeEmployeeId(row.employeeId) === record.employeeId);
+    const recMatchSet = buildEmployeeIdMatchSet(record.employeeId);
+    recMatchSet.add(normalizeEmployeeId(record.employeeId));
+    const recLowerSet = new Set(Array.from(recMatchSet).map((x) => x.toLowerCase()));
+    if (
+      expanded.some(
+        (row) =>
+          row.type === record.module &&
+          (recLowerSet.has(row.employeeId.trim().toLowerCase()) ||
+            recLowerSet.has(normalizeEmployeeId(row.employeeId).toLowerCase())),
+      )
+    ) {
+      continue;
+    }
+    const existingRow = rows.find(
+      (row) =>
+        recLowerSet.has(row.employeeId.trim().toLowerCase()) ||
+        recLowerSet.has(normalizeEmployeeId(row.employeeId).toLowerCase()),
+    );
     const managedUser = managedUsers.find(
-      (u) => normalizeEmployeeId(u.employeeId) === record.employeeId || u.employeeId.toLowerCase() === record.employeeId.toLowerCase(),
+      (u) =>
+        recLowerSet.has(u.employeeId.trim().toLowerCase()) ||
+        recLowerSet.has(normalizeEmployeeId(u.employeeId).toLowerCase()),
     );
     const templateRow: ApprovalRow | null = existingRow
       ? existingRow
@@ -320,13 +338,7 @@ export function resolveDynamicApprovalRowsForUser(
       continue;
     }
 
-    const wfRec = workflows.find(
-      (w) =>
-        w.year === "2026" &&
-        w.phase === phase &&
-        w.module === row.type &&
-        w.employeeId === normEmpId,
-    );
+    const wfRec = findBestWorkflowRecordForEmployee(workflows, row.employeeId, row.type, phase, "2026");
     const bypassCheck =
       (row.type === "KPI" || row.type === "SMART Goals" || row.type === "RCA") &&
       shouldBypassCheckerForSubmission(row.employeeId);

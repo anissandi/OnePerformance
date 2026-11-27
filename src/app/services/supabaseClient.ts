@@ -1488,14 +1488,23 @@ export function buildEmployeeIdMatchSet(rawEmployeeId: string): Set<string> {
   const digits = prefMatch ?? pureDigits;
   if (digits) {
     const cleanNum = String(Number(digits));
-    out.add(digits);
-    out.add(cleanNum);
-    out.add(`E${digits}`);
-    out.add(`E${digits.padStart(3, "0")}`);
-    out.add(`EMP-${digits}`);
-    out.add(`EMP-${digits.padStart(3, "0")}`);
-    out.add(`e${digits}`);
-    out.add(`emp-${digits.padStart(3, "0")}`);
+    const digitVariants = Array.from(
+      new Set([
+        digits,
+        cleanNum,
+        cleanNum.padStart(3, "0"),
+        cleanNum.padStart(4, "0"),
+        cleanNum.padStart(5, "0"),
+        cleanNum.padStart(6, "0"),
+      ]),
+    );
+    for (const d of digitVariants) {
+      out.add(d);
+      out.add(`E${d}`);
+      out.add(`EMP-${d}`);
+      out.add(`e${d}`);
+      out.add(`emp-${d}`);
+    }
   }
   return out;
 }
@@ -1638,27 +1647,164 @@ export async function fetchKpiAttachmentsForEmployee(employeeId: string): Promis
   }
 }
 
+function buildPostgrestInList(values: Iterable<string>): string {
+  const cleaned = Array.from(
+    new Set(
+      Array.from(values)
+        .map((v) => String(v ?? "").trim())
+        .filter((v) => v.length > 0 && !/["(),\\]/.test(v)),
+    ),
+  );
+  return cleaned.map((v) => encodeURIComponent(v)).join(",");
+}
+
+function workflowStatusPriority(rec?: Record<string, unknown> | null): number {
+  if (!rec || typeof rec !== "object") return 0;
+  const decisions = (rec.decisions && typeof rec.decisions === "object" ? rec.decisions : {}) as Record<
+    string,
+    { status?: string } | undefined
+  >;
+  const val = decisions.validator?.status ?? "";
+  const a2 = decisions.approver2?.status ?? "";
+  const a1 = decisions.approver1?.status ?? "";
+  const chk = decisions.checker?.status ?? "";
+  if (val === "Validated" || a2 === "Validated") return 50;
+  if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") return 15;
+  if (a2 === "Approved" || a2.startsWith("Assessed")) return 40;
+  if (a1 === "Approved" || a1.startsWith("Assessed")) return 30;
+  if (chk && chk !== "Bypassed") return 20;
+  return 10;
+}
+
+/**
+ * Menarik dokumen workflow (`pa_workflow_documents`) khusus milik satu karyawan secara langsung dari Supabase
+ * (mencakup seluruh varian leading zero seperti "05233" / "5233" / "EMP-05233") tanpa terkena batas 1.000 baris PostgREST,
+ * lalu menggabungkannya secara aman ke `appraisal_workflow_v1`.
+ */
+export async function fetchEmployeeWorkflowRecordsLive(employeeId: string): Promise<Array<Record<string, unknown>>> {
+  try {
+    const matchIds = buildEmployeeIdMatchSet(employeeId);
+    const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
+    if (matchIds.size === 0) return [];
+    const inList = buildPostgrestInList(matchIds);
+    if (!inList) return [];
+    const docs = await restSelect<Record<string, unknown>>(
+      "pa_workflow_documents",
+      `select=*&employee_id=in.(${inList})&order=updated_at.desc`,
+    );
+
+    const existingRaw = safeGetLocalRaw("appraisal_workflow_v1");
+    const existingList: Array<Record<string, unknown>> = existingRaw ? JSON.parse(existingRaw) : [];
+    const byKey = new Map<string, Record<string, unknown>>();
+    for (const item of Array.isArray(existingList) ? existingList : []) {
+      if (item && typeof item.key === "string") byKey.set(item.key, item);
+    }
+    let changed = false;
+    const remotePayloads: Array<Record<string, unknown>> = [];
+    for (const doc of Array.isArray(docs) ? docs : []) {
+      const payload = (doc.payload && typeof doc.payload === "object" ? doc.payload : null) as Record<string, unknown> | null;
+      const key = String(payload?.key ?? doc.doc_key ?? "").trim();
+      if (!key) continue;
+      if (payload?.cancelled === true || doc.status === "Cancelled") {
+        if (byKey.has(key)) {
+          byKey.delete(key);
+          changed = true;
+        }
+        continue;
+      }
+      if (payload) {
+        remotePayloads.push(payload);
+        const prev = byKey.get(key);
+        const prevPrio = workflowStatusPriority(prev);
+        const nextPrio = workflowStatusPriority(payload);
+        if (!prev || nextPrio >= prevPrio || JSON.stringify(prev) !== JSON.stringify(payload)) {
+          byKey.set(key, payload);
+          changed = true;
+        }
+      }
+    }
+    if (remotePayloads.length === 0) {
+      const kvBoot = await fetchVercelKvBootstrap(["appraisal_workflow_v1"]);
+      const kvArr = kvBoot?.kvMap?.appraisal_workflow_v1;
+      if (Array.isArray(kvArr)) {
+        for (const rawRec of kvArr as Array<Record<string, unknown>>) {
+          if (!rawRec || typeof rawRec !== "object") continue;
+          const rEmp = String(rawRec.employeeId ?? "").trim().toLowerCase();
+          if (!rEmp || !lowerIds.has(rEmp)) continue;
+          const key = String(rawRec.key ?? "").trim();
+          if (!key) continue;
+          remotePayloads.push(rawRec);
+          const prev = byKey.get(key);
+          if (!prev || workflowStatusPriority(rawRec) >= workflowStatusPriority(prev)) {
+            byKey.set(key, rawRec);
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) {
+      safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("appraisal-updated"));
+      }
+    }
+    return remotePayloads;
+  } catch {
+    return [];
+  }
+}
+
 /** Mengambil baris KPI Setting milik karyawan langsung dari tabel `pa_kpi_settings` bila cache lokal belum terisi. */
 export async function fetchEmployeeKpiSettingsLive<T = Record<string, unknown>>(employeeId: string): Promise<T[]> {
   try {
   const matchIds = buildEmployeeIdMatchSet(employeeId);
   const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
   if (lowerIds.size === 0) return [];
-  const rows = await restSelect<Record<string, unknown>>("pa_kpi_settings", "select=*&tab=eq.personal");
+  const inList = buildPostgrestInList(matchIds);
+  const rows = inList
+    ? await restSelect<Record<string, unknown>>(
+        "pa_kpi_settings",
+        `select=*&tab=eq.personal&employee_id=in.(${inList})&order=updated_at.desc`,
+      )
+    : [];
+  const persistFetchedItems = (items: unknown[], remoteStatus?: string) => {
+    try {
+      const byEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
+      const stripped = String(employeeId ?? "").trim().replace(/^emp-mi-/i, "");
+      const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+      const canonKey = num ? `EMP-${num.padStart(3, "0")}` : stripped.toUpperCase();
+      byEmp[canonKey] = items;
+      if (stripped) byEmp[stripped] = items;
+      safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
+      if (remoteStatus && /^(validated|approved)$/i.test(remoteStatus.trim())) {
+        const stMap = JSON.parse(safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1") ?? "{}") ?? {};
+        stMap[canonKey] = "Validated";
+        if (stripped) stMap[stripped] = "Validated";
+        safeSetLocalJson("pa_kpi_setting_status_by_emp_v1", stMap);
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("appraisal-updated"));
+      }
+    } catch {
+      // ignore
+    }
+  };
   for (const row of rows) {
     const rEmp = String(row.employee_id ?? "").trim().toLowerCase();
     if (rEmp && lowerIds.has(rEmp) && Array.isArray(row.items) && row.items.length > 0) {
-      try {
-        const byEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
-        const stripped = String(employeeId ?? "").trim().replace(/^emp-mi-/i, "");
-        const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
-        const canonKey = num ? `EMP-${num.padStart(3, "0")}` : stripped.toUpperCase();
-        byEmp[canonKey] = row.items;
-        safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
-      } catch {
-        // ignore
-      }
+      persistFetchedItems(row.items, String(row.status ?? ""));
       return row.items as T[];
+    }
+  }
+  // Fallback ke pa_kv_state ('pa_kpi_setting_by_emp_v2') apabila baris lama belum masuk ke tabel pa_kpi_settings
+  const kvBoot = await fetchVercelKvBootstrap(["pa_kpi_setting_by_emp_v2"]);
+  const kvByEmp = kvBoot?.kvMap?.pa_kpi_setting_by_emp_v2 as Record<string, unknown[]> | undefined;
+  if (kvByEmp && typeof kvByEmp === "object") {
+    for (const [k, v] of Object.entries(kvByEmp)) {
+      if (lowerIds.has(k.trim().toLowerCase()) && Array.isArray(v) && v.length > 0) {
+        persistFetchedItems(v);
+        return v as T[];
+      }
     }
   }
   return [];
@@ -1701,7 +1847,13 @@ export async function fetchEmployeeSmartGoalsLive<TGoal = Record<string, unknown
   const matchIds = buildEmployeeIdMatchSet(employeeId);
   const lowerIds = new Set(Array.from(matchIds).map((x) => x.toLowerCase()));
   if (lowerIds.size === 0) return null;
-  const rows = await restSelect<Record<string, unknown>>("pa_smart_goals", "select=*&order=updated_at.desc");
+  const inList = buildPostgrestInList(matchIds);
+  const rows = inList
+    ? await restSelect<Record<string, unknown>>(
+        "pa_smart_goals",
+        `select=*&employee_id=in.(${inList})&order=updated_at.desc`,
+      )
+    : [];
   for (const row of rows) {
     const rEmp = String(row.employee_id ?? "").trim().toLowerCase();
     if (!rEmp || !lowerIds.has(rEmp)) continue;
@@ -1942,7 +2094,7 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_evidence_files", "select=*&order=created_at.desc"),
       restSelect("pa_audit_trail", "select=*&order=id.desc&limit=150"),
       restSelect("pa_year_end_verifications", "select=*&period=eq.2026&limit=1"),
-      restSelect("pa_workflow_documents", "select=*"),
+      restSelect("pa_workflow_documents", "select=*&order=updated_at.desc&limit=5000"),
       restSelect("pa_interview_schedules", "select=*&order=updated_at.desc"),
       restSelect("pa_group_rules", "select=*"),
       restSelect("pa_score_weights", "select=*"),
@@ -1952,8 +2104,8 @@ export async function fetchBootstrapFromSupabase(): Promise<Record<string, unkno
       restSelect("pa_open_lock_requests", "select=*&order=updated_at.desc"),
       restSelect("pa_inter_dept_feedbacks", "select=*&order=updated_at.desc"),
       restSelect("pa_rca_submissions", "select=*&order=updated_at.desc"),
-      restSelect("pa_kpi_trackings", "select=*&order=updated_at.desc"),
-      restSelect("pa_kpi_settings", "select=*&order=updated_at.desc"),
+      restSelect("pa_kpi_trackings", "select=*&order=updated_at.desc&limit=5000"),
+      restSelect("pa_kpi_settings", "select=*&order=updated_at.desc&limit=5000"),
       restSelect("pa_kpi_business", "select=*&order=updated_at.desc"),
       restSelect("pa_smart_goals", "select=*&order=updated_at.desc"),
       restSelect("pa_module_windows", "select=*"),
@@ -2772,32 +2924,40 @@ export async function fetchEmployeeKpiTrackingLive<TMonth = unknown>(
   if (candidates.size === 0) return null;
   const lowerSet = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
   const numMatch = employeeId.trim().match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
-  const normKey = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : employeeId.trim();
+  const normKey = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : employeeId.trim().toUpperCase();
   const kvKey = `kpi_tracking_v1_${normKey}`;
+  const inList = buildPostgrestInList(candidates);
   try {
     const [trackingRows, kvMap] = await Promise.all([
-      restSelect<{
-        employee_id?: string;
-        months?: unknown[];
-        cells_map?: Record<string, Record<string, string>>;
-        updated_at?: string;
-      }>("pa_kpi_trackings", "select=*&period=eq.2026&order=updated_at.desc"),
+      inList
+        ? restSelect<{
+            employee_id?: string;
+            months?: unknown[];
+            cells_map?: Record<string, Record<string, string>>;
+            updated_at?: string;
+          }>("pa_kpi_trackings", `select=*&period=eq.2026&employee_id=in.(${inList})&order=updated_at.desc`)
+        : Promise.resolve([]),
       refreshKvKeysFromBackend([kvKey]),
     ]);
-    const matchedRow = trackingRows.find((r) => lowerSet.has(String(r.employee_id ?? "").trim().toLowerCase()));
-    if (matchedRow && Array.isArray(matchedRow.months)) {
+    const matchedNonEmptyRow = trackingRows.find(
+      (r) =>
+        lowerSet.has(String(r.employee_id ?? "").trim().toLowerCase()) &&
+        Array.isArray(r.months) &&
+        r.months.length > 0,
+    );
+    if (matchedNonEmptyRow && Array.isArray(matchedNonEmptyRow.months)) {
       const snap = {
-        months: matchedRow.months as TMonth[],
+        months: matchedNonEmptyRow.months as TMonth[],
         cellsMap:
-          matchedRow.cells_map && typeof matchedRow.cells_map === "object"
-            ? matchedRow.cells_map
+          matchedNonEmptyRow.cells_map && typeof matchedNonEmptyRow.cells_map === "object"
+            ? matchedNonEmptyRow.cells_map
             : {},
       };
       safeSetLocalJson(kvKey, snap);
       return snap;
     }
     const fromKv = kvMap[kvKey] as { months?: unknown[]; cellsMap?: Record<string, Record<string, string>> } | undefined;
-    if (fromKv && Array.isArray(fromKv.months)) {
+    if (fromKv && Array.isArray(fromKv.months) && fromKv.months.length > 0) {
       const snap = {
         months: fromKv.months as TMonth[],
         cellsMap: fromKv.cellsMap && typeof fromKv.cellsMap === "object" ? fromKv.cellsMap : {},
@@ -3129,7 +3289,10 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
           // Dokumen yang dibatalkan Administrator (Cancel Transaction) tidak dimunculkan kembali
           byKey.delete(payload.key);
         } else if (payload && typeof payload.key === "string") {
-          byKey.set(payload.key, payload);
+          const prev = byKey.get(payload.key);
+          if (!prev || workflowStatusPriority(payload) >= workflowStatusPriority(prev)) {
+            byKey.set(payload.key, payload);
+          }
         }
       }
       safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
@@ -3349,6 +3512,17 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
         const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp.toUpperCase();
         byEmp[normId] = items;
+        byEmp[rawEmp] = items;
+        if (/^(validated|approved)$/i.test(String(row.status ?? "").trim())) {
+          try {
+            const stMap = JSON.parse(safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1") ?? "{}") ?? {};
+            stMap[normId] = "Validated";
+            stMap[rawEmp] = "Validated";
+            safeSetLocalJson("pa_kpi_setting_status_by_emp_v1", stMap);
+          } catch {
+            // ignore
+          }
+        }
       }
       safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
     }

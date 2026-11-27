@@ -9,6 +9,7 @@ import {
   type ManagedUser,
 } from "../store/authStore";
 import {
+  findBestWorkflowRecordForEmployee,
   loadWorkflowRecords,
   normalizeEmployeeId,
 } from "../pages/shared/appraisalWorkflowStore";
@@ -79,14 +80,7 @@ export function ModuleApprovalStatusBar({
           u.employeeId.toLowerCase() === employeeId.toLowerCase(),
       ) ?? fallbackActive
     : fallbackActive;
-  const normId = normalizeEmployeeId(activeUser.employeeId);
-  const wfRec = loadWorkflowRecords().find(
-    (r) =>
-      r.year === "2026" &&
-      r.module === module &&
-      r.phase === phase &&
-      (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
-  );
+  const wfRec = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), activeUser.employeeId, module, phase, "2026");
 
   const isFourStep = module === "KPI" || module === "SMART Goals" || module === "RCA";
   const bypassCheck = isFourStep && shouldBypassCheckerForSubmission(activeUser.employeeId);

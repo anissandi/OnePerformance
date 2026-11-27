@@ -19,7 +19,7 @@ import { loadEvidenceFiles } from "../shared/kpiEvidenceStore";
 import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
 import { KPITableView } from "../../components/KPITableView";
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../components/AnalyticsStatCard";
-import { fetchEmployeeKpiSettingsLive, fetchEmployeeKpiTrackingLive } from "../../services/supabaseClient";
+import { fetchEmployeeKpiSettingsLive, fetchEmployeeKpiTrackingLive, fetchEmployeeWorkflowRecordsLive } from "../../services/supabaseClient";
 import { SmartGoalsScoreHistory } from "../../components/SmartGoalsScoreHistory";
 import { InterDeptFeedbackAppraisalSummary } from "../../components/InterDeptFeedbackAppraisalSummary";
 import { AppraisalRCASection } from "../employee/RCAPage";
@@ -35,7 +35,12 @@ import { useProjectStore, SCOPE_BOBOT } from "../../store/projectStore";
 import type { CheckInStatus as ProjectCheckInStatus } from "../../store/projectStore";
 import { SUPERVISOR_PROFILE } from "../../store/profileStore";
 import { getActiveUser, resolveEffectiveUserGrouping, useAuthStore } from "../../store/authStore";
-import { loadWorkflowRecords, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
+import {
+  findBestWorkflowRecordForEmployee,
+  isEmployeeKpiSettingMarkedValidatedInTable,
+  loadWorkflowRecords,
+  normalizeEmployeeId,
+} from "../shared/appraisalWorkflowStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { loadUnitScoreWeights, weightColumnFromGrouping } from "../shared/scoringWeightStore";
 import {
@@ -100,6 +105,7 @@ function KPITab({ onOpenRcaTab }: { onOpenRcaTab: () => void }) {
     let cancelled = false;
     const onSync = () => setTick((t) => t + 1);
     void Promise.all([
+      fetchEmployeeWorkflowRecordsLive(activeUser.employeeId),
       fetchEmployeeKpiSettingsLive(activeUser.employeeId),
       fetchEmployeeKpiTrackingLive<MonthEntry>(activeUser.employeeId),
     ]).then(() => {
@@ -126,20 +132,14 @@ function KPITab({ onOpenRcaTab }: { onOpenRcaTab: () => void }) {
   const kpiComments = React.useMemo(() => loadKPICommentsForEmployee(activeUser.employeeId), [activeUser.employeeId, tick]);
   const rcaSubmissions = React.useMemo(() => loadRCASubmissions(activeUser.employeeId), [activeUser.employeeId, tick]);
   const wfKpiMeas = React.useMemo(() => {
-    const normId = normalizeEmployeeId(activeUser.employeeId);
-    return loadWorkflowRecords().find(
-      (r) => r.year === "2026" && r.module === "KPI" && r.phase === "measurement" && r.employeeId === normId,
-    );
+    return findBestWorkflowRecordForEmployee(loadWorkflowRecords(), activeUser.employeeId, "KPI", "measurement", "2026");
   }, [activeUser.employeeId, tick]);
   const isKpiSettingValidated = React.useMemo(() => {
-    const normId = normalizeEmployeeId(activeUser.employeeId);
-    const wfSet = loadWorkflowRecords().find(
-      (r) => r.year === "2026" && r.module === "KPI" && r.phase === "setting" && r.employeeId === normId,
-    );
-    if (!wfSet) return false;
+    const wfSet = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), activeUser.employeeId, "KPI", "setting", "2026");
+    if (!wfSet) return isEmployeeKpiSettingMarkedValidatedInTable(activeUser.employeeId);
     const val = wfSet.decisions.validator?.status ?? "";
     const a2 = wfSet.decisions.approver2?.status ?? "";
-    return val === "Validated" || a2 === "Validated";
+    return val === "Validated" || a2 === "Validated" || isEmployeeKpiSettingMarkedValidatedInTable(activeUser.employeeId);
   }, [activeUser.employeeId, tick]);
 
   const generalA1Note =

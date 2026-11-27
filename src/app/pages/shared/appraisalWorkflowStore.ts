@@ -1,5 +1,5 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
-import { safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
+import { buildEmployeeIdMatchSet, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
 import {
   findHrIcfValidatorUser,
   findHrUnitCheckerUserForCompany,
@@ -81,6 +81,71 @@ export function normalizeEmployeeId(id: string) {
   if (!trimmed) return "";
   const number = trimmed.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
   return number ? `EMP-${number.padStart(3, "0")}` : trimmed.toUpperCase();
+}
+
+function workflowProgressScore(rec: WorkflowRecord): number {
+  const val = rec.decisions.validator?.status ?? "";
+  const a2 = rec.decisions.approver2?.status ?? "";
+  const a1 = rec.decisions.approver1?.status ?? "";
+  const chk = rec.decisions.checker?.status ?? "";
+  if (val === "Validated" || a2 === "Validated") return 50;
+  if (val === "Revision" || a2 === "Revision" || a1 === "Revision" || chk === "Revision") return 15;
+  if (a2 === "Approved" || a2.startsWith("Assessed")) return 40;
+  if (a1 === "Approved" || a1.startsWith("Assessed")) return 30;
+  if (chk && chk !== "Bypassed") return 20;
+  return 10;
+}
+
+/**
+ * Mencocokkan `WorkflowRecord` milik karyawan dengan toleransi penuh terhadap varian leading zero
+ * (contoh: "05233" <-> "5233", "05112" <-> "5112", "EMP-05233" <-> "05233") serta mengambil status paling mutakhir.
+ */
+export function findBestWorkflowRecordForEmployee(
+  records: WorkflowRecord[],
+  employeeId: string,
+  module: string,
+  phase: WorkflowRecord["phase"],
+  year = "2026",
+): WorkflowRecord | undefined {
+  const trimmed = String(employeeId ?? "").trim();
+  if (!trimmed) return undefined;
+  const candidates = buildEmployeeIdMatchSet(trimmed);
+  candidates.add(normalizeEmployeeId(trimmed));
+  const lowerSet = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+  let best: WorkflowRecord | undefined;
+  let bestScore = -1;
+  for (const r of records) {
+    if (!r || r.module !== module || r.phase !== phase) continue;
+    if (year && r.year !== year) continue;
+    const rRaw = String(r.employeeId ?? "").trim().toLowerCase();
+    const rNorm = normalizeEmployeeId(r.employeeId).toLowerCase();
+    if (lowerSet.has(rRaw) || lowerSet.has(rNorm)) {
+      const sc = workflowProgressScore(r);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = r;
+      }
+    }
+  }
+  return best;
+}
+
+export function isEmployeeKpiSettingMarkedValidatedInTable(employeeId: string): boolean {
+  try {
+    const raw = safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1");
+    if (!raw) return false;
+    const stMap = JSON.parse(raw) as Record<string, string>;
+    if (!stMap || typeof stMap !== "object") return false;
+    const candidates = buildEmployeeIdMatchSet(employeeId);
+    candidates.add(normalizeEmployeeId(employeeId));
+    const lowerSet = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
+    for (const [k, v] of Object.entries(stMap)) {
+      if (lowerSet.has(k.trim().toLowerCase()) && v === "Validated") return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
 }
 function keyFor(employeeId: string, module: string, phase: WorkflowRecord["phase"], year = "2026") {
   return `${normalizeEmployeeId(employeeId)}:${phase}:${module}:${year}`;
@@ -465,7 +530,10 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
   const alias = workflowAlias(no);
   if (!alias) return;
   const activeUser = getActiveUser();
-  const existing = loadWorkflowRecords().find((item) => item.key === alias.key);
+  const allRecords = loadWorkflowRecords();
+  const existing =
+    allRecords.find((item) => item.key === alias.key) ??
+    findBestWorkflowRecordForEmployee(allRecords, alias.employeeId, alias.module, alias.phase, alias.year);
   const record: WorkflowRecord = existing ?? { ...alias, decisions: {}, assessments: {}, revisionHistory: [] };
   const isFourStep = alias.module === "KPI" || alias.module === "SMART Goals" || alias.module === "RCA";
   const effectiveDate = date && date !== "-" ? normalizeDateDDMMYYYY(date) : "-";
@@ -680,6 +748,20 @@ export function saveWorkflowDecision(no: string, status: string, date: string, n
     validatedMonths = Array.from(new Set([...validatedMonths, ...record.submittedMonths]));
   }
   write({ ...record, decisions, assessments, revisionHistory, decisionLog, validatedMonths });
+  if (
+    record.module === "KPI" &&
+    record.phase === "setting" &&
+    (decisions.validator?.status === "Validated" || decisions.approver2?.status === "Validated")
+  ) {
+    try {
+      const stMap = JSON.parse(safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1") ?? "{}") ?? {};
+      stMap[record.employeeId] = "Validated";
+      stMap[alias.employeeId] = "Validated";
+      safeSetLocalJson("pa_kpi_setting_status_by_emp_v1", stMap);
+    } catch {
+      // ignore
+    }
+  }
   triggerApprovalTransactionNotification({
     employeeId: alias.employeeId,
     moduleName: `${alias.module} (${alias.phase === "setting" ? "Setting" : "Measurement"})`,
@@ -737,10 +819,7 @@ export function getApproverNotesHistory(
   module: string,
   phase: WorkflowRecord["phase"],
 ): ApproverNoteHistoryItem[] {
-  const normId = normalizeEmployeeId(employeeId);
-  const rec = loadWorkflowRecords().find(
-    (r) => r.module === module && r.phase === phase && normalizeEmployeeId(r.employeeId) === normId,
-  );
+  const rec = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), employeeId, module, phase, "");
   if (!rec) return [];
   return getRecordDecisionLog(rec)
     .map((e) => ({ ...e, stageLabel: WORKFLOW_STAGE_LABEL[e.stage] ?? e.stage }))
@@ -750,9 +829,7 @@ export function getApproverNotesHistory(
 export type KpiMonthState = "validated" | "pending" | "revision" | "not_submitted";
 /** Status per bulan (Jan–Dec) KPI Tracking milik karyawan. */
 export function getKpiMonthStatuses(employeeId: string): Array<{ label: string; state: KpiMonthState }> {
-  const normId = normalizeEmployeeId(employeeId);
-  const empRecs = loadWorkflowRecordsByEmployeeMap().get(normId) ?? [];
-  const rec = empRecs.find((r) => r.module === "KPI" && r.phase === "measurement");
+  const rec = findBestWorkflowRecordForEmployee(loadWorkflowRecords(), employeeId, "KPI", "measurement", "2026");
   const validated = new Set(rec?.validatedMonths ?? []);
   const isValidatedRecord = rec?.decisions.validator?.status === "Validated";
   // Record lama yang sudah Validated tanpa validatedMonths: anggap semua bulan tercatat tervalidasi
@@ -783,7 +860,10 @@ export function saveWorkflowAssessment(no: string, role: ReviewerRole, ratings: 
 }
 export function workflowRowStatus(row: ApprovalRow, role: ReviewerRole): Partial<ApprovalRow> | null {
   const alias = workflowAlias(row.no);
-  const record = alias ? loadWorkflowRecordsByKeyMap().get(alias.key) : undefined;
+  const record = alias
+    ? loadWorkflowRecordsByKeyMap().get(alias.key) ??
+      findBestWorkflowRecordForEmployee(loadWorkflowRecords(), alias.employeeId, alias.module, alias.phase, alias.year)
+    : undefined;
   if (!record) return null;
   const isFourStep = record.module === "KPI" || record.module === "SMART Goals" || record.module === "RCA";
   const stage: WorkflowStageRole = row.workflowStageForRow ?? alias?.stage ?? role;
@@ -938,13 +1018,11 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
   const activeUser = getActiveUser();
   const allowed = resolveUserAllowedModules(activeUser);
   const normId = normalizeEmployeeId(activeUser.employeeId);
-  const records = loadWorkflowRecords().filter(
-    (r) => r.year === "2026" && (r.employeeId === normId || r.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase()),
-  );
+  const allRecords = loadWorkflowRecords();
   const bypassCheck = shouldBypassCheckerForSubmission(activeUser.employeeId);
 
   const buildFourStep = (modLabel: string, modKey: string, phase: "setting" | "measurement"): LiveModuleApprovalData => {
-    const rec = records.find((r) => r.module === modKey && r.phase === phase);
+    const rec = findBestWorkflowRecordForEmployee(allRecords, activeUser.employeeId, modKey, phase, "2026");
     if (!rec) {
       return {
         module: modLabel,
@@ -975,7 +1053,7 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
   };
 
   const buildTwoStep = (modLabel: string, modKey: string): LiveModuleApprovalData => {
-    const rec = records.find((r) => r.module === modKey && r.phase === "measurement");
+    const rec = findBestWorkflowRecordForEmployee(allRecords, activeUser.employeeId, modKey, "measurement", "2026");
     if (!rec) {
       return {
         module: modLabel,
@@ -1021,8 +1099,12 @@ export function getLiveUserModuleApprovals(includeManagerial = false): LiveModul
     list.push(buildTwoStep("Managerial Skill", "Managerial Skill"));
   }
   if (allowed.includes("Inter-Departement Feedback")) {
-    const wfRec = records.find(
-      (r) => r.module === "Inter-Department Feedback" && r.phase === "measurement",
+    const wfRec = findBestWorkflowRecordForEmployee(
+      allRecords,
+      activeUser.employeeId,
+      "Inter-Department Feedback",
+      "measurement",
+      "2026",
     );
     let idfRec: {
       summarySubmittedAt?: string;

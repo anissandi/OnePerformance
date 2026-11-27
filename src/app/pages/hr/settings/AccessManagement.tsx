@@ -734,13 +734,13 @@ const DEFAULT_HR_UNIT: RolePermissions = {
   pa_setting_kpi:   VCET,
   pa_setting_smart: VCE,
   pa_measurement: V,
-  pa_measurement_kpi:        VE,
-  pa_measurement_rca:        VE,
-  pa_measurement_smart:      VE,
-  pa_measurement_appraisal:  VE,
-  pa_measurement_project:    VE,
-  pa_measurement_managerial: VE,
-  pa_measurement_feedback:   VE,
+  pa_measurement_kpi:        VCET,
+  pa_measurement_rca:        VCET,
+  pa_measurement_smart:      VCET,
+  pa_measurement_appraisal:  VCET,
+  pa_measurement_project:    VCET,
+  pa_measurement_managerial: VCET,
+  pa_measurement_feedback:   VCET,
   pa_measurement_interview:  VE,
   history: V,
   documents: T,
@@ -1779,6 +1779,14 @@ export function loadRolePermissionsMap(): Record<Role, RolePermissions> {
       result[role] = { ...base, ...savedRole };
     } else {
       result[role] = base;
+    }
+    if (role === "HR Unit") {
+      for (const measKey of ["pa_measurement_kpi", "pa_measurement_rca", "pa_measurement_smart"] as const) {
+        const cur = result[role][measKey];
+        if (cur?.view && cur?.edit && !cur.create) {
+          result[role][measKey] = { ...cur, create: true };
+        }
+      }
     }
     // Form Feedback tersedia untuk semua role (termasuk role custom) kecuali dimatikan eksplisit
     if (!savedRole?.feedback) result[role].feedback = result[role].feedback?.view ? result[role].feedback : { ...V };

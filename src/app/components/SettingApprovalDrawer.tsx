@@ -12,6 +12,7 @@ import {
   fetchEmployeeKpiSettingsLive,
   fetchEmployeeSmartGoalsLive,
   fetchKpiAttachmentsForEmployee,
+  safeGetLocalRaw,
   type HydratedKpiAttachmentItem,
 } from "../services/supabaseClient";
 import { FORMS } from "../pages/employee/AppraisalForm";
@@ -749,7 +750,7 @@ function KPIContent({ employeeId }: { employeeId: string }) {
     try {
       const candidates = buildEmployeeIdMatchSet(employeeId);
       candidates.add(normalizeEmployeeId(employeeId));
-      const raw = localStorage.getItem("pa_kpi_setting_by_emp_v2");
+      const raw = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
       const map = raw ? (JSON.parse(raw) as Record<string, StoredOwnerKpiItem[]>) : {};
       for (const key of candidates) {
         const stored = map[key];
@@ -774,7 +775,7 @@ function KPIContent({ employeeId }: { employeeId: string }) {
     candidates.add(normalizeEmployeeId(employeeId));
     const lowerCandidates = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
     try {
-      const raw = localStorage.getItem("pa_kpi_attachments_v1");
+      const raw = safeGetLocalRaw("pa_kpi_attachments_v1");
       const map = raw ? (JSON.parse(raw) as Record<string, HydratedKpiAttachmentItem[]>) : {};
       for (const [k, arr] of Object.entries(map)) {
         if (!lowerCandidates.has(k.trim().toLowerCase()) || !Array.isArray(arr)) continue;
@@ -791,7 +792,7 @@ function KPIContent({ employeeId }: { employeeId: string }) {
       // ignore
     }
     try {
-      const evRaw = localStorage.getItem("pa_uploaded_evidence_v1");
+      const evRaw = safeGetLocalRaw("pa_uploaded_evidence_v1");
       const evList = evRaw ? (JSON.parse(evRaw) as Array<Record<string, unknown>>) : [];
       for (const ev of evList) {
         if (
