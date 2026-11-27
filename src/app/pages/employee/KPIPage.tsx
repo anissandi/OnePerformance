@@ -46,6 +46,7 @@ import {
   fetchEmployeeWorkflowRecordsLive,
   loadPersistedState,
   mergeKvMapRecord,
+  readEmployeeKpiSettingSlice,
   safeGetLocalRaw,
   safeSetLocalJson,
   savePersistedState,
@@ -971,19 +972,24 @@ function getCachedKpiSettingByEmpStore() {
 export function resolveEmployeeTrackingKpiItems(employeeId: string): KPIItem[] {
   try {
     const { setMap, byLower, mappedCache } = getCachedKpiSettingByEmpStore();
-    if (byLower.size === 0) return [];
-    const candidates = buildEmployeeIdMatchSet(employeeId);
-    candidates.add(normalizeEmployeeId(employeeId));
-    for (const k of candidates) {
-      const kl = k.toLowerCase();
-      const cachedMapped = mappedCache.get(kl);
-      if (cachedMapped) return cachedMapped;
-      const rows = setMap[k] ?? byLower.get(kl);
-      if (Array.isArray(rows) && rows.length > 0) {
-        const mapped = mapStoredSettingRowsToTrackingItems(rows);
-        mappedCache.set(kl, mapped);
-        return mapped;
+    if (byLower.size > 0) {
+      const candidates = buildEmployeeIdMatchSet(employeeId);
+      candidates.add(normalizeEmployeeId(employeeId));
+      for (const k of candidates) {
+        const kl = k.toLowerCase();
+        const cachedMapped = mappedCache.get(kl);
+        if (cachedMapped) return cachedMapped;
+        const rows = setMap[k] ?? byLower.get(kl);
+        if (Array.isArray(rows) && rows.length > 0) {
+          const mapped = mapStoredSettingRowsToTrackingItems(rows);
+          mappedCache.set(kl, mapped);
+          return mapped;
+        }
       }
+    }
+    const slice = readEmployeeKpiSettingSlice<Record<string, unknown>>(employeeId);
+    if (slice && Array.isArray(slice.items) && slice.items.length > 0) {
+      return mapStoredSettingRowsToTrackingItems(slice.items);
     }
   } catch {
     // ignore
@@ -1493,7 +1499,7 @@ export function separatorMismatchMessage(target: string, actual: string): string
 function AddMonthModal({
   existingLabels,
   allowedLabels,
-  lockedReasonByLabel,
+  lockedReasonByLabel: _lockedReasonByLabel,
   kpiItems = KPI_ITEMS,
   onAdd,
   onClose,
@@ -1612,17 +1618,12 @@ function AddMonthModal({
               value={label}
               onChange={(e) => handleLabelChange(e.target.value)}
               disabled={available.length === 0}
-              className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F]"
+              className="flex-1 text-sm bg-white text-gray-800 border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F] [color-scheme:light]"
             >
-              {available.map((m) => <option key={m} value={m}>{m}</option>)}
-              {!available.length && <option value="">Tidak ada bulan yang terbuka pada jadwal saat ini</option>}
+              {available.map((m) => <option key={m} value={m} className="bg-white text-gray-800">{m}</option>)}
+              {!available.length && <option value="" className="bg-white text-gray-800">Tidak ada bulan yang terbuka pada jadwal saat ini</option>}
             </select>
           </div>
-          {lockedReasonByLabel && unadded.some((m) => !available.includes(m) && lockedReasonByLabel[m]) && (
-            <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 leading-relaxed">
-              <strong>Info Jadwal Modul (/modules):</strong> Bulan yang terkunci oleh <em>Date Lock Per Month</em> atau di luar <em>Bulan Tracking Tertinggal</em> tidak dapat dipilih kecuali dibuka melalui Aktivasi Modul atau Request Open Lock ke HR ICF.
-            </div>
-          )}
           <div className="flex items-center gap-2 px-3 py-2 bg-sky-50 rounded-lg border border-sky-200">
             <Lock className="w-3 h-3 text-sky-500 shrink-0" />
             <p className="text-[11px] text-sky-700 font-medium">
@@ -1841,14 +1842,14 @@ function AddMonthModal({
                                       <select
                                         value={curBand}
                                         onChange={(e) => setVal(ck(kpi.no, grp.actualIdx), e.target.value)}
-                                        className={`text-xs font-semibold border rounded-lg px-3 py-2 outline-none cursor-pointer ${
-                                          empty ? "border-red-400 bg-red-50" : "border-gray-200"
+                                        className={`text-xs font-semibold border rounded-lg px-3 py-2 outline-none cursor-pointer [color-scheme:light] ${
+                                          empty ? "border-red-400 bg-red-50 text-gray-800" : "border-gray-200 bg-white text-gray-800"
                                         }`}
                                         style={cm ? { background: cm.bg, borderColor: cm.border, color: cm.color } : undefined}
                                       >
-                                        <option value="">— Pilih Warna Aktual (Biru / Merah / Hitam) —</option>
+                                        <option value="" className="bg-white text-gray-800">— Pilih Warna Aktual (Biru / Merah / Hitam) —</option>
                                         {KPI_COLOR_BANDS.map((o) => (
-                                          <option key={o.value} value={o.value}>{o.label}</option>
+                                          <option key={o.value} value={o.value} className="bg-white text-gray-800">{o.label}</option>
                                         ))}
                                       </select>
                                     );
@@ -4206,7 +4207,7 @@ function ValidatedEvidenceHistorySection({
       >
         <span className="flex items-center gap-2 text-sm font-semibold">
           <Paperclip className="w-4 h-4 text-emerald-300" />
-          History Evidence Document (Bulan Full Approved / Validated)
+          History Evidence Document
           <span className="ml-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium">
             {files.length} file{files.length !== 1 ? "s" : ""}
           </span>
@@ -4597,7 +4598,7 @@ function KPIWorkspace({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeUser.employeeId, isKpiSettingValidated]);
+  }, [activeUser.employeeId]);
 
   const isBusinessSettingApproved = (() => {
     try {

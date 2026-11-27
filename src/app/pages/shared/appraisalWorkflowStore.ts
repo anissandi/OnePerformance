@@ -1,5 +1,14 @@
 import type { ApprovalRow, ReviewerRole } from "../../components/ReviewDrawer";
-import { buildEmployeeIdMatchSet, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../../services/supabaseClient";
+import {
+  buildEmployeeIdMatchSet,
+  readEmployeeKpiSettingSlice,
+  readEmployeeWorkflowSlice,
+  safeGetLocalRaw,
+  safeSetLocalJson,
+  saveEmployeeWorkflowSlice,
+  savePersistedState,
+  syncToSupabase,
+} from "../../services/supabaseClient";
 import {
   findHrIcfValidatorUser,
   findHrUnitCheckerUserForCompany,
@@ -114,7 +123,9 @@ export function findBestWorkflowRecordForEmployee(
   const lowerSet = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
   let best: WorkflowRecord | undefined;
   let bestScore = -1;
-  for (const r of records) {
+  const sliceRecords = readEmployeeWorkflowSlice<WorkflowRecord>(trimmed);
+  const combined = sliceRecords.length > 0 ? [...records, ...sliceRecords] : records;
+  for (const r of combined) {
     if (!r || r.module !== module || r.phase !== phase) continue;
     if (year && r.year !== year) continue;
     const rRaw = String(r.employeeId ?? "").trim().toLowerCase();
@@ -132,6 +143,8 @@ export function findBestWorkflowRecordForEmployee(
 
 export function isEmployeeKpiSettingMarkedValidatedInTable(employeeId: string): boolean {
   try {
+    const slice = readEmployeeKpiSettingSlice(employeeId);
+    if (slice?.status === "Validated") return true;
     const raw = safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1");
     if (!raw) return false;
     const stMap = JSON.parse(raw) as Record<string, string>;
@@ -332,6 +345,20 @@ export function registerWorkflowRows(rows: ApprovalRow[], role: ReviewerRole) {
 function write(record: WorkflowRecord) {
   const nextRecords = [...loadWorkflowRecords().filter((item) => item.key !== record.key), record];
   safeSetLocalJson(KEY, nextRecords);
+  try {
+    const empCandidates = buildEmployeeIdMatchSet(record.employeeId);
+    empCandidates.add(normalizeEmployeeId(record.employeeId));
+    const empLower = new Set(Array.from(empCandidates).map((x) => x.toLowerCase()));
+    const prevSlice = readEmployeeWorkflowSlice<WorkflowRecord>(record.employeeId).filter((r) => r.key !== record.key);
+    const mineGlobal = nextRecords.filter((r) => empLower.has(String(r.employeeId ?? "").trim().toLowerCase()));
+    const byKey = new Map<string, WorkflowRecord>();
+    for (const r of [...prevSlice, ...mineGlobal, record]) {
+      if (r?.key) byKey.set(r.key, r);
+    }
+    saveEmployeeWorkflowSlice(record.employeeId, Array.from(byKey.values()));
+  } catch {
+    // ignore
+  }
   window.dispatchEvent(new Event("appraisal-updated"));
   const latestStatus =
     record.decisions.validator?.status ??
@@ -377,6 +404,12 @@ export function resetWorkflowPhaseForEmployee(
   if (!current.some((r) => r.key === docKey)) return;
   const remaining = current.filter((r) => r.key !== docKey);
   safeSetLocalJson(KEY, remaining);
+  try {
+    const prevSlice = readEmployeeWorkflowSlice<WorkflowRecord>(employeeId).filter((r) => r.key !== docKey);
+    saveEmployeeWorkflowSlice(employeeId, prevSlice);
+  } catch {
+    // ignore
+  }
   savePersistedState(KEY, remaining, {
     kind: "workflow-document",
     doc: {

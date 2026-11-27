@@ -1,6 +1,7 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  color-scheme: light;
   --font-size: 16px;
   --background: #ffffff;
   --foreground: oklch(0.145 0 0);
@@ -134,6 +135,7 @@
   */
 
   html {
+    color-scheme: light;
     font-size: var(--font-size);
   }
 
@@ -177,5 +179,17 @@
     font-size: var(--text-base);
     font-weight: var(--font-weight-normal);
     line-height: 1.5;
+  }
+
+  select,
+  input,
+  textarea {
+    color-scheme: light;
+  }
+
+  select option,
+  select optgroup {
+    background-color: #ffffff;
+    color: #1e293b;
   }
 }

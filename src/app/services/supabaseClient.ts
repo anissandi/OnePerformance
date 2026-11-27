@@ -1647,6 +1647,79 @@ export async function fetchKpiAttachmentsForEmployee(employeeId: string): Promis
   }
 }
 
+function canonicalEmployeeSliceKey(employeeId: string): string {
+  const stripped = String(employeeId ?? "").trim().replace(/^emp-mi-/i, "");
+  if (!stripped) return "";
+  const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1] ?? (/^\d+$/.test(stripped) ? stripped : undefined);
+  if (num) return String(Number(num));
+  return stripped.toUpperCase();
+}
+
+/**
+ * Menyimpan slice ringan KPI Setting milik 1 karyawan (~2–4 KB) ke localStorage sehingga render awal halaman
+ * tabel KPI (/appraisal, /measurement/kpi-tracking, /setting/kpi) tampil instan 0 ms meskipun map seluruh karyawan
+ * (`pa_kpi_setting_by_emp_v2`) melebihi kuota 5 MB localStorage.
+ */
+export function saveEmployeeKpiSettingSlice(employeeId: string, items: unknown[], status?: string): void {
+  const keySuffix = canonicalEmployeeSliceKey(employeeId);
+  if (!keySuffix || !Array.isArray(items)) return;
+  const storageKey = `pa_kpi_setting_emp_v1_${keySuffix}`;
+  try {
+    const prevRaw = safeGetLocalRaw(storageKey);
+    const prev = prevRaw ? (JSON.parse(prevRaw) as { items?: unknown[]; status?: string }) : null;
+    const nextStatus = status || prev?.status || "";
+    safeSetLocalJson(storageKey, { items, status: nextStatus });
+  } catch {
+    // ignore
+  }
+}
+
+export function readEmployeeKpiSettingSlice<T = Record<string, unknown>>(
+  employeeId: string,
+): { items: T[]; status?: string } | null {
+  const keySuffix = canonicalEmployeeSliceKey(employeeId);
+  if (!keySuffix) return null;
+  try {
+    const raw = safeGetLocalRaw(`pa_kpi_setting_emp_v1_${keySuffix}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { items?: T[]; status?: string } | null;
+    if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+      return { items: parsed.items, status: parsed.status };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Menyimpan slice ringan Workflow milik 1 karyawan (~1–2 KB) ke localStorage agar status Validated/Approved
+ * langsung tersedia di render frame pertama tanpa menunggu unduhan ribuan baris `appraisal_workflow_v1`.
+ */
+export function saveEmployeeWorkflowSlice(employeeId: string, records: readonly unknown[]): void {
+  const keySuffix = canonicalEmployeeSliceKey(employeeId);
+  if (!keySuffix || !Array.isArray(records)) return;
+  const storageKey = `pa_wf_emp_v1_${keySuffix}`;
+  try {
+    safeSetLocalJson(storageKey, records);
+  } catch {
+    // ignore
+  }
+}
+
+export function readEmployeeWorkflowSlice<T = Record<string, unknown>>(employeeId: string): T[] {
+  const keySuffix = canonicalEmployeeSliceKey(employeeId);
+  if (!keySuffix) return [];
+  try {
+    const raw = safeGetLocalRaw(`pa_wf_emp_v1_${keySuffix}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function buildPostgrestInList(values: Iterable<string>): string {
   const cleaned = Array.from(
     new Set(
@@ -1717,7 +1790,8 @@ export async function fetchEmployeeWorkflowRecordsLive(employeeId: string): Prom
         const prev = byKey.get(key);
         const prevPrio = workflowStatusPriority(prev);
         const nextPrio = workflowStatusPriority(payload);
-        if (!prev || nextPrio >= prevPrio || JSON.stringify(prev) !== JSON.stringify(payload)) {
+        const sameJson = prev ? JSON.stringify(prev) === JSON.stringify(payload) : false;
+        if (!prev || (!sameJson && nextPrio >= prevPrio)) {
           byKey.set(key, payload);
           changed = true;
         }
@@ -1735,12 +1809,16 @@ export async function fetchEmployeeWorkflowRecordsLive(employeeId: string): Prom
           if (!key) continue;
           remotePayloads.push(rawRec);
           const prev = byKey.get(key);
-          if (!prev || workflowStatusPriority(rawRec) >= workflowStatusPriority(prev)) {
+          const sameRaw = prev ? JSON.stringify(prev) === JSON.stringify(rawRec) : false;
+          if (!prev || (!sameRaw && workflowStatusPriority(rawRec) >= workflowStatusPriority(prev))) {
             byKey.set(key, rawRec);
             changed = true;
           }
         }
       }
+    }
+    if (remotePayloads.length > 0) {
+      saveEmployeeWorkflowSlice(employeeId, remotePayloads);
     }
     if (changed) {
       safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
@@ -1773,16 +1851,26 @@ export async function fetchEmployeeKpiSettingsLive<T = Record<string, unknown>>(
       const stripped = String(employeeId ?? "").trim().replace(/^emp-mi-/i, "");
       const num = stripped.match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
       const canonKey = num ? `EMP-${num.padStart(3, "0")}` : stripped.toUpperCase();
-      byEmp[canonKey] = items;
-      if (stripped) byEmp[stripped] = items;
-      safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
-      if (remoteStatus && /^(validated|approved)$/i.test(remoteStatus.trim())) {
-        const stMap = JSON.parse(safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1") ?? "{}") ?? {};
-        stMap[canonKey] = "Validated";
-        if (stripped) stMap[stripped] = "Validated";
-        safeSetLocalJson("pa_kpi_setting_status_by_emp_v1", stMap);
+      const nextJson = JSON.stringify(items);
+      const prevJson = byEmp[canonKey] ? JSON.stringify(byEmp[canonKey]) : "";
+      let didChange = prevJson !== nextJson;
+      if (didChange) {
+        byEmp[canonKey] = items;
+        if (stripped) byEmp[stripped] = items;
+        safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
       }
-      if (typeof window !== "undefined") {
+      const normalizedStatus = remoteStatus && /^(validated|approved)$/i.test(remoteStatus.trim()) ? "Validated" : undefined;
+      saveEmployeeKpiSettingSlice(employeeId, items, normalizedStatus);
+      if (normalizedStatus) {
+        const stMap = JSON.parse(safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1") ?? "{}") ?? {};
+        if (stMap[canonKey] !== "Validated" || (stripped && stMap[stripped] !== "Validated")) {
+          stMap[canonKey] = "Validated";
+          if (stripped) stMap[stripped] = "Validated";
+          safeSetLocalJson("pa_kpi_setting_status_by_emp_v1", stMap);
+          didChange = true;
+        }
+      }
+      if (didChange && typeof window !== "undefined") {
         window.dispatchEvent(new Event("appraisal-updated"));
       }
     } catch {
@@ -2257,11 +2345,18 @@ export function waitForInitialHydration(timeoutMs = 12000): Promise<void> {
  * - Jika browser/device baru kosong (incognito), hanya menunggu state login kritikal (~200-400 ms) agar siap login tanpa layar berat.
  */
 export function waitForFastAuthBoot(timeoutMs = 2500): Promise<void> {
+  if (hasWarmLocalAuthCache()) {
+    if (!initialHydrationPromise) {
+      initialHydrationPromise = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          hydrateAllStoresFromSupabase().then(resolve, () => resolve());
+        }, 180);
+      });
+    }
+    return Promise.resolve();
+  }
   if (!initialHydrationPromise) {
     initialHydrationPromise = hydrateAllStoresFromSupabase();
-  }
-  if (hasWarmLocalAuthCache()) {
-    return Promise.resolve();
   }
   return Promise.race([
     refreshLoginCriticalStateFromBackend().catch(() => undefined),
@@ -3296,6 +3391,19 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         }
       }
       safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
+      try {
+        const activeRaw = safeGetLocalRaw("pa_active_user_v1");
+        const activeEmpId = activeRaw ? String((JSON.parse(activeRaw) as { employeeId?: string })?.employeeId ?? "").trim() : "";
+        if (activeEmpId) {
+          const activeSet = new Set(Array.from(buildEmployeeIdMatchSet(activeEmpId)).map((x) => x.toLowerCase()));
+          const mine = Array.from(byKey.values()).filter((r) =>
+            activeSet.has(String(r?.employeeId ?? "").trim().toLowerCase()),
+          );
+          if (mine.length > 0) saveEmployeeWorkflowSlice(activeEmpId, mine);
+        }
+      } catch {
+        // ignore
+      }
     }
 
     // 8. Hydrate normalized interview schedules if present
@@ -3499,10 +3607,28 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
     const kpiSettingsRows = data.kpiSettings as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(kpiSettingsRows) && kpiSettingsRows.length > 0) {
       let byEmp: Record<string, unknown> = {};
+      let stMap: Record<string, string> = {};
+      let stChanged = false;
+      let activeLowerSet = new Set<string>();
+      let activeEmpId = "";
       try {
         byEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
       } catch {
         byEmp = {};
+      }
+      try {
+        stMap = JSON.parse(safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1") ?? "{}") ?? {};
+      } catch {
+        stMap = {};
+      }
+      try {
+        const activeRaw = safeGetLocalRaw("pa_active_user_v1");
+        activeEmpId = activeRaw ? String((JSON.parse(activeRaw) as { employeeId?: string })?.employeeId ?? "").trim() : "";
+        if (activeEmpId) {
+          activeLowerSet = new Set(Array.from(buildEmployeeIdMatchSet(activeEmpId)).map((x) => x.toLowerCase()));
+        }
+      } catch {
+        // ignore
       }
       for (const row of kpiSettingsRows) {
         const rawEmp = String(row.employee_id ?? "").trim();
@@ -3513,16 +3639,20 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
         const normId = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp.toUpperCase();
         byEmp[normId] = items;
         byEmp[rawEmp] = items;
-        if (/^(validated|approved)$/i.test(String(row.status ?? "").trim())) {
-          try {
-            const stMap = JSON.parse(safeGetLocalRaw("pa_kpi_setting_status_by_emp_v1") ?? "{}") ?? {};
+        const isRowValidated = /^(validated|approved)$/i.test(String(row.status ?? "").trim());
+        if (isRowValidated) {
+          if (stMap[normId] !== "Validated" || stMap[rawEmp] !== "Validated") {
             stMap[normId] = "Validated";
             stMap[rawEmp] = "Validated";
-            safeSetLocalJson("pa_kpi_setting_status_by_emp_v1", stMap);
-          } catch {
-            // ignore
+            stChanged = true;
           }
         }
+        if (activeEmpId && (activeLowerSet.has(rawEmp.toLowerCase()) || activeLowerSet.has(normId.toLowerCase()))) {
+          saveEmployeeKpiSettingSlice(activeEmpId, items, isRowValidated ? "Validated" : undefined);
+        }
+      }
+      if (stChanged) {
+        safeSetLocalJson("pa_kpi_setting_status_by_emp_v1", stMap);
       }
       safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
     }

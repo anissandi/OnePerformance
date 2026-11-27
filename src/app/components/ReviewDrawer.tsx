@@ -602,7 +602,7 @@ function KPIReview({ row }: { row: ApprovalRow }) {
         )}
       </div>
 
-      {/* ── History Evidence Document (Bulan Full Approved / Validated) — Default Collapse ── */}
+      {/* ── History Evidence Document — Default Collapse ── */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <button
           type="button"
@@ -611,7 +611,7 @@ function KPIReview({ row }: { row: ApprovalRow }) {
         >
           <span className="flex items-center gap-2 text-sm font-semibold">
             <Paperclip className="w-4 h-4 text-emerald-300" />
-            History Evidence Document (Bulan Full Approved / Validated)
+            History Evidence Document
             <span className="ml-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium">
               {validatedHistoryEvidenceFiles.length} file{validatedHistoryEvidenceFiles.length !== 1 ? "s" : ""}
             </span>

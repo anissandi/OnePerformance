@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 interface DualScrollTableContainerProps {
   children: React.ReactNode;
   className?: string;
 }
+
+const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 /**
  * Pembungkus tabel lebar (KPI Setting, KPI Tracking, dsb.) yang menyediakan:
@@ -18,6 +20,9 @@ export function DualScrollTableContainer({
   const topScrollRef = useRef<HTMLDivElement>(null);
   const bottomScrollRef = useRef<HTMLDivElement>(null);
   const syncingFromRef = useRef<"top" | "bottom" | null>(null);
+  const lastSwRef = useRef(0);
+  const lastOverflowRef = useRef(false);
+  const rafIdRef = useRef<number | null>(null);
 
   const [scrollWidth, setScrollWidth] = useState(0);
   const [hasOverflow, setHasOverflow] = useState(false);
@@ -28,38 +33,52 @@ export function DualScrollTableContainer({
     const sw = el.scrollWidth;
     const cw = el.clientWidth;
     const sl = el.scrollLeft;
-    setScrollWidth(sw);
-    const overflow = sw > cw + 2;
-    setHasOverflow(overflow);
+    if (Math.abs(sw - lastSwRef.current) > 1) {
+      lastSwRef.current = sw;
+      setScrollWidth(sw);
+    }
+    // Hysteresis mencegah osilasi bolak-balik pada batas lebar ambang batas
+    const prevOverflow = lastOverflowRef.current;
+    const nextOverflow = prevOverflow ? sw > cw : sw > cw + 4;
+    if (nextOverflow !== prevOverflow) {
+      lastOverflowRef.current = nextOverflow;
+      setHasOverflow(nextOverflow);
+    }
     if (topScrollRef.current && Math.abs(topScrollRef.current.scrollLeft - sl) > 1) {
       topScrollRef.current.scrollLeft = sl;
     }
   }, []);
 
-  useEffect(() => {
+  useIsoLayoutEffect(() => {
     const el = bottomScrollRef.current;
     if (!el) return;
     updateMetrics();
 
+    const scheduleUpdate = () => {
+      if (rafIdRef.current !== null) return;
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        updateMetrics();
+      });
+    };
+
     const ro = new ResizeObserver(() => {
-      updateMetrics();
+      scheduleUpdate();
     });
     ro.observe(el);
     const tableEl = el.querySelector("table");
     if (tableEl) ro.observe(tableEl);
 
-    const mo = new MutationObserver(() => {
-      updateMetrics();
-    });
-    mo.observe(el, { childList: true, subtree: true, attributes: false });
-
-    window.addEventListener("resize", updateMetrics);
+    window.addEventListener("resize", scheduleUpdate);
     return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
       ro.disconnect();
-      mo.disconnect();
-      window.removeEventListener("resize", updateMetrics);
+      window.removeEventListener("resize", scheduleUpdate);
     };
-  }, [updateMetrics]);
+  }, [updateMetrics, children]);
 
   const handleTopScroll = () => {
     if (syncingFromRef.current === "bottom") return;
@@ -68,7 +87,6 @@ export function DualScrollTableContainer({
     if (!topEl || !botEl) return;
     syncingFromRef.current = "top";
     botEl.scrollLeft = topEl.scrollLeft;
-    updateMetrics();
     requestAnimationFrame(() => {
       syncingFromRef.current = null;
     });
@@ -81,7 +99,6 @@ export function DualScrollTableContainer({
     if (!botEl) return;
     syncingFromRef.current = "bottom";
     if (topEl) topEl.scrollLeft = botEl.scrollLeft;
-    updateMetrics();
     requestAnimationFrame(() => {
       syncingFromRef.current = null;
     });
@@ -93,7 +110,8 @@ export function DualScrollTableContainer({
         <div
           ref={topScrollRef}
           onScroll={handleTopScroll}
-          className="overflow-x-auto overflow-y-hidden w-full border-b border-gray-200 bg-slate-50/70"
+          style={{ height: 14, minHeight: 14, maxHeight: 14 }}
+          className="pa-dual-scroll-top shrink-0 overflow-x-auto overflow-y-hidden w-full border-b border-gray-200 bg-slate-50/80"
           aria-label="Horizontal table scroll atas"
         >
           <div style={{ width: `${scrollWidth}px`, height: 1 }} />
@@ -103,7 +121,7 @@ export function DualScrollTableContainer({
       <div
         ref={bottomScrollRef}
         onScroll={handleBottomScroll}
-        className="overflow-x-auto w-full"
+        className="pa-dual-scroll-bottom overflow-x-auto w-full"
       >
         {children}
       </div>

@@ -101,6 +101,7 @@ function SupvEvidenceChip({ file }: { file: StoredEvidenceFile }) {
 function KPITab({ onOpenRcaTab }: { onOpenRcaTab: () => void }) {
   const { activeUser } = useAuthStore();
   const [tick, setTick] = useState(0);
+  const [initialRemoteChecked, setInitialRemoteChecked] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const onSync = () => setTick((t) => t + 1);
@@ -109,7 +110,10 @@ function KPITab({ onOpenRcaTab }: { onOpenRcaTab: () => void }) {
       fetchEmployeeKpiSettingsLive(activeUser.employeeId),
       fetchEmployeeKpiTrackingLive<MonthEntry>(activeUser.employeeId),
     ]).then(() => {
-      if (!cancelled) setTick((t) => t + 1);
+      if (!cancelled) {
+        setInitialRemoteChecked(true);
+        setTick((t) => t + 1);
+      }
     });
     window.addEventListener("appraisal-updated", onSync);
     window.addEventListener("pa-auth-updated", onSync);
@@ -176,6 +180,13 @@ function KPITab({ onOpenRcaTab }: { onOpenRcaTab: () => void }) {
   }, [evidenceFiles]);
 
   if (!isKpiSettingValidated) {
+    if (!initialRemoteChecked && ownerKpiItems.length === 0) {
+      return (
+        <div className="rounded-2xl border border-gray-100 bg-white p-8 text-center">
+          <p className="text-xs font-medium text-gray-400">Memuat data KPI…</p>
+        </div>
+      );
+    }
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center">
         <p className="text-sm font-bold text-amber-900">KPI Setting Belum Berstatus Validated</p>
@@ -2555,7 +2566,7 @@ export function SupervisorMyPerformanceAppraisal() {
         ))}
       </div>
 
-      {activeTab === "KPI"                       && <KPITab key={revision} onOpenRcaTab={() => setActiveTab("RCA")} />}
+      {activeTab === "KPI"                       && <KPITab onOpenRcaTab={() => setActiveTab("RCA")} />}
       {activeTab === "RCA"                       && <RCATab key={revision} />}
       {activeTab === "SMART Goals"               && <SMARTGoalsTab key={revision} />}
       {activeTab === "Appraisal Form"            && <AppraisalFormTab key={revision} />}

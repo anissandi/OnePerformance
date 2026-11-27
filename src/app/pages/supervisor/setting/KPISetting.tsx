@@ -37,8 +37,10 @@ import {
   fetchEmployeeWorkflowRecordsLive,
   fetchKpiAttachmentsForEmployee,
   mergeKvMapRecord,
+  readEmployeeKpiSettingSlice,
   safeGetLocalRaw,
   safeSetLocalJson,
+  saveEmployeeKpiSettingSlice,
   syncToSupabase,
   uploadEvidenceFileToSupabase,
 } from "../../../services/supabaseClient";
@@ -8753,6 +8755,10 @@ function readStoredPersonalKpiItems(employeeId: string): KPISetting[] | null {
         return v;
       }
     }
+    const slice = readEmployeeKpiSettingSlice<KPISetting>(employeeId);
+    if (slice && Array.isArray(slice.items) && slice.items.length > 0) {
+      return slice.items;
+    }
   } catch {
     // ignore
   }
@@ -9194,6 +9200,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       });
     } else {
       const normId = normalizeEmployeeId(targetOwner.employeeId);
+      saveEmployeeKpiSettingSlice(targetOwner.employeeId, nextItems);
       try {
         const raw = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
         const map = raw ? (JSON.parse(raw) as Record<string, KPISetting[]>) : {};

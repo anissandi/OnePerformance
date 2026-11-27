@@ -1559,7 +1559,7 @@ export function StaffMyPA() {
         ))}
       </div>
 
-      {activeTab === "KPI"                       && <KPITab key={revision} onOpenRcaTab={() => setActiveTab("RCA")} />}
+      {activeTab === "KPI"                       && <KPITab onOpenRcaTab={() => setActiveTab("RCA")} />}
       {activeTab === "RCA"                       && <RCATab key={revision} />}
       {activeTab === "SMART Goals"               && <SMARTGoalsTab key={revision} />}
       {activeTab === "Appraisal Form"            && <AppraisalFormTab key={revision} />}
