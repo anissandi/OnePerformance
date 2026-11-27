@@ -4,7 +4,7 @@ import { AlertTriangle, Eye, X, FileText, ChevronDown, ArrowUpDown, ArrowUp, Arr
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
 import { AnalyticsStatCard } from "../../components/AnalyticsStatCard";
 import { loadPersistedState } from "../../services/supabaseClient";
-import { getActiveUser, getStrictSubordinateUsers } from "../../store/authStore";
+import { canonicalizeCompanyUnitName, getActiveUser, getStrictSubordinateUsers } from "../../store/authStore";
 import { getApproverNotesHistory, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 import { loadMeasurementRCARecords } from "../employee/RCAPage";
@@ -87,8 +87,16 @@ interface TeamMember {
 
 function buildLiveSupervisorTeamMembers(): TeamMember[] {
   const activeUser = getActiveUser();
-  const allowedIds = new Set(getStrictSubordinateUsers(activeUser).map((u) => u.employeeId.toLowerCase()));
-  const liveEmps = getLiveTransactionalEmployees().filter((e) => allowedIds.has(e.id.toLowerCase()));
+  const allowedUnitRefs = new Set(
+    getStrictSubordinateUsers(activeUser).map(
+      (u) => `${canonicalizeCompanyUnitName(u.company).toLowerCase()}::${String(u.regNo || u.employeeId || u.id).trim().toLowerCase()}`,
+    ),
+  );
+  const liveEmps = getLiveTransactionalEmployees().filter((e) =>
+    allowedUnitRefs.has(
+      `${canonicalizeCompanyUnitName(e.companyUnit).toLowerCase()}::${String(e.regNo || e.id || e.userId).trim().toLowerCase()}`,
+    ),
+  );
   const adjScores = loadPersistedState<Record<string, number>>("pa_calibration_adj_scores_v1", {});
   const adjComments = loadPersistedState<Record<string, string>>("pa_calibration_adj_comments_v1", {});
   return liveEmps.map((e, idx) => {

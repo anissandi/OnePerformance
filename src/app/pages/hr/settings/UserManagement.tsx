@@ -939,6 +939,62 @@ function EditModal({
               <p className="text-[11px] text-gray-500 mt-0.5">
                 Opsional: Jika ceklist Unit Usaha dipilih maka seluruh karyawan di Unit Usaha tersebut akan terlihat; jika ditambah ceklist Divisi maka otomatis difilter sesuai Divisi di Unit Usaha tersebut; dan jika ditambah Departemen / Bagian maka otomatis difilter sesuai Departemen / Bagian dari Divisi &amp; Unit Usaha tersebut.
               </p>
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                <span className="text-[10px] font-semibold text-gray-500 mr-0.5">Pilih Cepat Group:</span>
+                {HIERARCHICAL_COMPANY_GROUPS.map((grp) => {
+                  const currentSelected = form.managedUnits ?? [];
+                  const allGroupChecked =
+                    grp.units.length > 0 &&
+                    grp.units.every((gu) => currentSelected.some((su) => isSameCompanyUnit(su, gu)));
+                  return (
+                    <button
+                      key={`ms-grp-${grp.groupName}`}
+                      type="button"
+                      onClick={() => {
+                        setForm((p) => {
+                          const prev = p.managedUnits ?? [];
+                          const next = allGroupChecked
+                            ? prev.filter((su) => !grp.units.some((gu) => isSameCompanyUnit(su, gu)))
+                            : Array.from(
+                                new Set([
+                                  ...prev.map((x) => canonicalizeCompanyUnitName(x)),
+                                  ...grp.units.map((x) => canonicalizeCompanyUnitName(x)),
+                                ]),
+                              ).filter(Boolean);
+                          return { ...p, managedUnits: next };
+                        });
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                        allGroupChecked
+                          ? "bg-[#1A284F] text-white border-[#1A284F]"
+                          : "bg-white text-[#1A284F] border-indigo-200 hover:bg-indigo-50"
+                      }`}
+                    >
+                      {allGroupChecked ? `✓ ${grp.groupName} (${grp.units.length} Unit)` : `+ ${grp.groupName} (${grp.units.length} Unit)`}
+                    </button>
+                  );
+                })}
+                {(form.managedUnits?.length ||
+                  form.managedDivisions?.length ||
+                  form.managedDepartments?.length ||
+                  form.managedBagians?.length) ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((p) => ({
+                        ...p,
+                        managedUnits: [],
+                        managedDivisions: [],
+                        managedDepartments: [],
+                        managedBagians: [],
+                      }))
+                    }
+                    className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-rose-600 bg-white border border-rose-200 hover:bg-rose-50 transition-colors"
+                  >
+                    Reset Cakupan
+                  </button>
+                ) : null}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <MultiCheckboxDropdown

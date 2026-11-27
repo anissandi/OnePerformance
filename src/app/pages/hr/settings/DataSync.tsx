@@ -11,8 +11,10 @@ import {
   loadPersistedState,
   replaceCompanyUnitUsersAndResetTransactions,
   savePersistedState,
+  safeSetLocalJson,
 } from "../../../services/supabaseClient";
 import {
+  AUTH_SESSION_KEY,
   COMPANY_UNIT_LOCATIONS,
   canonicalizeCompanyUnitName,
   getActiveUser,
@@ -22,6 +24,7 @@ import {
   normalizeApproverPair,
   resolveGroupingForCompanyAndPosition,
   saveManagedUsers,
+  startOrRefreshAuthSession,
   type ManagedUser,
   type AppUserRole,
 } from "../../../store/authStore";
@@ -321,6 +324,10 @@ export function DataSyncPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
+    if (importMode === "replace_all_trial" && selectedUnit === "ALL") {
+      toast.error("Silakan pilih spesifik 1 Unit Usaha terlebih dahulu untuk Mode: Replace / Ganti Data (agar unit usaha lain tidak ikut terganti).");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -389,11 +396,13 @@ export function DataSyncPage() {
           const r = rawRows[idx];
           const empId = String(r["ID Karyawan"] ?? r["Employee ID"] ?? r["NIK"] ?? "").trim();
           const name = String(r["Nama"] ?? r["Name"] ?? "").trim();
-          if (!empId || !name) continue;
+          const rawRegNoCell = String(r["Reg No"] ?? r["RegNo"] ?? "").trim();
+          const cleanRegNoCell = rawRegNoCell === "-" || rawRegNoCell === "—" ? "" : rawRegNoCell;
+          if (!name || (!empId && !cleanRegNoCell)) continue;
 
           const no = String(r["No"] ?? idx + 1).trim();
-          const rawRegNo = String(r["Reg No"] ?? r["RegNo"] ?? "").trim();
-          const regNo = rawRegNo || empId;
+          const effectiveEmpId = empId || cleanRegNoCell;
+          const regNo = cleanRegNoCell || effectiveEmpId;
           const division = String(r["Divisi"] ?? r["Division"] ?? "Staff Management").trim();
           const department = String(r["Departement"] ?? r["Departemen"] ?? r["Department"] ?? "Sumber Daya Manusia").trim();
           const bagian = String(r["Bagian"] ?? r["Section"] ?? "").trim();
@@ -418,27 +427,38 @@ export function DataSyncPage() {
             ? parseOptionalExcelDate(r["Tgl Efektif"] ?? r["Tanggal Efektif"] ?? r["Effective Date"] ?? "")
             : "";
 
-          const rowCompany = canonicalizeCompanyUnitName(String(r["Company"] ?? r["Unit"] ?? targetCompany).trim());
-          const fileKey = `${rowCompany.toLowerCase()}::${regNo.toLowerCase()}`;
-          const prevNameInFile = seenUnitRegInFile.get(fileKey);
-          if (prevNameInFile) {
-            duplicateRegErrorsInFile.push(
-              `Reg No "${regNo}" duplikat pada unit ${rowCompany} (${prevNameInFile} & ${name})`,
-            );
-            continue;
+          // Pada Mode: Replace / Ganti Data, kunci ketat pada Unit Usaha yang dipilih (tidak pernah menyentuh unit usaha lain)
+          // dan TIDAK melakukan validasi duplikat Reg No maupun ID Karyawan karena seluruh data unit tersebut diganti baru.
+          const rowCompany =
+            importMode === "replace_all_trial"
+              ? canonicalizeCompanyUnitName(targetCompany)
+              : canonicalizeCompanyUnitName(String(r["Company"] ?? r["Unit"] ?? targetCompany).trim());
+
+          if (importMode !== "replace_all_trial") {
+            const fileKey = `${rowCompany.toLowerCase()}::${regNo.toLowerCase()}`;
+            const prevNameInFile = seenUnitRegInFile.get(fileKey);
+            if (prevNameInFile) {
+              duplicateRegErrorsInFile.push(
+                `Reg No "${regNo}" duplikat pada unit ${rowCompany} (${prevNameInFile} & ${name})`,
+              );
+              continue;
+            }
+            seenUnitRegInFile.set(fileKey, name);
           }
-          seenUnitRegInFile.set(fileKey, name);
 
           const grouping = resolveGroupingForCompanyAndPosition(rowCompany, position, rawGrouping);
 
           // UM-2: Cocokkan existing user berdasarkan Reg No dalam Unit Usaha yang sama
           // (ID Karyawan yang sama dengan Reg No berbeda tetap menjadi akun terpisah dan tidak saling menimpa)
-          const prev = currentManagedUsers.find((u) => {
-            if (!isSameCompanyUnit(u.company, rowCompany)) return false;
-            const uReg = String(u.regNo ?? "").trim().toLowerCase();
-            if (uReg) return uReg === regNo.toLowerCase();
-            return u.employeeId.trim().toLowerCase() === empId.toLowerCase();
-          });
+          const prev =
+            importMode === "replace_all_trial"
+              ? undefined
+              : currentManagedUsers.find((u) => {
+                  if (!isSameCompanyUnit(u.company, rowCompany)) return false;
+                  const uReg = String(u.regNo ?? "").trim().toLowerCase();
+                  if (uReg) return uReg === regNo.toLowerCase();
+                  return u.employeeId.trim().toLowerCase() === effectiveEmpId.toLowerCase();
+                });
 
           const isApproverByChain = referencedApproverRegNos.has(regNo.toUpperCase());
           const explicitRole = normalizeImportedRole(rawRole);
@@ -456,10 +476,13 @@ export function DataSyncPage() {
               : "Employee");
 
           const userRecord: ManagedUser = {
-            id: importMode === "replace_all_trial" ? `usr-${Date.now()}-${idx}` : (prev?.id ?? `usr-${Date.now()}-${idx}`),
+            id:
+              importMode === "replace_all_trial"
+                ? `usr-rep-${Date.now()}-${idx}`
+                : (prev?.id ?? `usr-${Date.now()}-${idx}`),
             no,
             regNo,
-            employeeId: empId,
+            employeeId: effectiveEmpId,
             name,
             division,
             department,
@@ -492,6 +515,7 @@ export function DataSyncPage() {
             employeeStatus: cleanEmpStatus,
             employeeStatusNote: cleanEmpStatusNote,
             effectiveDate,
+            ...(importMode === "replace_all_trial" ? { allowDuplicateInUnit: true } : {}),
           };
 
           importedRows.push(userRecord);
@@ -507,7 +531,7 @@ export function DataSyncPage() {
           }
         }
 
-        if (duplicateRegErrorsInFile.length > 0) {
+        if (importMode !== "replace_all_trial" && duplicateRegErrorsInFile.length > 0) {
           toast.error(
             `File Excel ditolak karena terdapat duplikat Reg No dalam 1 unit usaha: ${duplicateRegErrorsInFile
               .slice(0, 3)
@@ -551,27 +575,51 @@ export function DataSyncPage() {
       const now = `${String(nowD.getDate()).padStart(2, "0")}/${String(nowD.getMonth() + 1).padStart(2, "0")}/${nowD.getFullYear()} ${String(nowD.getHours()).padStart(2, "0")}:${String(nowD.getMinutes()).padStart(2, "0")}`;
 
       if (plan.mode === "replace_all_trial") {
-        // Jaga akun aktif Administrator / HR ICF agar sesi Admin yang sedang mengeksekusi tidak terputus apabila tidak tercantum di file
         const activeAdmin = getActiveUser();
+        const baselineAll = loadManagedUsers();
+        const otherUnitsList = baselineAll.filter(
+          (u) => !isSameCompanyUnit(u.company, plan.targetUnit),
+        );
         let finalUnitRows = [...plan.importedRows];
-        if (
-          activeAdmin &&
-          isAdminOrHrIcfRole(activeAdmin.role) &&
-          (plan.targetUnit === "ALL" || isSameCompanyUnit(activeAdmin.company, plan.targetUnit))
-        ) {
-          const alreadyIncluded = finalUnitRows.some(
-            (r) =>
-              isSameCompanyUnit(r.company, activeAdmin.company) &&
-              String(r.regNo || r.employeeId).trim().toLowerCase() ===
+        // Hanya pertahankan akun Administrator / HR ICF yang sedang login apabila Admin tersebut berasal dari unit yang di-replace
+        // DAN di seluruh sistem (unit lain + file baru) tidak ada satu pun akun Administrator / HR ICF sama sekali.
+        if (activeAdmin && isAdminOrHrIcfRole(activeAdmin.role) && isSameCompanyUnit(activeAdmin.company, plan.targetUnit)) {
+          const replacementAdminInFile = finalUnitRows.find((r) => isAdminOrHrIcfRole(r.role));
+          const hasAdminElsewhere = otherUnitsList.some((u) => isAdminOrHrIcfRole(u.role));
+          if (replacementAdminInFile) {
+            const hasSess = Boolean(localStorage.getItem(AUTH_SESSION_KEY));
+            safeSetLocalJson("pa_active_user_v1", replacementAdminInFile);
+            if (hasSess) {
+              startOrRefreshAuthSession(
+                replacementAdminInFile.employeeId,
+                replacementAdminInFile.company,
+                replacementAdminInFile.regNo,
+              );
+            }
+          } else if (!hasAdminElsewhere) {
+            const alreadySameIdentity = finalUnitRows.some(
+              (r) =>
+                String(r.regNo || r.employeeId).trim().toLowerCase() ===
                 String(activeAdmin.regNo || activeAdmin.employeeId).trim().toLowerCase(),
-          );
-          if (!alreadyIncluded) {
-            finalUnitRows = [activeAdmin, ...finalUnitRows];
+            );
+            if (!alreadySameIdentity) {
+              finalUnitRows = [{ ...activeAdmin, allowDuplicateInUnit: true }, ...finalUnitRows];
+            }
+          } else {
+            const fallbackAdmin = otherUnitsList.find((u) => isAdminOrHrIcfRole(u.role));
+            if (fallbackAdmin) {
+              const hasSess = Boolean(localStorage.getItem(AUTH_SESSION_KEY));
+              safeSetLocalJson("pa_active_user_v1", fallbackAdmin);
+              if (hasSess) {
+                startOrRefreshAuthSession(fallbackAdmin.employeeId, fallbackAdmin.company, fallbackAdmin.regNo);
+              }
+            }
           }
         }
         await replaceCompanyUnitUsersAndResetTransactions(
           plan.targetUnit,
           finalUnitRows as unknown as Array<Record<string, unknown>>,
+          baselineAll as unknown as Array<Record<string, unknown>>,
         );
         setUsers(loadManagedUsers());
       } else {
@@ -790,7 +838,13 @@ export function DataSyncPage() {
             <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5">
               <select
                 value={importMode}
-                onChange={(e) => setImportMode(e.target.value as "merge" | "update_clear_tx" | "replace_all_trial")}
+                onChange={(e) => {
+                  const nextMode = e.target.value as "merge" | "update_clear_tx" | "replace_all_trial";
+                  setImportMode(nextMode);
+                  if (nextMode === "replace_all_trial" && selectedUnit === "ALL") {
+                    setSelectedUnit(COMPANY_UNIT_LOCATIONS[0].company);
+                  }
+                }}
                 className="text-xs font-semibold text-[#1A284F] bg-transparent focus:outline-none"
               >
                 <option value="merge">Mode: Update / Gabung Data</option>
@@ -836,7 +890,11 @@ export function DataSyncPage() {
                 onChange={(e) => setSelectedUnit(e.target.value)}
                 className="text-xs font-semibold text-gray-700 bg-transparent focus:outline-none"
               >
-                <option value="ALL">Semua Unit Usaha ({users.length})</option>
+                <option value="ALL" disabled={importMode === "replace_all_trial"}>
+                  {importMode === "replace_all_trial"
+                    ? "Pilih 1 Unit Usaha (Mode Replace)"
+                    : `Semua Unit Usaha (${users.length})`}
+                </option>
                 {COMPANY_UNIT_LOCATIONS.map((loc) => (
                   <option key={loc.code} value={loc.company}>
                     {loc.company}

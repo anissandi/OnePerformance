@@ -51,6 +51,7 @@ import {
 } from "../../data/mockEmployees";
 import {
   canCheckerHandleCompanyUnit,
+  canonicalizeCompanyUnitName,
   getEffectiveCheckerUnits,
   getAuthorizedSubordinates,
   isAdminOrHrIcfRole,
@@ -1644,20 +1645,40 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     if (isGlobalViewer) {
       return globalLockedUnits ? all.filter((u) => globalLockedUnits.includes(u.company)) : all;
     }
-    const authorizedIds = new Set(
-      getAuthorizedSubordinates(scopeUser, rawUsers).map((u) => u.employeeId.toLowerCase()),
+    const authorizedList = getAuthorizedSubordinates(scopeUser, rawUsers);
+    const authorizedUnitRefs = new Set(
+      authorizedList.map(
+        (u) => `${canonicalizeCompanyUnitName(u.company).toLowerCase()}::${String(u.regNo || u.employeeId || u.id).trim().toLowerCase()}`,
+      ),
     );
+    const isAuthorizedUser = (u: (typeof all)[number]) =>
+      authorizedUnitRefs.has(
+        `${canonicalizeCompanyUnitName(u.company).toLowerCase()}::${String(u.regNo || u.employeeId || u.id).trim().toLowerCase()}`,
+      );
     if (isCheckerRole) {
       // Checker: melihat seluruh karyawan di Company Unit yang di-allow pada konfigurasi Checker (Lintas Unit Usaha) + bawahan approver bila ada
       return all.filter(
         (u) =>
           canCheckerHandleCompanyUnit(scopeUser, u.company) ||
-          authorizedIds.has(u.employeeId.toLowerCase()),
+          isAuthorizedUser(u),
       );
     }
-    return all.filter((u) => authorizedIds.has(u.employeeId.toLowerCase()));
+    return all.filter(isAuthorizedUser);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGlobalViewer, isCheckerRole, checkerAllowedUnits.join(","), globalLockedUnits, scopeUser.employeeId, scopeUser.role, tick]);
+  }, [
+    isGlobalViewer,
+    isCheckerRole,
+    checkerAllowedUnits.join(","),
+    (scopeUser.managedUnits ?? []).join(","),
+    (scopeUser.managedDivisions ?? []).join(","),
+    (scopeUser.managedDepartments ?? []).join(","),
+    (scopeUser.managedBagians ?? []).join(","),
+    globalLockedUnits,
+    scopeUser.id,
+    scopeUser.employeeId,
+    scopeUser.role,
+    tick,
+  ]);
 
   const moduleOptions = useMemo(() => {
     if (!isModuleScopedRole) return filterOptions.module;
@@ -1694,7 +1715,12 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       if (orderedChecker.length === 1) return [orderedChecker[0]];
       if (orderedChecker.length > 1) return ["All Units", ...orderedChecker];
     }
-    const unitSet = new Set(allManagedActiveUsers.map((u) => u.company).filter(Boolean));
+    const unitSet = new Set(
+      [
+        ...allManagedActiveUsers.map((u) => canonicalizeCompanyUnitName(u.company)),
+        ...(scopeUser.managedUnits ?? []).map((u) => canonicalizeCompanyUnitName(u)),
+      ].filter(Boolean),
+    );
     const orderedUnits = [
       ...filterOptions.companyUnit.slice(1).filter((u) => unitSet.has(u)),
       ...Array.from(unitSet).filter((u) => !filterOptions.companyUnit.includes(u)),
@@ -1706,7 +1732,15 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       return [orderedUnits[0]];
     }
     return ["All Units", ...orderedUnits];
-  }, [isGlobalViewer, isCheckerRole, checkerAllowedUnits, globalLockedUnits, allManagedActiveUsers, scopeUser.company]);
+  }, [
+    isGlobalViewer,
+    isCheckerRole,
+    checkerAllowedUnits,
+    globalLockedUnits,
+    allManagedActiveUsers,
+    scopeUser.company,
+    (scopeUser.managedUnits ?? []).join(","),
+  ]);
 
   const defaultCompanyUnit = companyUnitOptions.length === 1 ? companyUnitOptions[0] : "All Units";
 
@@ -1795,10 +1829,18 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
 
   const filteredEmployees = useMemo(
     () => {
-      const allowedIds = new Set(allManagedActiveUsers.map((u) => u.employeeId.toLowerCase()));
+      const allowedUnitRefs = new Set(
+        allManagedActiveUsers.map(
+          (u) => `${canonicalizeCompanyUnitName(u.company).toLowerCase()}::${String(u.regNo || u.employeeId || u.id).trim().toLowerCase()}`,
+        ),
+      );
+      const allowedEmpIds = new Set(allManagedActiveUsers.map((u) => u.employeeId.toLowerCase()));
       const unitEmployees = isGlobalViewer
         ? (globalLockedUnits ? liveEmployees.filter((e) => globalLockedUnits.includes(e.companyUnit)) : liveEmployees)
-        : liveEmployees.filter((e) => allowedIds.has(e.id.toLowerCase()));
+        : liveEmployees.filter((e) => {
+            const refKey = `${canonicalizeCompanyUnitName(e.companyUnit).toLowerCase()}::${String(e.regNo || e.id || e.userId).trim().toLowerCase()}`;
+            return allowedUnitRefs.has(refKey) || (!e.regNo && allowedEmpIds.has(e.id.toLowerCase()));
+          });
       return unitEmployees.filter(
         (e) =>
           (companyUnit === "All Units" || isSameCompanyUnit(e.companyUnit, companyUnit)) &&

@@ -11,7 +11,15 @@ import {
 import {
   getPenilai1ScoreAsPercent, subscribeScores,
 } from "../supervisor/managementInterviewScoreStore";
-import { getActiveUser, getAuthorizedSubordinates, getScopedFilterOptionsForUser, isAdminOrHrIcfRole, loadManagedUsers, useAuthStore } from "../../store/authStore";
+import {
+  canonicalizeCompanyUnitName,
+  getActiveUser,
+  getAuthorizedSubordinates,
+  getScopedFilterOptionsForUser,
+  isAdminOrHrIcfRole,
+  loadManagedUsers,
+  useAuthStore,
+} from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { getMasterCompanyLocations } from "../hr/settings/masterCompanyStore";
 
@@ -484,7 +492,9 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     () =>
       new Set(
         !isGlobalViewer
-          ? getAuthorizedSubordinates(activeUser).map((u) => u.employeeId.toLowerCase())
+          ? getAuthorizedSubordinates(activeUser).map(
+              (u) => `${canonicalizeCompanyUnitName(u.company).toLowerCase()}::${String(u.regNo || u.employeeId || u.id).trim().toLowerCase()}`,
+            )
           : [],
       ),
     [isGlobalViewer, activeUser, refreshTick],
@@ -495,7 +505,8 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     () =>
       liveEmployees.filter((emp) => {
         if (!isGlobalViewer) {
-          return supervisorAllowedIds.has(emp.id.toLowerCase());
+          const refKey = `${canonicalizeCompanyUnitName(emp.companyUnit).toLowerCase()}::${String(emp.regNo || emp.id || emp.userId).trim().toLowerCase()}`;
+          return supervisorAllowedIds.has(refKey);
         }
         if (globalLockedUnits && !globalLockedUnits.includes(emp.companyUnit)) return false;
         return true;
@@ -596,14 +607,17 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     const uniq = (arr: string[]) =>
       Array.from(new Set(arr.map((s) => s.trim()).filter((s) => s && s !== "-"))).sort((a, b) => a.localeCompare(b));
 
-    const units = uniq(visibleBaseEmployees.map((e) => e.companyUnit));
+    const extraManagedUnits = !isGlobalViewer
+      ? (activeUser.managedUnits ?? []).map((u) => canonicalizeCompanyUnitName(u)).filter(Boolean)
+      : [];
+    const units = uniq([...visibleBaseEmployees.map((e) => e.companyUnit), ...extraManagedUnits]);
     return {
       companyUnit: units.length === 1 && !isGlobalViewer ? [units[0]] : ["All Units", ...units],
       division: ["All Divisions", ...uniq(poolByUnit.map((e) => e.division))],
       department: ["All Departments", ...uniq(poolByDiv.map((e) => e.department))],
       position: ["All Positions", ...uniq(poolByDept.map((e) => e.position))],
     };
-  }, [visibleBaseEmployees, companyUnit, division, department, isGlobalViewer]);
+  }, [visibleBaseEmployees, companyUnit, division, department, isGlobalViewer, (activeUser.managedUnits ?? []).join(",")]);
 
   useEffect(() => {
     if (!dynamicFilterOpts.companyUnit.includes(companyUnit)) {

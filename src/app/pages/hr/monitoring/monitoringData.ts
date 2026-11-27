@@ -1,12 +1,14 @@
 // Shared mock data for all HR Monitoring pages
 
 import {
+  canonicalizeCompanyUnitName,
   getActiveUser,
   getAuthorizedSubordinates,
   getGroupCompaniesForUnit,
   getRoleAllowedCompanyUnits,
   isAdminOrHrIcfRole,
   isDirectorRoleOrGrouping,
+  isSameCompanyUnit,
   loadManagedUsers,
   resolveUserAllowedModules,
   type AppraisalModuleName,
@@ -39,6 +41,8 @@ if (typeof window !== "undefined") {
 
 export interface MonitoringEmployee {
   id: string;
+  regNo?: string;
+  userId?: string;
   name: string;
   position: string;
   department?: string;
@@ -56,7 +60,8 @@ export interface MonitoringEmployee {
 export function getMonitoringEmployees(): MonitoringEmployee[] {
   const users = loadManagedUsers();
   const activeUser = getActiveUser();
-  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}`;
+  const extraSig = `${(activeUser.managedUnits ?? []).join(",")}|${(activeUser.managedDivisions ?? []).join(",")}|${(activeUser.managedDepartments ?? []).join(",")}|${(activeUser.managedBagians ?? []).join(",")}`;
+  const sig = `${_monEpoch}|${users.length}|${activeUser.id ?? ""}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}|${extraSig}`;
   if (_cachedMonList && _cachedMonSig === sig) {
     return _cachedMonList;
   }
@@ -65,9 +70,15 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
   const scopedUsers = isGlobalViewer ? users : getAuthorizedSubordinates(activeUser, users);
   const mapped = scopedUsers.map((u) => {
     const allowed = resolveUserAllowedModules(u);
-    const isSelf = u.employeeId.toLowerCase() === activeUser.employeeId.toLowerCase();
+    const isSelf =
+      (activeUser.id && u.id === activeUser.id && isSameCompanyUnit(u.company, activeUser.company)) ||
+      (isSameCompanyUnit(u.company, activeUser.company) &&
+        String(u.regNo || u.employeeId).trim().toLowerCase() ===
+          String(activeUser.regNo || activeUser.employeeId).trim().toLowerCase());
     return {
       id: u.employeeId,
+      regNo: u.regNo,
+      userId: u.id,
       name: u.name,
       position: u.position,
       department: u.department,
@@ -101,13 +112,22 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
 export function getSupervisorScopedMonitoringEmployees(): MonitoringEmployee[] {
   const activeUser = getActiveUser();
   const users = loadManagedUsers();
-  const sig = `${_monEpoch}|${users.length}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}`;
+  const extraSig = `${(activeUser.managedUnits ?? []).join(",")}|${(activeUser.managedDivisions ?? []).join(",")}|${(activeUser.managedDepartments ?? []).join(",")}|${(activeUser.managedBagians ?? []).join(",")}`;
+  const sig = `${_monEpoch}|${users.length}|${activeUser.id ?? ""}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}|${extraSig}`;
   if (_cachedSupMonList && _cachedSupMonSig === sig) {
     return _cachedSupMonList;
   }
   const authorized = getAuthorizedSubordinates(activeUser, users);
-  const allowedIds = new Set(authorized.map((s) => s.employeeId.toLowerCase()));
-  const filtered = getMonitoringEmployees().filter((e) => allowedIds.has(e.id.toLowerCase()));
+  const allowedUnitRefs = new Set(
+    authorized.map(
+      (s) => `${canonicalizeCompanyUnitName(s.company).toLowerCase()}::${String(s.regNo || s.employeeId || s.id).trim().toLowerCase()}`,
+    ),
+  );
+  const filtered = getMonitoringEmployees().filter((e) =>
+    allowedUnitRefs.has(
+      `${canonicalizeCompanyUnitName(e.unit).toLowerCase()}::${String(e.regNo || e.id || e.userId).trim().toLowerCase()}`,
+    ),
+  );
   _cachedSupMonSig = sig;
   _cachedSupMonList = filtered;
   return filtered;
@@ -161,7 +181,8 @@ function getAllMasterUnitsList(): string[] {
 function getScopedCompanyUnits(): string[] {
   const activeUser = getActiveUser();
   const allUnits = getAllMasterUnitsList();
-  const sig = `${_monEpoch}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}|${allUnits.join(",")}`;
+  const extraUnits = (activeUser.managedUnits ?? []).map((u) => canonicalizeCompanyUnitName(u)).filter(Boolean);
+  const sig = `${_monEpoch}|${activeUser.id ?? ""}|${activeUser.employeeId}|${activeUser.role}|${activeUser.company}|${extraUnits.join(",")}|${allUnits.join(",")}`;
   if (_cachedUnitsList && _cachedUnitsSig === sig) {
     return _cachedUnitsList;
   }
@@ -178,7 +199,9 @@ function getScopedCompanyUnits(): string[] {
     _cachedUnitsList = allUnits;
     return allUnits;
   }
-  const visibleUnits = new Set(getMonitoringEmployees().map((e) => e.unit).filter(Boolean));
+  const visibleUnits = new Set(
+    [...getMonitoringEmployees().map((e) => canonicalizeCompanyUnitName(e.unit)), ...extraUnits].filter(Boolean),
+  );
   const ordered = [
     ...allUnits.filter((u) => visibleUnits.has(u)),
     ...Array.from(visibleUnits).filter((u) => !allUnits.includes(u)),

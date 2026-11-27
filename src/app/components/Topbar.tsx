@@ -315,6 +315,31 @@ function formatNotifTime(iso: string): string {
   return `${diffDay}d ago`;
 }
 
+const TOPBAR_AVATAR_COLORS = [
+  "bg-purple-500",
+  "bg-blue-500",
+  "bg-emerald-500",
+  "bg-orange-500",
+  "bg-pink-500",
+  "bg-teal-500",
+  "bg-indigo-500",
+  "bg-cyan-600",
+  "bg-fuchsia-500",
+  "bg-sky-600",
+];
+
+function topbarAvatarColor(seed: string, fallbackName = ""): string {
+  const str = String(seed || fallbackName || "user").trim();
+  if (/^\d+$/.test(str)) {
+    return TOPBAR_AVATAR_COLORS[Math.abs(parseInt(str, 10)) % TOPBAR_AVATAR_COLORS.length] || "bg-indigo-500";
+  }
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return TOPBAR_AVATAR_COLORS[hash % TOPBAR_AVATAR_COLORS.length] || "bg-indigo-500";
+}
+
 // ─── Topbar ───────────────────────────────────────────────────────────────────
 
 export function Topbar({
@@ -390,7 +415,12 @@ export function Topbar({
       return;
     }
     const res = await Promise.race([
-      updateEmployeeNewPasswordAsync(activeUser.employeeId, newPassword),
+      updateEmployeeNewPasswordAsync(
+        activeUser.employeeId,
+        newPassword,
+        activeUser.company,
+        activeUser.regNo,
+      ),
       new Promise<{ ok: true }>((resolve) => setTimeout(() => resolve({ ok: true }), 6000)),
     ]);
     if (!res.ok) {
@@ -415,11 +445,16 @@ export function Topbar({
   const { title, subtitle } = titles[role as keyof typeof titles] || titles.hr;
   const displayUserName = activeUser?.name || (role === "employee" ? STAFF_PROFILE.name : SUPERVISOR_PROFILE.name);
   const displayInitials = displayUserName
-    .split(" ")
-    .filter((w) => /^[A-Za-z]/.test(w))
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
     .slice(0, 2)
-    .map((w) => w[0].toUpperCase())
-    .join("") || "PA";
+    .map((w) => w.charAt(0).toUpperCase())
+    .join("") || "U";
+  const avatarBgClass = topbarAvatarColor(
+    activeUser.id || activeUser.regNo || activeUser.employeeId,
+    displayUserName,
+  );
 
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -593,10 +628,14 @@ export function Topbar({
             <div className="text-right hidden sm:block">
               <p className="text-sm font-medium text-gray-800 leading-tight">{activeUser.name || displayUserName}</p>
               <p className="text-[11px] text-gray-400 leading-tight">
-                {activeUser.position || "—"} · {activeUser.department || "—"}
+                {activeUser.position || "—"}
               </p>
             </div>
-            <div className="w-9 h-9 rounded-full bg-[#1A284F] flex items-center justify-center shrink-0 overflow-hidden border border-gray-200">
+            <div
+              className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 overflow-hidden border border-gray-200 ${
+                avatarPhotoUrl ? "bg-gray-100" : avatarBgClass
+              }`}
+            >
               {avatarPhotoUrl ? (
                 <img src={avatarPhotoUrl} alt={activeUser.name} className="w-full h-full object-cover" />
               ) : (
@@ -613,7 +652,6 @@ export function Topbar({
               <div className="px-4 py-2.5 bg-gray-50/80 border-b border-gray-100">
                 <p className="text-xs font-bold text-[#1A284F] truncate">{activeUser.name}</p>
                 <p className="text-[11px] text-gray-600 truncate">{activeUser.position || "—"}</p>
-                <p className="text-[10px] text-gray-400 truncate">{activeUser.department || "—"}</p>
               </div>
               <button
                 onClick={() => { setDropOpen(false); navigate(`/${role}/profile`); }}
@@ -659,7 +697,7 @@ export function Topbar({
                   placeholder="Cari ID, nama, jabatan, unit..."
                   maxHeightClass="max-h-56"
                   onSelect={(u) => {
-                    const switched = switchActiveUserByEmployeeId(u.employeeId);
+                    const switched = switchActiveUserByEmployeeId(u.employeeId, u.company, u.regNo);
                     setDropOpen(false);
                     if (switched) {
                       navigate(resolvePortalPathForRole(switched.role, switched.position));

@@ -117,6 +117,8 @@ export interface ManagedUser {
   employeeStatusNote?: string;
   /** Tanggal Efektif Status Karyawan (DD/MM/YYYY) */
   effectiveDate?: string;
+  /** Penanda baris hasil Mode: Replace / Ganti Data agar tidak dihapus oleh auto-deduplikasi Reg No */
+  allowDuplicateInUnit?: boolean;
 }
 
 export interface ManagedGroupRule {
@@ -207,6 +209,15 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
   const managedUnits = Array.isArray(user.managedUnits)
     ? Array.from(new Set(user.managedUnits.map((x) => canonicalizeCompanyUnitName(x)).filter(Boolean)))
     : user.managedUnits;
+  const managedDivisions = Array.isArray(user.managedDivisions)
+    ? Array.from(new Set(user.managedDivisions.map((x) => String(x ?? "").trim()).filter(Boolean)))
+    : user.managedDivisions;
+  const managedDepartments = Array.isArray(user.managedDepartments)
+    ? Array.from(new Set(user.managedDepartments.map((x) => String(x ?? "").trim()).filter(Boolean)))
+    : user.managedDepartments;
+  const managedBagians = Array.isArray(user.managedBagians)
+    ? Array.from(new Set(user.managedBagians.map((x) => String(x ?? "").trim()).filter(Boolean)))
+    : user.managedBagians;
   const checkerUnits = Array.isArray(user.checkerUnits)
     ? Array.from(new Set(user.checkerUnits.map((x) => canonicalizeCompanyUnitName(x)).filter(Boolean)))
     : user.checkerUnits;
@@ -259,6 +270,9 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     employeeStatusNote: rawEmpStatusNote === "-" || rawEmpStatusNote === "—" ? "" : rawEmpStatusNote,
     effectiveDate: cleanEmpStatus ? normalizeStoredDate(user.effectiveDate) : (user.effectiveDate !== undefined ? "" : undefined),
     managedUnits,
+    managedDivisions,
+    managedDepartments,
+    managedBagians,
     checkerUnits,
     kpiBusinessCheckerUnits,
     calibrationRoleByUnit,
@@ -1022,10 +1036,39 @@ export function getTransitiveApproverSubordinateIds(
 }
 
 /**
+ * Mengecek apakah `target` masuk ke dalam Cakupan Wewenang Berjenjang Tambahan
+ * (`managedUnits`, `managedDivisions`, `managedDepartments`, `managedBagians`) yang di-checklist pada `viewer`
+ * di User Management:
+ * - Jika `managedUnits` dicentang: berlaku pada seluruh Unit Usaha yang dicentang.
+ * - Jika ditambah `managedDivisions`: difilter sesuai Divisi pada Unit Usaha tersebut.
+ * - Jika ditambah `managedDepartments` / `managedBagians`: difilter sesuai Departemen / Bagian pada cakupan di atasnya.
+ * - Jika `managedUnits` kosong tetapi Divisi/Departemen/Bagian dicentang: berlaku pada Unit Usaha asal `viewer`.
+ */
+export function doesTargetMatchExtraManagedScope(viewer: ManagedUser, target: ManagedUser): boolean {
+  const mUnits = (viewer.managedUnits ?? []).map((u) => canonicalizeCompanyUnitName(u)).filter(Boolean);
+  const mDivs = (viewer.managedDivisions ?? []).map((d) => normOrgName(d)).filter(Boolean);
+  const mDepts = (viewer.managedDepartments ?? []).map((d) => normOrgName(d)).filter(Boolean);
+  const mBags = (viewer.managedBagians ?? []).map((b) => normOrgName(b)).filter(Boolean);
+
+  if (mUnits.length === 0 && mDivs.length === 0 && mDepts.length === 0 && mBags.length === 0) {
+    return false;
+  }
+  const unitOk =
+    mUnits.length > 0
+      ? mUnits.some((mu) => isSameCompanyUnit(target.company, mu))
+      : isSameCompanyUnit(target.company, viewer.company);
+  if (!unitOk) return false;
+  if (mDivs.length > 0 && !mDivs.includes(normOrgName(target.division))) return false;
+  if (mDepts.length > 0 && !mDepts.includes(normOrgName(target.department))) return false;
+  if (mBags.length > 0 && !mBags.includes(normOrgName(target.bagian))) return false;
+  return true;
+}
+
+/**
  * Kewenangan Akses Data Tim (`/summary`, `/monitoring`, `/calibration/team-performance`, `Appraisal Analytics`):
  * 1. Role Global (`Administrator`, `HR Admin`, `HR ICF`, `BOD`): melihat seluruh karyawan aktif (sesuai `roleAllowedUnits` jika dibatasi).
  * 2. Seluruh Role Lainnya (termasuk `Director`, `GM`, `VGM`, `Division`, `Departement`, `HR Unit`, `Supervisor`, `Employee`):
- *    - Murni dikunci berdasarkan **Rantai Approval Berkaitan (Langsung maupun Tidak Langsung via `Reg No AP1` / `Reg No AP2`)** + diri sendiri (`isSelf`).
+ *    - Dikunci berdasarkan **Rantai Approval Berkaitan (`Reg No AP1` / `Reg No AP2`)**, **Cakupan Wewenang Berjenjang Tambahan** (`managedUnits` / `managedDivisions` / `managedDepartments` / `managedBagians`), + diri sendiri (`isSelf`).
  *    - Kesamaan nama Group, Unit Usaha, Divisi, Departemen, atau Bagian TIDAK lagi membuka akses tanpa ikatan rantai approval.
  *    - Pengaman Anti-Peer: rekan satu Departemen/Divisi dengan Posisi sama atau Level Grouping setara/lebih tinggi (`targetRank >= myRank`),
  *      termasuk ketika kolom `Bagian` kosong (`-`), diblokir dari saling melihat KECUALI tercatat sebagai `AP1`/`AP2` langsung (`hop === 1`).
@@ -1055,7 +1098,8 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     perUsersMap = new Map();
     _authorizedSubsMemo.set(allUsers, perUsersMap);
   }
-  const userMemoKey = `${user.employeeId.toLowerCase()}|${user.regNo ?? ""}|${user.role}|${user.groupings ?? ""}|${user.position}|${user.company}|${user.division}|${user.department}|${user.bagian ?? ""}|${user.regNoAp1 ?? ""}|${user.regNoAp2 ?? ""}`;
+  const extraScopeSig = `${(user.managedUnits ?? []).join(",")}|${(user.managedDivisions ?? []).join(",")}|${(user.managedDepartments ?? []).join(",")}|${(user.managedBagians ?? []).join(",")}`;
+  const userMemoKey = `${user.id ?? ""}|${user.employeeId.toLowerCase()}|${user.regNo ?? ""}|${user.role}|${user.groupings ?? ""}|${user.position}|${user.company}|${user.division}|${user.department}|${user.bagian ?? ""}|${user.regNoAp1 ?? ""}|${user.regNoAp2 ?? ""}|${extraScopeSig}`;
   const cachedSubs = perUsersMap.get(userMemoKey);
   if (cachedSubs) return cachedSubs;
 
@@ -1064,13 +1108,21 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   const myCompNorm = normOrgName(canonicalizeCompanyUnitName(user.company));
   const myDeptNorm = normOrgName(user.department);
   const selfEmpLower = user.employeeId.trim().toLowerCase();
+  const selfRegLower = String(user.regNo ?? "").trim().toLowerCase();
+  const isExactSelf = (target: ManagedUser): boolean => {
+    if (user.id && target.id && user.id === target.id && isSameCompanyUnit(target.company, user.company)) return true;
+    if (!isSameCompanyUnit(target.company, user.company)) return false;
+    const tReg = String(target.regNo ?? "").trim().toLowerCase();
+    if (selfRegLower && tReg) return selfRegLower === tReg;
+    return target.employeeId.trim().toLowerCase() === selfEmpLower;
+  };
 
   // Kumpulkan rantai approval berkaitan (hop = 1 langsung, hop >= 2 tidak langsung / berjenjang)
   const chainDistances = getApprovalChainDistances(user, allUsers);
 
   // 0. Semua role kecuali Administrator & HR ICF tidak boleh melihat data/history/summary approver-nya (AP1 & AP2)
   const isMyApprover = (target: ManagedUser): boolean => {
-    if (target.employeeId.trim().toLowerCase() === selfEmpLower) return false;
+    if (isExactSelf(target)) return false;
     return (
       doesUserMatchApproverRef(target, user.regNoAp1, allUsers) ||
       doesUserMatchApproverRef(target, user.regNoAp2, allUsers)
@@ -1079,8 +1131,13 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
 
   const filteredSubs = allUsers.filter((target) => {
     const targetKey = target.employeeId.trim().toLowerCase();
-    if (targetKey === selfEmpLower) return true;
+    if (isExactSelf(target)) return true;
     if (isMyApprover(target)) return false;
+
+    // Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian)
+    if (doesTargetMatchExtraManagedScope(user, target)) {
+      return true;
+    }
 
     const hop = chainDistances.get(targetKey);
     if (hop === undefined) {
@@ -1118,8 +1175,18 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
  * dari pengguna yang sedang login (tidak termasuk dirinya sendiri).
  */
 export function getStrictSubordinateUsers(user = getActiveUser(), allUsers = loadManagedUsers()): ManagedUser[] {
+  const selfRegLower = String(user.regNo ?? "").trim().toLowerCase();
+  const selfEmpLower = user.employeeId.trim().toLowerCase();
   return getAuthorizedSubordinates(user, allUsers).filter(
-    (u) => u.employeeId.toLowerCase() !== user.employeeId.toLowerCase(),
+    (u) => {
+      if (user.id && u.id && user.id === u.id && isSameCompanyUnit(u.company, user.company)) return false;
+      if (isSameCompanyUnit(u.company, user.company)) {
+        const uReg = String(u.regNo ?? "").trim().toLowerCase();
+        if (selfRegLower && uReg) return selfRegLower !== uReg;
+        return u.employeeId.trim().toLowerCase() !== selfEmpLower;
+      }
+      return true;
+    },
   );
 }
 
@@ -1330,13 +1397,17 @@ export function getScopedFilterOptionsForUser(
       : [];
   const mergedMap = new Map<string, ManagedUser>();
   for (const u of [...subs, ...checkerPool]) {
-    mergedMap.set(u.employeeId.toLowerCase(), u);
+    const uk = `${canonicalizeCompanyUnitName(u.company).toLowerCase()}::${String(u.regNo || u.employeeId || u.id).trim().toLowerCase()}`;
+    mergedMap.set(uk, u);
   }
   const mergedSubs = Array.from(mergedMap.values());
   const pool = level === "admin" || level === "bod" ? allUsers : [user, ...mergedSubs];
 
   const uniq = (arr: (string | undefined)[]) =>
     Array.from(new Set(arr.map((v) => (v ?? "").trim()).filter(Boolean))).sort();
+  const extraManagedUnits = (user.managedUnits ?? [])
+    .map((u) => canonicalizeCompanyUnitName(u))
+    .filter(Boolean);
 
   const checkerLabel =
     checkerUnits.length > 1
@@ -1363,7 +1434,7 @@ export function getScopedFilterOptionsForUser(
   return {
     authorityLevel: level,
     authorityLabel: LABEL_BY_LEVEL[level],
-    units: uniq(pool.map((u) => u.company)),
+    units: uniq([...pool.map((u) => canonicalizeCompanyUnitName(u.company)), ...extraManagedUnits]),
     divisions: uniq(pool.map((u) => u.division)),
     departments: uniq(pool.map((u) => u.department)),
     bagians: uniq(pool.map((u) => u.bagian)),
@@ -1718,6 +1789,13 @@ export function deduplicateUsersByUnitAndRegNo(
       unique.push(u);
     } else {
       const existing = unique[existingIdx];
+      if (
+        (u.allowDuplicateInUnit || existing.allowDuplicateInUnit) &&
+        u.id !== existing.id
+      ) {
+        unique.push(u);
+        continue;
+      }
       if (scoreUser(u) > scoreUser(existing)) {
         removedDuplicates.push(existing);
         unique[existingIdx] = u;

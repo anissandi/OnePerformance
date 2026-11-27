@@ -2920,6 +2920,21 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
           : Array.isArray(dbU?.managed_units)
             ? Array.from(new Set((dbU.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
             : undefined,
+        managedDivisions: Array.isArray(kvU.managedDivisions)
+          ? Array.from(new Set((kvU.managedDivisions as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+          : Array.isArray(dbU?.managed_divisions)
+            ? Array.from(new Set((dbU.managed_divisions as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+            : undefined,
+        managedDepartments: Array.isArray(kvU.managedDepartments)
+          ? Array.from(new Set((kvU.managedDepartments as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+          : Array.isArray(dbU?.managed_departments)
+            ? Array.from(new Set((dbU.managed_departments as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+            : undefined,
+        managedBagians: Array.isArray(kvU.managedBagians)
+          ? Array.from(new Set((kvU.managedBagians as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+          : Array.isArray(dbU?.managed_bagians)
+            ? Array.from(new Set((dbU.managed_bagians as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+            : undefined,
         isKpiBusinessChecker: Boolean(kvU.isKpiBusinessChecker ?? dbU?.is_kpi_business_checker ?? false),
         kpiBusinessCheckerUnits: Array.isArray(kvU.kpiBusinessCheckerUnits)
           ? Array.from(
@@ -4251,20 +4266,30 @@ export async function clearEmployeeTransactionsForSync(
 export async function replaceCompanyUnitUsersAndResetTransactions(
   targetUnit: string,
   importedUnitUsers: Array<Record<string, unknown>>,
+  baselineAllUsers?: Array<Record<string, unknown>>,
 ): Promise<Array<Record<string, unknown>>> {
-  if (targetUnit === "ALL") {
-    savePersistedState("pa_archived_users_v1", []);
-    await replaceAllBackendUsersAndResetForTrial(importedUnitUsers, true);
-    return importedUnitUsers;
+  const cleanTarget = String(targetUnit ?? "").trim();
+  if (!cleanTarget || cleanTarget === "ALL") {
+    throw new Error("Pilih spesifik 1 Unit Usaha untuk Mode: Replace / Ganti Data agar unit usaha lain tidak ikut terganti.");
   }
-  const canonTarget = canonicalizeDbCompanyUnit(targetUnit);
-  const currentAll = loadPersistedState<Array<Record<string, unknown>>>("pa_managed_users_v1", []);
+  const canonTarget = canonicalizeDbCompanyUnit(cleanTarget);
+  const persistedAll = loadPersistedState<Array<Record<string, unknown>>>("pa_managed_users_v1", []);
+  const currentAll =
+    persistedAll.length > 0
+      ? persistedAll
+      : Array.isArray(baselineAllUsers)
+        ? baselineAllUsers
+        : [];
   const otherUnitUsers = currentAll.filter(
     (u) => canonicalizeDbCompanyUnit(u?.company ?? "") !== canonTarget,
   );
   const oldUnitUsers = currentAll.filter(
     (u) => canonicalizeDbCompanyUnit(u?.company ?? "") === canonTarget,
   );
+  const normalizedImportedForTarget: Array<Record<string, unknown>> = importedUnitUsers.map((u) => ({
+    ...u,
+    company: canonTarget,
+  }));
 
   // Bersihkan data arsip khusus untuk Unit Usaha ini
   let archivedUnitEmps: Array<{ employeeId: string; regNo?: string; company?: string }> = [];
@@ -4289,7 +4314,7 @@ export async function replaceCompanyUnitUsersAndResetTransactions(
     // ignore
   }
 
-  const nextAllUsers = [...otherUnitUsers, ...importedUnitUsers];
+  const nextAllUsers = [...otherUnitUsers, ...normalizedImportedForTarget];
   savePersistedState("pa_managed_users_v1", nextAllUsers);
 
   // Bersihkan transaksi milik karyawan lama, arsip, maupun baru pada Unit Usaha tersebut (lindungi akun unit lain)
@@ -4300,7 +4325,7 @@ export async function replaceCompanyUnitUsersAndResetTransactions(
       company: canonTarget,
     })),
     ...archivedUnitEmps,
-    ...importedUnitUsers.map((u) => ({
+    ...normalizedImportedForTarget.map((u) => ({
       employeeId: String(u.employeeId ?? ""),
       regNo: String(u.regNo ?? ""),
       company: canonTarget,
@@ -4321,7 +4346,11 @@ export async function replaceCompanyUnitUsersAndResetTransactions(
     users: nextAllUsers,
   });
   try {
-    await fetch(`${SUPABASE_REST_BASE}/pa_users?company=eq.${encodeURIComponent(canonTarget)}`, {
+    const deleteFilter =
+      canonTarget === "PT RSUP ASD"
+        ? `company=in.(${["PT RSUP ASD", "ASD", "RSUP ASD"].map((c) => encodeURIComponent(c)).join(",")})`
+        : `company=eq.${encodeURIComponent(canonTarget)}`;
+    await fetch(`${SUPABASE_REST_BASE}/pa_users?${deleteFilter}`, {
       method: "DELETE",
       headers: {
         apikey: SUPABASE_ANON_KEY,

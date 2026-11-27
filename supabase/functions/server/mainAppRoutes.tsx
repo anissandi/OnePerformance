@@ -474,13 +474,28 @@ mainAppRoutes.post("/sync", async (c) => {
       }
     } else if (kind === "users-replace-unit" && Array.isArray(body.users)) {
       const canonComp = body.targetCompany ? canonicalizeUnitName(body.targetCompany) : "";
-      if (canonComp) {
-        await client.from("pa_users").delete().eq("company", canonComp);
+      let finalUsersList = body.users as Array<Record<string, unknown>>;
+      if (canonComp && canonComp !== "ALL") {
+        if (canonComp === "PT RSUP ASD") {
+          await client.from("pa_users").delete().in("company", ["PT RSUP ASD", "ASD", "RSUP ASD"]);
+        } else {
+          await client.from("pa_users").delete().eq("company", canonComp);
+        }
+        const serverExisting = await readSingleBackendKv(client, "pa_managed_users_v1");
+        if (Array.isArray(serverExisting) && serverExisting.length > 0) {
+          const preservedOtherUnits = (serverExisting as Array<Record<string, unknown>>).filter(
+            (u) => u && canonicalizeUnitName(u.company ?? "") !== canonComp,
+          );
+          const incomingTargetOnly = finalUsersList
+            .filter((u) => u && canonicalizeUnitName(u.company ?? canonComp) === canonComp)
+            .map((u) => ({ ...u, company: canonComp }));
+          finalUsersList = [...preservedOtherUnits, ...incomingTargetOnly];
+        }
       }
-      for (const rawU of body.users as Array<Record<string, unknown>>) {
+      for (const rawU of finalUsersList) {
         await upsertPaUserSafe(client, rawU, now);
       }
-      await writeBackendKv(client, "pa_managed_users_v1", body.users, now);
+      await writeBackendKv(client, "pa_managed_users_v1", finalUsersList, now);
     } else if (kind === "users-batch" && Array.isArray(body.users)) {
       for (const rawU of body.users as Array<Record<string, unknown>>) {
         await upsertPaUserSafe(client, rawU, now);

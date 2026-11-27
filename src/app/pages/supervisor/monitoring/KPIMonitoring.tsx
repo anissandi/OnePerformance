@@ -4,6 +4,7 @@ import { Search, TrendingUp, BarChart2, AlertTriangle, AlertCircle, Clock, Users
 import { AnalyticsStatCard, type AnalyticsCardTone } from "../../../components/AnalyticsStatCard";
 import { TablePaginationBar } from "../../../components/TablePaginationBar";
 import { SUPERVISOR_TEAM_EMPLOYEES, filterMonitoringByModuleAccess } from "../../hr/monitoring/monitoringData";
+import { getActiveUser } from "../../../store/authStore";
 import { getKpiMonthStatuses, loadWorkflowRecords, loadWorkflowRecordsByEmployeeMap, normalizeEmployeeId } from "../../shared/appraisalWorkflowStore";
 
 const countValidatedKpiMonths = (employeeId: string) =>
@@ -1074,14 +1075,20 @@ export function SupervisorMonitoringKPI() {
     };
   }, []);
   const [search, setSearch]     = useState("");
+  const [unitFilter, setUnitFilter] = useState("All Units");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [kpiModal, setKpiModal] = useState<{ rec: KPIRecord; empName: string } | null>(null);
   const [rcaModal, setRcaModal] = useState<{ rec: KPIRecord; empName: string } | null>(null);
+  const activeUser = getActiveUser();
 
   const allowedTeamEmployees = useMemo(
     () => filterMonitoringByModuleAccess(TEAM_EMPLOYEES, "KPI (Setting/Measurement)"),
     [tick],
+  );
+  const unitOptions = useMemo(
+    () => Array.from(new Set(allowedTeamEmployees.map((e) => e.unit).filter(Boolean))).sort(),
+    [allowedTeamEmployees],
   );
   const allTeamRows = useMemo(() => {
     const wfByEmp = loadWorkflowRecordsByEmployeeMap();
@@ -1130,13 +1137,21 @@ export function SupervisorMonitoringKPI() {
 
   const rows = useMemo(() => {
     const q = search.toLowerCase();
-    if (!q) return allTeamRows;
-    return allTeamRows.filter(({ emp }) => emp.name.toLowerCase().includes(q) || emp.id.toLowerCase().includes(q));
-  }, [allTeamRows, search]);
+    return allTeamRows.filter(({ emp }) => {
+      if (unitFilter !== "All Units" && emp.unit !== unitFilter) return false;
+      if (!q) return true;
+      return (
+        emp.name.toLowerCase().includes(q) ||
+        emp.id.toLowerCase().includes(q) ||
+        emp.unit.toLowerCase().includes(q) ||
+        (emp.division || "").toLowerCase().includes(q)
+      );
+    });
+  }, [allTeamRows, search, unitFilter]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search]);
+  }, [search, unitFilter]);
   const safePage = Math.min(currentPage, Math.max(1, Math.ceil(rows.length / pageSize)));
   const pagedRows = useMemo(
     () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
@@ -1156,7 +1171,11 @@ export function SupervisorMonitoringKPI() {
           <span className="px-2.5 py-0.5 rounded-full bg-[#1A284F] text-white text-xs font-bold">2026</span>
           <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">My Team</span>
         </div>
-        <p className="text-gray-500 text-sm">{TEAM_UNIT} · {TEAM_DIV}</p>
+        <p className="text-gray-500 text-sm">
+          {unitOptions.length > 1
+            ? `${unitOptions.length} Unit Usaha (${unitOptions.join(", ")})`
+            : `${activeUser.company || TEAM_UNIT}${activeUser.division ? ` · ${activeUser.division}` : ""}`}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
@@ -1176,6 +1195,20 @@ export function SupervisorMonitoringKPI() {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or ID..."
             className="text-sm outline-none bg-transparent flex-1 text-gray-700 placeholder-gray-400" />
         </div>
+        {unitOptions.length > 1 && (
+          <select
+            value={unitFilter}
+            onChange={(e) => setUnitFilter(e.target.value)}
+            className="border border-gray-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-[#1A284F] bg-gray-50 focus:outline-none focus:border-[#1A284F]"
+          >
+            <option value="All Units">Semua Unit Usaha ({unitOptions.length})</option>
+            {unitOptions.map((u) => (
+              <option key={u} value={u}>
+                {u}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="ml-auto text-xs text-gray-400">{rows.length} members shown</span>
       </div>
 

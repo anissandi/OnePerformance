@@ -2,6 +2,7 @@ import { resolveGradeForScore } from "../pages/shared/scoringWeightStore";
 import { TrendingUp, Lightbulb, ClipboardList, Briefcase, FolderKanban, MessageSquare } from "lucide-react";
 import React from "react";
 import {
+  canonicalizeCompanyUnitName,
   getActiveUser,
   isExcludedFromAppraisalCalibration,
   loadManagedUsers,
@@ -24,6 +25,7 @@ export interface ScoreGrade { score: number; grade: string; weightedScore?: numb
 export interface ModuleScore { name: string; icon: React.ReactNode; score: number; grade: string; weight: number; }
 export interface Employee {
   id: string; fullName: string; position: string; department: string;
+  regNo?: string; userId?: string;
   departmentId?: string; sectionId?: string; section?: string;
   division: string; companyUnit: string; joined: string; tenure: string;
   approvalCompleteDate: string; totalScore: number; grade: string;
@@ -323,6 +325,8 @@ function buildSingleEmployeeRecord(
 
   return {
     id: u.employeeId,
+    regNo: u.regNo,
+    userId: u.id,
     fullName: u.name,
     position: u.position,
     department: u.department,
@@ -430,19 +434,22 @@ export function getLiveTransactionalEmployees(): Employee[] {
     return _cachedEmployees;
   }
   try {
-    const archivedNormSet = new Set(
-      loadArchivedUsers().flatMap((a) => [
-        a.user.employeeId.trim().toLowerCase(),
-        normalizeEmployeeId(a.user.employeeId).toLowerCase(),
-      ]),
+    const archivedList = loadArchivedUsers();
+    const archivedUnitKeys = new Set(
+      archivedList.map((a) => {
+        const unit = canonicalizeCompanyUnitName(a.user.company ?? "").trim().toLowerCase();
+        const ref = String(a.user.regNo || a.user.employeeId || "").trim().toLowerCase();
+        return `${unit}::${ref}`;
+      }),
     );
     // Role Director & BOD tidak masuk dalam penilaian kinerja reguler (headcount, grade distribution, calibration adjustment, dll.)
     const users = loadManagedUsers().filter(
       (u) =>
         u.status === "Active" &&
         !isExcludedFromAppraisalCalibration(u) &&
-        !archivedNormSet.has(u.employeeId.trim().toLowerCase()) &&
-        !archivedNormSet.has(normalizeEmployeeId(u.employeeId).toLowerCase()),
+        !archivedUnitKeys.has(
+          `${canonicalizeCompanyUnitName(u.company ?? "").trim().toLowerCase()}::${String(u.regNo || u.employeeId || "").trim().toLowerCase()}`,
+        ),
     );
     const workflows = loadWorkflowRecords();
     const workflowsByNormId = new Map<string, typeof workflows>();

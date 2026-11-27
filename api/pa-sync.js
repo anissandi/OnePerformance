@@ -309,8 +309,29 @@ export default async function handler(req, res) {
           }
         } else if (kind === "users-replace-unit" && body.targetCompany) {
           const canonComp = canonicalizeUnitName(body.targetCompany);
-          if (canonComp) {
-            await pgRest(cfg, `pa_users?company=eq.${encodeURIComponent(canonComp)}`, { method: "DELETE" });
+          if (canonComp && canonComp !== "ALL") {
+            const delFilter =
+              canonComp === "PT RSUP ASD"
+                ? `company=in.(${["PT RSUP ASD", "ASD", "RSUP ASD"].map((c) => encodeURIComponent(c)).join(",")})`
+                : `company=eq.${encodeURIComponent(canonComp)}`;
+            await pgRest(cfg, `pa_users?${delFilter}`, { method: "DELETE" });
+            // Pastikan di sisi server juga hanya unit terpilih (canonComp) yang diganti, unit usaha lain di database tetap utuh
+            const existingKvRes = await pgRest(cfg, "pa_kv_state?select=state_value&state_key=eq.pa_managed_users_v1");
+            if (existingKvRes.ok) {
+              const kvRows = await existingKvRes.json();
+              const serverExisting = Array.isArray(kvRows) && kvRows[0] && Array.isArray(kvRows[0].state_value)
+                ? kvRows[0].state_value
+                : null;
+              if (Array.isArray(serverExisting) && serverExisting.length > 0) {
+                const preservedServerOtherUnits = serverExisting.filter(
+                  (u) => u && canonicalizeUnitName(u.company) !== canonComp,
+                );
+                const incomingTargetUnitOnly = body.users
+                  .filter((u) => u && canonicalizeUnitName(u.company || canonComp) === canonComp)
+                  .map((u) => ({ ...u, company: canonComp }));
+                body.users = [...preservedServerOtherUnits, ...incomingTargetUnitOnly];
+              }
+            }
           }
         }
         const validUsers = body.users.filter((u) => u && String(u.employeeId ?? u.employee_id ?? "").trim());
