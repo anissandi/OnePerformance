@@ -109,6 +109,43 @@ export function isStoredRcaSubmissionClosed(sub: StoredRCASubmission): boolean {
   return active.length > 0 && active.every((ap) => ap.status === "Selesai");
 }
 
+export interface RcaMasalahFactorSummary {
+  eksternalOpen: number;
+  eksternalClosed: number;
+  internalOpen: number;
+  internalClosed: number;
+}
+
+/**
+ * Menghitung ringkasan jumlah Masalah Utama (A) ber-tag Faktor Eksternal & Faktor Internal
+ * berdasarkan status Open vs Closed tanpa mengubah data RCA eksisting.
+ */
+export function computeRcaMasalahFactorSummary(submissions: StoredRCASubmission[]): RcaMasalahFactorSummary {
+  let eksternalOpen = 0;
+  let eksternalClosed = 0;
+  let internalOpen = 0;
+  let internalClosed = 0;
+  for (const sub of submissions) {
+    const subClosed = isStoredRcaSubmissionClosed(sub);
+    const blocks = normalizeBlocks(sub);
+    for (const block of blocks) {
+      const raw = String(block.masalahUtama ?? "");
+      const isInternal = raw.startsWith("[Faktor Internal]") || /\[?\s*faktor\s+internal\s*\]?/i.test(raw);
+      const isEksternal = raw.startsWith("[Faktor Eksternal]") || /\[?\s*faktor\s+eksternal\s*\]?/i.test(raw);
+      if (!isInternal && !isEksternal) continue;
+      const activeAps = (block.actionPlans ?? []).filter((a) => a.status !== "Dibatalkan");
+      const blockClosed = subClosed || (activeAps.length > 0 && activeAps.every((a) => a.status === "Selesai"));
+      if (isEksternal) {
+        if (blockClosed) eksternalClosed += 1;
+        else eksternalOpen += 1;
+      } else if (isInternal) {
+        if (blockClosed) internalClosed += 1;
+        else internalOpen += 1;
+      }
+    }
+  }
+  return { eksternalOpen, eksternalClosed, internalOpen, internalClosed };
+}
 function resolveMonthIndex(sub: StoredRCASubmission): number {
   const ml = String(sub.monthLabel ?? "").trim().toLowerCase().replace(/-\d{2,4}$/, "");
   if (MONTH_SORT_ORDER[ml]) return MONTH_SORT_ORDER[ml];
@@ -224,6 +261,7 @@ export function UnifiedRCADetailTable({
     ["Target Penyelesaian", 120],
     ["PIC", 120],
     ["Status Perbaikan", 135],
+    ["Aktual Penyelesaian", 135],
     ["Keterangan", 165],
     ["Output", 165],
     ["Evidence", 165],
@@ -440,6 +478,11 @@ export function UnifiedRCADetailTable({
                                     {ap.status === "Selesai" ? "Close (Selesai)" : ap.status || "—"}
                                   </span>
                                 </td>
+                                <td className={`${tdCommon} ${apCellBg} text-center whitespace-nowrap font-medium text-emerald-700`}>
+                                  {ap.status === "Selesai" && ap.actualCompletionDate
+                                    ? normalizeDateDDMMYYYY(ap.actualCompletionDate)
+                                    : "—"}
+                                </td>
                                 <td className={`${tdCommon} ${apCellBg}`}>
                                   {Array.isArray(ap.keterangan) && ap.keterangan.length > 0 ? (
                                     <ul className="flex flex-col gap-0.5">
@@ -500,7 +543,7 @@ export function UnifiedRCADetailTable({
                                 </td>
                               </>
                             ) : (
-                              <td colSpan={7} className={`${tdCommon} ${apCellBg} text-center text-gray-300`}>
+                              <td colSpan={8} className={`${tdCommon} ${apCellBg} text-center text-gray-300`}>
                                 Belum ada action plan
                               </td>
                             )}

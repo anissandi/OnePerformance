@@ -13,6 +13,7 @@ import {
   formatLastLoginDDMMYYYY,
   getActiveUser,
   getEffectiveCheckerUnits,
+  isSameCompanyUnit,
   loadManagedUsers,
   loadUnitGroupRules,
   normalizeApproverPair,
@@ -20,6 +21,8 @@ import {
   saveUnitGroupRules,
   type ManagedUser,
 } from "../../../store/authStore";
+import { DatePickerID } from "../../../components/DatePickerID";
+import { normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 import { HIERARCHICAL_COMPANY_GROUPS, useAccessManagement } from "./AccessManagement";
 import { loadCalibrationOrgOptions } from "../CalibrationSetting";
 import {
@@ -50,8 +53,12 @@ const COMPANIES: string[] = new Proxy([] as string[], {
 });
 const GROUPINGS_SCORES = ["Operasional", "Ka./Wa.Ka.Seksi", "Ka./Wa.Ka.Bagian", "Ka./Wa.Ka.Dept", "Ka./Wa.Ka.Div ke atas", "Direktur / Director"];
 
-function initials(name: string) {
-  return name.split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
+const EMPLOYEE_STATUS_OPTIONS = ["Karyawan Baru", "Mutasi", "Promosi"] as const;
+
+function initials(name: string): string {
+  const parts = String(name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "U";
+  return parts.slice(0, 2).map((w) => w.charAt(0)).join("").toUpperCase() || "U";
 }
 
 const AVATAR_COLORS = [
@@ -60,8 +67,16 @@ const AVATAR_COLORS = [
   "bg-yellow-500", "bg-cyan-500", "bg-fuchsia-500", "bg-lime-600", "bg-sky-600",
 ];
 
-function avatarColor(id: string) {
-  return AVATAR_COLORS[parseInt(id) % AVATAR_COLORS.length];
+function avatarColor(seed: string, fallbackName = ""): string {
+  const str = String(seed || fallbackName || "user").trim();
+  if (/^\d+$/.test(str)) {
+    return AVATAR_COLORS[Math.abs(parseInt(str, 10)) % AVATAR_COLORS.length] || "bg-indigo-500";
+  }
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length] || "bg-indigo-500";
 }
 
 const ROLE_BADGE: Record<string, string> = {
@@ -103,7 +118,7 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4" onClick={e => e.stopPropagation()}>
         {/* Header strip */}
         <div className="bg-gradient-to-r from-[#1A284F] to-[#2a3d6e] rounded-t-2xl px-6 py-5 flex items-center gap-4">
-          <div className={`w-14 h-14 rounded-full flex items-center justify-center text-white font-bold text-xl shrink-0 ${avatarColor(user.id)}`}>
+          <div className={`w-14 h-14 rounded-full flex items-center justify-center text-white font-bold text-xl shrink-0 ${avatarColor(user.id, user.name)}`}>
             {initials(user.name)}
           </div>
           <div className="text-white">
@@ -119,7 +134,7 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
             { label: "Reg No", value: user.regNo || "—" },
             { label: "Email", value: user.email },
             { label: "No Telegram", value: user.telegramNo || "—" },
-            { label: "Joindate", value: user.joinDate || "—" },
+            { label: "Joindate", value: user.joinDate ? normalizeDateDDMMYYYY(user.joinDate) : "—" },
             { label: "Company", value: user.company },
             { label: "Division", value: user.division },
             { label: "Department", value: user.department },
@@ -132,6 +147,13 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
             { label: "Multi-Bagian (Tambahan)", value: user.managedBagians?.length ? user.managedBagians.join(", ") : "—" },
             { label: "Role", value: <RoleBadge role={user.role} /> },
             { label: "Groupings", value: user.groupings },
+            { label: "Status Karyawan", value: user.employeeStatus || "-" },
+            ...(user.employeeStatus
+              ? [
+                  { label: "Keterangan Status Karyawan", value: user.employeeStatusNote || "-" },
+                  { label: "Tgl Efektif", value: user.effectiveDate ? normalizeDateDDMMYYYY(user.effectiveDate) : "-" },
+                ]
+              : []),
             {
               label: "Checker KPI Business",
               value: user.isKpiBusinessChecker
@@ -318,6 +340,7 @@ function EditModal({
     division: "", department: "", bagian: "", joinDate: "", telegramNo: "", grade: "Grade 5", role: "Employee",
     groupings: availableGroups[0] ?? GROUPINGS_SCORES[0], status: "Active", lastLogin: "", email: "", regNoAp1: "", regNoAp2: "",
     isHrUnitChecker: false, isHrIcfValidator: false,
+    employeeStatus: "", employeeStatusNote: "", effectiveDate: "",
   });
 
   function f(key: keyof User, val: string) { setForm(p => ({ ...p, [key]: val })); }
@@ -381,12 +404,22 @@ function EditModal({
     return false;
   };
   const sameUnitDupRegUser = useMemo(() => {
-    const regClean = String(form.regNo ?? "").trim().toLowerCase();
-    if (!regClean) return undefined;
+    const effectiveReg = String(form.regNo || form.employeeId || "").trim().toLowerCase();
+    if (!effectiveReg) return undefined;
     return allExistingUsers.find(
       (u) =>
         !isTargetOriginalUser(u) &&
-        u.company === form.company &&
+        isSameCompanyUnit(u.company, form.company) &&
+        String(u.regNo || u.employeeId || "").trim().toLowerCase() === effectiveReg,
+    );
+  }, [allExistingUsers, form.id, form.company, form.regNo, form.employeeId, isNew, originalUser]);
+  const crossUnitDupRegPeers = useMemo(() => {
+    const regClean = String(form.regNo || "").trim().toLowerCase();
+    if (!regClean) return [];
+    return allExistingUsers.filter(
+      (u) =>
+        !isTargetOriginalUser(u) &&
+        !isSameCompanyUnit(u.company, form.company) &&
         String(u.regNo ?? "").trim().toLowerCase() === regClean,
     );
   }, [allExistingUsers, form.id, form.company, form.regNo, isNew, originalUser]);
@@ -488,28 +521,53 @@ function EditModal({
           ].map(({ label, key, type }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-              <input
-                type={type}
-                className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
-                  (key === "regNo" && sameUnitDupRegUser) || (key === "employeeId" && dupEmpIdPeers.length > 0)
-                    ? "border-rose-400 bg-rose-50/40 focus:ring-rose-400"
-                    : "border-gray-200 focus:ring-blue-500"
-                }`}
-                value={(form[key] as string) ?? ""}
-                onChange={e => {
-                  setFormError("");
-                  f(key, e.target.value);
-                }}
-              />
+              {key === "joinDate" ? (
+                <DatePickerID
+                  value={form.joinDate ?? ""}
+                  onChange={(val) => {
+                    setFormError("");
+                    f("joinDate", val);
+                  }}
+                  placeholder="DD/MM/YYYY"
+                />
+              ) : (
+                <input
+                  type={type}
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
+                    key === "regNo" && sameUnitDupRegUser
+                      ? "border-rose-400 bg-rose-50/40 focus:ring-rose-400"
+                      : (key === "regNo" && crossUnitDupRegPeers.length > 0) ||
+                        (key === "employeeId" && dupEmpIdPeers.length > 0)
+                      ? "border-amber-300 bg-amber-50/30 focus:ring-amber-400"
+                      : "border-gray-200 focus:ring-blue-500"
+                  }`}
+                  value={(form[key] as string) ?? ""}
+                  onChange={e => {
+                    setFormError("");
+                    f(key, e.target.value);
+                  }}
+                />
+              )}
               {key === "regNo" && sameUnitDupRegUser && (
                 <p className="mt-1 text-[11px] font-medium text-rose-600">
                   Reg No duplikat di {form.company} dengan {sameUnitDupRegUser.name} ({sameUnitDupRegUser.employeeId}). Tidak diizinkan duplikat Reg No dalam 1 unit usaha.
                 </p>
               )}
-              {key === "employeeId" && dupEmpIdPeers.length > 0 && !sameUnitDupRegUser && (
-                <p className="mt-1 text-[11px] font-medium text-rose-600">
-                  ID Karyawan sama dengan: {dupEmpIdPeers.map((p) => `${p.name} (Reg No: ${p.regNo || "—"}, ${p.company})`).join("; ")}
-                </p>
+              {key === "regNo" && !sameUnitDupRegUser && crossUnitDupRegPeers.length > 0 && (
+                <div className="mt-1.5 inline-flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-300 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+                  <AlertTriangle size={12} className="text-amber-600 shrink-0 mt-0.5" />
+                  <span>
+                    Info: Reg No sama di unit usaha berbeda ({crossUnitDupRegPeers.map((p) => `${p.name} — ${p.company}`).join("; ")}). Diizinkan karena berbeda unit usaha.
+                  </span>
+                </div>
+              )}
+              {key === "employeeId" && dupEmpIdPeers.length > 0 && (
+                <div className="mt-1.5 inline-flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-300 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+                  <AlertTriangle size={12} className="text-amber-600 shrink-0 mt-0.5" />
+                  <span>
+                    Info: ID Karyawan sama dengan {dupEmpIdPeers.map((p) => `${p.name} (Reg No: ${p.regNo || "—"}, ${p.company})`).join("; ")}. Diizinkan selama Reg No pada unit ini unik.
+                  </span>
+                </div>
               )}
             </div>
           ))}
@@ -573,6 +631,60 @@ function EditModal({
               </select>
             </div>
           ))}
+
+          {/* DS-6: Status Karyawan + Kondisional Keterangan Status Karyawan & Tgl Efektif */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Status Karyawan</label>
+            <select
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={form.employeeStatus ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                setForm((p) => ({
+                  ...p,
+                  employeeStatus: v,
+                  ...(v ? {} : { employeeStatusNote: "", effectiveDate: "" }),
+                }));
+              }}
+            >
+              <option value="">— Kosong (-) —</option>
+              {Array.from(
+                new Set([
+                  ...EMPLOYEE_STATUS_OPTIONS,
+                  ...(form.employeeStatus && !(EMPLOYEE_STATUS_OPTIONS as readonly string[]).includes(form.employeeStatus)
+                    ? [form.employeeStatus]
+                    : []),
+                ]),
+              ).map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {Boolean(form.employeeStatus && String(form.employeeStatus).trim()) && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Tgl Efektif (DD/MM/YYYY)</label>
+                <DatePickerID
+                  value={form.effectiveDate ?? ""}
+                  onChange={(val) => f("effectiveDate", val)}
+                  placeholder="DD/MM/YYYY"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Keterangan Status Karyawan</label>
+                <input
+                  type="text"
+                  value={form.employeeStatusNote ?? ""}
+                  onChange={(e) => f("employeeStatusNote", e.target.value)}
+                  placeholder="Contoh: Promosi jabatan / Mutasi antar bagian / Karyawan baru..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </>
+          )}
 
           <div className="col-span-2 rounded-xl border border-gray-200 bg-slate-50/70 p-3.5 space-y-2">
             <p className="text-xs font-semibold text-[#1A284F]">Setup Fungsi Approval Khusus & Akses Role</p>
@@ -864,6 +976,12 @@ function EditModal({
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100">
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
           <button
+            disabled={Boolean(sameUnitDupRegUser)}
+            title={
+              sameUnitDupRegUser
+                ? `Tidak dapat menyimpan: Reg No duplikat pada unit ${form.company}`
+                : undefined
+            }
             onClick={() => {
               const trimmedName = String(form.name ?? "").trim();
               const trimmedEmpId = String(form.employeeId ?? "").trim();
@@ -879,17 +997,18 @@ function EditModal({
               const conflictReg = loadManagedUsers().find(
                 (u) =>
                   !isTargetOriginalUser(u) &&
-                  u.company === form.company &&
-                  String(u.regNo || "").trim().toLowerCase() === effectiveRegNo.toLowerCase() &&
+                  isSameCompanyUnit(u.company, form.company) &&
+                  String(u.regNo || u.employeeId || "").trim().toLowerCase() === effectiveRegNo.toLowerCase() &&
                   effectiveRegNo !== "",
               );
               if (conflictReg) {
                 setFormError(
-                  `Reg No "${effectiveRegNo}" sudah terdaftar pada ${conflictReg.name} (${conflictReg.employeeId}) di unit ${form.company}. Gunakan Reg No yang unik.`,
+                  `Reg No "${effectiveRegNo}" sudah terdaftar pada ${conflictReg.name} (${conflictReg.employeeId}) di unit ${form.company}. Reg No tidak boleh sama dalam 1 unit usaha.`,
                 );
                 return;
               }
               const ap = normalizeApproverPair(form.regNoAp1, form.regNoAp2);
+              const cleanEmpStatus = String(form.employeeStatus ?? "").trim();
               onSave({
                 ...form,
                 name: trimmedName,
@@ -901,12 +1020,16 @@ function EditModal({
                 division: String(form.division ?? "").trim(),
                 department: String(form.department ?? "").trim(),
                 bagian: String(form.bagian ?? "").trim(),
+                joinDate: String(form.joinDate ?? "").trim(),
                 regNoAp1: ap.regNoAp1,
                 regNoAp2: ap.regNoAp2,
+                employeeStatus: cleanEmpStatus,
+                employeeStatusNote: cleanEmpStatus ? String(form.employeeStatusNote ?? "").trim() : "",
+                effectiveDate: cleanEmpStatus ? String(form.effectiveDate ?? "").trim() : "",
               }, originalUser, mode);
               onClose();
             }}
-            className="px-4 py-2 text-sm bg-[#1A284F] text-white rounded-lg hover:bg-[#2a3d6e] flex items-center gap-1.5">
+            className="px-4 py-2 text-sm bg-[#1A284F] text-white rounded-lg hover:bg-[#2a3d6e] disabled:opacity-45 disabled:cursor-not-allowed flex items-center gap-1.5">
             <Save size={14} /> {isNew ? "Add User" : "Save Changes"}
           </button>
         </div>
@@ -2185,7 +2308,7 @@ export function UserManagementPage() {
   const { roles: accessRoles, groups: accessGroups } = useAccessManagement();
   const {
     getUnitLoginConfig,
-    securityMap,
+    getUserSecurityRecord,
     resetPasswordToDefault,
   } = useLoginManagement();
   const [pageSize, setPageSize] = useState(10);
@@ -2247,6 +2370,27 @@ export function UserManagementPage() {
     for (const u of companyUsers) {
       const key = String(u.employeeId ?? "").trim().toLowerCase();
       const peers = (byEmpId.get(key) ?? []).filter((o) => o.id !== u.id);
+      if (peers.length > 0) out.set(u.id, peers);
+    }
+    return out;
+  }, [users, companyUsers]);
+
+  // Peta Reg No yang sama pada Unit Usaha berbeda (diizinkan — tampilkan tag kuning informasi)
+  const crossUnitRegNoPeersByUserId = useMemo(() => {
+    const byReg = new Map<string, User[]>();
+    for (const u of users) {
+      const key = String(u.regNo ?? "").trim().toLowerCase();
+      if (!key) continue;
+      const arr = byReg.get(key) ?? [];
+      arr.push(u);
+      byReg.set(key, arr);
+    }
+    const out = new Map<string, User[]>();
+    for (const u of companyUsers) {
+      const key = String(u.regNo ?? "").trim().toLowerCase();
+      const peers = (byReg.get(key) ?? []).filter(
+        (o) => o.id !== u.id && !isSameCompanyUnit(o.company, u.company),
+      );
       if (peers.length > 0) out.set(u.id, peers);
     }
     return out;
@@ -2391,8 +2535,15 @@ export function UserManagementPage() {
   }
 
   // Multi Delete / Archive (checkbox) — tersinkron ke backend via archiveUsers
-  const activeEmpId = getActiveUser().employeeId.toUpperCase();
-  const isSelectable = (u: User) => u.employeeId.toUpperCase() !== activeEmpId;
+  const activeCurrent = getActiveUser();
+  const activeEmpId = activeCurrent.employeeId.toUpperCase();
+  const isSelectable = (u: User) =>
+    !(
+      u.id === activeCurrent.id ||
+      (isSameCompanyUnit(u.company, activeCurrent.company) &&
+        String(u.regNo ?? "").trim().toLowerCase() === String(activeCurrent.regNo ?? "").trim().toLowerCase() &&
+        u.employeeId.toUpperCase() === activeEmpId)
+    );
   const selectedUsers = companyUsers.filter(u => selectedIds.has(u.id));
   const pageSelectable = paginated.filter(isSelectable);
   const allPageChecked = pageSelectable.length > 0 && pageSelectable.every(u => selectedIds.has(u.id));
@@ -2689,22 +2840,30 @@ export function UserManagementPage() {
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Departement</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Role</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Groupings</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status Karyawan</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Last Login</th>
               </tr>
             </thead>
             <tbody>
               {paginated.length === 0 ? (
-                <tr><td colSpan={12} className="text-center text-gray-400 py-14">No users match the current filter.</td></tr>
+                <tr><td colSpan={13} className="text-center text-gray-400 py-14">No users match the current filter.</td></tr>
               ) : paginated.map((user, idx) => {
                 const userUnitCfg = getUnitLoginConfig(user.company);
                 const isUserUnitPwdMode = userUnitCfg.enabledMethods.includes("password");
-                const userSec = securityMap[user.employeeId.trim().toUpperCase()];
+                const userSec = getUserSecurityRecord(user.employeeId, user.regNo, user.company);
                 const dupPeers = duplicateEmployeeIdPeersByUserId.get(user.id) ?? [];
                 const dupTooltipText =
                   dupPeers.length > 0
-                    ? `Duplikat ID Karyawan (${user.employeeId}) dengan: ${dupPeers
+                    ? `ID Karyawan (${user.employeeId}) juga digunakan pada: ${dupPeers
                         .map((p) => `${p.name} (Reg No: ${p.regNo || "—"}, Unit: ${p.company})`)
+                        .join(" • ")}`
+                    : "";
+                const crossRegPeers = crossUnitRegNoPeersByUserId.get(user.id) ?? [];
+                const crossRegTooltipText =
+                  crossRegPeers.length > 0
+                    ? `Reg No (${user.regNo}) juga terdaftar pada unit usaha lain: ${crossRegPeers
+                        .map((p) => `${p.name} (ID: ${p.employeeId}, Unit: ${p.company})`)
                         .join(" • ")}`
                     : "";
                 return (
@@ -2750,7 +2909,23 @@ export function UserManagementPage() {
                   </td>
                   {/* Reg No */}
                   <td className="px-4 py-3 text-xs whitespace-nowrap">
-                    <div className="font-mono font-semibold text-[#1A284F]">{user.regNo || "—"}</div>
+                    {crossRegPeers.length > 0 ? (
+                      <div>
+                        <span className="group/dupreg relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300 font-mono font-bold text-[11px] cursor-help">
+                          <AlertTriangle size={11} className="text-amber-600 shrink-0" />
+                          <span>{user.regNo || "—"}</span>
+                          <span
+                            role="tooltip"
+                            className="pointer-events-none invisible opacity-0 group-hover/dupreg:visible group-hover/dupreg:opacity-100 transition-opacity absolute left-0 bottom-full mb-1.5 z-50 w-72 rounded-xl bg-[#1A284F] text-white p-2.5 text-[11px] font-sans font-normal shadow-xl leading-relaxed whitespace-normal"
+                          >
+                            <span className="block font-bold text-amber-300 mb-0.5">Info Reg No Lintas Unit Usaha</span>
+                            {crossRegTooltipText}
+                          </span>
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="font-mono font-semibold text-[#1A284F]">{user.regNo || "—"}</div>
+                    )}
                     {!user.regNoAp1 && !user.regNoAp2 ? (
                       <div className="mt-0.5">
                         <span className="inline-flex px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-medium">
@@ -2767,14 +2942,14 @@ export function UserManagementPage() {
                   {/* ID Employee */}
                   <td className="px-4 py-3 text-xs whitespace-nowrap">
                     {dupPeers.length > 0 ? (
-                      <span className="group/dupid relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-300 font-mono font-bold text-[11px] cursor-help">
-                        <AlertTriangle size={11} className="text-rose-600 shrink-0" />
+                      <span className="group/dupid relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300 font-mono font-bold text-[11px] cursor-help">
+                        <AlertTriangle size={11} className="text-amber-600 shrink-0" />
                         <span>{user.employeeId}</span>
                         <span
                           role="tooltip"
                           className="pointer-events-none invisible opacity-0 group-hover/dupid:visible group-hover/dupid:opacity-100 transition-opacity absolute left-0 bottom-full mb-1.5 z-50 w-72 rounded-xl bg-[#1A284F] text-white p-2.5 text-[11px] font-sans font-normal shadow-xl leading-relaxed whitespace-normal"
                         >
-                          <span className="block font-bold text-rose-300 mb-0.5">ID Karyawan Duplikat</span>
+                          <span className="block font-bold text-amber-300 mb-0.5">Info ID Karyawan Sama</span>
                           {dupTooltipText}
                         </span>
                       </span>
@@ -2785,7 +2960,7 @@ export function UserManagementPage() {
                   {/* Name */}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shrink-0 ${avatarColor(user.id)}`}>
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shrink-0 ${avatarColor(user.id, user.name)}`}>
                         {initials(user.name)}
                       </div>
                       <div>
@@ -2842,6 +3017,37 @@ export function UserManagementPage() {
                   </td>
                   <td className="px-4 py-3">
                     <span className="inline-flex px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-xs font-medium">{user.groupings}</span>
+                  </td>
+                  <td className="px-4 py-3 text-xs whitespace-nowrap">
+                    {user.employeeStatus ? (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <span
+                          className={`inline-flex px-2 py-0.5 rounded font-semibold text-[11px] ${
+                            user.employeeStatus === "Promosi"
+                              ? "bg-violet-50 text-violet-700 border border-violet-200"
+                              : user.employeeStatus === "Mutasi"
+                              ? "bg-amber-50 text-amber-800 border border-amber-200"
+                              : "bg-sky-50 text-sky-700 border border-sky-200"
+                          }`}
+                        >
+                          {user.employeeStatus}
+                        </span>
+                        {(user.effectiveDate || user.employeeStatusNote) && (
+                          <span
+                            className="text-[10px] text-gray-500 max-w-[160px] truncate"
+                            title={`${user.effectiveDate ? `Tgl Efektif: ${normalizeDateDDMMYYYY(user.effectiveDate)}` : ""}${
+                              user.effectiveDate && user.employeeStatusNote ? " · " : ""
+                            }${user.employeeStatusNote || ""}`}
+                          >
+                            {user.effectiveDate ? normalizeDateDDMMYYYY(user.effectiveDate) : ""}
+                            {user.effectiveDate && user.employeeStatusNote ? " · " : ""}
+                            {user.employeeStatusNote || ""}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col items-start gap-1">
@@ -2929,7 +3135,12 @@ export function UserManagementPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    resetPasswordToDefault(resetPwdUser.employeeId);
+                    resetPasswordToDefault(
+                      resetPwdUser.employeeId,
+                      resetPwdUser.name,
+                      resetPwdUser.company,
+                      resetPwdUser.regNo,
+                    );
                     setResetPwdBanner(
                       `Password untuk ${resetPwdUser.name} (${resetPwdUser.employeeId}) telah di-reset ke password default awal.`,
                     );

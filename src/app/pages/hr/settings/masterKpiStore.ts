@@ -50,6 +50,7 @@ export interface MasterKpiFormatItem {
   monthlyTargets?: Record<string, string>;
   colorIndicator?: boolean;
   indicatorMode?: "numeric" | "color" | "ratio";
+  ratioType?: "default" | "custom";
   ratioPositiveLabel?: string;
   ratioNegativeLabel?: string;
   sectionAlphabet?: string;

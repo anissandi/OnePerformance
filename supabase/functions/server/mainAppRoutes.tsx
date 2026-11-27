@@ -472,6 +472,20 @@ mainAppRoutes.post("/sync", async (c) => {
           try { await client.from("pa_kv_state").delete().eq("state_key", rk); } catch { /* ignore */ }
         }
       }
+    } else if (kind === "users-replace-unit" && Array.isArray(body.users)) {
+      const canonComp = body.targetCompany ? canonicalizeUnitName(body.targetCompany) : "";
+      if (canonComp) {
+        await client.from("pa_users").delete().eq("company", canonComp);
+      }
+      for (const rawU of body.users as Array<Record<string, unknown>>) {
+        await upsertPaUserSafe(client, rawU, now);
+      }
+      await writeBackendKv(client, "pa_managed_users_v1", body.users, now);
+    } else if (kind === "users-batch" && Array.isArray(body.users)) {
+      for (const rawU of body.users as Array<Record<string, unknown>>) {
+        await upsertPaUserSafe(client, rawU, now);
+      }
+      await writeBackendKv(client, "pa_managed_users_v1", body.users, now);
     } else if (kind === "user-delete" && body.employeeId) {
       await client.from("pa_users").delete().eq("employee_id", body.employeeId);
       const existingUsers = await readSingleBackendKv(client, "pa_managed_users_v1");

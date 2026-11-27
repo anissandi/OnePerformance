@@ -413,6 +413,38 @@ export function parseStabilizeRange(raw?: string | null): ParsedStabilizeRange |
   const hasPercent = rawLo.includes("%") || rawHi.includes("%");
   return { lo, hi, hasPercent, rawLo, rawHi };
 }
+
+/**
+ * Mengurai target rasio KPI (baik Default Rasio seperti "10:1", "6:1" maupun Custom Ratio seperti "2%:10%" atau "100:200")
+ * menjadi pasangan angka { left, right, multiplier: left / right, hasPercent }.
+ */
+export function parseKpiRatioParts(raw?: string | null): {
+  left: number;
+  right: number;
+  multiplier: number;
+  hasPercent: boolean;
+} | null {
+  const s = String(raw ?? "").trim();
+  if (!s || !s.includes(":")) return null;
+  const parts = s.split(":");
+  if (parts.length !== 2) return null;
+  const rawLeft = parts[0].trim();
+  const rawRight = parts[1].trim();
+  if (!rawLeft || !rawRight) return null;
+  const left = parseFlexibleKpiNumber(rawLeft);
+  const right = parseFlexibleKpiNumber(rawRight);
+  if (left === null || right === null || right === 0) return null;
+  return {
+    left,
+    right,
+    multiplier: left / right,
+    hasPercent: rawLeft.includes("%") || rawRight.includes("%"),
+  };
+}
+
+export function sanitizeCustomRatioInput(raw: string): string {
+  return String(raw ?? "").replace(/[^0-9.,:%\s]/g, "");
+}
 function detectPreferredStyle(samples: string[]): {
   style: "id" | "en" | "plain";
   useThousands: boolean;

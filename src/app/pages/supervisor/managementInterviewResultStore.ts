@@ -118,7 +118,7 @@ export function setMIPenilaiResult(
     ...current,
     penilai: current.penilai.map((p) =>
       p.slot === slot
-        ? { ...p, scores, recommendation, notes, status: "Completed", date: new Date().toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) }
+        ? { ...p, scores, recommendation, notes, status: "Completed", date: formatTodayDDMMYYYY() }
         : p
     ),
   };
@@ -168,3 +168,4 @@ export function finalScorePercent(result: MIEmployeeResult): number | null {
   if (pcts.length === 0) return null;
   return parseFloat((pcts.reduce((a, b) => a + b, 0) / pcts.length).toFixed(2));
 }
+import { formatTodayDDMMYYYY } from "../../utils/dateFormat";

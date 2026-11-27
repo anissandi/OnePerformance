@@ -53,7 +53,7 @@ function isoToDMY(iso: string): string {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-");
   if (!y || !m || !d) return iso;
-  return `${d}-${m}-${y}`;
+  return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
 }
 
 const ACCEPT_TYPES = ".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx";

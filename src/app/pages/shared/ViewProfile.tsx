@@ -868,7 +868,10 @@ export function ViewProfile() {
       getRecordDecisionLog(rec).forEach((e) => consider(e.date));
     }
     if (!best) return "—";
-    return new Date(best).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" }) || bestLabel;
+    const bd = new Date(best);
+    return !Number.isNaN(bd.getTime())
+      ? `${String(bd.getDate()).padStart(2, "0")}/${String(bd.getMonth() + 1).padStart(2, "0")}/${bd.getFullYear()}`
+      : bestLabel;
   })();
 
   const softModuleTagClass = (moduleName: string) => {

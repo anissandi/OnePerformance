@@ -1,6 +1,7 @@
 import { DELEGATION_EVENT, getDelegatedModuleFlagsForUser, resolveApproverIdentities } from "./delegationStore";
 import { useEffect, useState } from "react";
 import { notifyLoginToSupabase, safeGetLocalRaw, safeSetLocalJson, savePersistedState, syncToSupabase } from "../services/supabaseClient";
+import { normalizeDateDDMMYYYY } from "../utils/dateFormat";
 import {
   getMasterCompanyLocations,
   getMasterUnitsByGroupUidOrName,
@@ -110,6 +111,12 @@ export interface ManagedUser {
   managedDivisions?: string[];
   managedDepartments?: string[];
   managedBagians?: string[];
+  /** Status Karyawan dari import Excel / User Management ("Karyawan Baru" | "Mutasi" | "Promosi" | "") */
+  employeeStatus?: "" | "Karyawan Baru" | "Mutasi" | "Promosi" | string;
+  /** Keterangan Status Karyawan */
+  employeeStatusNote?: string;
+  /** Tanggal Efektif Status Karyawan (DD/MM/YYYY) */
+  effectiveDate?: string;
 }
 
 export interface ManagedGroupRule {
@@ -188,6 +195,13 @@ export function normalizeApproverPair(
 }
 
 function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
+  const normalizeStoredDate = (val?: string | null): string | undefined => {
+    if (val === undefined) return undefined;
+    const trimmed = String(val ?? "").trim();
+    if (!trimmed || trimmed === "-" || trimmed === "—") return "";
+    const norm = normalizeDateDDMMYYYY(trimmed);
+    return norm === "—" ? trimmed : norm;
+  };
   const company = canonicalizeCompanyUnitName(user.company);
   const { regNoAp1, regNoAp2 } = normalizeApproverPair(user.regNoAp1, user.regNoAp2);
   const managedUnits = Array.isArray(user.managedUnits)
@@ -229,6 +243,10 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     String(user.role ?? "").trim().toLowerCase() === "vgm" ? "VGM" : user.role;
   const normalizedGroupings =
     normGroupKey(user.groupings) === "gm/vgm" ? "GM / VGM" : user.groupings;
+  const rawEmpStatus = user.employeeStatus !== undefined ? String(user.employeeStatus ?? "").trim() : undefined;
+  const cleanEmpStatus = rawEmpStatus === "-" || rawEmpStatus === "—" ? "" : rawEmpStatus;
+  const rawEmpStatusNote =
+    user.employeeStatusNote !== undefined ? String(user.employeeStatusNote ?? "").trim() : undefined;
   return {
     ...user,
     role: normalizedRole,
@@ -236,6 +254,10 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     company,
     regNoAp1,
     regNoAp2,
+    joinDate: normalizeStoredDate(user.joinDate),
+    employeeStatus: cleanEmpStatus,
+    employeeStatusNote: rawEmpStatusNote === "-" || rawEmpStatusNote === "—" ? "" : rawEmpStatusNote,
+    effectiveDate: cleanEmpStatus ? normalizeStoredDate(user.effectiveDate) : (user.effectiveDate !== undefined ? "" : undefined),
     managedUnits,
     checkerUnits,
     kpiBusinessCheckerUnits,
@@ -1450,6 +1472,8 @@ export const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 menit di luar halaman Si
 export interface AuthSessionState {
   isAuthenticated: boolean;
   employeeId: string;
+  company?: string;
+  regNo?: string;
   loginAt: number;
   /**
    * null selama user berada & aktif melihat halaman Sistem PA (timer tidak menghitung).
@@ -1473,11 +1497,17 @@ function readAuthSessionRaw(): AuthSessionState | null {
   }
 }
 
-export function startOrRefreshAuthSession(employeeId: string): AuthSessionState {
+export function startOrRefreshAuthSession(
+  employeeId: string,
+  company?: string,
+  regNo?: string,
+): AuthSessionState {
   const now = Date.now();
   const next: AuthSessionState = {
     isAuthenticated: true,
     employeeId,
+    ...(company ? { company: canonicalizeCompanyUnitName(company) } : {}),
+    ...(regNo ? { regNo: String(regNo).trim() } : {}),
     loginAt: now,
     awayStartedAt: null,
     lastActiveAt: now,
@@ -1527,15 +1557,43 @@ export function peekSessionValidity(now = Date.now()): { valid: boolean; expired
   }
   try {
     const sessId = String(session.employeeId ?? "").trim().toLowerCase();
+    const sessUnit = session.company ? canonicalizeCompanyUnitName(session.company).trim().toLowerCase() : "";
+    const sessReg = String(session.regNo ?? "").trim().toLowerCase();
     if (sessId) {
       const archived = JSON.parse(safeGetLocalRaw("pa_archived_users_v1") ?? "[]") as Array<{ user?: ManagedUser }>;
       if (
         Array.isArray(archived) &&
-        archived.some((a) => a?.user?.employeeId && a.user.employeeId.trim().toLowerCase() === sessId)
+        archived.some((a) => {
+          if (!a?.user?.employeeId) return false;
+          if (a.user.employeeId.trim().toLowerCase() !== sessId) return false;
+          if (sessUnit && canonicalizeCompanyUnitName(a.user.company ?? "").trim().toLowerCase() !== sessUnit) {
+            return false;
+          }
+          if (sessReg && String(a.user.regNo ?? "").trim().toLowerCase() !== sessReg) {
+            return false;
+          }
+          return true;
+        })
       ) {
         return { valid: false, expired: true };
       }
-      const matchedInUsers = loadManagedUsers().find((u) => u.employeeId.trim().toLowerCase() === sessId);
+      const allUsers = loadManagedUsers();
+      const matchedInUsers =
+        (sessUnit && sessReg
+          ? allUsers.find(
+              (u) =>
+                canonicalizeCompanyUnitName(u.company).trim().toLowerCase() === sessUnit &&
+                String(u.regNo ?? "").trim().toLowerCase() === sessReg,
+            )
+          : undefined) ??
+        (sessUnit
+          ? allUsers.find(
+              (u) =>
+                canonicalizeCompanyUnitName(u.company).trim().toLowerCase() === sessUnit &&
+                u.employeeId.trim().toLowerCase() === sessId,
+            )
+          : undefined) ??
+        allUsers.find((u) => u.employeeId.trim().toLowerCase() === sessId);
       if (matchedInUsers && matchedInUsers.status !== "Active") {
         return { valid: false, expired: true };
       }
@@ -1737,8 +1795,33 @@ export function loadManagedUsers(): ManagedUser[] {
     _cachedManagedUsersActiveRaw = activeRaw;
     _cachedManagedUsersList = unique;
     const upperMap = new Map<string, ManagedUser>();
+    let activeUnitLower = "";
+    let activeRegLower = "";
+    try {
+      if (activeRaw) {
+        const parsedAct = JSON.parse(activeRaw) as Partial<ManagedUser>;
+        activeUnitLower = canonicalizeCompanyUnitName(parsedAct.company ?? "").trim().toLowerCase();
+        activeRegLower = String(parsedAct.regNo ?? "").trim().toLowerCase();
+      }
+    } catch {
+      // ignore
+    }
     for (const u of unique) {
-      upperMap.set(u.employeeId.toUpperCase(), u);
+      const empUp = u.employeeId.toUpperCase();
+      const existingMapped = upperMap.get(empUp);
+      if (!existingMapped) {
+        upperMap.set(empUp, u);
+        continue;
+      }
+      const uUnit = canonicalizeCompanyUnitName(u.company).trim().toLowerCase();
+      const uReg = String(u.regNo ?? "").trim().toLowerCase();
+      const isExactActive =
+        Boolean(activeUnitLower) &&
+        uUnit === activeUnitLower &&
+        (!activeRegLower || uReg === activeRegLower);
+      if (isExactActive) {
+        upperMap.set(empUp, u);
+      }
     }
     _cachedUsersByEmpUpper = upperMap;
     _authComputedEpoch++;
@@ -1872,10 +1955,19 @@ export function saveManagedUsers(
         },
       });
     } else if (deletedId) {
-      void syncToSupabase({
-        kind: "user-delete",
-        employeeId: deletedId,
-      });
+      const deletedLower = deletedId.trim().toLowerCase();
+      const stillUsedInList = users.some((u) => u.employeeId.trim().toLowerCase() === deletedLower);
+      if (!stillUsedInList) {
+        void syncToSupabase({
+          kind: "user-delete",
+          employeeId: deletedId,
+        });
+      } else {
+        const survivingPeer = users.find((u) => u.employeeId.trim().toLowerCase() === deletedLower);
+        if (survivingPeer) {
+          void syncToSupabase({ kind: "user-upsert", user: survivingPeer });
+        }
+      }
     } else if (users.length > 0) {
       // Operasi massal (Import Excel mode Gabung / sinkronisasi grouping): pastikan tabel pa_users juga langsung ter-upsert secara batch
       void syncToSupabase({
@@ -2253,36 +2345,77 @@ export function isSameCompanyUnit(userCompany: string, selectedCompany: string):
 }
 
 /**
+ * Mengembalikan seluruh kandidat akun pada Unit Usaha terpilih yang cocok dengan input Employee ID / Reg No / Email.
+ * Digunakan pada halaman Login untuk mendeteksi bila dalam 1 Unit Usaha terdapat >1 akun dengan ID Karyawan yang sama
+ * (masing-masing memiliki Reg No unik pada unit tersebut).
+ */
+export function getLoginCandidatesInCompanyUnit(
+  companyName: string,
+  employeeIdInput: string,
+): ManagedUser[] {
+  const q = employeeIdInput.trim().toLowerCase();
+  if (!q) return [];
+  return loadManagedUsers().filter(
+    (u) =>
+      isSameCompanyUnit(u.company, companyName) &&
+      (u.employeeId.trim().toLowerCase() === q ||
+        (u.regNo ?? "").trim().toLowerCase() === q ||
+        (u.email ?? "").trim().toLowerCase() === q),
+  );
+}
+
+/**
  * Validasi Company Unit sebelum verifikasi password (agar salah pilih unit tidak dihitung sebagai percobaan password).
  */
 export function validateLoginCompanyUnit(
   companyName: string,
   employeeIdInput: string,
-): { ok: true; user: ManagedUser } | { ok: false; error: string } {
+  selectedRegNo?: string,
+): { ok: true; user: ManagedUser } | { ok: false; error: string; ambiguousUsers?: ManagedUser[] } {
   const q = employeeIdInput.trim().toLowerCase();
   if (!q) return { ok: false, error: "Masukkan Employee ID terlebih dahulu." };
   const candidates = loadManagedUsers().filter(
     (u) =>
-      u.employeeId.toLowerCase() === q ||
-      (u.regNo ?? "").toLowerCase() === q ||
-      (u.email ?? "").toLowerCase() === q,
+      u.employeeId.trim().toLowerCase() === q ||
+      (u.regNo ?? "").trim().toLowerCase() === q ||
+      (u.email ?? "").trim().toLowerCase() === q,
   );
   if (candidates.length === 0) {
     return { ok: false, error: `Employee ID "${employeeIdInput}" tidak ditemukan pada User Management.` };
   }
-  const inUnit = candidates.find((u) => isSameCompanyUnit(u.company, companyName));
-  if (!inUnit) {
+  const inUnitList = candidates.filter((u) => isSameCompanyUnit(u.company, companyName));
+  if (inUnitList.length === 0) {
     return {
       ok: false,
       error: `Company Unit tidak sesuai. Akun ${candidates[0].employeeId} tidak terdaftar pada ${companyName}. Silakan pilih Company Unit yang sesuai dengan akun Anda.`,
     };
   }
+  if (selectedRegNo && selectedRegNo.trim()) {
+    const regQ = selectedRegNo.trim().toLowerCase();
+    const byReg = inUnitList.find(
+      (u) => (u.regNo ?? "").trim().toLowerCase() === regQ || u.id === selectedRegNo.trim(),
+    );
+    if (byReg) return { ok: true, user: byReg };
+  }
+  const exactRegMatches = inUnitList.filter((u) => (u.regNo ?? "").trim().toLowerCase() === q);
+  if (exactRegMatches.length === 1) {
+    return { ok: true, user: exactRegMatches[0] };
+  }
+  if (inUnitList.length > 1) {
+    return {
+      ok: false,
+      error: `Terdapat ${inUnitList.length} akun dengan ID Karyawan "${employeeIdInput}" pada ${companyName}. Silakan pilih akun / Reg No Anda terlebih dahulu.`,
+      ambiguousUsers: inUnitList,
+    };
+  }
+  const inUnit = inUnitList[0];
   return { ok: true, user: inUnit };
 }
 
 export function loginWithCompanyAndEmployeeId(
   companyName: string,
   employeeIdInput: string,
+  selectedRegNo?: string,
 ): { ok: true; user: ManagedUser; redirectPath: string } | { ok: false; error: string } {
   const users = loadManagedUsers();
   const q = employeeIdInput.trim().toLowerCase();
@@ -2292,12 +2425,24 @@ export function loginWithCompanyAndEmployeeId(
 
   // Cari karyawan berdasarkan Employee ID / Reg No / email / nama
   const matchesQuery = (u: ManagedUser) =>
-    u.employeeId.toLowerCase() === q ||
+    u.employeeId.trim().toLowerCase() === q ||
     Boolean(u.regNo && u.regNo.trim().toLowerCase() === q) ||
     Boolean(u.email && u.email.trim().toLowerCase() === q) ||
     Boolean(u.name && u.name.trim().toLowerCase() === q);
   const candidates = users.filter(matchesQuery);
-  const matched = candidates.find((u) => isSameCompanyUnit(u.company, companyName));
+  const inUnitList = candidates.filter((u) => isSameCompanyUnit(u.company, companyName));
+  const regQ = (selectedRegNo ?? "").trim().toLowerCase();
+  const matched =
+    (regQ
+      ? inUnitList.find(
+          (u) => (u.regNo ?? "").trim().toLowerCase() === regQ || u.id === (selectedRegNo ?? "").trim(),
+        )
+      : undefined) ??
+    (inUnitList.length === 1
+      ? inUnitList[0]
+      : inUnitList.find((u) => (u.regNo ?? "").trim().toLowerCase() === q) ??
+        inUnitList.find((u) => u.status === "Active") ??
+        inUnitList[0]);
 
   // Validasi Unit Usaha: login wajib sesuai Company Unit karyawan walaupun Employee ID & password benar
   if (!matched && candidates.length > 0) {
@@ -2357,13 +2502,19 @@ export function loginWithCompanyAndEmployeeId(
   } catch {
     // ignore storage errors
   }
-  const newSess = startOrRefreshAuthSession(updatedUser.employeeId);
+  const newSess = startOrRefreshAuthSession(
+    updatedUser.employeeId,
+    updatedUser.company,
+    updatedUser.regNo,
+  );
   if (isAdminOrHrIcfRole(updatedUser.role)) {
     try {
       sessionStorage.setItem(
         SWITCH_ORIGIN_SESSION_KEY,
         JSON.stringify({
           employeeId: updatedUser.employeeId,
+          company: updatedUser.company,
+          regNo: updatedUser.regNo,
           role: updatedUser.role,
           loginAt: newSess.loginAt,
         }),
@@ -2384,20 +2535,41 @@ export function loginWithCompanyAndEmployeeId(
   return { ok: true, user: updatedUser, redirectPath };
 }
 
-export function switchActiveUserByEmployeeId(employeeId: string): ManagedUser | null {
+export function switchActiveUserByEmployeeId(
+  employeeId: string,
+  company?: string,
+  regNo?: string,
+): ManagedUser | null {
   if (!canSwitchAccount()) return null;
   const users = loadManagedUsers();
-  const found = users.find((u) => u.employeeId.toUpperCase() === employeeId.toUpperCase());
+  const found =
+    (company && regNo
+      ? users.find(
+          (u) =>
+            isSameCompanyUnit(u.company, company) &&
+            String(u.regNo ?? "").trim().toLowerCase() === regNo.trim().toLowerCase(),
+        )
+      : undefined) ??
+    (company
+      ? users.find(
+          (u) =>
+            isSameCompanyUnit(u.company, company) &&
+            u.employeeId.toUpperCase() === employeeId.toUpperCase(),
+        )
+      : undefined) ??
+    users.find((u) => u.employeeId.toUpperCase() === employeeId.toUpperCase());
   if (!found) return null;
   const origin = getLoginOriginUser();
   if (!isAdminOrHrIcfRole(origin.role)) return null;
-  const newSess = startOrRefreshAuthSession(found.employeeId);
+  const newSess = startOrRefreshAuthSession(found.employeeId, found.company, found.regNo);
   try {
     localStorage.removeItem(LEGACY_LOGIN_ORIGIN_KEY);
     sessionStorage.setItem(
       SWITCH_ORIGIN_SESSION_KEY,
       JSON.stringify({
         employeeId: origin.employeeId,
+        company: origin.company,
+        regNo: origin.regNo,
         role: origin.role,
         loginAt: newSess.loginAt,
       }),

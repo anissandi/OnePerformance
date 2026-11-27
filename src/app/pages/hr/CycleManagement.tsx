@@ -3,6 +3,7 @@ import { CheckCircle2, Clock, Users, BarChart2, TrendingUp, RefreshCw, Lock, Pla
 import { loadPersistedState, savePersistedState } from "../../services/supabaseClient";
 import { toast } from "sonner";
 import { buildLiveCycleStepsFromActivation } from "./ModuleActivation";
+import { DatePickerID } from "../../components/DatePickerID";
 
 type PhaseStatus = "completed" | "in-progress" | "upcoming";
 
@@ -319,56 +320,46 @@ export function CycleManagement() {
             {/* Cycle Start Date */}
             <div className="space-y-1">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Cycle Start Date</label>
-              <input
-                type="date"
+              <DatePickerID
                 value={cycleStartDate}
-                onChange={(e) => setCycleStartDate(e.target.value)}
+                onChange={setCycleStartDate}
                 disabled={!isCycleClosed}
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F] disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
               />
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Setting Phase End</label>
-              <input
-                type="date"
+              <DatePickerID
                 value={settingEnd}
-                onChange={(e) => setSettingEnd(e.target.value)}
+                onChange={setSettingEnd}
                 disabled={!isCycleClosed}
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F] disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
               />
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Measurement Phase End</label>
-              <input
-                type="date"
+              <DatePickerID
                 value={measurementEnd}
-                onChange={(e) => setMeasurementEnd(e.target.value)}
+                onChange={setMeasurementEnd}
                 disabled={!isCycleClosed}
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F] disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
               />
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Evaluation Phase End</label>
-              <input
-                type="date"
+              <DatePickerID
                 value={evaluationEnd}
-                onChange={(e) => setEvaluationEnd(e.target.value)}
+                onChange={setEvaluationEnd}
                 disabled={!isCycleClosed}
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F] disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
               />
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Year-End Dialogue End</label>
-              <input
-                type="date"
+              <DatePickerID
                 value={dialogueEnd}
-                onChange={(e) => setDialogueEnd(e.target.value)}
+                onChange={setDialogueEnd}
                 disabled={!isCycleClosed}
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F] disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
               />
             </div>
           </div>

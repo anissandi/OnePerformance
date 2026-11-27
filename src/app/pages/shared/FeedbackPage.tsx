@@ -21,6 +21,7 @@ import { useAuthStore } from "../../store/authStore";
 import { normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { hasRolePermission } from "../hr/settings/AccessManagement";
 import { EvidenceViewerModal } from "../../components/EvidenceViewerModal";
+import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 
 const MAX_FILE = 3 * 1024 * 1024;
 
@@ -28,8 +29,8 @@ function fmtDate(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+    ? normalizeDateDDMMYYYY(iso)
+    : `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 }
 
 const FEEDBACK_STATUS_TONE: Record<string, string> = {

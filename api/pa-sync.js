@@ -295,7 +295,7 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: up.ok, status: up.status, stateValue: nextObj });
       }
 
-      if ((kind === "users-batch" || kind === "users-replace") && Array.isArray(body.users)) {
+      if ((kind === "users-batch" || kind === "users-replace" || kind === "users-replace-unit") && Array.isArray(body.users)) {
         if (kind === "users-replace") {
           await pgRest(cfg, "pa_users?employee_id=neq.__NONE__", { method: "DELETE" });
           if (Array.isArray(body.resetKeys) && body.resetKeys.length > 0) {
@@ -307,17 +307,30 @@ export default async function handler(req, res) {
               await pgRest(cfg, `pa_kv_state?state_key=in.(${cleanReset})`, { method: "DELETE" });
             }
           }
+        } else if (kind === "users-replace-unit" && body.targetCompany) {
+          const canonComp = canonicalizeUnitName(body.targetCompany);
+          if (canonComp) {
+            await pgRest(cfg, `pa_users?company=eq.${encodeURIComponent(canonComp)}`, { method: "DELETE" });
+          }
         }
         const validUsers = body.users.filter((u) => u && String(u.employeeId ?? u.employee_id ?? "").trim());
         if (validUsers.length > 0) {
-          const fullRows = validUsers.map((u) => toPaUserRow(u, now, "full"));
+          // Deduplikasi per employee_id khusus untuk tabel SQL pa_users (ON CONFLICT employee_id);
+          // seluruh entri per (Unit Usaha, Reg No) disimpan lengkap pada pa_managed_users_v1 di bawah.
+          const dedupMap = new Map();
+          for (const u of validUsers) {
+            const k = String(u.employeeId ?? u.employee_id ?? "").trim().toLowerCase();
+            if (k) dedupMap.set(k, u);
+          }
+          const sqlUsers = Array.from(dedupMap.values());
+          const fullRows = sqlUsers.map((u) => toPaUserRow(u, now, "full"));
           let up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
             method: "POST",
             headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
             body: JSON.stringify(fullRows),
           });
           if (!up.ok) {
-            const legacyRows = validUsers.map((u) => toPaUserRow(u, now, "legacy"));
+            const legacyRows = sqlUsers.map((u) => toPaUserRow(u, now, "legacy"));
             up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
               method: "POST",
               headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -325,7 +338,7 @@ export default async function handler(req, res) {
             });
           }
           if (!up.ok) {
-            const minRows = validUsers.map((u) => toPaUserRow(u, now, "minimal"));
+            const minRows = sqlUsers.map((u) => toPaUserRow(u, now, "minimal"));
             up = await pgRest(cfg, "pa_users?on_conflict=employee_id", {
               method: "POST",
               headers: { Prefer: "resolution=merge-duplicates,return=minimal" },

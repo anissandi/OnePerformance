@@ -82,9 +82,11 @@ import {
   normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
+  parseKpiRatioParts,
   parseStabilizeRange,
   resolveEffectiveBlockedMonthSet,
   resolveKpiColorBandMeta,
+  sanitizeCustomRatioInput,
   sanitizeKpiNumericInput,
   syncPercentSuffixOnValue,
 } from "../../../utils/kpiNumberAndPeriod";
@@ -224,10 +226,26 @@ function computeTarget2026(
 }
 
 type IndicatorMode = "numeric" | "color" | "ratio";
+type RatioSubType = "default" | "custom";
 
 const RATIO_OPTIONS = ["10:1", "6:1", "5:1", "4:1", "3:1", "2:1"] as const;
 
+function detectRatioSubType(item?: { ratioType?: "default" | "custom"; target2026?: string; baseline2025?: string; monthlyTargets?: Record<string, string> }): RatioSubType {
+  if (item?.ratioType === "custom") return "custom";
+  if (item?.ratioType === "default") return "default";
+  const samples = [item?.target2026, item?.baseline2025, ...Object.values(item?.monthlyTargets ?? {})]
+    .map((s) => String(s ?? "").trim())
+    .filter(Boolean);
+  if (samples.length === 0) return "default";
+  const defaultSet = new Set<string>(RATIO_OPTIONS as unknown as string[]);
+  return samples.some((s) => s.includes(":") && !defaultSet.has(s)) ? "custom" : "default";
+}
+
 function parseRatioParts(val: string): { pos: number; neg: number } {
+  const parsed = parseKpiRatioParts(val);
+  if (parsed) {
+    return { pos: Math.round(parsed.left * 100) / 100, neg: Math.round(parsed.right * 100) / 100 };
+  }
   const parts = val.split(":");
   const pos = parseInt(parts[0] ?? "0", 10);
   const neg = parseInt(parts[1] ?? "0", 10);
@@ -288,6 +306,7 @@ export interface KPISetting {
   monthlyTargets?: Record<string, string>;
   colorIndicator?: boolean;
   indicatorMode?: IndicatorMode;
+  ratioType?: RatioSubType;
   ratioPositiveLabel?: string;
   ratioNegativeLabel?: string;
   sectionAlphabet?: string;
@@ -1816,19 +1835,38 @@ function EditTargetRequestModal({ items, onCancel, onConfirm, owner }: {
               <div className="flex-1 h-px bg-gray-200" />
             </div>
 
-            {/* Phase 2 — minimized summary */}
-            <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl border border-blue-100 bg-blue-50/30">
-              <div className="flex items-center gap-1 shrink-0">
-                {TARGET_EDIT_APPROVERS.map((a, i) => (
-                  <div key={a.label} className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white border-2 border-white ${a.label === "Validate" ? "bg-emerald-500" : "bg-[#1A284F]"}`}
-                    style={{ marginLeft: i > 0 ? -6 : 0, zIndex: TARGET_EDIT_APPROVERS.length - i }}>
-                    {a.label === "Validate" ? "✓" : i + 1}
-                  </div>
-                ))}
+            {/* Phase 2 — Approval chain detail */}
+            <div className="rounded-xl border border-blue-200 bg-blue-50/40 overflow-hidden">
+              <div className="px-3 py-1.5 bg-blue-100/60 border-b border-blue-200">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-blue-800">Fase 2 — Submit Target yang Diedit</p>
+                <p className="text-[10px] text-blue-600 mt-0.5">
+                  Approver: {TARGET_EDIT_APPROVERS.map((a) => a.label).join(" → ")}
+                </p>
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] font-bold text-blue-700">Fase 2 — Submit Target yang Diedit</p>
-                <p className="text-[10px] text-blue-500">{TARGET_EDIT_APPROVERS.map((a) => a.label).join(" → ")}</p>
+              <div className="p-2.5 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {TARGET_EDIT_APPROVERS.map((a, i) => {
+                  const isVal = a.label.startsWith("Validate");
+                  return (
+                    <div
+                      key={`${a.label}-${i}`}
+                      className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
+                        isVal ? "bg-emerald-50/90 border-emerald-200" : "bg-white border-blue-100"
+                      }`}
+                    >
+                      <div
+                        className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0 ${
+                          isVal ? "bg-emerald-600" : "bg-[#1A284F]"
+                        }`}
+                      >
+                        {isVal ? "✓" : i + 1}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[10px] font-bold text-[#1A284F] truncate">{a.name}</p>
+                        <p className="text-[9px] text-gray-500 truncate">{a.label}</p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -2219,11 +2257,21 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
                                     {COLOR_BAND_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                                   </select>
                                 ) : mode === "ratio" ? (
+                                  detectRatioSubType(item) === "custom" ? (
+                                    <input
+                                      type="text"
+                                      value={val}
+                                      onChange={(e) => setMonthTarget(item.id, month, sanitizeCustomRatioInput(e.target.value))}
+                                      placeholder="2%:10% / 100:200"
+                                      className="w-full text-[10px] font-semibold border border-purple-200 rounded px-1 py-0.5 outline-none focus:border-purple-500 bg-white text-purple-700 text-center"
+                                    />
+                                  ) : (
                                   <select value={val} onChange={(e) => setMonthTarget(item.id, month, e.target.value)}
                                     className="w-full text-[10px] border border-gray-200 rounded px-1 py-0.5 outline-none focus:border-blue-400 bg-white">
                                     <option value="">—</option>
                                     {RATIO_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                                   </select>
+                                  )
                                 ) : (
                                   <input type="text" inputMode="decimal" value={val}
                                     onChange={(e) => setMonthTarget(item.id, month, e.target.value)}
@@ -2329,7 +2377,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
             <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Approval setelah submit (Fase 2)</p>
             <div className="flex items-center gap-1.5 flex-wrap">
               {TARGET_EDIT_APPROVERS.map((a, i) => {
-                const isValidate = a.label === "Validate";
+                const isValidate = a.label.startsWith("Validate");
                 return (
                   <React.Fragment key={a.label}>
                     {i > 0 && <span className="text-gray-300 text-xs">→</span>}
@@ -2337,7 +2385,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
                       <div className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 ${isValidate ? "bg-emerald-500" : "bg-[#1A284F]"}`}>
                         {isValidate ? "✓" : i + 1}
                       </div>
-                      <span>{a.label}</span>
+                      <span>{a.label} ({a.name})</span>
                     </div>
                   </React.Fragment>
                 );
@@ -2485,26 +2533,62 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
 // ─────────────────────────────────────────────────────────────────────────────
 
 
-function ColorIndicatorRadio({ value, onChange }: { value: IndicatorMode; onChange: (mode: IndicatorMode) => void }) {
+function ColorIndicatorRadio({
+  value,
+  ratioType = "default",
+  onChange,
+}: {
+  value: IndicatorMode;
+  ratioType?: RatioSubType;
+  onChange: (mode: IndicatorMode, chosenRatioType?: RatioSubType) => void;
+}) {
+  const [showRatioTypeModal, setShowRatioTypeModal] = useState(false);
   const options: { mode: IndicatorMode; label: string; desc: string }[] = [
     { mode: "numeric", label: "Numeric",  desc: "Input target as numbers" },
     { mode: "color",   label: "Color",    desc: "Use color bands (Blue/ Red / Black)" },
-    { mode: "ratio",   label: "Ratio",    desc: "Monthly target as ratio (e.g. 10:1)" },
+    { mode: "ratio",   label: "Ratio",    desc: "Default Rasio (10:1) atau Custom Ratio (2%:10% / 100:200)" },
   ];
   return (
     <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 transition-all shadow-2xs ${FIELD_TONE_STYLES.amber.wrap}`}>
-      <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
-        <span>Indicator Mode</span>
-      </label>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <label className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide ${FIELD_TONE_STYLES.amber.label}`}>
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${FIELD_TONE_STYLES.amber.dot}`} />
+          <span>Indicator Mode</span>
+        </label>
+        {value === "ratio" && (
+          <button
+            type="button"
+            onClick={() => setShowRatioTypeModal(true)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300 hover:bg-purple-200 transition-colors cursor-pointer"
+          >
+            <span>{ratioType === "custom" ? "Mode: Custom Ratio" : "Mode: Default Rasio"}</span>
+            <span className="underline">Ubah</span>
+          </button>
+        )}
+      </div>
       <div className="flex items-center gap-4 px-4 py-2.5 rounded-xl border border-amber-200/70 bg-white/90">
         {options.map(({ mode, label, desc }) => (
-          <label key={mode} className="flex items-start gap-2.5 cursor-pointer flex-1">
+          <label
+            key={mode}
+            onClick={(e) => {
+              if (mode === "ratio") {
+                e.preventDefault();
+                setShowRatioTypeModal(true);
+              }
+            }}
+            className="flex items-start gap-2.5 cursor-pointer flex-1"
+          >
             <input
               type="radio"
               name="indicatorMode"
               checked={value === mode}
-              onChange={() => onChange(mode)}
+              onChange={() => {
+                if (mode === "ratio") {
+                  setShowRatioTypeModal(true);
+                } else {
+                  onChange(mode);
+                }
+              }}
               className="mt-0.5 accent-[#1A284F] w-4 h-4 shrink-0"
             />
             <span className="flex flex-col">
@@ -2514,6 +2598,79 @@ function ColorIndicatorRadio({ value, onChange }: { value: IndicatorMode; onChan
           </label>
         ))}
       </div>
+      {showRatioTypeModal && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4"
+          onClick={() => setShowRatioTypeModal(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-purple-100 flex flex-col gap-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-base font-bold text-[#1A284F]">Pilih Tipe Indicator Ratio</h4>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Tentukan format pengisian rasio untuk Baseline dan Monthly Target KPI ini.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRatioTypeModal(false)}
+                className="p-1 rounded-lg text-gray-400 hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  onChange("ratio", "default");
+                  setShowRatioTypeModal(false);
+                }}
+                className={`text-left rounded-xl border-2 p-4 transition-all cursor-pointer ${
+                  value === "ratio" && ratioType === "default"
+                    ? "border-purple-500 bg-purple-50/70 ring-2 ring-purple-100"
+                    : "border-gray-200 bg-white hover:border-purple-300 hover:bg-purple-50/30"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-[#1A284F]">Default Rasio</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-700">
+                    10:1 · 6:1 · 5:1 · 4:1 · 3:1 · 2:1
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Menggunakan pilihan rasio standar yang sudah tersedia pada dropdown sistem.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange("ratio", "custom");
+                  setShowRatioTypeModal(false);
+                }}
+                className={`text-left rounded-xl border-2 p-4 transition-all cursor-pointer ${
+                  value === "ratio" && ratioType === "custom"
+                    ? "border-indigo-500 bg-indigo-50/70 ring-2 ring-indigo-100"
+                    : "border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/30"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-[#1A284F]">Custom Ratio</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700">
+                    Bebas (% / Numerik)
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Penulisan rasio bebas (persen atau numerik), contoh persen: <strong>2%:10%</strong>, contoh numerik: <strong>100:200</strong>.
+                </p>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2712,6 +2869,7 @@ function MonthlyTargetTable({
   formula,
   colorMode,
   ratioMode,
+  ratioType = "default",
   onChange,
   trackingPeriod,
   periodicTargetBlock = false,
@@ -2729,6 +2887,7 @@ function MonthlyTargetTable({
   formula: string;
   colorMode: boolean;
   ratioMode?: boolean;
+  ratioType?: RatioSubType;
   onChange: (mt: Record<string, string>, computed2026: string) => void;
   trackingPeriod?: string;
   periodicTargetBlock?: boolean;
@@ -2797,6 +2956,9 @@ function MonthlyTargetTable({
   const handleChange = (key: string, val: string) => {
     const prevCellVal = monthlyTargets[key] ?? "";
     const cleanVal =
+      ratioMode && ratioType === "custom"
+        ? sanitizeCustomRatioInput(val)
+        :
       !colorMode && !ratioMode
         ? pctSatuan
           ? applyAutoPercentInput(val, prevCellVal)
@@ -2999,7 +3161,22 @@ function MonthlyTargetTable({
                 }
                 if (ratioMode) {
                   const selected = monthlyTargets[key] ?? "";
-                  const isLocked = i !== firstActiveIdx && !!monthlyTargets[firstActiveKey];
+                  const isLocked = ratioType !== "custom" && i !== firstActiveIdx && !!monthlyTargets[firstActiveKey];
+                  if (ratioType === "custom") {
+                    return (
+                      <td key={key} className={`border border-gray-200 p-1 ${softYellowHighlight && !selected ? "bg-yellow-50/80" : "bg-indigo-50/25"}`}>
+                        <input
+                          type="text"
+                          value={selected}
+                          onChange={(e) => handleChange(key, e.target.value)}
+                          placeholder="2%:10%"
+                          className={`w-full text-[10px] font-semibold border rounded-md px-1 py-1.5 outline-none text-center text-indigo-800 focus:border-indigo-500 ${
+                            softYellowHighlight && !selected ? "border-yellow-300 bg-yellow-50/70" : "border-indigo-200 bg-white"
+                          }`}
+                        />
+                      </td>
+                    );
+                  }
                   return (
                     <td key={key} className={`border border-gray-200 p-1 ${softYellowHighlight && !selected ? "bg-yellow-50/80" : isLocked ? "bg-purple-50/10" : "bg-purple-50/20"}`}>
                       <select
@@ -4104,8 +4281,14 @@ export function AddKPIModal({
     }
   };
 
-  const setIndicatorMode = (mode: IndicatorMode) => setForm((p) => ({
-    ...p, indicatorMode: mode, colorIndicator: mode === "color", monthlyTargets: {}, baseline2025: "", target2026: "",
+  const setIndicatorMode = (mode: IndicatorMode, chosenRatioType?: RatioSubType) => setForm((p) => ({
+    ...p,
+    indicatorMode: mode,
+    ratioType: mode === "ratio" ? (chosenRatioType ?? p.ratioType ?? "default") : undefined,
+    colorIndicator: mode === "color",
+    monthlyTargets: {},
+    baseline2025: "",
+    target2026: "",
     ...(mode === "color" ? { formula: "Nilai Akhir" } : mode === "ratio" ? { formula: "Jumlah" } : {}),
   }));
 
@@ -4746,16 +4929,26 @@ export function AddKPIModal({
               <Field label="Definisi / Deskripsi"><textarea rows={3} value={form.definisi} onChange={(e) => set("definisi", e.target.value)} className={inputCls + " resize-none"} /></Field>
               <Field label="Source"><input value={form.source} onChange={(e) => set("source", e.target.value)} placeholder="e.g. Laporan HRD" className={inputCls} /></Field>
 
-              <ColorIndicatorRadio value={indicatorMode} onChange={setIndicatorMode} />
+              <ColorIndicatorRadio value={indicatorMode} ratioType={form.ratioType ?? "default"} onChange={setIndicatorMode} />
 
               {colorMode ? (
                 <BaselineColorField value={form.baseline2025} onChange={(v) => set("baseline2025", v)} />
               ) : ratioMode ? (
                 <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
-                  <select value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls}>
-                    <option value="">— Pilih Ratio —</option>
-                    {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
+                  {(form.ratioType ?? "default") === "custom" ? (
+                    <input
+                      type="text"
+                      value={form.baseline2025}
+                      onChange={(e) => set("baseline2025", sanitizeCustomRatioInput(e.target.value))}
+                      placeholder="Contoh persen: 2%:10% · Contoh numerik: 100:200"
+                      className={inputCls}
+                    />
+                  ) : (
+                    <select value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls}>
+                      <option value="">— Pilih Ratio —</option>
+                      {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  )}
                 </Field>
               ) : (
                 <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
@@ -4800,6 +4993,7 @@ export function AddKPIModal({
                 formula={form.formula}
                 colorMode={colorMode}
                 ratioMode={ratioMode}
+                ratioType={form.ratioType ?? "default"}
                 trackingPeriod={form.trackingPeriod}
                 periodicTargetBlock={Boolean(form.periodicTargetBlock)}
                 blockedMonths={form.blockedMonths}
@@ -5495,9 +5689,10 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const setIndicatorMode = (mode: IndicatorMode) => setForm((p) => ({
+  const setIndicatorMode = (mode: IndicatorMode, chosenRatioType?: RatioSubType) => setForm((p) => ({
     ...p,
     indicatorMode: mode,
+    ratioType: mode === "ratio" ? (chosenRatioType ?? p.ratioType ?? "default") : undefined,
     colorIndicator: mode === "color",
     monthlyTargets: {},
     baseline2025: "",
@@ -6042,16 +6237,26 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
               </Field>
 
               {/* Indicator & targets */}
-              <ColorIndicatorRadio value={indicatorMode} onChange={setIndicatorMode} />
+              <ColorIndicatorRadio value={indicatorMode} ratioType={form.ratioType ?? "default"} onChange={setIndicatorMode} />
 
               {colorMode
                 ? <BaselineColorField value={form.baseline2025} onChange={(v) => set("baseline2025", v)} />
                 : ratioMode
                 ? <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
-                    <select value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls}>
-                      <option value="">— Pilih Ratio —</option>
-                      {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-                    </select>
+                    {(form.ratioType ?? "default") === "custom" ? (
+                      <input
+                        type="text"
+                        value={form.baseline2025}
+                        onChange={(e) => set("baseline2025", sanitizeCustomRatioInput(e.target.value))}
+                        placeholder="Contoh persen: 2%:10% · Contoh numerik: 100:200"
+                        className={inputCls}
+                      />
+                    ) : (
+                      <select value={form.baseline2025} onChange={(e) => set("baseline2025", e.target.value)} className={inputCls}>
+                        <option value="">— Pilih Ratio —</option>
+                        {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    )}
                   </Field>
                 : <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
                     <input
@@ -6094,6 +6299,7 @@ export function AddCorporateKPIModal({ onAdd, onClose, existingItems = [], secti
                 formula={form.formula}
                 colorMode={colorMode}
                 ratioMode={ratioMode}
+                ratioType={form.ratioType ?? "default"}
                 trackingPeriod={form.trackingPeriod}
                 periodicTargetBlock={Boolean(form.periodicTargetBlock)}
                 blockedMonths={form.blockedMonths}
@@ -6281,6 +6487,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
   const periodOpts = master.trackingPeriod?.length ? master.trackingPeriod : [...STANDARD_TRACKING_PERIODS];
   const initMode: IndicatorMode = item.indicatorMode ?? (item.colorIndicator ? "color" : "numeric");
   const [indicatorMode, setIndicatorMode] = useState<IndicatorMode>(initMode);
+  const [ratioType, setRatioType] = useState<RatioSubType>(() => detectRatioSubType(item));
   const colorMode = indicatorMode === "color";
   const ratioMode = indicatorMode === "ratio";
   const [formula, setFormula] = useState(item.formula || "Jumlah");
@@ -6295,8 +6502,9 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
   const [target2026, setTarget2026] = useState(item.target2026);
   const [baseline2025, setBaseline2025] = useState(item.baseline2025);
 
-  const handleModeChange = (mode: IndicatorMode) => {
+  const handleModeChange = (mode: IndicatorMode, chosenRatioType?: RatioSubType) => {
     setIndicatorMode(mode);
+    if (mode === "ratio") setRatioType(chosenRatioType ?? "default");
     setMonthlyTargets({});
     setTarget2026("");
     setBaseline2025("");
@@ -6339,15 +6547,25 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
                   {FORMULA_OPTIONS.map((f) => <option key={f}>{f}</option>)}
                 </select>}
           </Field>
-          <ColorIndicatorRadio value={indicatorMode} onChange={handleModeChange} />
+          <ColorIndicatorRadio value={indicatorMode} ratioType={ratioType} onChange={handleModeChange} />
           {colorMode
             ? <BaselineColorField value={baseline2025} onChange={setBaseline2025} />
             : ratioMode
             ? <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
-                <select value={baseline2025} onChange={(e) => setBaseline2025(e.target.value)} className={inputCls}>
-                  <option value="">— Pilih Ratio —</option>
-                  {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-                </select>
+                {ratioType === "custom" ? (
+                  <input
+                    type="text"
+                    value={baseline2025}
+                    onChange={(e) => setBaseline2025(sanitizeCustomRatioInput(e.target.value))}
+                    placeholder="Contoh persen: 2%:10% · Contoh numerik: 100:200"
+                    className={inputCls}
+                  />
+                ) : (
+                  <select value={baseline2025} onChange={(e) => setBaseline2025(e.target.value)} className={inputCls}>
+                    <option value="">— Pilih Ratio —</option>
+                    {RATIO_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                )}
               </Field>
             : <Field label={`Baseline ${Number(KPI_CYCLE_YEAR) - 1}`}>
                 <input
@@ -6430,6 +6648,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             formula={formula}
             colorMode={colorMode}
             ratioMode={ratioMode}
+            ratioType={ratioType}
             trackingPeriod={trackingPeriod}
             periodicTargetBlock={periodicTargetBlock}
             blockedMonths={blockedMonths}
@@ -6466,6 +6685,7 @@ function TargetEditMiniModal({ item, onSave, onClose }: {
             onClick={() => {
               onSave({
                 indicatorMode,
+                ratioType: ratioMode ? ratioType : undefined,
                 colorIndicator: colorMode,
                 monthlyTargets,
                 target2026,
@@ -7981,7 +8201,7 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
         <div className="flex items-center gap-2 flex-wrap">
           {!submitted && !kpiApproved && onAddClick && (
             <button onClick={onAddClick}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors">
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white border border-blue-600 hover:bg-blue-700 shadow-2xs transition-colors">
               <Plus className="w-3.5 h-3.5" /> Add KPI
             </button>
           )}
@@ -8000,7 +8220,7 @@ export function CorporateKPITable({ items, onUpdateItem, onBatchUpdateItems, onD
               onClick={() => { setPreviewMode((p) => !p); if (!previewMode) { setEditingRowId(null); setDraft(null); } }}
               className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                 previewMode
-                  ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                  ? "bg-slate-700 text-white border border-slate-700 hover:bg-slate-800 shadow-2xs"
                   : "bg-amber-50 border border-amber-300 text-amber-700 hover:bg-amber-100"
               }`}>
               <Eye className="w-3.5 h-3.5" />
@@ -10101,12 +10321,12 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
                 <button onClick={() => !isPersonal || divisionApproved ? setShowAddModal(true) : undefined}
                   disabled={isPersonal && !divisionApproved}
                   title={isPersonal && !divisionApproved ? "KPI Division harus disetujui terlebih dahulu" : ""}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white border border-blue-600 hover:bg-blue-700 shadow-2xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                   <Plus className="w-4 h-4" /> Add KPI
                 </button>
               )}
               <button onClick={() => setView("preview")}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 shadow-2xs transition-colors">
                 <Eye className="w-4 h-4" /> Preview
               </button>
               {canSubmit && (
@@ -10121,7 +10341,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
           {!isCorporate && view === "preview" && !submitted && !isViewOnly && (
             <>
               <button onClick={() => setView("input")}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-slate-700 text-white border border-slate-700 hover:bg-slate-800 shadow-2xs transition-colors">
                 <Edit3 className="w-4 h-4" /> Back
               </button>
               {canSubmit && (

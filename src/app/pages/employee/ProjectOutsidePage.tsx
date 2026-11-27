@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { DatePickerID } from "../../components/DatePickerID";
+import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 import {
   Eye, Send, CheckCircle2, Edit3, Plus, Trash2, X, FolderKanban,
   Users, Lightbulb, Award, ClipboardList,
@@ -294,11 +295,11 @@ function ProjectCard({ project, editable, onEdit, onDelete }: {
         <div className="grid grid-cols-3 gap-3">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400 mb-0.5">Start Date</p>
-            <p className="text-sm text-gray-700">{project.startDate || "—"}</p>
+            <p className="text-sm text-gray-700">{normalizeDateDDMMYYYY(project.startDate)}</p>
           </div>
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400 mb-0.5">End Date</p>
-            <p className="text-sm text-gray-700">{project.endDate || "—"}</p>
+            <p className="text-sm text-gray-700">{normalizeDateDDMMYYYY(project.endDate)}</p>
           </div>
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400 mb-0.5">Your Role</p>

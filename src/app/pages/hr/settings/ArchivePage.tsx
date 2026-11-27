@@ -10,11 +10,12 @@ import {
   type ArchivedUserRecord,
 } from "../../../store/archiveStore";
 import { useAuthStore } from "../../../store/authStore";
+import { normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso || "—";
-  return d.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+  if (Number.isNaN(d.getTime())) return normalizeDateDDMMYYYY(iso);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 }
 
 type ConfirmState = { kind: "restore" | "delete"; record: ArchivedUserRecord } | null;

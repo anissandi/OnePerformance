@@ -20,6 +20,8 @@ export interface StoredRCAActionPlan {
   targetDate: string;
   pic: string;
   status: string;
+  /** Tanggal aktual penyelesaian (diisi melalui DatePicker saat Status Perbaikan = "Selesai") */
+  actualCompletionDate?: string;
   keterangan: string[];
   output: string[];
   evidence: string[];

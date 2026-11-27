@@ -17,6 +17,7 @@ import {
   normalizeKpiColorBandValue,
   normalizeTrackingPeriod,
   parseFlexibleKpiNumber,
+  parseKpiRatioParts,
   parseStabilizeRange,
   resolveKpiColorBandMeta,
   sanitizeKpiNumericInput,
@@ -217,6 +218,7 @@ interface RCAActionPlan {
   targetDate: string;
   pic: string;
   status: StatusPerbaikan;
+  actualCompletionDate?: string;
   keterangan: string[];
   output: string[];
   evidence: string[];
@@ -250,7 +252,7 @@ const RCA_STATUS_STYLE: Record<StatusPerbaikan, string> = {
 };
 
 function newRCAAction(): RCAActionPlan {
-  return { id: Math.random().toString(36).slice(2), action: "", targetDate: "", pic: "", status: "Belum dilaksanakan", keterangan: [], output: [], evidence: [] };
+  return { id: Math.random().toString(36).slice(2), action: "", targetDate: "", pic: "", status: "Belum dilaksanakan", actualCompletionDate: "", keterangan: [], output: [], evidence: [] };
 }
 
 interface PendingRCA {
@@ -510,7 +512,11 @@ function computeCell(
     const neg = parseNum(negRaw) ?? 0;
     const pos = parseNum(getRaw(spec.posIdx)) ?? 0;
     if (neg === 0) return "100%";
-    return pos >= neg * spec.multiplier ? "100%" : "0%";
+    const tgtIdx = subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));
+    const tgtRatioRaw = tgtIdx >= 0 ? getRaw(tgtIdx) : "";
+    const parsedRatio = parseKpiRatioParts(tgtRatioRaw);
+    const mult = parsedRatio ? parsedRatio.multiplier : spec.multiplier;
+    return pos + 1e-9 >= neg * mult ? "100%" : "0%";
   }
 
   if (spec.type === "color_band") {
@@ -648,7 +654,12 @@ export function computeTotal2026(
           if (!negRaw) return null;
           const neg = parseNum(negRaw) ?? 0;
           const pos = parseNum(allCells[m.id]?.[ck(kpi.no, spec.posIdx)] ?? "") ?? 0;
-          return (neg === 0 || pos >= neg * spec.multiplier) ? 100 : 0;
+          if (neg === 0) return 100;
+          const tgtIdx = kpi.subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));
+          const tgtRatioRaw = (tgtIdx >= 0 ? allCells[m.id]?.[ck(kpi.no, tgtIdx)] : "") || resolveKpiMonthTarget(kpi, m.label);
+          const parsedRatio = parseKpiRatioParts(tgtRatioRaw);
+          const mult = parsedRatio ? parsedRatio.multiplier : spec.multiplier;
+          return pos + 1e-9 >= neg * mult ? 100 : 0;
         })
         .filter((v): v is number => v !== null);
       if (!scores.length) return "—";
@@ -905,9 +916,23 @@ export function mapStoredSettingRowsToTrackingItems(rows: Array<Record<string, u
     const isRatio = rawMode === "ratio";
     const mt = (r.monthlyTargets && typeof r.monthlyTargets === "object" ? (r.monthlyTargets as Record<string, string>) : {});
     const firstRatioStr = String(r.target2026 ?? Object.values(mt).find(Boolean) ?? "6:1");
-    const ratioMult = isRatio ? (parseInt(firstRatioStr.split(":")[0] ?? "6", 10) || 6) : undefined;
-    const negLabel = r.ratioNegativeLabel ? String(r.ratioNegativeLabel) : "News Negatif";
-    const posLabel = r.ratioPositiveLabel ? String(r.ratioPositiveLabel) : "News Positif";
+    const parsedFirstRatio = isRatio ? parseKpiRatioParts(firstRatioStr) : null;
+    const ratioMult = isRatio
+      ? (parsedFirstRatio ? parsedFirstRatio.multiplier : (parseFloat(firstRatioStr.split(":")[0] ?? "6") || 6))
+      : undefined;
+    const isCustomRatio =
+      isRatio &&
+      (r.ratioType === "custom" || !["10:1", "6:1", "5:1", "4:1", "3:1", "2:1"].includes(firstRatioStr.trim()));
+    const negLabel = r.ratioNegativeLabel
+      ? String(r.ratioNegativeLabel)
+      : isCustomRatio
+      ? "Aktual Rasio Pembanding (Kanan)"
+      : "News Negatif";
+    const posLabel = r.ratioPositiveLabel
+      ? String(r.ratioPositiveLabel)
+      : isCustomRatio
+      ? "Aktual Rasio Utama (Kiri)"
+      : "News Positif";
     const subRows: SubRow[] = isRatio
       ? mkRatioScore(ratioMult ?? 6, negLabel, posLabel)
       : isColor
@@ -1375,6 +1400,26 @@ const MONTH_OPTIONS = [
   "Jul-26","Aug-26","Sep-26","Oct-26","Nov-26","Dec-26",
 ];
 
+const FULL_MONTH_NAME_ID: Record<string, string> = {
+  Jan: "Januari",
+  Feb: "Februari",
+  Mar: "Maret",
+  Apr: "April",
+  May: "Mei",
+  Jun: "Juni",
+  Jul: "Juli",
+  Aug: "Agustus",
+  Sep: "September",
+  Oct: "Oktober",
+  Nov: "November",
+  Dec: "Desember",
+};
+
+function resolveFullIdMonthName(label: string): string {
+  const short = String(label ?? "").replace(/-\d{2}$/, "").trim();
+  return FULL_MONTH_NAME_ID[short] ?? short;
+}
+
 // Strip year suffix for display only (e.g. "Jan-26" → "Jan")
 function displayMonth(label: string): string {
   return label.replace(/-\d{2}$/, "");
@@ -1782,7 +1827,7 @@ function AddMonthModal({
                         {isBlockedInSelectedMonth && (
                           <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
                             <Lock className="w-2.5 h-2.5 shrink-0" />
-                            Inactive · Bulan {displayMonth(label)} Diblok ({normKpiPeriod})
+                            KPI ini di bulan {resolveFullIdMonthName(label)} Anda inactive kan pada saat membuat KPI Setting.
                           </span>
                         )}
                       </p>
@@ -1798,7 +1843,7 @@ function AddMonthModal({
                         <div className="rounded-xl border border-slate-200 bg-slate-100/70 px-3.5 py-2.5 text-xs text-slate-500 flex items-center gap-2">
                           <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                           <span>
-                            Bulan <strong>{displayMonth(label)}</strong> berstatus <strong>Inactive</strong> (bernilai <strong>0</strong>, bersifat <strong>read-only</strong>, dan tidak memicu <strong>RCA</strong>).
+                            KPI ini di bulan <strong>{resolveFullIdMonthName(label)}</strong> Anda inactive kan pada saat membuat KPI Setting.
                           </span>
                         </div>
                       ) : rowGroups.map((grp, gi) => {
@@ -2404,19 +2449,15 @@ function RCAModal({
                 </div>
               </div>
               <div className="mt-3 max-w-xs">
-                <label className="text-[10px] font-bold uppercase tracking-wide text-[#1A284F]">
-                  Actual <span className="text-emerald-600 font-semibold normal-case tracking-normal">(dapat diedit)</span>
+                <label className="text-[10px] font-bold uppercase tracking-wide text-blue-600">
+                  Actual <span className="text-blue-400 font-normal normal-case tracking-normal">(auto · read-only)</span>
                 </label>
-                <input
-                  type="text"
-                  value={form.actual}
-                  onChange={(e) => setForm((prev) => ({ ...prev, actual: e.target.value }))}
-                  placeholder="Masukkan nilai actual..."
-                  className="mt-1 w-full text-xs font-bold text-gray-800 px-3 py-2 bg-white rounded-lg border border-gray-300 focus:border-[#1A284F] outline-none min-h-[34px]"
-                />
+                <p className="mt-1 w-full text-xs font-bold text-gray-800 px-3 py-2 bg-blue-50 rounded-lg border border-blue-100 min-h-[34px] flex items-center select-none">
+                  {form.actual || "—"}
+                </p>
               </div>
               <p className="mt-2 text-[10px] text-blue-500 flex items-center gap-1">
-                <Info className="w-3 h-3 shrink-0" /> Periode, KPI, Satuan, Baseline, Target (Yearly), dan Monthly Target terisi otomatis sesuai baris KPI pada tabel KPI Tracking; field Actual dapat disesuaikan.
+                <Info className="w-3 h-3 shrink-0" /> Periode, KPI, Satuan, Baseline, Target (Yearly), Monthly Target, dan Actual terisi otomatis (read-only) sesuai baris KPI pada tabel KPI Tracking.
               </p>
             </div>
           </div>
@@ -2554,12 +2595,38 @@ function RCAModal({
                                 <div className="flex flex-col gap-1">
                                   <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Status Perbaikan</label>
                                   <select value={ap.status}
-                                    onChange={(e) => setBlockAP(block.id, ap.id, "status", e.target.value as StatusPerbaikan)}
+                                    onChange={(e) => {
+                                      const nextSt = e.target.value as StatusPerbaikan;
+                                      setBlocks((bs) =>
+                                        bs.map((b) =>
+                                          b.id !== block.id
+                                            ? b
+                                            : {
+                                                ...b,
+                                                actionPlans: b.actionPlans.map((a) =>
+                                                  a.id === ap.id
+                                                    ? { ...a, status: nextSt, ...(nextSt !== "Selesai" ? { actualCompletionDate: "" } : {}) }
+                                                    : a,
+                                                ),
+                                              },
+                                        ),
+                                      );
+                                    }}
                                     className={F_CLS}>
                                     {RCA_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                                   </select>
                                   <span className={`inline-block w-fit mt-0.5 px-2 py-0.5 rounded-full text-[9px] font-bold ${RCA_STATUS_STYLE[ap.status]}`}>{ap.status}</span>
                                 </div>
+                                {ap.status === "Selesai" && (
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Aktual Penyelesaian</label>
+                                    <DatePickerID
+                                      value={ap.actualCompletionDate ?? ""}
+                                      onChange={(iso) => setBlockAP(block.id, ap.id, "actualCompletionDate", iso)}
+                                      size="sm"
+                                    />
+                                  </div>
+                                )}
                                 <div className="flex flex-col gap-1">
                                   <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Keterangan</label>
                                   <RCAListEditor items={ap.keterangan} onChange={(v) => setBlockAP(block.id, ap.id, "keterangan", v)} />
@@ -3183,7 +3250,7 @@ function KPITable({
                     key={m.id}
                     className="border border-slate-200 bg-slate-100/85 text-center text-xs py-1 px-1 select-none"
                     style={{ minWidth: 120 }}
-                    title={`Bulan ${displayMonth(m.label)} berstatus Inactive (nilai 0 · read-only · tidak memicu RCA)`}
+                    title={`KPI ini di bulan ${resolveFullIdMonthName(m.label)} Anda inactive kan pada saat membuat KPI Setting.`}
                   >
                     {isComputed ? (
                       <span className="text-slate-400 text-[11px] font-medium" title="Bulan Inactive tidak memicu RCA">—</span>
@@ -5577,7 +5644,7 @@ function KPIWorkspace({
                           editRequestApproved ||
                           MONTH_OPTIONS.filter((m) => !months.some((em) => em.label === m) && kpiModuleScheduleEval.allowedMonthLabels.includes(m)).length === 0
                         }
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-blue-600 text-white border border-blue-600 hover:bg-blue-700 shadow-2xs disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
                       >
                         <Plus className="w-4 h-4" />
                         Add Month
@@ -5596,7 +5663,7 @@ function KPIWorkspace({
                   <button
                     type="button"
                     onClick={() => setView("preview")}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 shadow-2xs transition-colors"
                   >
                     <Eye className="w-4 h-4" />
                     Preview
@@ -5605,7 +5672,7 @@ function KPIWorkspace({
                   <button
                     type="button"
                     onClick={() => setView("input")}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-slate-700 text-white border border-slate-700 hover:bg-slate-800 shadow-2xs transition-colors"
                   >
                     <Edit3 className="w-4 h-4" />
                     Back to Edit

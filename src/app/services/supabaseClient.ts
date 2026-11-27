@@ -297,7 +297,16 @@ async function syncDirectToPostgrest(payload: Record<string, unknown>): Promise<
   } else if (kind === "users-batch" && Array.isArray(payload.users)) {
     const valid = (payload.users as Array<Record<string, unknown>>).filter((u) => Boolean(u && String(u.employeeId ?? "").trim()));
     if (valid.length > 0) {
-      const fullRows = valid.map((u) => {
+      // Deduplikasi berdasarkan employee_id khusus untuk tabel relasional pa_users (ON CONFLICT employee_id)
+      // agar tidak terjadi error Postgres 21000 apabila terdapat >1 akun dengan ID Karyawan yang sama;
+      // daftar lengkap per (Unit Usaha, Reg No) tetap tersimpan utuh di pa_managed_users_v1 (pa_kv_state).
+      const dedupByEmp = new Map<string, Record<string, unknown>>();
+      for (const item of valid) {
+        const k = String(item.employeeId ?? "").trim().toLowerCase();
+        if (k) dedupByEmp.set(k, item);
+      }
+      const uniqueForSql = Array.from(dedupByEmp.values());
+      const fullRows = uniqueForSql.map((u) => {
         const apPair = normalizeDbApproverPair(u.regNoAp1, u.regNoAp2);
         const empIdStr = String(u.employeeId ?? "").trim();
         const rawRegNo = String(u.regNo ?? "").trim();
@@ -1114,6 +1123,7 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
       kind === "user-upsert" ||
       kind === "users-batch" ||
       kind === "users-replace" ||
+      kind === "users-replace-unit" ||
       kind === "user-delete" ||
       kind === "workflow-delete" ||
       kind === "interview-schedule" ||
@@ -1127,7 +1137,7 @@ export async function syncToSupabase(payload: Record<string, unknown>): Promise<
     const vercelResp = await callVercelSyncApi({ method: "POST", body: JSON.stringify(payload) });
     const vercelOk = Boolean(vercelResp?.ok);
 
-    const directOk = kind === "kv-map-merge" || kind === "users-replace"
+    const directOk = kind === "kv-map-merge" || kind === "users-replace" || kind === "users-replace-unit"
       ? false
       : await syncDirectToPostgrest(payload);
 
@@ -1829,6 +1839,55 @@ export async function fetchEmployeeWorkflowRecordsLive(employeeId: string): Prom
     return remotePayloads;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Sinkronisasi ringan dokumen workflow terbaru (`pa_workflow_documents`) untuk memperbarui antrean approval
+ * secara realtime pada sesi Approver yang sedang aktif tanpa me-reload halaman.
+ */
+export async function syncRecentWorkflowDocumentsRealtime(limit = 60): Promise<void> {
+  try {
+    const docs = await restSelect<Record<string, unknown>>(
+      "pa_workflow_documents",
+      `select=*&order=updated_at.desc&limit=${limit}`,
+    );
+    if (!Array.isArray(docs) || docs.length === 0) return;
+    const existingRaw = safeGetLocalRaw("appraisal_workflow_v1");
+    const existingList: Array<Record<string, unknown>> = existingRaw ? JSON.parse(existingRaw) : [];
+    const byKey = new Map<string, Record<string, unknown>>();
+    for (const item of Array.isArray(existingList) ? existingList : []) {
+      if (item && typeof item.key === "string") byKey.set(item.key, item);
+    }
+    let changed = false;
+    for (const doc of docs) {
+      const payload = (doc.payload && typeof doc.payload === "object" ? doc.payload : null) as Record<string, unknown> | null;
+      const key = String(payload?.key ?? doc.doc_key ?? "").trim();
+      if (!key) continue;
+      if (payload?.cancelled === true || doc.status === "Cancelled") {
+        if (byKey.has(key)) {
+          byKey.delete(key);
+          changed = true;
+        }
+        continue;
+      }
+      if (payload) {
+        const prev = byKey.get(key);
+        const sameJson = prev ? JSON.stringify(prev) === JSON.stringify(payload) : false;
+        if (!sameJson) {
+          byKey.set(key, payload);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      safeSetLocalJson("appraisal_workflow_v1", Array.from(byKey.values()));
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("appraisal-updated"));
+      }
+    }
+  } catch {
+    // ignore offline
   }
 }
 
@@ -2745,19 +2804,45 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
     kvUsersList = [];
   }
   let archivedIds = new Set<string>();
+  let archivedUnitRegs = new Set<string>();
+  let archivedUnitEmps = new Set<string>();
   try {
-    const archived = JSON.parse(safeGetLocalRaw("pa_archived_users_v1") ?? "[]") as Array<{ user?: { employeeId?: string } }>;
-    archivedIds = new Set(archived.map((a) => String(a.user?.employeeId ?? "").toLowerCase()).filter(Boolean));
+    const archived = JSON.parse(safeGetLocalRaw("pa_archived_users_v1") ?? "[]") as Array<{
+      user?: { employeeId?: string; company?: string; regNo?: string };
+    }>;
+    for (const a of archived) {
+      const emp = String(a.user?.employeeId ?? "").trim().toLowerCase();
+      const unit = canonicalizeDbCompanyUnit(a.user?.company ?? "").trim().toLowerCase();
+      const reg = String(a.user?.regNo ?? "").trim().toLowerCase();
+      if (unit && reg) {
+        archivedUnitRegs.add(`${unit}::${reg}`);
+      } else if (unit && emp) {
+        archivedUnitEmps.add(`${unit}::${emp}`);
+      } else if (emp) {
+        archivedIds.add(emp);
+      }
+    }
   } catch {
     archivedIds = new Set();
+    archivedUnitRegs = new Set();
+    archivedUnitEmps = new Set();
   }
+  const isArchivedUserRecord = (u: Record<string, unknown>): boolean => {
+    const emp = String(u.employeeId ?? u.employee_id ?? "").trim().toLowerCase();
+    const unit = canonicalizeDbCompanyUnit(u.company ?? "").trim().toLowerCase();
+    const reg = String(u.regNo ?? u.reg_no ?? "").trim().toLowerCase();
+    if (unit && reg && archivedUnitRegs.has(`${unit}::${reg}`)) return true;
+    if (unit && emp && archivedUnitEmps.has(`${unit}::${emp}`)) return true;
+    if (!unit && emp && archivedIds.has(emp)) return true;
+    return false;
+  };
   const rawTrialFlag = safeGetLocalRaw("pa_trial_mode_clean_v1");
   const isCleanTrial =
     rawTrialFlag === "true" ||
     rawTrialFlag === '"true"';
 
   if (!Array.isArray(users) || users.length === 0) {
-    const list = kvUsersList.filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
+    const list = kvUsersList.filter((u) => !isArchivedUserRecord(u));
     if (list.length > 0) safeSetLocalJson("pa_managed_users_v1", list);
     return list;
   }
@@ -2765,6 +2850,12 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
   // Jika pa_managed_users_v1 tersedia (hasil User Management / Import Excel), nilai field di pa_managed_users_v1
   // (seperti Company Unit, Reg No, Role, Divisi, Status) harus diutamakan agar baris seed lama di pa_users tidak menimpanya!
   const dbByEmp = new Map(users.map((u) => [String(u.employee_id ?? "").toLowerCase(), u]));
+  const dbByUnitAndReg = new Map<string, Record<string, unknown>>();
+  for (const u of users) {
+    const unitK = canonicalizeDbCompanyUnit(u.company ?? "").trim().toLowerCase();
+    const regK = String(u.reg_no ?? "").trim().toLowerCase();
+    if (unitK && regK) dbByUnitAndReg.set(`${unitK}::${regK}`, u);
+  }
   const hadLegacyAsdInDb =
     users.some((u) => u?.company === "ASD" || u?.company === "RSUP ASD") ||
     kvUsersList.some((u) => u?.company === "ASD" || u?.company === "RSUP ASD");
@@ -2774,7 +2865,18 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
   if (kvUsersList.length > 0) {
     const mergedFromKv = kvUsersList.map((kvU, idx) => {
       const empKey = String(kvU.employeeId ?? "").toLowerCase();
-      const dbU = dbByEmp.get(empKey);
+      const kvUnitLower = canonicalizeDbCompanyUnit(kvU.company ?? "").trim().toLowerCase();
+      const kvRegLower = String(kvU.regNo ?? "").trim().toLowerCase();
+      const rawDbByEmp = dbByEmp.get(empKey);
+      const rawDbByEmpSameUnit =
+        rawDbByEmp &&
+        (!kvUnitLower || canonicalizeDbCompanyUnit(rawDbByEmp.company ?? "").trim().toLowerCase() === kvUnitLower) &&
+        (!kvRegLower || !rawDbByEmp.reg_no || String(rawDbByEmp.reg_no ?? "").trim().toLowerCase() === kvRegLower)
+          ? rawDbByEmp
+          : undefined;
+      const dbU =
+        (kvUnitLower && kvRegLower ? dbByUnitAndReg.get(`${kvUnitLower}::${kvRegLower}`) : undefined) ??
+        rawDbByEmpSameUnit;
       const hasKvAp = kvU.regNoAp1 !== undefined || kvU.regNoAp2 !== undefined;
       const apPair = normalizeDbApproverPair(
         hasKvAp ? kvU.regNoAp1 : dbU?.reg_no_ap1,
@@ -2849,6 +2951,9 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
               ? (dbU.soy_calibration_role_by_unit as Record<string, string>)
               : undefined,
         directorCalibrationRole: String(kvU.directorCalibrationRole ?? dbU?.director_calibration_role ?? ""),
+        employeeStatus: String(kvU.employeeStatus ?? dbU?.employee_status ?? ""),
+        employeeStatusNote: String(kvU.employeeStatusNote ?? dbU?.employee_status_note ?? ""),
+        effectiveDate: String(kvU.effectiveDate ?? dbU?.effective_date ?? ""),
       };
     });
     const seenIds = new Set(mergedFromKv.map((u) => u.employeeId.toLowerCase()));
@@ -2924,10 +3029,11 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
                 ? (u.soy_calibration_role_by_unit as Record<string, string>)
                 : undefined,
             directorCalibrationRole: String(u.director_calibration_role ?? ""),
+            employeeStatus: String(u.employee_status ?? ""),
+            employeeStatusNote: String(u.employee_status_note ?? ""),
+            effectiveDate: String(u.effective_date ?? ""),
           }));
-    const synced = [...mergedFromKv, ...extraDbUsers].filter(
-      (u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()),
-    );
+    const synced = [...mergedFromKv, ...extraDbUsers].filter((u) => !isArchivedUserRecord(u));
     // Pastikan tidak ada id duplikat antar entri user hasil penggabungan
     const usedSyncIds = new Set<string>();
     for (let i = 0; i < synced.length; i++) {
@@ -3007,7 +3113,10 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
         ? (u.soy_calibration_role_by_unit as Record<string, string>)
         : undefined,
     directorCalibrationRole: String(u.director_calibration_role ?? ""),
-  })).filter((u) => !archivedIds.has(String(u.employeeId ?? "").toLowerCase()));
+    employeeStatus: String(u.employee_status ?? ""),
+    employeeStatusNote: String(u.employee_status_note ?? ""),
+    effectiveDate: String(u.effective_date ?? ""),
+  })).filter((u) => !isArchivedUserRecord(u));
   safeSetLocalJson("pa_managed_users_v1", mapped);
   return mapped;
 }
@@ -3968,4 +4077,267 @@ export async function replaceAllBackendUsersAndResetForTrial(
   window.dispatchEvent(new Event("pa-employees-imported"));
   window.dispatchEvent(new Event("appraisal-updated"));
   window.dispatchEvent(new Event("feedback-updated"));
+}
+
+/**
+ * Membersihkan riwayat transaksi penilaian kinerja secara terarah hanya untuk daftar karyawan terdampak
+ * (tanpa menyentuh akun atau transaksi karyawan lain maupun unit usaha lain).
+ */
+export async function clearEmployeeTransactionsForSync(
+  targetEmployees: Array<{ employeeId: string; regNo?: string; company?: string }>,
+  survivingProtectedEmployees: Array<{ employeeId: string; regNo?: string; company?: string }> = [],
+): Promise<void> {
+  if (targetEmployees.length === 0) return;
+  const protectedEmpIds = new Set<string>();
+  for (const p of survivingProtectedEmployees) {
+    for (const v of buildEmployeeIdMatchSet(p.employeeId)) {
+      protectedEmpIds.add(v.toLowerCase());
+    }
+  }
+  const clearableEmpVariants = new Set<string>();
+  const rawTargetEmpIds: string[] = [];
+  for (const t of targetEmployees) {
+    const variants = buildEmployeeIdMatchSet(t.employeeId);
+    const isSharedWithProtected = Array.from(variants).some((v) => protectedEmpIds.has(v.toLowerCase()));
+    if (!isSharedWithProtected) {
+      for (const v of variants) {
+        clearableEmpVariants.add(v.toLowerCase());
+        rawTargetEmpIds.push(v);
+      }
+    }
+    const sliceKey = canonicalEmployeeSliceKey(t.employeeId);
+    if (sliceKey && !isSharedWithProtected) {
+      try {
+        localStorage.removeItem(`pa_kpi_setting_emp_v1_${sliceKey}`);
+        localStorage.removeItem(`pa_wf_emp_v1_${sliceKey}`);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  if (clearableEmpVariants.size === 0) return;
+
+  const EMP_MAP_KEYS = [
+    "pa_kpi_setting_by_emp_v2",
+    "pa_kpi_tracking_by_emp_v1",
+    "kpi_tracking_v1",
+    "pa_smart_goals_by_emp_v1",
+    "smart_goals_v1",
+    "smart_goals_checkin_v1",
+    "smart_goals_approvals_v1",
+    "pa_appraisal_form_by_emp_v1",
+    "appraisal_form_self_v1",
+    "appraisal_form_approver_v1",
+    "pa_managerial_skill_by_emp_v1",
+    "ms_self_v1",
+    "ms_approver_v1",
+    "kpi_evidence_files_by_emp_v1",
+    "pa_project_icf_by_emp_v1",
+    "pa_mi_supervisor_assessments_v1",
+    "pa_mi_penilai1_scores_v1",
+    "pa_mi_results_by_emp_v1",
+    "pa_calibration_adj_scores_v1",
+    "pa_calibration_adj_comments_v1",
+  ];
+  for (const key of EMP_MAP_KEYS) {
+    try {
+      const raw = safeGetLocalRaw(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const map = parsed as Record<string, unknown>;
+      let changed = false;
+      for (const k of Object.keys(map)) {
+        if (clearableEmpVariants.has(k.trim().toLowerCase())) {
+          delete map[k];
+          changed = true;
+        }
+      }
+      if (changed) {
+        savePersistedState(key, map);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Bersihkan dokumen workflow (appraisal_workflow_v1 & appraisal_workflow_records_v1) milik karyawan terdampak
+  for (const wfKey of ["appraisal_workflow_v1", "appraisal_workflow_records_v1"]) {
+    try {
+      const wfRaw = safeGetLocalRaw(wfKey);
+      if (!wfRaw) continue;
+      const wfList = JSON.parse(wfRaw) as Array<Record<string, unknown>>;
+      if (!Array.isArray(wfList) || wfList.length === 0) continue;
+      const removedWf = wfList.filter((r) =>
+        clearableEmpVariants.has(String(r?.employeeId ?? "").trim().toLowerCase()),
+      );
+      if (removedWf.length > 0) {
+        const keptWf = wfList.filter(
+          (r) => !clearableEmpVariants.has(String(r?.employeeId ?? "").trim().toLowerCase()),
+        );
+        savePersistedState(wfKey, keptWf);
+        void syncToSupabase({
+          kind: "workflow-delete",
+          docKeys: removedWf.map((r) => String(r.key ?? "")).filter(Boolean),
+          records: removedWf,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Bersihkan array transaksi berbasis employeeId / requesterId
+  const ARRAY_EMP_KEYS: Array<{ key: string; fields: string[] }> = [
+    { key: "kpi_rca_submissions", fields: ["employeeId"] },
+    { key: "inter_department_feedback_workflows_v2", fields: ["requesterId", "employeeId"] },
+    { key: "pa_open_lock_requests_v1", fields: ["employeeId"] },
+    { key: "pa_kpi_target_edit_requests_v1", fields: ["requesterId", "employeeId"] },
+    { key: "pa_interview_schedules_v1", fields: ["employeeId"] },
+  ];
+  for (const { key, fields } of ARRAY_EMP_KEYS) {
+    try {
+      const raw = safeGetLocalRaw(key);
+      if (!raw) continue;
+      const list = JSON.parse(raw) as Array<Record<string, unknown>>;
+      if (!Array.isArray(list) || list.length === 0) continue;
+      const kept = list.filter(
+        (item) =>
+          !fields.some((f) => clearableEmpVariants.has(String(item?.[f] ?? "").trim().toLowerCase())),
+      );
+      if (kept.length !== list.length) {
+        savePersistedState(key, kept);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Bersihkan baris tabel relasional Supabase khusus untuk employee_id yang tidak dipakai unit lain
+  const inList = buildPostgrestInList(rawTargetEmpIds);
+  if (inList) {
+    const relTables = [
+      "pa_workflow_documents",
+      "pa_kpi_settings",
+      "pa_kpi_trackings",
+      "pa_smart_goals",
+      "pa_rca_submissions",
+      "pa_calibration_adjustments",
+    ];
+    await Promise.all(
+      relTables.map(async (tbl) => {
+        try {
+          await fetch(`${SUPABASE_REST_BASE}/${tbl}?employee_id=in.(${inList})`, {
+            method: "DELETE",
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            },
+          });
+        } catch {
+          // ignore network / missing table errors
+        }
+      }),
+    );
+  }
+  window.dispatchEvent(new Event("appraisal-updated"));
+  window.dispatchEvent(new Event("feedback-updated"));
+}
+
+/**
+ * Mengganti seluruh data karyawan & transaksi (aktif maupun arsip) khusus untuk satu Unit Usaha terpilih
+ * (atau seluruh unit bila targetUnit === "ALL"), tanpa menyentuh Unit Usaha lainnya.
+ */
+export async function replaceCompanyUnitUsersAndResetTransactions(
+  targetUnit: string,
+  importedUnitUsers: Array<Record<string, unknown>>,
+): Promise<Array<Record<string, unknown>>> {
+  if (targetUnit === "ALL") {
+    savePersistedState("pa_archived_users_v1", []);
+    await replaceAllBackendUsersAndResetForTrial(importedUnitUsers, true);
+    return importedUnitUsers;
+  }
+  const canonTarget = canonicalizeDbCompanyUnit(targetUnit);
+  const currentAll = loadPersistedState<Array<Record<string, unknown>>>("pa_managed_users_v1", []);
+  const otherUnitUsers = currentAll.filter(
+    (u) => canonicalizeDbCompanyUnit(u?.company ?? "") !== canonTarget,
+  );
+  const oldUnitUsers = currentAll.filter(
+    (u) => canonicalizeDbCompanyUnit(u?.company ?? "") === canonTarget,
+  );
+
+  // Bersihkan data arsip khusus untuk Unit Usaha ini
+  let archivedUnitEmps: Array<{ employeeId: string; regNo?: string; company?: string }> = [];
+  try {
+    const rawArch = safeGetLocalRaw("pa_archived_users_v1");
+    const archList = rawArch ? (JSON.parse(rawArch) as Array<{ user?: Record<string, unknown> }>) : [];
+    if (Array.isArray(archList) && archList.length > 0) {
+      archivedUnitEmps = archList
+        .filter((a) => canonicalizeDbCompanyUnit(a?.user?.company ?? "") === canonTarget)
+        .map((a) => ({
+          employeeId: String(a?.user?.employeeId ?? ""),
+          regNo: String(a?.user?.regNo ?? ""),
+          company: canonTarget,
+        }))
+        .filter((x) => Boolean(x.employeeId));
+      const keptArch = archList.filter(
+        (a) => canonicalizeDbCompanyUnit(a?.user?.company ?? "") !== canonTarget,
+      );
+      savePersistedState("pa_archived_users_v1", keptArch);
+    }
+  } catch {
+    // ignore
+  }
+
+  const nextAllUsers = [...otherUnitUsers, ...importedUnitUsers];
+  savePersistedState("pa_managed_users_v1", nextAllUsers);
+
+  // Bersihkan transaksi milik karyawan lama, arsip, maupun baru pada Unit Usaha tersebut (lindungi akun unit lain)
+  const affectedEmployees = [
+    ...oldUnitUsers.map((u) => ({
+      employeeId: String(u.employeeId ?? ""),
+      regNo: String(u.regNo ?? ""),
+      company: canonTarget,
+    })),
+    ...archivedUnitEmps,
+    ...importedUnitUsers.map((u) => ({
+      employeeId: String(u.employeeId ?? ""),
+      regNo: String(u.regNo ?? ""),
+      company: canonTarget,
+    })),
+  ].filter((x) => Boolean(x.employeeId));
+  const protectedOtherEmps = otherUnitUsers
+    .map((u) => ({
+      employeeId: String(u.employeeId ?? ""),
+      regNo: String(u.regNo ?? ""),
+      company: String(u.company ?? ""),
+    }))
+    .filter((x) => Boolean(x.employeeId));
+  await clearEmployeeTransactionsForSync(affectedEmployees, protectedOtherEmps);
+
+  await syncToSupabase({
+    kind: "users-replace-unit",
+    targetCompany: canonTarget,
+    users: nextAllUsers,
+  });
+  try {
+    await fetch(`${SUPABASE_REST_BASE}/pa_users?company=eq.${encodeURIComponent(canonTarget)}`, {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    });
+    if (nextAllUsers.length > 0) {
+      await syncDirectToPostgrest({ kind: "users-batch", users: nextAllUsers });
+    }
+  } catch {
+    // ignore network errors
+  }
+
+  window.dispatchEvent(new Event("pa-auth-updated"));
+  window.dispatchEvent(new Event("pa-employees-imported"));
+  window.dispatchEvent(new Event("appraisal-updated"));
+  window.dispatchEvent(new Event("feedback-updated"));
+  return nextAllUsers;
 }

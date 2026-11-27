@@ -27,6 +27,9 @@ Read and always follow the instructions in the [project guidelines](guidelines/G
    - Setiap request perubahan, penambahan, atau perbaikan wajib dihubungkan ke backend (`api/pa-sync.js`, Supabase Edge Function) dan database Supabase (tabel `pa_*` / Storage `pa-evidence`) apabila memiliki kebutuhan atau keterkaitan data persisten.
 3. **Analisis & Implementasi Tepat Tanpa Kendala**:
    - Pastikan setiap perubahan dianalisis secara menyeluruh (alur data, tipe, validasi, dan dampak lintas modul) sebelum diimplementasikan agar sistem berjalan lancar menuju *Live Production*.
+4. **Perlindungan Mutlak Data User & Transaksi Eksisting (Zero-Data-Loss Rule)**:
+   - Setiap tambahan atau perubahan fitur, *flow*, proses, *formula*, struktur data, maupun tampilan pada sistem ini **wajib menjaga keutuhan seluruh data user dan seluruh transaksinya (termasuk data *draft*, *pending*, *revision*, *approved*, *validated*, lampiran, serta riwayat nilai)** yang sudah ada di database Supabase.
+   - Dilarang melakukan *reset*, pembersihan otomatis, atau migrasi destruktif yang menghapus data user/transaksi eksisting; semua pembaruan wajib *backward-compatible* (kecuali aksi *Clear Transaksi* / *Replace Data* yang secara eksplisit dipilih dan dikonfirmasi dua tahap oleh Administrator di halaman Data Sync).
 
 ---
 
@@ -38,7 +41,8 @@ Seluruh pengembangan dan logika bisnis pada sistem Performance Appraisal (PA) wa
 1. **Import Excel Data Karyawan (`/hr/settings/data-sync`)**:
    - Role **Administrator** mengimpor file Excel data karyawan ke dalam sistem PA (karena untuk tahun berjalan belum terintegrasi langsung ke database & sistem approval internal unit usaha).
    - Format kolom tabel wajib:
-     `No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2; Role; Groupings`
+     `No; Reg No; ID Karyawan; Nama; Divisi; Departement; Bagian; Jabatan; Joindate; No Telegram; Corporate Email; Reg No AP1; Reg No AP2; Role; Groupings; Status Karyawan; Keterangan Status Karyawan; Tgl Efektif` (sheet referensi `Master` diabaikan saat import).
+   - Seluruh format tanggal pada sistem dan dukungan import file menggunakan standar **`DD/MM/YYYY`**.
    - Daftar **Role** sistem: `Employee`, `Supervisor`, `GM`, `HR Unit`, `HR ICF`, `Director`, `BOD`, `Administrator`.
    - Fitur import ini ditempatkan di `/hr/settings/data-sync`.
 2. **Validasi Approval Berjenjang (`Reg No AP1` & `Reg No AP2`)**:

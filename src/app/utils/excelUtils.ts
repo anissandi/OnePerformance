@@ -461,14 +461,66 @@ export function exportXLSX(filename: string, headers: string[], rows: (string | 
   });
 }
 
-/** Membaca matriks penuh seluruh baris dari sheet pertama `.xlsx` (mendukung header bertingkat / matriks SMART Goals). */
+/**
+ * Membaca matriks penuh seluruh baris dari sheet data `.xlsx`:
+ * - Mengabaikan sheet referensi bernama "Master" / "Referensi" / "Reference".
+ * - Mengonversi sel tanggal Excel (serial date) langsung menjadi format standar DD/MM/YYYY tanpa distorsi M/D/YY.
+ * - Tetap mempertahankan format persen (%) pada sel numerik berformat persentase.
+ */
 export function parseXLSXMatrix(dataOrFile: ArrayBuffer | Uint8Array): string[][] {
   const bytes = dataOrFile instanceof Uint8Array ? dataOrFile : new Uint8Array(dataOrFile);
-  const wb = XLSX.read(bytes, { type: "array" });
-  const ws = wb.Sheets[wb.SheetNames[0]];
+  const wb = XLSX.read(bytes, { type: "array", cellNF: true });
+  const targetSheetName =
+    wb.SheetNames.find((n) => !/^(master|referensi|reference)$/i.test(String(n ?? "").trim())) ??
+    wb.SheetNames[0];
+  const ws = targetSheetName ? wb.Sheets[targetSheetName] : undefined;
   if (!ws) return [];
-  const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
-  return aoa.map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? "").trim()) : []));
+  const ref = ws["!ref"];
+  if (!ref) return [];
+  const range = XLSX.utils.decode_range(ref);
+  const matrix: string[][] = [];
+  for (let R = range.s.r; R <= range.e.r; R++) {
+    const row: string[] = [];
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r: R, c: C });
+      const cell = ws[addr] as XLSX.CellObject | undefined;
+      if (!cell || cell.v === undefined || cell.v === null) {
+        row.push("");
+        continue;
+      }
+      if (cell.t === "n" && typeof cell.v === "number") {
+        const fmt = String(cell.z ?? "");
+        const formattedText = String(cell.w ?? "");
+        const isPct = fmt.includes("%") || formattedText.includes("%");
+        const isDateFmt =
+          !isPct &&
+          cell.v > 10000 &&
+          cell.v < 90000 &&
+          ((fmt && /[dmy]/i.test(fmt.replace(/\[[^\]]*\]/g, ""))) ||
+            /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(formattedText.trim()));
+        if (isDateFmt && XLSX.SSF && typeof XLSX.SSF.parse_date_code === "function") {
+          const parsed = XLSX.SSF.parse_date_code(cell.v);
+          if (parsed && parsed.y && parsed.m && parsed.d) {
+            row.push(
+              `${String(parsed.d).padStart(2, "0")}/${String(parsed.m).padStart(2, "0")}/${String(parsed.y).padStart(4, "0")}`,
+            );
+            continue;
+          }
+        }
+        row.push((cell.w !== undefined ? String(cell.w) : String(cell.v)).trim());
+        continue;
+      }
+      if (cell.t === "d" && cell.v instanceof Date && !Number.isNaN(cell.v.getTime())) {
+        row.push(
+          `${String(cell.v.getDate()).padStart(2, "0")}/${String(cell.v.getMonth() + 1).padStart(2, "0")}/${cell.v.getFullYear()}`,
+        );
+        continue;
+      }
+      row.push((cell.w !== undefined ? String(cell.w) : String(cell.v)).trim());
+    }
+    matrix.push(row);
+  }
+  return matrix;
 }
 
 export function parseXLSX(file: File): Promise<{ headers: string[]; rows: string[][] }> {

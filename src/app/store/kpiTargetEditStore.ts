@@ -112,17 +112,21 @@ function findUserByRef(users: ManagedUser[], ref?: string): ManagedUser | undefi
 }
 
 function findHrIcfIds(users: ManagedUser[]): string[] {
-  const icf = users.filter((u) => u.status === "Active" && (u.role === "HR ICF" || Boolean(u.isHrIcfValidator)));
+  // Utamakan user eksplisit dengan role === "HR ICF" agar nama yang tampil adalah user role HR ICF
+  const strictHrIcf = users.filter((u) => u.status !== "Inactive" && u.role === "HR ICF");
+  if (strictHrIcf.length > 0) return strictHrIcf.map((u) => u.employeeId);
+  const icf = users.filter((u) => u.status !== "Inactive" && Boolean(u.isHrIcfValidator));
   if (icf.length > 0) return icf.map((u) => u.employeeId);
-  return users.filter((u) => u.status === "Active" && u.role === "Administrator").map((u) => u.employeeId);
+  return users.filter((u) => u.status !== "Inactive" && u.role === "Administrator").map((u) => u.employeeId);
 }
 
 function findUnitGmUsers(users: ManagedUser[], companyUnit: string, excludeEmpId?: string): ManagedUser[] {
   return users.filter(
     (u) =>
-      u.status === "Active" &&
+      u.status !== "Inactive" &&
       u.role === "GM" &&
-      isSameCompanyUnit(u.company, companyUnit) &&
+      (isSameCompanyUnit(u.company, companyUnit) ||
+        (Array.isArray(u.managedUnits) && u.managedUnits.some((mu) => isSameCompanyUnit(mu, companyUnit)))) &&
       (!excludeEmpId || normalizeEmployeeId(u.employeeId) !== normalizeEmployeeId(excludeEmpId)),
   );
 }
@@ -637,15 +641,70 @@ export function resolveEditRequestApprovers(owner?: ManagedUser): ApproverChainE
 /** Approver Fase 1 Edit [Target] Request: Role HR ICF. */
 export function resolveTargetEditPhase1Approver(): ApproverChainEntry {
   const users = loadManagedUsers();
+  const strictHrIcf = users.filter((u) => u.status !== "Inactive" && u.role === "HR ICF");
+  if (strictHrIcf.length > 0) {
+    return {
+      label: "Approver",
+      name: strictHrIcf.map((u) => u.name).join(", "),
+      role: "HR ICF",
+      employeeId: strictHrIcf[0].employeeId,
+    };
+  }
   const ids = findHrIcfIds(users);
   const first = users.find((u) => ids.includes(u.employeeId));
   return { label: "Approver", name: first?.name ?? "HR ICF", role: "HR ICF", employeeId: first?.employeeId };
 }
 
-/** Rantai Fase 2 Edit [Target] Request: Approver 1 -> Approver 2 -> GM (Unit Usaha) -> Validate (HR ICF). */
+/**
+ * Rantai Fase 2 Edit [Target] Request:
+ * - Untuk KPI Setting Personal selain Role Director, GM, VGM:
+ *   Approver: Atasan 1 -> Atasan 2 -> GM (sesuai unit) -> Validate: HR ICF
+ * - Untuk Role Director / GM / VGM: menyesuaikan rantai atasan terkait -> Validate: HR ICF.
+ */
 export function resolveTargetEditPhase2Chain(owner?: ManagedUser): ApproverChainEntry[] {
   const users = loadManagedUsers();
   const target = owner ?? getActiveUser();
+  const roleNorm = String(target.role ?? "").trim();
+  const isTopExec =
+    roleNorm === "Director" ||
+    roleNorm === "DirectorNonOpr" ||
+    roleNorm === "GM" ||
+    roleNorm === "VGM" ||
+    roleNorm.toLowerCase() === "vgm";
+  const validator = resolveTargetEditPhase1Approver();
+
+  if (!isTopExec) {
+    const ap1 = findUserByRef(users, target.regNoAp1);
+    const ap2 = findUserByRef(users, target.regNoAp2);
+    const gms = findUnitGmUsers(users, target.company, target.employeeId);
+    return [
+      {
+        label: "Atasan 1",
+        name: ap1?.name || target.regNoAp1 || "Belum ditentukan",
+        role: ap1 ? describeUser(ap1) : "Approver 1",
+        employeeId: ap1?.employeeId,
+      },
+      {
+        label: "Atasan 2",
+        name: ap2?.name || target.regNoAp2 || ap1?.name || "Belum ditentukan",
+        role: ap2 ? describeUser(ap2) : "Approver 2",
+        employeeId: ap2?.employeeId,
+      },
+      {
+        label: `GM (${target.company})`,
+        name: gms.length > 0 ? gms.map((g) => g.name).join(", ") : `GM (${target.company})`,
+        role: `GM · ${target.company}`,
+        employeeId: gms[0]?.employeeId,
+      },
+      {
+        label: "Validate: HR ICF",
+        name: validator.name,
+        role: "HR ICF",
+        employeeId: validator.employeeId,
+      },
+    ];
+  }
+
   const chain: ApproverChainEntry[] = [...resolveEditRequestApprovers(target)];
   const usedIds = new Set(chain.map((c) => normalizeEmployeeId(c.employeeId ?? "")));
   const gms = findUnitGmUsers(users, target.company, target.employeeId).filter(
@@ -654,7 +713,6 @@ export function resolveTargetEditPhase2Chain(owner?: ManagedUser): ApproverChain
   if (gms.length > 0) {
     chain.push({ label: "GM", name: gms.map((g) => g.name).join(", "), role: `General Manager (${target.company})`, employeeId: gms[0].employeeId });
   }
-  const validator = resolveTargetEditPhase1Approver();
-  chain.push({ label: "Validate", name: validator.name, role: "HR ICF", employeeId: validator.employeeId });
+  chain.push({ label: "Validate: HR ICF", name: validator.name, role: "HR ICF", employeeId: validator.employeeId });
   return chain;
 }

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Search, Eye, Calendar, X, Users, CheckCircle2, Clock, AlertCircle, Send } from "lucide-react";
+import { DatePickerID } from "../../components/DatePickerID";
 
 interface Candidate {
   id: number;
@@ -299,11 +300,9 @@ export function ManagementInterviewInvitation() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">Interview Date</label>
-                  <input
-                    type="date"
+                  <DatePickerID
                     value={form.date}
-                    onChange={(e) => setField("date", e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]"
+                    onChange={(iso) => setField("date", iso)}
                   />
                 </div>
                 <div>

@@ -12,7 +12,7 @@ import {
 import type { MonthEntry } from "../pages/employee/KPIPage";
 import type { StoredRCASubmission } from "../pages/shared/rcaStore";
 import type { EditedKpiCellDiff } from "../pages/shared/appraisalWorkflowStore";
-import { computeKpiColorBandAchievementPct, isMonthBlockedForKpi, parseStabilizeRange } from "../utils/kpiNumberAndPeriod";
+import { computeKpiColorBandAchievementPct, isMonthBlockedForKpi, parseKpiRatioParts, parseStabilizeRange } from "../utils/kpiNumberAndPeriod";
 import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -126,7 +126,11 @@ export function KPITableView({
       const neg = parseNum(negRaw) ?? 0;
       const pos = parseNum(cells[monthId]?.[`${kpi.no}__${spec.posIdx}`] ?? "") ?? 0;
       if (neg === 0) return "100%";
-      return pos >= neg * spec.multiplier ? "100%" : "0%";
+      const tgtIdx = kpi.subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));
+      const rawTgtRatio = (tgtIdx >= 0 ? cells[monthId]?.[`${kpi.no}__${tgtIdx}`] : "") || resolveFallbackTarget(kpi, monthId);
+      const parsedRatio = parseKpiRatioParts(rawTgtRatio);
+      const mult = parsedRatio ? parsedRatio.multiplier : spec.multiplier;
+      return pos + 1e-9 >= neg * mult ? "100%" : "0%";
     }
     
     return "—";
@@ -295,11 +299,18 @@ export function KPITableView({
                   {months.length > 0 ? (
                     months.map((m) => {
                       if (isMonthBlockedForKpi(kpi, m.label)) {
+                        const monthFullMap: Record<string, string> = {
+                          Jan: "Januari", Feb: "Februari", Mar: "Maret", Apr: "April",
+                          May: "Mei", Jun: "Juni", Jul: "Juli", Aug: "Agustus",
+                          Sep: "September", Oct: "Oktober", Nov: "November", Dec: "Desember",
+                        };
+                        const mShort = m.label.replace(/-\d{2}$/, "");
+                        const mFull = monthFullMap[mShort] ?? mShort;
                         return (
                           <td
                             key={m.id}
                             className="border border-slate-200 bg-slate-100/85 text-center py-1.5 px-1.5 select-none"
-                            title={`Bulan ${m.label} berstatus Inactive (nilai 0 · read-only · tidak memicu RCA)`}
+                            title={`KPI ini di bulan ${mFull} Anda inactive kan pada saat membuat KPI Setting.`}
                           >
                             {isComputed ? (
                               <span className="text-slate-400 text-[11px] font-medium">—</span>

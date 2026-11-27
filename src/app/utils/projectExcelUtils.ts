@@ -1,4 +1,5 @@
 import { exportXLSX, parseXLSX } from "./excelUtils";
+import { normalizeDateDDMMYYYY } from "./dateFormat";
 
 export const PROJECT_EXCEL_HEADERS = [
   "No",
@@ -83,6 +84,10 @@ export function mapParsedProjectExcelRows(headers: string[], rawRows: string[][]
       throw new Error(`Nilai Final Score pada baris ke-${idx + 1} ("${rawScore}") harus berupa angka 0–100.`);
     }
     const employeeId = empIdIdx >= 0 ? getCell(row, empIdIdx, -1) : undefined;
+    const rawStart = getCell(row, startIdx, hasEmpColumns ? 10 : 5);
+    const rawFinish = getCell(row, finishIdx, hasEmpColumns ? 11 : 6);
+    const normStart = normalizeDateDDMMYYYY(rawStart);
+    const normFinish = normalizeDateDDMMYYYY(rawFinish);
     return {
       no: idx + 1,
       ...(employeeId ? { employeeId } : {}),
@@ -94,8 +99,8 @@ export function mapParsedProjectExcelRows(headers: string[], rawRows: string[][]
       roleProject: getCell(row, roleIdx, hasEmpColumns ? 7 : 2),
       projectTitle: getCell(row, titleIdx, hasEmpColumns ? 8 : 3),
       projectDetail: getCell(row, detailIdx, hasEmpColumns ? 9 : 4),
-      startDate: getCell(row, startIdx, hasEmpColumns ? 10 : 5),
-      finishDate: getCell(row, finishIdx, hasEmpColumns ? 11 : 6),
+      startDate: normStart === "—" ? "" : normStart,
+      finishDate: normFinish === "—" ? "" : normFinish,
       progressStatus: getCell(row, statusIdx, hasEmpColumns ? 12 : 7),
       finalScore: Number(parsedScore.toFixed(2)),
     };
@@ -131,8 +136,8 @@ export function downloadProjectExcelTemplate(
         "Team Leader",
         "Reduksi Downtime Mesin Boiler",
         "Pengurangan downtime mesin boiler melalui preventive maintenance dan perbaikan SOP operasional.",
-        "2026-01-15",
-        "2026-06-30",
+        "15/01/2026",
+        "30/06/2026",
         "Done",
         88,
       ],
@@ -147,8 +152,8 @@ export function downloadProjectExcelTemplate(
         "Ideator",
         "Otomasi Checklist Inspeksi Harian",
         "Digitalisasi form inspeksi harian menggunakan QR code untuk mempercepat pelaporan.",
-        "2026-03-01",
-        "2026-08-15",
+        "01/03/2026",
+        "15/08/2026",
         "Done",
         92,
       ],
@@ -169,8 +174,8 @@ export function downloadProjectExcelTemplate(
       "Leader / Ketua",
       "Reduksi Downtime Mesin Boiler",
       "Preventive maintenance terjadwal dan kalibrasi sensor tekanan uap",
-      "2026-01-15",
-      "2026-06-30",
+      "15/01/2026",
+      "30/06/2026",
       "Done",
       88,
     ],

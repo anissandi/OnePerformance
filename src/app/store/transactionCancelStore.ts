@@ -161,7 +161,7 @@ export function listPendingTransactions(): PendingTransaction[] {
       company: rec.unitName,
       moduleLabel: "Calibration Setting (HC Awal Tahun)",
       status: "Pending Approval",
-      submittedDate: rec.submittedAt ? new Date(rec.submittedAt).toLocaleDateString("id-ID") : "—",
+      submittedDate: rec.submittedAt ? normalizeDateDDMMYYYY(rec.submittedAt) : "—",
       resetTo: "Unsubmitted",
     });
   }
@@ -450,3 +450,4 @@ export function cancelPendingTransactions(ids: string[]): number {
   window.dispatchEvent(new Event("pa-db-hydrated"));
   return count;
 }
+import { normalizeDateDDMMYYYY } from "../utils/dateFormat";

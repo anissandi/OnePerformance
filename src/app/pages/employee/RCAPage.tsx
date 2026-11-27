@@ -40,6 +40,7 @@ interface ActionPlan {
   targetDate: string;
   pic: string;
   status: StatusPerbaikan;
+  actualCompletionDate?: string;
   keterangan: string[];
   output: string[];
   evidence: string[];
@@ -112,7 +113,7 @@ const STATUS_PERBAIKAN_STYLE: Record<StatusPerbaikan, string> = {
 function genId() { return Math.random().toString(36).slice(2, 9); }
 
 function newAction(): ActionPlan {
-  return { id: genId(), action: "", targetDate: "", pic: "", status: "Belum dilaksanakan", keterangan: [], output: [], evidence: [] };
+  return { id: genId(), action: "", targetDate: "", pic: "", status: "Belum dilaksanakan", actualCompletionDate: "", keterangan: [], output: [], evidence: [] };
 }
 
 function newMasalahBlock(): MasalahBlock {
@@ -431,6 +432,7 @@ function RCAPreviewTable({ data }: { data: RCAItem[] }) {
             {([["No",42],["Periode",72],["KPI",160],["Satuan",90],["Baseline",90],["Target",80],["Actual",80],
               ["Masalah Utama (A)",180],["Kenapa A? (B)",150],["Kenapa B? (C)",150],["Kenapa C? (D)",150],
               ["Action Plan",180],["Target Penyelesaian",120],["PIC",120],["Status Perbaikan",130],
+              ["Aktual Penyelesaian",135],
               ["Keterangan",160],["Output",160],["Evidence",160]] as [string,number][]).map(([h, w]) => (
               <th key={h} className={th} style={{ minWidth: w }}>{h}</th>
             ))}
@@ -487,10 +489,13 @@ function RCAPreviewTable({ data }: { data: RCAItem[] }) {
                   {ap ? (
                     <>
                       <td className="border border-gray-200 py-2 px-3 text-gray-700 leading-relaxed bg-blue-50/20">{ap.action || "—"}</td>
-                      <td className="border border-gray-200 py-2 px-3 text-center text-gray-600 bg-blue-50/20">{ap.targetDate || "—"}</td>
+                      <td className="border border-gray-200 py-2 px-3 text-center text-gray-600 bg-blue-50/20 whitespace-nowrap">{ap.targetDate ? normalizeDateDDMMYYYY(ap.targetDate) : "—"}</td>
                       <td className="border border-gray-200 py-2 px-3 text-gray-600 bg-blue-50/20">{ap.pic || "—"}</td>
                       <td className="border border-gray-200 py-2 px-3 text-center bg-blue-50/20">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_PERBAIKAN_STYLE[ap.status]}`}>{ap.status}</span>
+                      </td>
+                      <td className="border border-gray-200 py-2 px-3 text-center bg-blue-50/20 whitespace-nowrap font-semibold text-emerald-700">
+                        {ap.status === "Selesai" && ap.actualCompletionDate ? normalizeDateDDMMYYYY(ap.actualCompletionDate) : "—"}
                       </td>
                       <td className="border border-gray-200 py-2 px-3 text-gray-600 bg-blue-50/20">
                         {ap.keterangan.length > 0
@@ -518,7 +523,7 @@ function RCAPreviewTable({ data }: { data: RCAItem[] }) {
                       </td>
                     </>
                   ) : (
-                    <td colSpan={7} className="border border-gray-200 py-2 px-3 text-center text-gray-300 bg-blue-50/20">Belum ada action plan</td>
+                    <td colSpan={8} className="border border-gray-200 py-2 px-3 text-center text-gray-300 bg-blue-50/20">Belum ada action plan</td>
                   )}
                 </tr>
               ));
@@ -571,6 +576,7 @@ function RCAEditableTable({ data, originalData, onChange, showEvidenceErrors }: 
               <th key={h} className={th} style={{ minWidth: w }}>{h}</th>
             ))}
             <th className={`${th} bg-amber-600/90`} style={{ minWidth: 140 }}>Status Perbaikan ✎</th>
+            <th className={`${th} bg-amber-600/90`} style={{ minWidth: 155 }}>Aktual Penyelesaian ✎</th>
             <th className={`${th} bg-amber-600/90`} style={{ minWidth: 180 }}>Keterangan ✎</th>
             <th className={`${th} bg-amber-600/90`} style={{ minWidth: 180 }}>Output ✎</th>
             <th className={`${th} bg-amber-600/90`} style={{ minWidth: 170 }}>Evidence ✎</th>
@@ -619,15 +625,37 @@ function RCAEditableTable({ data, originalData, onChange, showEvidenceErrors }: 
                     {ap ? (
                       <>
                         <td className={`${tdRO} leading-relaxed`}>{ap.action || "—"}</td>
-                        <td className={`${tdRO} text-center`}>{ap.targetDate || "—"}</td>
+                        <td className={`${tdRO} text-center whitespace-nowrap`}>{ap.targetDate ? normalizeDateDDMMYYYY(ap.targetDate) : "—"}</td>
                         <td className={`${tdRO}`}>{ap.pic || "—"}</td>
                         <td className={tdED}>
                           <select value={ap.status}
-                            onChange={(e) => updateAP(item.id, block.id, ap.id, { status: e.target.value as StatusPerbaikan })}
+                            onChange={(e) => {
+                              const nextSt = e.target.value as StatusPerbaikan;
+                              updateAP(item.id, block.id, ap.id, {
+                                status: nextSt,
+                                ...(nextSt !== "Selesai" ? { actualCompletionDate: "" } : {}),
+                              });
+                            }}
                             className="w-full text-[11px] border border-amber-300 rounded-lg px-2 py-1.5 outline-none focus:border-amber-500 bg-white cursor-pointer">
                             {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                           </select>
                           <span className={`mt-1.5 inline-block px-2 py-0.5 rounded-full text-[9px] font-bold ${STATUS_PERBAIKAN_STYLE[ap.status]}`}>{ap.status}</span>
+                        </td>
+                        <td className={showEvidenceErrors && ap.status === "Selesai" && !ap.actualCompletionDate ? "border-2 border-red-400 align-top py-2 px-2 bg-red-50/30" : tdED}>
+                          {ap.status === "Selesai" ? (
+                            <div className="flex flex-col gap-1">
+                              <DatePickerID
+                                value={ap.actualCompletionDate ?? ""}
+                                onChange={(iso) => updateAP(item.id, block.id, ap.id, { actualCompletionDate: iso })}
+                                size="sm"
+                              />
+                              {showEvidenceErrors && !ap.actualCompletionDate && (
+                                <p className="text-[10px] text-red-600 font-semibold">Wajib isi tanggal selesai</p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-gray-300 italic">Tersedia saat Selesai</span>
+                          )}
                         </td>
                         <td className={tdED}>
                           <ListEditor items={ap.keterangan} onChange={(v) => updateAP(item.id, block.id, ap.id, { keterangan: v })} />
@@ -650,7 +678,7 @@ function RCAEditableTable({ data, originalData, onChange, showEvidenceErrors }: 
                         </td>
                       </>
                     ) : (
-                      <td colSpan={7} className="border border-gray-200 py-2 px-3 text-center text-gray-300">Belum ada action plan</td>
+                      <td colSpan={8} className="border border-gray-200 py-2 px-3 text-center text-gray-300">Belum ada action plan</td>
                     )}
                   </tr>
                 );
@@ -804,11 +832,11 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
               <RO label="Monthly Target" value={item.target} />
             </div>
             <div className="mt-3 max-w-xs">
-              <Field label="Actual" value={item.actual} onChange={(v) => set("actual", v)} />
+              <RO label="Actual" value={item.actual} />
             </div>
             {kpiSelected && (
               <p className="mt-2 text-[10px] text-blue-500 flex items-center gap-1">
-                <Info className="w-3 h-3" /> Periode, KPI, Satuan, Baseline, Target (Yearly), dan Monthly Target diisi otomatis dari baris KPI di KPI Tracking; field Actual dapat disesuaikan.
+                <Info className="w-3 h-3" /> Periode, KPI, Satuan, Baseline, Target (Yearly), Monthly Target, dan Actual diisi otomatis (read-only) dari baris KPI di KPI Tracking.
                 <button className="underline ml-1" onClick={() => onChange({ ...item, sourceKey: "", monthLabel: "", kpi: "", satuan: "", baseline: "", targetYearly: "", target: "", actual: "", periode: "" })}>Reset</button>
               </p>
             )}
@@ -948,11 +976,32 @@ function RCAInputCard({ item, onChange, onDelete, kpiCatalog }: {
                             </div>
                             <div className="flex flex-col gap-1">
                               <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Status Perbaikan</label>
-                              <select value={ap.status} onChange={(e) => setAP(block.id, ap.id, "status", e.target.value as StatusPerbaikan)}
+                              <select
+                                value={ap.status}
+                                onChange={(e) => {
+                                  const nextSt = e.target.value as StatusPerbaikan;
+                                  const curBlock = item.masalahBlocks.find((b) => b.id === block.id)!;
+                                  updateBlock(block.id, {
+                                    actionPlans: curBlock.actionPlans.map((a) =>
+                                      a.id === ap.id
+                                        ? { ...a, status: nextSt, ...(nextSt !== "Selesai" ? { actualCompletionDate: "" } : {}) }
+                                        : a,
+                                    ),
+                                  });
+                                }}
                                 className="text-xs border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#1A284F]">
                                 {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                               </select>
                             </div>
+                            {ap.status === "Selesai" && (
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Aktual Penyelesaian</label>
+                                <DatePickerID
+                                  value={ap.actualCompletionDate ?? ""}
+                                  onChange={(iso) => setAP(block.id, ap.id, "actualCompletionDate", iso)}
+                                />
+                              </div>
+                            )}
                             <div className="flex flex-col gap-1">
                               <label className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Keterangan</label>
                               <ListEditor items={ap.keterangan} onChange={(v) => setAP(block.id, ap.id, "keterangan", v)} />
@@ -1098,6 +1147,9 @@ function DetailDrawer({ row, onClose, onSubmit }: {
         const out: string[] = [];
         if (!ap.status) out.push(`${label}: Status Perbaikan wajib dipilih`);
         if (ap.status === "Selesai" && ap.evidence.length === 0) out.push(`${label}: Evidence wajib diupload (Status Selesai)`);
+        if (ap.status === "Selesai" && !String(ap.actualCompletionDate ?? "").trim()) {
+          out.push(`${label}: Tanggal Aktual Penyelesaian wajib dipilih (Status Selesai)`);
+        }
         return out;
       }),
     ),
@@ -1440,6 +1492,30 @@ function SummaryCards({ allRows }: { allRows: RCARow[] }) {
   );
   const outstandingPct   = apCount > 0 ? Math.round((totalOutstanding / apCount) * 100) : 0;
   const totalClosed      = allRows.filter((r) => r.approvalStatus === "Closed").length;
+  const factorCounts = allRows.reduce(
+    (acc, r) => {
+      const rowClosed = r.approvalStatus === "Closed";
+      r.rcaData.forEach((it) => {
+        it.masalahBlocks.forEach((b) => {
+          const raw = String(b.masalahUtama ?? "");
+          const isInternal = raw.startsWith("[Faktor Internal]") || /\[?\s*faktor\s+internal\s*\]?/i.test(raw);
+          const isEksternal = raw.startsWith("[Faktor Eksternal]") || /\[?\s*faktor\s+eksternal\s*\]?/i.test(raw);
+          if (!isInternal && !isEksternal) return;
+          const activeAps = b.actionPlans.filter((a) => a.status !== "Dibatalkan");
+          const isBlockClosed = rowClosed || (activeAps.length > 0 && activeAps.every((a) => a.status === "Selesai"));
+          if (isEksternal) {
+            if (isBlockClosed) acc.eksternalClosed += 1;
+            else acc.eksternalOpen += 1;
+          } else if (isInternal) {
+            if (isBlockClosed) acc.internalClosed += 1;
+            else acc.internalOpen += 1;
+          }
+        });
+      });
+      return acc;
+    },
+    { eksternalOpen: 0, eksternalClosed: 0, internalOpen: 0, internalClosed: 0 },
+  );
 
   const cards: Array<{
     label: string;
@@ -1457,19 +1533,60 @@ function SummaryCards({ allRows }: { allRows: RCARow[] }) {
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5">
-      {cards.map((c, idx) => (
-        <AnalyticsStatCard
-          key={c.label}
-          title={c.label}
-          value={c.value}
-          subtitle={c.subtitle}
-          icon={c.icon}
-          tone={c.tone}
-          index={idx}
-          compact
-        />
-      ))}
+    <div className="flex flex-col gap-3.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5">
+        {cards.map((c, idx) => (
+          <AnalyticsStatCard
+            key={c.label}
+            title={c.label}
+            value={c.value}
+            subtitle={c.subtitle}
+            icon={c.icon}
+            tone={c.tone}
+            index={idx}
+            compact
+          />
+        ))}
+      </div>
+
+      {/* Card Summary Masalah Utama (A) — Eksternal & Internal (Open | Closed) */}
+      <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-[#F4F7FD] via-white to-[#FDF8F4] px-5 py-4 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-[#1A284F] text-white flex items-center justify-center shrink-0 shadow-2xs">
+            <FileText className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-[#1A284F]">Summary Masalah Utama</p>
+            <p className="text-[11px] text-slate-500">Ringkasan jumlah Open &amp; Closed berdasarkan tag Faktor pada kolom Masalah Utama (A)</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:min-w-[440px]">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-200/90 bg-orange-50/60 px-3.5 py-2.5">
+            <span className="text-xs font-bold text-orange-800">Eksternal:</span>
+            <div className="flex items-center gap-2 text-xs font-bold tabular-nums">
+              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                {factorCounts.eksternalOpen} Open
+              </span>
+              <span className="text-orange-300">|</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                {factorCounts.eksternalClosed} Closed
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200/90 bg-blue-50/60 px-3.5 py-2.5">
+            <span className="text-xs font-bold text-blue-800">Internal:</span>
+            <div className="flex items-center gap-2 text-xs font-bold tabular-nums">
+              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                {factorCounts.internalOpen} Open
+              </span>
+              <span className="text-blue-300">|</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                {factorCounts.internalClosed} Closed
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

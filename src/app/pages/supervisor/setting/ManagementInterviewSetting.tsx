@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { DatePickerID } from "../../../components/DatePickerID";
+import { normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 import { MessageSquare, Calendar, User, Clock, Plus, CheckCircle2, AlertCircle, Edit2, Save, X, Info, Trash2, Paperclip, FileText, FileImage, File, Upload } from "lucide-react";
 import { getSchedule, saveSchedule, clearSchedule, subscribe, InterviewSchedule, AttachedFile } from "../interviewScheduleStore";
 
@@ -163,7 +164,7 @@ export function SupervisorSettingManagementInterview() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex items-start gap-3 bg-gray-50 rounded-xl px-4 py-3">
               <Calendar className="w-4 h-4 text-indigo-400 mt-0.5 shrink-0" />
-              <div><p className="text-xs text-gray-400 mb-0.5">Tanggal Interview</p><p className="text-sm font-semibold text-gray-800">{schedule.scheduledDate}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Tanggal Interview</p><p className="text-sm font-semibold text-gray-800">{normalizeDateDDMMYYYY(schedule.scheduledDate)}</p></div>
             </div>
             <div className="flex items-start gap-3 bg-gray-50 rounded-xl px-4 py-3">
               <Clock className="w-4 h-4 text-indigo-400 mt-0.5 shrink-0" />

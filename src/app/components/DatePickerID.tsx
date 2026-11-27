@@ -9,18 +9,35 @@ const DAYS_SHORT = ["SEN", "SEL", "RAB", "KAM", "JUM", "SAB", "MIN"];
 
 function isoToDisplay(iso: string): string {
   if (!iso) return "";
+  const slashMatch = iso.trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (slashMatch) {
+    return `${slashMatch[1].padStart(2, "0")}/${slashMatch[2].padStart(2, "0")}/${slashMatch[3]}`;
+  }
   const [y, m, d] = iso.split("-");
   if (!y || !m || !d) return "";
-  return `${d}-${m}-${y}`;
+  return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
 }
 
 function displayToIso(display: string): string {
   if (!display) return "";
-  const parts = display.split("-");
+  const parts = display.trim().split(/[\/\-]/);
   if (parts.length !== 3) return "";
   const [d, m, y] = parts;
   if (d.length !== 2 || m.length !== 2 || y.length !== 4) return "";
+  const dn = parseInt(d, 10);
+  const mn = parseInt(m, 10);
+  const yn = parseInt(y, 10);
+  if (!Number.isFinite(dn) || !Number.isFinite(mn) || !Number.isFinite(yn) || dn < 1 || dn > 31 || mn < 1 || mn > 12) {
+    return "";
+  }
   return `${y}-${m}-${d}`;
+}
+
+function normalizeIncomingToIso(raw: string): string {
+  if (!raw) return "";
+  const t = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  return displayToIso(t);
 }
 
 function daysInMonth(year: number, month: number): number {
@@ -46,13 +63,14 @@ export function DatePickerID({
   value,
   onChange,
   className = "",
-  placeholder = "DD-MM-YYYY",
+  placeholder = "DD/MM/YYYY",
   size = "md",
   disabled = false,
 }: DatePickerIDProps) {
   const today = new Date();
-  const initYear  = value ? parseInt(value.slice(0, 4)) : today.getFullYear();
-  const initMonth = value ? parseInt(value.slice(5, 7)) - 1 : today.getMonth();
+  const normIso   = normalizeIncomingToIso(value);
+  const initYear  = normIso ? parseInt(normIso.slice(0, 4)) : today.getFullYear();
+  const initMonth = normIso ? parseInt(normIso.slice(5, 7)) - 1 : today.getMonth();
 
   const [open, setOpen]           = useState(false);
   const [viewYear, setViewYear]   = useState(initYear);
@@ -66,9 +84,10 @@ export function DatePickerID({
   // Sync display when controlled value changes externally
   useEffect(() => {
     setRawInput(isoToDisplay(value));
-    if (value) {
-      setViewYear(parseInt(value.slice(0, 4)));
-      setViewMonth(parseInt(value.slice(5, 7)) - 1);
+    const nextIso = normalizeIncomingToIso(value);
+    if (nextIso) {
+      setViewYear(parseInt(nextIso.slice(0, 4)));
+      setViewMonth(parseInt(nextIso.slice(5, 7)) - 1);
     }
   }, [value]);
 
@@ -150,9 +169,9 @@ export function DatePickerID({
     }
   };
 
-  const selectedDay   = value ? parseInt(value.slice(8, 10)) : null;
-  const selectedMonth = value ? parseInt(value.slice(5, 7)) - 1 : null;
-  const selectedYear  = value ? parseInt(value.slice(0, 4)) : null;
+  const selectedDay   = normIso ? parseInt(normIso.slice(8, 10)) : null;
+  const selectedMonth = normIso ? parseInt(normIso.slice(5, 7)) - 1 : null;
+  const selectedYear  = normIso ? parseInt(normIso.slice(0, 4)) : null;
 
   const totalDays  = daysInMonth(viewYear, viewMonth);
   const startIndex = firstDayOfMonth(viewYear, viewMonth);

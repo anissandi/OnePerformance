@@ -81,8 +81,7 @@ function fmtShortRange(startIso: string, endIso: string): string {
   const fmtOne = (iso: string) => {
     if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || "—";
     const [y, m, d] = iso.split("-");
-    const mIdx = Math.max(0, Math.min(11, parseInt(m, 10) - 1));
-    return `${d} ${SHORT_MONTHS_ID[mIdx]} ${y}`;
+    return `${d}/${m}/${y}`;
   };
   if (startIso && endIso) return `${fmtOne(startIso)} - ${fmtOne(endIso)}`;
   return fmtOne(startIso || endIso);
@@ -140,7 +139,7 @@ export function buildLiveTimelineRowsFromActivation(selectedYear = "2026"): {
   const now = new Date();
   const todayIso = now.toISOString().slice(0, 10);
   const todaySlot = isoToMonthSlot(todayIso, baseYear) ?? now.getMonth();
-  const todayLabel = `${String(now.getDate()).padStart(2, "0")} ${SHORT_MONTHS_ID[now.getMonth()]} ${now.getFullYear()}`;
+  const todayLabel = `${String(now.getDate()).padStart(2, "0")}/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
 
   const FILTER_LABEL_BY_ID: Record<string, string> = {
     "kpi-setting": "KPI (Setting)",
@@ -799,7 +798,7 @@ function ModuleCard({
           <div className="flex items-center gap-2 px-4 py-3 bg-[#F8F7F4] rounded-xl text-xs text-[#8C7B5D]">
             <Lock className="w-3.5 h-3.5 shrink-0" />
             <span>
-              Modul aktif mulai {module.startDate} s/d {module.endDate}.
+              Modul aktif mulai {fmtShortRange(module.startDate, "")} s/d {fmtShortRange(module.endDate, "")}.
             </span>
           </div>
         )}

@@ -10,7 +10,7 @@ import {
   PA_APP_API_BASE,
   SUPABASE_ANON_KEY,
 } from "../services/supabaseClient";
-import { canonicalizeCompanyUnitName, COMPANY_UNIT_LOCATIONS } from "./authStore";
+import { canonicalizeCompanyUnitName, COMPANY_UNIT_LOCATIONS, loadManagedUsers } from "./authStore";
 
 export type LoginMethodOption = "otp_telegram" | "otp_whatsapp" | "otp_email" | "password";
 
@@ -37,6 +37,8 @@ export interface UnitLoginConfig {
 
 export interface UserPasswordSecurityRecord {
   employeeId: string;
+  company?: string;
+  regNo?: string;
   /** Digest satu arah dari password pengguna. Jika kosong, menggunakan digest password default awal. */
   passwordDigest?: string;
   /** Jika true, karyawan wajib mengganti password default ke password baru saat login. */
@@ -211,10 +213,40 @@ export function loadUserSecurityMap(): Record<string, UserPasswordSecurityRecord
   return loadPersistedState<Record<string, UserPasswordSecurityRecord>>(USER_SECURITY_MAP_KEY, {});
 }
 
-export function getUserSecurityRecord(employeeId: string, altRegNo?: string): UserPasswordSecurityRecord {
+export function buildScopedUserSecurityKey(employeeId: string, company?: string, regNo?: string): string {
+  const canonUnit = company ? canonicalizeCompanyUnitName(company).trim().toUpperCase() : "";
+  const cleanReg = String(regNo ?? "").trim().toUpperCase();
+  if (canonUnit && cleanReg) return `${canonUnit}::${cleanReg}`;
+  return employeeId.trim().toUpperCase();
+}
+
+function resolveEffectiveSecurityMapKey(employeeId: string, company?: string, regNo?: string): string {
+  const empUpper = employeeId.trim().toUpperCase();
+  const scopedKey = buildScopedUserSecurityKey(employeeId, company, regNo);
+  if (scopedKey === empUpper) return empUpper;
+  const map = loadUserSecurityMap();
+  if (map[scopedKey]) return scopedKey;
+  try {
+    const peers = loadManagedUsers().filter((u) => u.employeeId.trim().toUpperCase() === empUpper);
+    if (peers.length > 1) return scopedKey;
+  } catch {
+    // ignore
+  }
+  return empUpper;
+}
+
+export function getUserSecurityRecord(
+  employeeId: string,
+  altRegNo?: string,
+  company?: string,
+): UserPasswordSecurityRecord {
   const key = employeeId.trim().toUpperCase();
   const altKey = (altRegNo ?? "").trim().toUpperCase();
+  const scopedKey = buildScopedUserSecurityKey(employeeId, company, altRegNo);
   const map = loadUserSecurityMap();
+  if (scopedKey !== key && map[scopedKey]) {
+    return { ...map[scopedKey], employeeId: key, company, regNo: altRegNo };
+  }
   if (map[key]?.passwordDigest) return { ...map[key], employeeId: key };
   // Cek juga case-insensitive atau berdasarkan Reg No apabila sebelumnya tersimpan dengan key berbeda
   const entries = Object.entries(map);
@@ -242,12 +274,16 @@ export function getUserSecurityRecord(employeeId: string, altRegNo?: string): Us
   );
 }
 
-export async function saveUserSecurityRecordAsync(record: UserPasswordSecurityRecord): Promise<void> {
-  const key = record.employeeId.trim().toUpperCase();
+export async function saveUserSecurityRecordAsync(
+  record: UserPasswordSecurityRecord,
+  mapKeyOverride?: string,
+): Promise<void> {
+  const empUpper = record.employeeId.trim().toUpperCase();
+  const key = (mapKeyOverride || resolveEffectiveSecurityMapKey(record.employeeId, record.company, record.regNo)).trim().toUpperCase();
   const map = loadUserSecurityMap();
   const saved: UserPasswordSecurityRecord = {
     ...record,
-    employeeId: key,
+    employeeId: empUpper,
     updatedAt: record.updatedAt || new Date().toISOString(),
   };
   const next = { ...map, [key]: saved };
@@ -256,8 +292,8 @@ export async function saveUserSecurityRecordAsync(record: UserPasswordSecurityRe
   await mergeKvMapRecord(USER_SECURITY_MAP_KEY, key, saved);
 }
 
-export function saveUserSecurityRecord(record: UserPasswordSecurityRecord): void {
-  void saveUserSecurityRecordAsync({ ...record, updatedAt: new Date().toISOString() });
+export function saveUserSecurityRecord(record: UserPasswordSecurityRecord, mapKeyOverride?: string): void {
+  void saveUserSecurityRecordAsync({ ...record, updatedAt: new Date().toISOString() }, mapKeyOverride);
 }
 
 /**
@@ -269,10 +305,12 @@ export function verifyEmployeePasswordLogin(
   employeeId: string,
   passwordInput: string,
   altRegNo?: string,
+  company?: string,
 ):
   | { ok: true; mustChangePassword: boolean; record: UserPasswordSecurityRecord }
   | { ok: false; isBlocked: boolean; remainingAttempts: number; error: string } {
-  const rec = getUserSecurityRecord(employeeId, altRegNo);
+  const rec = getUserSecurityRecord(employeeId, altRegNo, company);
+  const targetMapKey = resolveEffectiveSecurityMapKey(employeeId, company, altRegNo);
   if (rec.isBlocked || rec.failedAttempts >= 5) {
     return {
       ok: false,
@@ -289,12 +327,17 @@ export function verifyEmployeePasswordLogin(
   if (inputDigest !== expectedDigest) {
     const nextFailed = rec.failedAttempts + 1;
     const nowBlocked = nextFailed >= 5;
-    saveUserSecurityRecord({
-      ...rec,
-      failedAttempts: nextFailed,
-      isBlocked: nowBlocked,
-      updatedAt: new Date().toISOString(),
-    });
+    saveUserSecurityRecord(
+      {
+        ...rec,
+        company: company ?? rec.company,
+        regNo: altRegNo ?? rec.regNo,
+        failedAttempts: nextFailed,
+        isBlocked: nowBlocked,
+        updatedAt: new Date().toISOString(),
+      },
+      targetMapKey,
+    );
     if (nowBlocked) {
       return {
         ok: false,
@@ -317,18 +360,22 @@ export function verifyEmployeePasswordLogin(
   const cleanRecord: UserPasswordSecurityRecord = {
     ...rec,
     employeeId: employeeId.trim().toUpperCase(),
+    company: company ?? rec.company,
+    regNo: altRegNo ?? rec.regNo,
     failedAttempts: 0,
     isBlocked: false,
     mustChangePassword: mustChange,
     updatedAt: new Date().toISOString(),
   };
-  saveUserSecurityRecord(cleanRecord);
+  saveUserSecurityRecord(cleanRecord, targetMapKey);
   return { ok: true, mustChangePassword: mustChange, record: cleanRecord };
 }
 
 export async function updateEmployeeNewPasswordAsync(
   employeeId: string,
   newPassword: string,
+  company?: string,
+  regNo?: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const policy = validateNewPasswordPolicy(newPassword);
   if (!policy.valid) {
@@ -341,21 +388,32 @@ export async function updateEmployeeNewPasswordAsync(
       error: "Password baru tidak boleh sama dengan password default awal.",
     };
   }
-  const rec = getUserSecurityRecord(employeeId);
-  await saveUserSecurityRecordAsync({
-    ...rec,
-    employeeId: employeeId.trim().toUpperCase(),
-    passwordDigest: digest,
-    mustChangePassword: false,
-    failedAttempts: 0,
-    isBlocked: false,
-    passwordResetAt: undefined,
-    updatedAt: new Date().toISOString(),
-  });
+  const rec = getUserSecurityRecord(employeeId, regNo, company);
+  const targetMapKey = resolveEffectiveSecurityMapKey(employeeId, company, regNo);
+  await saveUserSecurityRecordAsync(
+    {
+      ...rec,
+      employeeId: employeeId.trim().toUpperCase(),
+      company: company ?? rec.company,
+      regNo: regNo ?? rec.regNo,
+      passwordDigest: digest,
+      mustChangePassword: false,
+      failedAttempts: 0,
+      isBlocked: false,
+      passwordResetAt: undefined,
+      updatedAt: new Date().toISOString(),
+    },
+    targetMapKey,
+  );
   return { ok: true };
 }
 
-export function updateEmployeeNewPassword(employeeId: string, newPassword: string): { ok: true } | { ok: false; error: string } {
+export function updateEmployeeNewPassword(
+  employeeId: string,
+  newPassword: string,
+  company?: string,
+  regNo?: string,
+): { ok: true } | { ok: false; error: string } {
   const policy = validateNewPasswordPolicy(newPassword);
   if (!policy.valid) {
     return { ok: false, error: policy.message };
@@ -367,38 +425,55 @@ export function updateEmployeeNewPassword(employeeId: string, newPassword: strin
       error: "Password baru tidak boleh sama dengan password default awal.",
     };
   }
-  const rec = getUserSecurityRecord(employeeId);
-  saveUserSecurityRecord({
-    ...rec,
-    employeeId: employeeId.trim().toUpperCase(),
-    passwordDigest: digest,
-    mustChangePassword: false,
-    failedAttempts: 0,
-    isBlocked: false,
-    passwordResetAt: undefined,
-    updatedAt: new Date().toISOString(),
-  });
+  const rec = getUserSecurityRecord(employeeId, regNo, company);
+  const targetMapKey = resolveEffectiveSecurityMapKey(employeeId, company, regNo);
+  saveUserSecurityRecord(
+    {
+      ...rec,
+      employeeId: employeeId.trim().toUpperCase(),
+      company: company ?? rec.company,
+      regNo: regNo ?? rec.regNo,
+      passwordDigest: digest,
+      mustChangePassword: false,
+      failedAttempts: 0,
+      isBlocked: false,
+      passwordResetAt: undefined,
+      updatedAt: new Date().toISOString(),
+    },
+    targetMapKey,
+  );
   return { ok: true };
 }
 
-export function resetEmployeePasswordToDefault(employeeId: string, employeeName = ""): void {
+export function resetEmployeePasswordToDefault(
+  employeeId: string,
+  employeeName = "",
+  company?: string,
+  regNo?: string,
+): void {
   const key = employeeId.trim().toUpperCase();
+  const targetMapKey = resolveEffectiveSecurityMapKey(employeeId, company, regNo);
   const nowIso = new Date().toISOString();
-  saveUserSecurityRecord({
-    employeeId: key,
-    passwordDigest: undefined,
-    mustChangePassword: true,
-    failedAttempts: 0,
-    isBlocked: false,
-    updatedAt: nowIso,
-    passwordResetAt: nowIso,
-  });
+  saveUserSecurityRecord(
+    {
+      employeeId: key,
+      company,
+      regNo,
+      passwordDigest: undefined,
+      mustChangePassword: true,
+      failedAttempts: 0,
+      isBlocked: false,
+      updatedAt: nowIso,
+      passwordResetAt: nowIso,
+    },
+    targetMapKey,
+  );
   void syncToSupabase({
     audit: {
       action: "Update",
       module: "User Management",
       subModule: "Reset Password",
-      description: `Reset password to initial default & unlocked account for ${employeeName || key} (${key})`,
+      description: `Reset password to initial default & unlocked account for ${employeeName || key} (${key}${company ? ` - ${company}` : ""})`,
     },
   });
 }

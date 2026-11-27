@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { getActiveDelegateIdsForDelegator } from "./delegationStore";
 import {
+  buildEmployeeIdMatchSet,
   loadPersistedState,
+  refreshKvKeysFromBackend,
+  safeSetLocalJson,
   savePersistedState,
-  mergeKvArrayById,
   syncToSupabase,
   PA_APP_API_BASE,
   SUPABASE_ANON_KEY,
@@ -14,10 +16,12 @@ import {
   loadManagedUsers,
   resolveEffectiveUserGrouping,
   resolvePortalPathForRole,
+  resolveUniqueUserByApproverRef,
   resolveUserAllowedModules,
   type AppraisalModuleName,
   type ManagedUser,
 } from "./authStore";
+import { formatTodayDDMMYYYY } from "../utils/dateFormat";
 
 export type NotificationCategory =
   | "Reminder"
@@ -291,11 +295,7 @@ export function interpolateNotificationTemplate(
   const u = ctx.user;
   const todayStr =
     ctx.date ||
-    new Date().toLocaleDateString("id-ID", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
+    formatTodayDDMMYYYY();
   const replacements: Record<string, string> = {
     "{{nama_karyawan}}": u?.name || "Karyawan",
     "{{id_karyawan}}": u?.employeeId || "-",
@@ -620,38 +620,97 @@ export function loadAllNotifications(): AppNotificationItem[] {
   });
   if (validList.length !== sourceList.length) {
     // Pruning hanya pada cache lokal (tidak menimpa daftar backend yang mungkin berisi notifikasi baru pengguna lain)
-    try {
-      localStorage.setItem(NOTIFICATIONS_LIST_KEY, JSON.stringify(validList));
-    } catch {
-      // ignore
-    }
+    safeSetLocalJson(NOTIFICATIONS_LIST_KEY, validList);
   }
   return validList.sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 }
 
-export function saveAllNotifications(list: AppNotificationItem[]): void {
-  try {
-    localStorage.setItem(NOTIFICATIONS_LIST_KEY, JSON.stringify(list));
-  } catch {
-    // ignore quota errors
+let _notifBackendSyncChain: Promise<void> = Promise.resolve();
+
+function mergeNotificationsLists(
+  localList: AppNotificationItem[],
+  remoteList: AppNotificationItem[],
+): AppNotificationItem[] {
+  const now = Date.now();
+  const byId = new Map<string, AppNotificationItem>();
+  for (const item of [...localList, ...remoteList]) {
+    if (!item || !item.id || item.id.startsWith("notif-seed-")) continue;
+    const ts = new Date(item.createdAt).getTime();
+    if (Number.isFinite(ts) && now - ts > THIRTY_DAYS_MS) continue;
+    const prev = byId.get(item.id);
+    if (!prev) {
+      byId.set(item.id, item);
+    } else {
+      byId.set(item.id, {
+        ...prev,
+        readByEmployeeIds: Array.from(
+          new Set([...(prev.readByEmployeeIds ?? []), ...(item.readByEmployeeIds ?? [])]),
+        ),
+        clearedByEmployeeIds: Array.from(
+          new Set([...(prev.clearedByEmployeeIds ?? []), ...(item.clearedByEmployeeIds ?? [])]),
+        ),
+      });
+    }
   }
-  queueMicrotask(() => window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT)));
-  // Merge-safe ke backend: notifikasi yang dibuat pengguna/perangkat lain tidak tertimpa cache lokal,
-  // status baca/clear digabung (union) per penerima.
-  void mergeKvArrayById<AppNotificationItem>(
-    NOTIFICATIONS_LIST_KEY,
-    list,
-    (n) => n.id,
-    (local, remote) => ({
-      ...local,
-      readByEmployeeIds: Array.from(new Set([...(local.readByEmployeeIds ?? []), ...(remote.readByEmployeeIds ?? [])])),
-      clearedByEmployeeIds: Array.from(
-        new Set([...(local.clearedByEmployeeIds ?? []), ...(remote.clearedByEmployeeIds ?? [])]),
-      ),
-    }),
-  ).then(() => window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT)));
+  return Array.from(byId.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+}
+
+/**
+ * Menarik daftar notifikasi terbaru dari Supabase (`pa_kv_state` -> `pa_notifications_v1`) secara merge-safe
+ * tanpa menghapus notifikasi lokal yang baru saja dibuat, lalu memicu render realtime bila ada pembaruan.
+ */
+export async function syncNotificationsFromBackendRealtime(): Promise<void> {
+  try {
+    const localBefore = loadAllNotifications();
+    const kvRes = await refreshKvKeysFromBackend([NOTIFICATIONS_LIST_KEY]);
+    const remote = Array.isArray(kvRes[NOTIFICATIONS_LIST_KEY])
+      ? (kvRes[NOTIFICATIONS_LIST_KEY] as AppNotificationItem[])
+      : [];
+    if (remote.length === 0 && localBefore.length === 0) return;
+    const merged = mergeNotificationsLists(localBefore, remote);
+    const prevSig = localBefore.map((n) => `${n.id}:${(n.readByEmployeeIds ?? []).length}:${(n.clearedByEmployeeIds ?? []).length}`).join("|");
+    const nextSig = merged.map((n) => `${n.id}:${(n.readByEmployeeIds ?? []).length}:${(n.clearedByEmployeeIds ?? []).length}`).join("|");
+    safeSetLocalJson(NOTIFICATIONS_LIST_KEY, merged);
+    if (prevSig !== nextSig && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT));
+    }
+  } catch {
+    // ignore offline
+  }
+}
+
+export function saveAllNotifications(list: AppNotificationItem[]): void {
+  // Gabungkan dengan isi lokal terkini agar pemanggilan berurutan pada tick yang sama tidak saling menimpa
+  const latestLocal = loadAllNotifications();
+  const mergedImmediate = mergeNotificationsLists(list, latestLocal);
+  safeSetLocalJson(NOTIFICATIONS_LIST_KEY, mergedImmediate);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT));
+  }
+  // Antrekan merge ke backend secara serial agar 2 notifikasi (karyawan + approver) tersimpan utuh keduanya
+  _notifBackendSyncChain = _notifBackendSyncChain
+    .then(async () => {
+      const curLocal = loadAllNotifications();
+      let remote: AppNotificationItem[] = [];
+      try {
+        const kvRes = await refreshKvKeysFromBackend([NOTIFICATIONS_LIST_KEY]);
+        if (Array.isArray(kvRes[NOTIFICATIONS_LIST_KEY])) {
+          remote = kvRes[NOTIFICATIONS_LIST_KEY] as AppNotificationItem[];
+        }
+      } catch {
+        remote = [];
+      }
+      const finalMerged = mergeNotificationsLists(curLocal, remote);
+      savePersistedState(NOTIFICATIONS_LIST_KEY, finalMerged);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event(NOTIFICATIONS_UPDATED_EVENT));
+      }
+    })
+    .catch(() => undefined);
 }
 
 /** Kirim notifikasi sistem ke daftar karyawan tertentu (tersimpan di backend). */
@@ -786,11 +845,14 @@ export function triggerInterDeptNominationNotifications(params: {
 
 export function isNotificationTargetedToUser(item: AppNotificationItem, user: ManagedUser): boolean {
   const empId = user.employeeId.trim().toUpperCase();
-  if ((item.clearedByEmployeeIds ?? []).includes(empId)) {
+  const matchSet = buildEmployeeIdMatchSet(user.employeeId);
+  const upperCandidates = new Set(Array.from(matchSet).map((x) => x.trim().toUpperCase()));
+  upperCandidates.add(empId);
+  if ((item.clearedByEmployeeIds ?? []).some((id) => upperCandidates.has(id.trim().toUpperCase()))) {
     return false;
   }
   if (item.targetAll) return true;
-  if (item.targetEmployeeIds?.some((id) => id.trim().toUpperCase() === empId)) return true;
+  if (item.targetEmployeeIds?.some((id) => upperCandidates.has(id.trim().toUpperCase()))) return true;
   const matchUnit =
     !item.targetUnits ||
     item.targetUnits.length === 0 ||
@@ -836,7 +898,11 @@ export function getNotificationsForUser(user = getActiveUser()): Array<
         bodyHtml: item.bodyHtml
           ? interpolateNotificationTemplate(item.bodyHtml, ctx)
           : undefined,
-        isRead: (item.readByEmployeeIds ?? []).includes(empId),
+        isRead: (item.readByEmployeeIds ?? []).some(
+          (id) =>
+            id.trim().toUpperCase() === empId ||
+            buildEmployeeIdMatchSet(user.employeeId).has(id.trim()),
+        ),
         ageDays,
       };
     });
@@ -1024,8 +1090,11 @@ export function triggerApprovalTransactionNotification(params: {
   ctaRoute?: string;
 }): void {
   const allUsers = loadManagedUsers();
+  const empCandidates = buildEmployeeIdMatchSet(params.employeeId);
+  const lowerEmpCandidates = new Set(Array.from(empCandidates).map((x) => x.trim().toLowerCase()));
   const targetUser = allUsers.find(
     (u) =>
+      lowerEmpCandidates.has(u.employeeId.trim().toLowerCase()) ||
       u.employeeId.trim().toUpperCase() === params.employeeId.trim().toUpperCase() ||
       u.employeeId.replace(/-/g, "").toUpperCase() === params.employeeId.replace(/-/g, "").toUpperCase(),
   );
@@ -1204,6 +1273,8 @@ export function triggerApprovalTransactionNotification(params: {
       canonicalMod.toLowerCase().includes("rca");
 
     const findApproverUser = (refValue?: string): ManagedUser | undefined => {
+      const strictResolved = resolveUniqueUserByApproverRef(allUsers, refValue, true);
+      if (strictResolved) return strictResolved;
       const ref = (refValue ?? "").trim().toLowerCase();
       if (!ref) return undefined;
       const refNum = ref.replace(/^(?:emp-?|e)0*/i, "");

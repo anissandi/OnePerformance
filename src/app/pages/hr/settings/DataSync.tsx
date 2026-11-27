@@ -1,19 +1,23 @@
 import { useState, useEffect, useRef } from "react";
 import {
   RefreshCw, CheckSquare, Square, Database, CheckCircle2,
-  AlertCircle, Clock, Upload, Download, FileSpreadsheet, Users, ShieldCheck, Building2, Search, Info,
+  AlertCircle, AlertTriangle, Clock, Upload, Download, FileSpreadsheet, Users, Building2, Search, Info, X,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
+  clearEmployeeTransactionsForSync,
   loadPersistedState,
-  replaceAllBackendUsersAndResetForTrial,
+  replaceCompanyUnitUsersAndResetTransactions,
   savePersistedState,
-  syncToSupabase,
 } from "../../../services/supabaseClient";
 import {
   COMPANY_UNIT_LOCATIONS,
+  canonicalizeCompanyUnitName,
+  getActiveUser,
+  isAdminOrHrIcfRole,
+  isSameCompanyUnit,
   loadManagedUsers,
   normalizeApproverPair,
   resolveGroupingForCompanyAndPosition,
@@ -21,6 +25,7 @@ import {
   type ManagedUser,
   type AppUserRole,
 } from "../../../store/authStore";
+import { normalizeDateDDMMYYYY } from "../../../utils/dateFormat";
 import { loadAccessRoles } from "./AccessManagement";
 
 export const EMPLOYEE_IMPORT_HEADERS = [
@@ -39,7 +44,91 @@ export const EMPLOYEE_IMPORT_HEADERS = [
   "Reg No AP2",
   "Role",
   "Groupings",
+  "Status Karyawan",
+  "Keterangan Status Karyawan",
+  "Tgl Efektif",
 ] as const;
+
+const IGNORED_REFERENCE_SHEETS = new Set(["master", "referensi", "reference", "petunjuk", "info"]);
+
+interface FieldDiffItem {
+  fieldLabel: string;
+  oldValue: string;
+  newValue: string;
+}
+
+interface MatchedRegNoComparison {
+  regNo: string;
+  company: string;
+  existingUser: ManagedUser;
+  incomingUser: ManagedUser;
+  diffs: FieldDiffItem[];
+}
+
+interface ParsedUploadPlan {
+  fileName: string;
+  sheetName: string;
+  mode: "merge" | "update_clear_tx" | "replace_all_trial";
+  targetUnit: string;
+  targetUnitLabel: string;
+  importedRows: ManagedUser[];
+  matchedRegComparisons: MatchedRegNoComparison[];
+  regComparisonsWithDiffs: MatchedRegNoComparison[];
+}
+
+function parseOptionalExcelDate(rawVal: unknown): string {
+  if (rawVal === null || rawVal === undefined || rawVal === "") return "";
+  if (rawVal instanceof Date && !Number.isNaN(rawVal.getTime())) {
+    const dd = String(rawVal.getDate()).padStart(2, "0");
+    const mm = String(rawVal.getMonth() + 1).padStart(2, "0");
+    const yyyy = rawVal.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  const str = String(rawVal).trim();
+  if (!str || str === "-" || str === "—") return "";
+  const norm = normalizeDateDDMMYYYY(rawVal as string | number);
+  return norm === "—" ? str : norm;
+}
+
+function computeManagedUserDiffs(existing: ManagedUser, incoming: ManagedUser): FieldDiffItem[] {
+  const pairs: Array<{ label: string; oldVal: string; newVal: string }> = [
+    { label: "ID Karyawan", oldVal: existing.employeeId || "-", newVal: incoming.employeeId || "-" },
+    { label: "Nama", oldVal: existing.name || "-", newVal: incoming.name || "-" },
+    { label: "Divisi", oldVal: existing.division || "-", newVal: incoming.division || "-" },
+    { label: "Departement", oldVal: existing.department || "-", newVal: incoming.department || "-" },
+    { label: "Bagian", oldVal: existing.bagian || "-", newVal: incoming.bagian || "-" },
+    { label: "Jabatan", oldVal: existing.position || "-", newVal: incoming.position || "-" },
+    {
+      label: "Joindate",
+      oldVal: existing.joinDate ? normalizeDateDDMMYYYY(existing.joinDate) : "-",
+      newVal: incoming.joinDate ? normalizeDateDDMMYYYY(incoming.joinDate) : "-",
+    },
+    { label: "No Telegram", oldVal: existing.telegramNo || "-", newVal: incoming.telegramNo || "-" },
+    { label: "Corporate Email", oldVal: existing.email || "-", newVal: incoming.email || "-" },
+    { label: "Reg No AP1", oldVal: existing.regNoAp1 || "-", newVal: incoming.regNoAp1 || "-" },
+    { label: "Reg No AP2", oldVal: existing.regNoAp2 || "-", newVal: incoming.regNoAp2 || "-" },
+    { label: "Role", oldVal: String(existing.role || "-"), newVal: String(incoming.role || "-") },
+    { label: "Groupings", oldVal: existing.groupings || "-", newVal: incoming.groupings || "-" },
+    { label: "Status Karyawan", oldVal: existing.employeeStatus || "-", newVal: incoming.employeeStatus || "-" },
+    {
+      label: "Keterangan Status Karyawan",
+      oldVal: existing.employeeStatusNote || "-",
+      newVal: incoming.employeeStatusNote || "-",
+    },
+    {
+      label: "Tgl Efektif",
+      oldVal: existing.effectiveDate ? normalizeDateDDMMYYYY(existing.effectiveDate) : "-",
+      newVal: incoming.effectiveDate ? normalizeDateDDMMYYYY(incoming.effectiveDate) : "-",
+    },
+  ];
+  return pairs
+    .filter((p) => p.oldVal.trim() !== p.newVal.trim())
+    .map((p) => ({
+      fieldLabel: p.label,
+      oldValue: p.oldVal,
+      newValue: p.newVal,
+    }));
+}
 
 type SyncItem = {
   id: string;
@@ -113,7 +202,10 @@ export function DataSyncPage() {
   const [users, setUsers] = useState<ManagedUser[]>(() => loadManagedUsers());
   const [searchQuery, setSearchQuery] = useState("");
   const [importMode, setImportMode] = useState<"merge" | "update_clear_tx" | "replace_all_trial">("merge");
-  const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
+  const [uploadPlan, setUploadPlan] = useState<ParsedUploadPlan | null>(null);
+  const [confirmStep, setConfirmStep] = useState<1 | 2>(1);
+  const [confirmPhraseInput, setConfirmPhraseInput] = useState("");
+  const [executingUpload, setExecutingUpload] = useState(false);
   const [lastImportSummary, setLastImportSummary] = useState<string | null>(() =>
     loadPersistedState<string | null>("pa_last_employee_excel_import_v1", null),
   );
@@ -134,64 +226,67 @@ export function DataSyncPage() {
     };
   }, []);
 
-  const handleDownloadTemplate = () => {
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await fetch("/templates/Template_Upload_Karyawan.xlsx", { cache: "no-store" });
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob.size > 0) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "Template_Upload_Karyawan.xlsx";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+          return;
+        }
+      }
+    } catch {
+      // fallback programmatic workbook below
+    }
     const sampleRows = [
       {
         "No": 1,
-        "Reg No": "REG-002",
-        "ID Karyawan": "E002",
-        "Nama": "Siti Rahayu",
+        "Reg No": "REG-001",
+        "ID Karyawan": "05001",
+        "Nama": "Contoh Nama Karyawan",
         "Divisi": "Staff Management",
         "Departement": "Sumber Daya Manusia",
         "Bagian": "Pengembangan SDM",
         "Jabatan": "Staff Pengembangan SDM",
-        "Joindate": "2021-07-01",
+        "Joindate": "21/02/2011",
         "No Telegram": "+628117001002",
-        "Corporate Email": "siti.rahayu@sambugroup.com",
+        "Corporate Email": "karyawan@sambugroup.com",
         "Reg No AP1": "REG-014",
         "Reg No AP2": "REG-008",
         "Role": "Employee",
         "Groupings": "Operasional",
-      },
-      {
-        "No": 2,
-        "Reg No": "REG-014",
-        "ID Karyawan": "E014",
-        "Nama": "Ananta Nirmala",
-        "Divisi": "Staff Management",
-        "Departement": "Sumber Daya Manusia",
-        "Bagian": "Rekrutmen & Seleksi",
-        "Jabatan": "Supervisor HR Unit",
-        "Joindate": "2018-06-11",
-        "No Telegram": "+628117001014",
-        "Corporate Email": "hr.unit.ind@sambugroup.com",
-        "Reg No AP1": "REG-008",
-        "Reg No AP2": "REG-016",
-        "Role": "HR Unit",
-        "Groupings": "Ka./Wa.Ka.Bagian",
-      },
-      {
-        "No": 3,
-        "Reg No": "REG-008",
-        "ID Karyawan": "E008",
-        "Nama": "Hendra Wijaya",
-        "Divisi": "Coconut Production",
-        "Departement": "Produksi Kelapa A",
-        "Bagian": "Proses Kelapa A",
-        "Jabatan": "Kepala Divisi Operasional",
-        "Joindate": "2014-06-01",
-        "No Telegram": "+628117001008",
-        "Corporate Email": "hendra.wijaya@sambugroup.com",
-        "Reg No AP1": "REG-016",
-        "Reg No AP2": "REG-017",
-        "Role": "Supervisor",
-        "Groupings": "Ka./Wa.Ka.Div ke atas",
+        "Status Karyawan": "",
+        "Keterangan Status Karyawan": "",
+        "Tgl Efektif": "",
       },
     ];
-    const ws = XLSX.utils.json_to_sheet(sampleRows, { header: [...EMPLOYEE_IMPORT_HEADERS] });
+    const masterRefRows = [
+      { "Groupings": "Operasional", "Role": "Employee", "Status Karyawan": "Karyawan Baru" },
+      { "Groupings": "Ka./Wa.Ka.Seksi", "Role": "Supervisor", "Status Karyawan": "Mutasi" },
+      { "Groupings": "Ka./Wa.Ka.Bagian", "Role": "Departement", "Status Karyawan": "Promosi" },
+      { "Groupings": "Ka./Wa.Ka.Dept", "Role": "Division", "Status Karyawan": "" },
+      { "Groupings": "Ka./Wa.Ka.Div ke atas", "Role": "GM", "Status Karyawan": "" },
+      { "Groupings": "GM / VGM", "Role": "VGM", "Status Karyawan": "" },
+      { "Groupings": "Direktur / Director", "Role": "HR Unit", "Status Karyawan": "" },
+      { "Groupings": "", "Role": "HR ICF", "Status Karyawan": "" },
+      { "Groupings": "", "Role": "Director", "Status Karyawan": "" },
+      { "Groupings": "", "Role": "BOD", "Status Karyawan": "" },
+      { "Groupings": "", "Role": "Administrator", "Status Karyawan": "" },
+    ];
+    const wsData = XLSX.utils.json_to_sheet(sampleRows, { header: [...EMPLOYEE_IMPORT_HEADERS] });
+    const wsMaster = XLSX.utils.json_to_sheet(masterRefRows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Template_Data_Karyawan");
-    XLSX.writeFile(wb, `Template_Import_Data_Karyawan_PA_2026.xlsx`);
+    XLSX.utils.book_append_sheet(wb, wsData, "Data_Karyawan");
+    XLSX.utils.book_append_sheet(wb, wsMaster, "Master");
+    XLSX.writeFile(wb, "Template_Upload_Karyawan.xlsx");
   };
 
   const handleExportCurrentUsers = () => {
@@ -205,13 +300,16 @@ export function DataSyncPage() {
       "Departement": u.department,
       "Bagian": u.bagian ?? "",
       "Jabatan": u.position,
-      "Joindate": u.joinDate ?? "",
+      "Joindate": u.joinDate ? normalizeDateDDMMYYYY(u.joinDate) : "",
       "No Telegram": u.telegramNo ?? "",
       "Corporate Email": u.email,
       "Reg No AP1": u.regNoAp1 ?? "",
       "Reg No AP2": u.regNoAp2 ?? "",
       "Role": u.role || "Employee",
       "Groupings": u.groupings,
+      "Status Karyawan": u.employeeStatus ?? "",
+      "Keterangan Status Karyawan": u.employeeStatusNote ?? "",
+      "Tgl Efektif": u.effectiveDate ? normalizeDateDDMMYYYY(u.effectiveDate) : "",
     }));
     const ws = XLSX.utils.json_to_sheet(rows, { header: [...EMPLOYEE_IMPORT_HEADERS] });
     const wb = XLSX.utils.book_new();
@@ -223,16 +321,20 @@ export function DataSyncPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    setPendingUploadFile(file);
-  };
-
-  const executeImportExcel = (file: File) => {
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
         const data = new Uint8Array(evt.target?.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: "array" });
-        const sheet = wb.Sheets[wb.SheetNames[0]];
+        // DS-5: Abaikan sheet "Master" (referensi); prioritaskan sheet "Data_Karyawan" atau sheet data pertama non-Master
+        const preferredSheetName =
+          wb.SheetNames.find((n) => n.trim().toLowerCase() === "data_karyawan") ??
+          wb.SheetNames.find((n) => !IGNORED_REFERENCE_SHEETS.has(n.trim().toLowerCase()));
+        if (!preferredSheetName) {
+          toast.error('Tidak ditemukan sheet data karyawan pada file Excel (sheet "Master" diabaikan).');
+          return;
+        }
+        const sheet = wb.Sheets[preferredSheetName];
         const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
         if (rawRows.length === 0) {
           toast.error("File Excel kosong atau tidak memiliki baris data.");
@@ -240,7 +342,8 @@ export function DataSyncPage() {
         }
 
         const targetCompany = selectedUnit === "ALL" ? COMPANY_UNIT_LOCATIONS[0].company : selectedUnit;
-        const existingUsers = importMode === "replace_all_trial" ? [] : [...loadManagedUsers()];
+        const targetUnitLabel = selectedUnit === "ALL" ? "Semua Unit Usaha" : selectedUnit;
+        const currentManagedUsers = loadManagedUsers();
 
         // Collect all Reg No values referenced as AP1 or AP2 to auto-assign Supervisor role when appropriate
         const referencedApproverRegNos = new Set<string>();
@@ -252,16 +355,41 @@ export function DataSyncPage() {
           if (pair.regNoAp1) referencedApproverRegNos.add(pair.regNoAp1.toUpperCase());
           if (pair.regNoAp2) referencedApproverRegNos.add(pair.regNoAp2.toUpperCase());
         });
-        existingUsers.forEach((u) => {
-          if (u.regNoAp1) referencedApproverRegNos.add(u.regNoAp1.trim().toUpperCase());
-          if (u.regNoAp2) referencedApproverRegNos.add(u.regNoAp2.trim().toUpperCase());
-        });
+        if (importMode !== "replace_all_trial") {
+          currentManagedUsers.forEach((u) => {
+            if (u.regNoAp1) referencedApproverRegNos.add(u.regNoAp1.trim().toUpperCase());
+            if (u.regNoAp2) referencedApproverRegNos.add(u.regNoAp2.trim().toUpperCase());
+          });
+        }
 
-        let importedCount = 0;
-        rawRows.forEach((r, idx) => {
+        const normalizeImportedRole = (val: string): AppUserRole | "" => {
+          const v = val.trim().toLowerCase();
+          if (!v) return "";
+          const configuredRoles = loadAccessRoles();
+          const exactMatch = configuredRoles.find((cr) => cr.toLowerCase() === v);
+          if (exactMatch) return exactMatch;
+          if (v === "administrator" || v === "admin") return "Administrator";
+          if (v === "hr icf" || v === "hricf" || v === "icf") return "HR ICF";
+          if (v === "hr unit" || v === "hrunit") return "HR Unit";
+          if (v === "bod") return "BOD";
+          if (v === "director" || v === "direktur") return "Director";
+          if (v === "gm" || v === "general manager") return "GM";
+          if (v === "vgm" || v === "vice general manager" || v === "wakil general manager") return "VGM";
+          if (v === "supervisor" || v === "approver") return "Supervisor";
+          if (v === "employee" || v === "staff" || v === "karyawan") return "Employee";
+          return val.trim() as AppUserRole;
+        };
+
+        const importedRows: ManagedUser[] = [];
+        const seenUnitRegInFile = new Map<string, string>();
+        const duplicateRegErrorsInFile: string[] = [];
+        const matchedRegComparisons: MatchedRegNoComparison[] = [];
+
+        for (let idx = 0; idx < rawRows.length; idx++) {
+          const r = rawRows[idx];
           const empId = String(r["ID Karyawan"] ?? r["Employee ID"] ?? r["NIK"] ?? "").trim();
           const name = String(r["Nama"] ?? r["Name"] ?? "").trim();
-          if (!empId || !name) return;
+          if (!empId || !name) continue;
 
           const no = String(r["No"] ?? idx + 1).trim();
           const rawRegNo = String(r["Reg No"] ?? r["RegNo"] ?? "").trim();
@@ -270,7 +398,7 @@ export function DataSyncPage() {
           const department = String(r["Departement"] ?? r["Departemen"] ?? r["Department"] ?? "Sumber Daya Manusia").trim();
           const bagian = String(r["Bagian"] ?? r["Section"] ?? "").trim();
           const position = String(r["Jabatan"] ?? r["Position"] ?? "Staff").trim();
-          const joinDate = String(r["Joindate"] ?? r["Join Date"] ?? "").trim();
+          const joinDate = parseOptionalExcelDate(r["Joindate"] ?? r["Join Date"] ?? "");
           const telegramNo = String(r["No Telegram"] ?? r["Telegram"] ?? "").trim();
           const email = String(r["Corporate Email"] ?? r["Email"] ?? "").trim();
           const { regNoAp1, regNoAp2 } = normalizeApproverPair(
@@ -279,34 +407,38 @@ export function DataSyncPage() {
           );
           const rawRole = String(r["Role"] ?? r["User Role"] ?? "").trim();
           const rawGrouping = String(r["Groupings"] ?? r["Grouping"] ?? r["User Groupings"] ?? "").trim();
+          const rawEmpStatus = String(r["Status Karyawan"] ?? r["Employee Status"] ?? "").trim();
+          const cleanEmpStatus = rawEmpStatus === "-" || rawEmpStatus === "—" ? "" : rawEmpStatus;
+          const rawEmpStatusNote = String(
+            r["Keterangan Status Karyawan"] ?? r["Keterangan Status"] ?? r["Status Note"] ?? "",
+          ).trim();
+          const cleanEmpStatusNote =
+            !cleanEmpStatus || rawEmpStatusNote === "-" || rawEmpStatusNote === "—" ? "" : rawEmpStatusNote;
+          const effectiveDate = cleanEmpStatus
+            ? parseOptionalExcelDate(r["Tgl Efektif"] ?? r["Tanggal Efektif"] ?? r["Effective Date"] ?? "")
+            : "";
 
-          const rowCompany = String(r["Company"] ?? r["Unit"] ?? targetCompany).trim();
+          const rowCompany = canonicalizeCompanyUnitName(String(r["Company"] ?? r["Unit"] ?? targetCompany).trim());
+          const fileKey = `${rowCompany.toLowerCase()}::${regNo.toLowerCase()}`;
+          const prevNameInFile = seenUnitRegInFile.get(fileKey);
+          if (prevNameInFile) {
+            duplicateRegErrorsInFile.push(
+              `Reg No "${regNo}" duplikat pada unit ${rowCompany} (${prevNameInFile} & ${name})`,
+            );
+            continue;
+          }
+          seenUnitRegInFile.set(fileKey, name);
+
           const grouping = resolveGroupingForCompanyAndPosition(rowCompany, position, rawGrouping);
 
-          const normalizeImportedRole = (val: string): AppUserRole | "" => {
-            const v = val.trim().toLowerCase();
-            if (!v) return "";
-            const configuredRoles = loadAccessRoles();
-            const exactMatch = configuredRoles.find((cr) => cr.toLowerCase() === v);
-            if (exactMatch) return exactMatch;
-            if (v === "administrator" || v === "admin") return "Administrator";
-            if (v === "hr icf" || v === "hricf" || v === "icf") return "HR ICF";
-            if (v === "hr unit" || v === "hrunit") return "HR Unit";
-            if (v === "bod") return "BOD";
-            if (v === "director" || v === "direktur") return "Director";
-            if (v === "gm" || v === "general manager") return "GM";
-            if (v === "vgm" || v === "vice general manager" || v === "wakil general manager") return "VGM";
-            if (v === "supervisor" || v === "approver") return "Supervisor";
-            if (v === "employee" || v === "staff" || v === "karyawan") return "Employee";
-            return val.trim() as AppUserRole;
-          };
-
-          const existingIdx = existingUsers.findIndex(
-            (u) =>
-              (u.company === rowCompany && u.regNo && u.regNo.toLowerCase() === regNo.toLowerCase()) ||
-              (u.company === rowCompany && u.employeeId.toLowerCase() === empId.toLowerCase()),
-          );
-          const prev = existingIdx >= 0 ? existingUsers[existingIdx] : undefined;
+          // UM-2: Cocokkan existing user berdasarkan Reg No dalam Unit Usaha yang sama
+          // (ID Karyawan yang sama dengan Reg No berbeda tetap menjadi akun terpisah dan tidak saling menimpa)
+          const prev = currentManagedUsers.find((u) => {
+            if (!isSameCompanyUnit(u.company, rowCompany)) return false;
+            const uReg = String(u.regNo ?? "").trim().toLowerCase();
+            if (uReg) return uReg === regNo.toLowerCase();
+            return u.employeeId.trim().toLowerCase() === empId.toLowerCase();
+          });
 
           const isApproverByChain = referencedApproverRegNos.has(regNo.toUpperCase());
           const explicitRole = normalizeImportedRole(rawRole);
@@ -324,7 +456,7 @@ export function DataSyncPage() {
               : "Employee");
 
           const userRecord: ManagedUser = {
-            id: prev?.id ?? String(Date.now() + idx),
+            id: importMode === "replace_all_trial" ? `usr-${Date.now()}-${idx}` : (prev?.id ?? `usr-${Date.now()}-${idx}`),
             no,
             regNo,
             employeeId: empId,
@@ -338,126 +470,70 @@ export function DataSyncPage() {
             email,
             regNoAp1,
             regNoAp2,
-            company: String(r["Company"] ?? r["Unit"] ?? prev?.company ?? targetCompany).trim(),
+            company: rowCompany,
             grade: prev?.grade ?? (grouping === "Ka./Wa.Ka.Div ke atas" ? "Grade 9" : grouping === "Ka./Wa.Ka.Dept" ? "Grade 8" : grouping === "Ka./Wa.Ka.Bagian" ? "Grade 7" : grouping === "Ka./Wa.Ka.Seksi" ? "Grade 6" : "Grade 5"),
             role: inferredRole,
             groupings: rawGrouping ? grouping : prev?.groupings || grouping,
-            status: prev?.status ?? "Active",
-            lastLogin: prev?.lastLogin ?? "",
-            isHrUnitChecker: inferredRole === "HR Unit" ? true : prev?.isHrUnitChecker,
-            isHrIcfValidator: inferredRole === "HR ICF" || inferredRole === "Administrator" ? true : prev?.isHrIcfValidator,
-            checkerUnits: prev?.checkerUnits,
-            managedUnits: prev?.managedUnits,
-            managedDivisions: prev?.managedDivisions,
-            managedDepartments: prev?.managedDepartments,
-            managedBagians: prev?.managedBagians,
-            calibrationRoleByUnit: prev?.calibrationRoleByUnit,
-            soyCalibrationRoleByUnit: prev?.soyCalibrationRoleByUnit,
-            directorCalibrationRole: prev?.directorCalibrationRole,
+            status: importMode === "replace_all_trial" ? "Active" : (prev?.status ?? "Active"),
+            lastLogin: importMode === "replace_all_trial" ? "" : (prev?.lastLogin ?? ""),
+            isHrUnitChecker: inferredRole === "HR Unit" ? true : (importMode === "replace_all_trial" ? false : prev?.isHrUnitChecker),
+            isHrIcfValidator:
+              inferredRole === "HR ICF" || inferredRole === "Administrator"
+                ? true
+                : (importMode === "replace_all_trial" ? false : prev?.isHrIcfValidator),
+            checkerUnits: importMode === "replace_all_trial" ? undefined : prev?.checkerUnits,
+            managedUnits: importMode === "replace_all_trial" ? undefined : prev?.managedUnits,
+            managedDivisions: importMode === "replace_all_trial" ? undefined : prev?.managedDivisions,
+            managedDepartments: importMode === "replace_all_trial" ? undefined : prev?.managedDepartments,
+            managedBagians: importMode === "replace_all_trial" ? undefined : prev?.managedBagians,
+            calibrationRoleByUnit: importMode === "replace_all_trial" ? undefined : prev?.calibrationRoleByUnit,
+            soyCalibrationRoleByUnit: importMode === "replace_all_trial" ? undefined : prev?.soyCalibrationRoleByUnit,
+            directorCalibrationRole: importMode === "replace_all_trial" ? undefined : prev?.directorCalibrationRole,
+            employeeStatus: cleanEmpStatus,
+            employeeStatusNote: cleanEmpStatusNote,
+            effectiveDate,
           };
 
-          if (existingIdx >= 0) {
-            existingUsers[existingIdx] = userRecord;
-          } else {
-            existingUsers.push(userRecord);
+          importedRows.push(userRecord);
+          if (prev && importMode !== "replace_all_trial") {
+            const diffs = computeManagedUserDiffs(prev, userRecord);
+            matchedRegComparisons.push({
+              regNo,
+              company: rowCompany,
+              existingUser: prev,
+              incomingUser: userRecord,
+              diffs,
+            });
           }
-          importedCount++;
-        });
+        }
 
-        if (importedCount === 0) {
+        if (duplicateRegErrorsInFile.length > 0) {
+          toast.error(
+            `File Excel ditolak karena terdapat duplikat Reg No dalam 1 unit usaha: ${duplicateRegErrorsInFile
+              .slice(0, 3)
+              .join("; ")}`,
+          );
+          return;
+        }
+
+        if (importedRows.length === 0) {
           toast.error("Tidak ada baris valid. Pastikan kolom 'ID Karyawan' dan 'Nama' terisi.");
           return;
         }
 
-        if (importMode === "replace_all_trial") {
-          void replaceAllBackendUsersAndResetForTrial(
-            existingUsers as unknown as Array<Record<string, unknown>>,
-            true,
-          );
-        } else {
-          saveManagedUsers(existingUsers);
-          if (importMode === "update_clear_tx") {
-            const importedIds = new Set(
-              existingUsers
-                .filter((u) => u.company === targetCompany || selectedUnit === "ALL")
-                .map((u) => u.employeeId.toLowerCase()),
-            );
-            const clearEmpKeys = [
-              "pa_kpi_setting_by_emp_v2",
-              "pa_kpi_tracking_by_emp_v1",
-              "pa_smart_goals_by_emp_v1",
-              "pa_appraisal_form_by_emp_v1",
-              "pa_managerial_skill_by_emp_v1",
-            ];
-            for (const key of clearEmpKeys) {
-              try {
-                const raw = localStorage.getItem(key);
-                if (!raw) continue;
-                const map = JSON.parse(raw) as Record<string, unknown>;
-                let changed = false;
-                for (const k of Object.keys(map)) {
-                  if (importedIds.has(k.toLowerCase())) {
-                    delete map[k];
-                    changed = true;
-                  }
-                }
-                if (changed) {
-                  savePersistedState(key, map);
-                }
-              } catch {
-                // ignore
-              }
-            }
-            try {
-              const wfRaw = localStorage.getItem("appraisal_workflow_records_v1");
-              const wfList = wfRaw ? (JSON.parse(wfRaw) as Array<{ key?: string; employeeId?: string; module?: string; phase?: string }>) : [];
-              if (Array.isArray(wfList) && wfList.length > 0) {
-                const matchesEmp = (idVal?: string) => {
-                  const low = String(idVal ?? "").trim().toLowerCase();
-                  if (importedIds.has(low)) return true;
-                  const num = low.match(/^(?:emp-?|e)(\d+)$/i)?.[1];
-                  if (!num) return false;
-                  return importedIds.has(`e${num.padStart(3, "0")}`) || importedIds.has(`emp-${num.padStart(3, "0")}`);
-                };
-                const removedWf = wfList.filter((r) => matchesEmp(r.employeeId));
-                if (removedWf.length > 0) {
-                  const keptWf = wfList.filter((r) => !matchesEmp(r.employeeId));
-                  savePersistedState("appraisal_workflow_records_v1", keptWf);
-                  void syncToSupabase({
-                    kind: "workflow-delete",
-                    docKeys: removedWf.map((r) => String(r.key ?? "")).filter(Boolean),
-                    records: removedWf,
-                  });
-                }
-              }
-            } catch {
-              // ignore
-            }
-          }
-        }
-        setUsers(existingUsers);
-        const now = new Date().toLocaleString("id-ID");
-        const modeLabel =
-          importMode === "replace_all_trial"
-            ? "Mode: Replace / Ganti Data"
-            : importMode === "update_clear_tx"
-              ? "Mode: Update / Clear Transaksi"
-              : "Mode: Update / Gabung Data";
-        const summary = `${importedCount} data karyawan berhasil di-upload ke ${targetCompany} (${modeLabel}) pada ${now}`;
-        setLastImportSummary(summary);
-        savePersistedState("pa_last_employee_excel_import_v1", summary, {
-          kind: "kv-state",
-          stateKey: "pa_last_employee_excel_import_v1",
-          stateValue: summary,
-          audit: {
-            action: "Import",
-            module: "Data Sync",
-            subModule: "Employee Excel Upload",
-            description: summary,
-          },
+        const regComparisonsWithDiffs = matchedRegComparisons.filter((m) => m.diffs.length > 0);
+        setConfirmStep(1);
+        setConfirmPhraseInput("");
+        setUploadPlan({
+          fileName: file.name,
+          sheetName: preferredSheetName,
+          mode: importMode,
+          targetUnit: selectedUnit,
+          targetUnitLabel,
+          importedRows,
+          matchedRegComparisons,
+          regComparisonsWithDiffs,
         });
-        window.dispatchEvent(new Event("pa-employees-imported"));
-        toast.success(`Berhasil meng-upload ${importedCount} data karyawan beserta rantai Approval (Reg No AP1 & AP2).`);
       } catch (err) {
         toast.error(`Gagal membaca file Excel: ${err instanceof Error ? err.message : "Format tidak valid"}`);
       } finally {
@@ -467,13 +543,121 @@ export function DataSyncPage() {
     reader.readAsArrayBuffer(file);
   };
 
-  const resolveApproverDisplay = (regNo?: string) => {
+  const commitUploadPlan = async (plan: ParsedUploadPlan) => {
+    if (executingUpload) return;
+    setExecutingUpload(true);
+    try {
+      const nowD = new Date();
+      const now = `${String(nowD.getDate()).padStart(2, "0")}/${String(nowD.getMonth() + 1).padStart(2, "0")}/${nowD.getFullYear()} ${String(nowD.getHours()).padStart(2, "0")}:${String(nowD.getMinutes()).padStart(2, "0")}`;
+
+      if (plan.mode === "replace_all_trial") {
+        // Jaga akun aktif Administrator / HR ICF agar sesi Admin yang sedang mengeksekusi tidak terputus apabila tidak tercantum di file
+        const activeAdmin = getActiveUser();
+        let finalUnitRows = [...plan.importedRows];
+        if (
+          activeAdmin &&
+          isAdminOrHrIcfRole(activeAdmin.role) &&
+          (plan.targetUnit === "ALL" || isSameCompanyUnit(activeAdmin.company, plan.targetUnit))
+        ) {
+          const alreadyIncluded = finalUnitRows.some(
+            (r) =>
+              isSameCompanyUnit(r.company, activeAdmin.company) &&
+              String(r.regNo || r.employeeId).trim().toLowerCase() ===
+                String(activeAdmin.regNo || activeAdmin.employeeId).trim().toLowerCase(),
+          );
+          if (!alreadyIncluded) {
+            finalUnitRows = [activeAdmin, ...finalUnitRows];
+          }
+        }
+        await replaceCompanyUnitUsersAndResetTransactions(
+          plan.targetUnit,
+          finalUnitRows as unknown as Array<Record<string, unknown>>,
+        );
+        setUsers(loadManagedUsers());
+      } else {
+        const mergedUsers = [...loadManagedUsers()];
+        const touchedIdentities = new Set<string>();
+        for (const incoming of plan.importedRows) {
+          const idx = mergedUsers.findIndex((u) => {
+            if (!isSameCompanyUnit(u.company, incoming.company)) return false;
+            const uReg = String(u.regNo ?? "").trim().toLowerCase();
+            const inReg = String(incoming.regNo ?? "").trim().toLowerCase();
+            if (uReg && inReg) return uReg === inReg;
+            return u.employeeId.trim().toLowerCase() === incoming.employeeId.trim().toLowerCase();
+          });
+          if (idx >= 0) {
+            mergedUsers[idx] = { ...mergedUsers[idx], ...incoming, id: mergedUsers[idx].id };
+            touchedIdentities.add(mergedUsers[idx].id);
+          } else {
+            mergedUsers.push(incoming);
+            touchedIdentities.add(incoming.id);
+          }
+        }
+        saveManagedUsers(mergedUsers);
+
+        if (plan.mode === "update_clear_tx") {
+          const affectedEmps = plan.importedRows.map((u) => ({
+            employeeId: u.employeeId,
+            regNo: u.regNo,
+            company: u.company,
+          }));
+          const survivingProtected = mergedUsers
+            .filter((u) => !touchedIdentities.has(u.id))
+            .map((u) => ({
+              employeeId: u.employeeId,
+              regNo: u.regNo,
+              company: u.company,
+            }));
+          await clearEmployeeTransactionsForSync(affectedEmps, survivingProtected);
+        }
+        setUsers(loadManagedUsers());
+      }
+
+      const modeLabel =
+        plan.mode === "replace_all_trial"
+          ? "Mode: Replace / Ganti Data"
+          : plan.mode === "update_clear_tx"
+            ? "Mode: Update / Clear Transaksi"
+            : "Mode: Update / Gabung Data";
+      const summary = `${plan.importedRows.length} data karyawan berhasil di-upload ke ${plan.targetUnitLabel} (${modeLabel}) pada ${now}`;
+      setLastImportSummary(summary);
+      savePersistedState("pa_last_employee_excel_import_v1", summary, {
+        kind: "kv-state",
+        stateKey: "pa_last_employee_excel_import_v1",
+        stateValue: summary,
+        audit: {
+          action: "Import",
+          module: "Data Sync",
+          subModule: "Employee Excel Upload",
+          description: summary,
+        },
+      });
+      window.dispatchEvent(new Event("pa-employees-imported"));
+      toast.success(`Berhasil meng-upload ${plan.importedRows.length} data karyawan pada ${plan.targetUnitLabel}.`);
+      setUploadPlan(null);
+      setConfirmStep(1);
+      setConfirmPhraseInput("");
+    } catch (err) {
+      toast.error(`Gagal memproses upload data karyawan: ${err instanceof Error ? err.message : "Terjadi kesalahan"}`);
+    } finally {
+      setExecutingUpload(false);
+    }
+  };
+
+  const resolveApproverDisplay = (regNo?: string, ownerCompany?: string) => {
     if (!regNo) return "Belum ada approver";
-    const found = users.find(
-      (u) =>
-        (u.regNo && u.regNo.toLowerCase() === regNo.toLowerCase()) ||
-        u.employeeId.toLowerCase() === regNo.toLowerCase(),
-    );
+    const regLow = regNo.trim().toLowerCase();
+    const found =
+      (ownerCompany
+        ? users.find(
+            (u) =>
+              isSameCompanyUnit(u.company, ownerCompany) &&
+              u.regNo &&
+              u.regNo.trim().toLowerCase() === regLow,
+          )
+        : undefined) ??
+      users.find((u) => u.regNo && u.regNo.trim().toLowerCase() === regLow) ??
+      users.find((u) => u.employeeId.trim().toLowerCase() === regLow);
     return found ? `${regNo} · ${found.name}` : regNo;
   };
 
@@ -489,7 +673,9 @@ export function DataSyncPage() {
       u.division.toLowerCase().includes(q) ||
       u.department.toLowerCase().includes(q) ||
       (u.bagian ?? "").toLowerCase().includes(q) ||
-      u.position.toLowerCase().includes(q)
+      u.position.toLowerCase().includes(q) ||
+      (u.employeeStatus ?? "").toLowerCase().includes(q) ||
+      (u.employeeStatusNote ?? "").toLowerCase().includes(q)
     );
   });
 
@@ -637,7 +823,7 @@ export function DataSyncPage() {
                   </div>
                   <div className={importMode === "replace_all_trial" ? "bg-white/10 rounded-lg p-2 border border-white/20" : "opacity-90"}>
                     <p className="font-bold text-white">3. Mode: Replace / Ganti Data</p>
-                    <p className="text-white/85">Mengganti seluruh data karyawan di sistem (kecuali Administrator &amp; HR ICF) dengan isi file Excel terbaru serta mengosongkan seluruh transaksi &amp; arsip di semua unit usaha.</p>
+                    <p className="text-white/85">Mengganti seluruh data karyawan pada Unit Usaha terpilih dengan isi file Excel terbaru serta mengosongkan seluruh riwayat transaksi penilaian kinerja aktif maupun arsip pada Unit Usaha tersebut.</p>
                   </div>
                 </TooltipContent>
               </Tooltip>
@@ -748,17 +934,17 @@ export function DataSyncPage() {
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{u.department}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{u.bagian || "—"}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{u.position}</td>
-                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{u.joinDate || "—"}</td>
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{u.joinDate ? normalizeDateDDMMYYYY(u.joinDate) : "-"}</td>
                     <td className="px-3 py-2 font-mono text-gray-600 whitespace-nowrap">{u.telegramNo || "—"}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{u.email || "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium text-[11px] ${u.regNoAp1 ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
-                        {resolveApproverDisplay(u.regNoAp1)}
+                        {resolveApproverDisplay(u.regNoAp1, u.company)}
                       </span>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium text-[11px] ${u.regNoAp2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>
-                        {resolveApproverDisplay(u.regNoAp2)}
+                        {resolveApproverDisplay(u.regNoAp2, u.company)}
                       </span>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -770,6 +956,21 @@ export function DataSyncPage() {
                       <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-700 font-medium text-[11px]">
                         {u.groupings}
                       </span>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {u.employeeStatus ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold text-[11px]">
+                          {u.employeeStatus}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
+                      {u.employeeStatusNote || "-"}
+                    </td>
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+                      {u.effectiveDate ? normalizeDateDDMMYYYY(u.effectiveDate) : "-"}
                     </td>
                   </tr>
                 ))}
@@ -832,64 +1033,328 @@ export function DataSyncPage() {
         </p>
       </div>
 
-      {pendingUploadFile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 flex flex-col gap-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
-                <AlertCircle className="w-5 h-5 text-amber-600" />
+      {uploadPlan && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div
+            className={`bg-white rounded-2xl shadow-2xl w-full ${
+              uploadPlan.mode !== "replace_all_trial" && confirmStep === 1 ? "max-w-4xl" : "max-w-lg"
+            } max-h-[90vh] flex flex-col overflow-hidden`}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-3 bg-gradient-to-r from-[#1A284F] to-[#26396c] text-white">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold leading-snug">
+                    {uploadPlan.mode === "replace_all_trial"
+                      ? "Konfirmasi Mode: Replace / Ganti Data"
+                      : uploadPlan.mode === "update_clear_tx"
+                        ? "Konfirmasi Mode: Update / Clear Transaksi"
+                        : "Konfirmasi Mode: Update / Gabung Data"}
+                  </h3>
+                  <p className="text-[11px] text-blue-100 mt-0.5">
+                    File: <span className="font-semibold text-white">{uploadPlan.fileName}</span> · Sheet:{" "}
+                    <span className="font-mono text-amber-200">{uploadPlan.sheetName}</span> ({uploadPlan.importedRows.length} baris)
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-[#1A284F]">Konfirmasi Upload Data Karyawan</h3>
-                <p className="text-xs text-gray-500 mt-0.5">File: <span className="font-semibold text-gray-700">{pendingUploadFile.name}</span></p>
-              </div>
-            </div>
-
-            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3.5 text-xs space-y-2">
-              <div className="flex justify-between gap-2">
-                <span className="text-gray-500">Mode Upload:</span>
-                <span className="font-bold text-[#1A284F]">
-                  {importMode === "replace_all_trial"
-                    ? "Replace / Ganti Data"
-                    : importMode === "update_clear_tx"
-                      ? "Update / Clear Transaksi"
-                      : "Update / Gabung Data"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-gray-500">Unit Usaha:</span>
-                <span className="font-bold text-[#1A284F]">
-                  {selectedUnit === "ALL" ? "Semua Unit Usaha" : selectedUnit}
-                </span>
-              </div>
-              <p className="text-[11px] text-gray-600 pt-1 border-t border-slate-200 leading-relaxed">
-                {importMode === "replace_all_trial"
-                  ? "Seluruh data karyawan di database (kecuali Administrator & HR ICF) termasuk history transaksi user aktif maupun arsip di semua unit usaha akan dikosongkan dan diganti dengan data terbaru."
-                  : importMode === "update_clear_tx"
-                    ? "Data karyawan akan ditambahkan/diperbarui berdasarkan Reg No terbaru dan seluruh history transaksi karyawan tersebut akan dihapus."
-                    : "Data karyawan akan ditambahkan/diperbarui berdasarkan Reg No terbaru tanpa menghapus history transaksi karyawan tersebut."}
-              </p>
-            </div>
-
-            <div className="flex justify-end gap-2.5 pt-1">
-              <button
-                type="button"
-                onClick={() => setPendingUploadFile(null)}
-                className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50"
-              >
-                Batal
-              </button>
               <button
                 type="button"
                 onClick={() => {
-                  const f = pendingUploadFile;
-                  setPendingUploadFile(null);
-                  if (f) executeImportExcel(f);
+                  if (!executingUpload) {
+                    setUploadPlan(null);
+                    setConfirmStep(1);
+                    setConfirmPhraseInput("");
+                  }
                 }}
-                className="px-4 py-2 rounded-xl bg-[#1A284F] text-white text-xs font-semibold hover:bg-[#131d3b]"
+                className="text-white/75 hover:text-white p-1"
               >
-                Lanjutkan Upload
+                <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 overflow-y-auto space-y-4 text-xs text-gray-700">
+              {/* DS-1: Mode Update / Gabung Data */}
+              {uploadPlan.mode === "merge" && (
+                <>
+                  {uploadPlan.regComparisonsWithDiffs.length > 0 ? (
+                    <>
+                      <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 text-amber-950 leading-relaxed">
+                        Anda memilih <strong>Mode Update / Gabung Data</strong> di Unit Usaha{" "}
+                        <strong>{uploadPlan.targetUnitLabel}</strong>, silahkan cek kembali sebelum gabung data, Ada perbedaan data dari Reg No:{" "}
+                        <strong className="font-mono">
+                          {uploadPlan.regComparisonsWithDiffs.map((m) => m.regNo).join(", ")}
+                        </strong>{" "}
+                        yaitu pada tabel perbandingan di bawah ini. Jika anda klik <strong>Continue and Update</strong>, artinya anda setuju untuk update data existing karyawan dengan data terbaru{" "}
+                        <strong>(tanpa menghapus riwayat data transaksi penilaian kinerja)</strong>, pilih <strong>Cancel</strong> jika anda mau menyesuaikan kembali file upload anda.
+                      </div>
+                      <div className="border border-gray-200 rounded-xl overflow-x-auto max-h-[320px]">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead className="bg-slate-50 sticky top-0 z-10 border-b border-gray-200 text-gray-600">
+                            <tr>
+                              <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Reg No</th>
+                              <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Nama Karyawan</th>
+                              <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Unit Usaha</th>
+                              <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Kolom Berbeda</th>
+                              <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Data Existing</th>
+                              <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Data Upload Terbaru</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {uploadPlan.regComparisonsWithDiffs.flatMap((comp) =>
+                              comp.diffs.map((d, dIdx) => (
+                                <tr key={`${comp.company}-${comp.regNo}-${d.fieldLabel}`} className="hover:bg-slate-50/70">
+                                  {dIdx === 0 && (
+                                    <>
+                                      <td rowSpan={comp.diffs.length} className="px-3 py-2 font-mono font-bold text-[#1A284F] align-top bg-white">
+                                        {comp.regNo}
+                                      </td>
+                                      <td rowSpan={comp.diffs.length} className="px-3 py-2 font-semibold text-gray-800 align-top bg-white whitespace-nowrap">
+                                        {comp.incomingUser.name}
+                                      </td>
+                                      <td rowSpan={comp.diffs.length} className="px-3 py-2 text-gray-600 align-top bg-white whitespace-nowrap">
+                                        {comp.company}
+                                      </td>
+                                    </>
+                                  )}
+                                  <td className="px-3 py-2 font-semibold text-gray-700 whitespace-nowrap">{d.fieldLabel}</td>
+                                  <td className="px-3 py-2 text-rose-700 bg-rose-50/40 font-medium">{d.oldValue}</td>
+                                  <td className="px-3 py-2 text-emerald-700 bg-emerald-50/50 font-semibold">{d.newValue}</td>
+                                </tr>
+                              )),
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3.5 text-blue-950 leading-relaxed">
+                      Anda memilih <strong>Mode Update / Gabung Data</strong> di Unit Usaha{" "}
+                      <strong>{uploadPlan.targetUnitLabel}</strong> ({uploadPlan.importedRows.length} baris karyawan;{" "}
+                      {uploadPlan.matchedRegComparisons.length > 0
+                        ? `${uploadPlan.matchedRegComparisons.length} Reg No existing memiliki data yang identik`
+                        : "seluruh Reg No merupakan data karyawan baru"}
+                      ). Jika anda klik <strong>Continue and Update</strong>, data akan digabungkan{" "}
+                      <strong>(tanpa menghapus riwayat data transaksi penilaian kinerja)</strong>.
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* DS-2: Mode Update / Clear Transaksi (Step 1: Tabel Perbandingan -> Step 2: Ketik konfirmasi perbaharui data) */}
+              {uploadPlan.mode === "update_clear_tx" && confirmStep === 1 && (
+                <>
+                  <div className="rounded-xl border border-rose-200 bg-rose-50/80 p-3.5 text-rose-950 leading-relaxed">
+                    Anda memilih <strong>Mode Update / Clear Transaksi</strong> di Unit Usaha{" "}
+                    <strong>{uploadPlan.targetUnitLabel}</strong>, silahkan cek kembali sebelum gabung data
+                    {uploadPlan.matchedRegComparisons.length > 0 ? (
+                      <>
+                        , Ada perbedaan/kecocokan data dari Reg No:{" "}
+                        <strong className="font-mono">
+                          {(uploadPlan.regComparisonsWithDiffs.length > 0
+                            ? uploadPlan.regComparisonsWithDiffs
+                            : uploadPlan.matchedRegComparisons
+                          )
+                            .map((m) => m.regNo)
+                            .join(", ")}
+                        </strong>{" "}
+                        yaitu pada tabel di bawah ini.
+                      </>
+                    ) : (
+                      "."
+                    )}{" "}
+                    Jika anda klik <strong>Continue and Update</strong>, artinya anda setuju untuk update data existing karyawan dengan data terbaru{" "}
+                    <strong className="text-rose-700">(termasuk menghapus riwayat data transaksi penilaian kinerja)</strong>, pilih{" "}
+                    <strong>Cancel</strong> jika anda mau menyesuaikan kembali file upload anda.
+                  </div>
+                  {uploadPlan.matchedRegComparisons.length > 0 && (
+                    <div className="border border-gray-200 rounded-xl overflow-x-auto max-h-[320px]">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead className="bg-slate-50 sticky top-0 z-10 border-b border-gray-200 text-gray-600">
+                          <tr>
+                            <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Reg No</th>
+                            <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Nama Karyawan</th>
+                            <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Unit Usaha</th>
+                            <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Kolom / Status</th>
+                            <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Data Existing</th>
+                            <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Data Upload Terbaru</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {uploadPlan.matchedRegComparisons.flatMap((comp) => {
+                            const rowsToShow =
+                              comp.diffs.length > 0
+                                ? comp.diffs
+                                : [
+                                    {
+                                      fieldLabel: "Data Profil",
+                                      oldValue: "Sama dengan existing",
+                                      newValue: "Transaksi PA akan di-clear",
+                                    },
+                                  ];
+                            return rowsToShow.map((d, dIdx) => (
+                              <tr key={`${comp.company}-${comp.regNo}-${d.fieldLabel}`} className="hover:bg-slate-50/70">
+                                {dIdx === 0 && (
+                                  <>
+                                    <td rowSpan={rowsToShow.length} className="px-3 py-2 font-mono font-bold text-[#1A284F] align-top bg-white">
+                                      {comp.regNo}
+                                    </td>
+                                    <td rowSpan={rowsToShow.length} className="px-3 py-2 font-semibold text-gray-800 align-top bg-white whitespace-nowrap">
+                                      {comp.incomingUser.name}
+                                    </td>
+                                    <td rowSpan={rowsToShow.length} className="px-3 py-2 text-gray-600 align-top bg-white whitespace-nowrap">
+                                      {comp.company}
+                                    </td>
+                                  </>
+                                )}
+                                <td className="px-3 py-2 font-semibold text-gray-700 whitespace-nowrap">{d.fieldLabel}</td>
+                                <td className="px-3 py-2 text-rose-700 bg-rose-50/40 font-medium">{d.oldValue}</td>
+                                <td className="px-3 py-2 text-emerald-700 bg-emerald-50/50 font-semibold">{d.newValue}</td>
+                              </tr>
+                            ));
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {uploadPlan.mode === "update_clear_tx" && confirmStep === 2 && (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-rose-900 leading-relaxed">
+                    Konfirmasi Tahap Akhir (<strong>Mode Update / Clear Transaksi</strong> — Unit Usaha{" "}
+                    <strong>{uploadPlan.targetUnitLabel}</strong>): seluruh riwayat transaksi penilaian kinerja milik karyawan pada file upload ini akan dihapus secara permanen.
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Ketik <span className="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">konfirmasi perbaharui data</span> untuk melanjutkan:
+                    </label>
+                    <input
+                      type="text"
+                      value={confirmPhraseInput}
+                      onChange={(e) => setConfirmPhraseInput(e.target.value)}
+                      placeholder="konfirmasi perbaharui data"
+                      autoFocus
+                      className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* DS-3: Mode Replace / Ganti Data (Step 1: Peringatan Unit -> Step 2: Ketik konfirmasi ganti data) */}
+              {uploadPlan.mode === "replace_all_trial" && confirmStep === 1 && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50/90 p-4 text-rose-950 leading-relaxed text-xs sm:text-[13px]">
+                  Anda memilih <strong>Mode: Replace / Ganti Data</strong> artinya semua data yang terkait pada Unit Usaha{" "}
+                  <strong>{uploadPlan.targetUnitLabel}</strong> ini akan digantikan dengan data baru (clean data termasuk data riwayat transaksi penilaian kinerja aktif maupun arsip). setelah konfirmasi, data tidak dapat dipulihkan sehingga pastikan kembali Mode yang anda pilih.
+                </div>
+              )}
+
+              {uploadPlan.mode === "replace_all_trial" && confirmStep === 2 && (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-rose-900 leading-relaxed">
+                    Konfirmasi Tahap Akhir (<strong>Mode: Replace / Ganti Data</strong> — Unit Usaha{" "}
+                    <strong>{uploadPlan.targetUnitLabel}</strong>): tindakan ini tidak dapat dipulihkan.
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Ketik <span className="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">konfirmasi ganti data</span> untuk melanjutkan:
+                    </label>
+                    <input
+                      type="text"
+                      value={confirmPhraseInput}
+                      onChange={(e) => setConfirmPhraseInput(e.target.value)}
+                      placeholder="konfirmasi ganti data"
+                      autoFocus
+                      className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/70 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={executingUpload}
+                onClick={() => {
+                  setUploadPlan(null);
+                  setConfirmStep(1);
+                  setConfirmPhraseInput("");
+                }}
+                className="px-4 py-2 rounded-xl border border-gray-200 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              {uploadPlan.mode === "merge" && (
+                <button
+                  type="button"
+                  disabled={executingUpload}
+                  onClick={() => void commitUploadPlan(uploadPlan)}
+                  className="px-4 py-2 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold disabled:opacity-50"
+                >
+                  {executingUpload ? "Memproses..." : "Continue and Update"}
+                </button>
+              )}
+
+              {uploadPlan.mode === "update_clear_tx" && confirmStep === 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmPhraseInput("");
+                    setConfirmStep(2);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold"
+                >
+                  Continue and Update
+                </button>
+              )}
+
+              {uploadPlan.mode === "update_clear_tx" && confirmStep === 2 && (
+                <button
+                  type="button"
+                  disabled={
+                    executingUpload ||
+                    confirmPhraseInput.trim().toLowerCase() !== "konfirmasi perbaharui data"
+                  }
+                  onClick={() => void commitUploadPlan(uploadPlan)}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  {executingUpload ? "Memproses..." : "Continue"}
+                </button>
+              )}
+
+              {uploadPlan.mode === "replace_all_trial" && confirmStep === 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmPhraseInput("");
+                    setConfirmStep(2);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold"
+                >
+                  Continue &amp; Change Data
+                </button>
+              )}
+
+              {uploadPlan.mode === "replace_all_trial" && confirmStep === 2 && (
+                <button
+                  type="button"
+                  disabled={
+                    executingUpload ||
+                    confirmPhraseInput.trim().toLowerCase() !== "konfirmasi ganti data"
+                  }
+                  onClick={() => void commitUploadPlan(uploadPlan)}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  {executingUpload ? "Memproses..." : "Continue"}
+                </button>
+              )}
             </div>
           </div>
         </div>

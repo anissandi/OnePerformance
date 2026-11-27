@@ -1,5 +1,12 @@
 import { deleteBackendRecordFromSupabase, loadPersistedState, savePersistedState, syncToSupabase } from "../services/supabaseClient";
-import { getActiveUser, loadManagedUsers, saveManagedUsers, type ManagedUser } from "./authStore";
+import {
+  canonicalizeCompanyUnitName,
+  getActiveUser,
+  isSameCompanyUnit,
+  loadManagedUsers,
+  saveManagedUsers,
+  type ManagedUser,
+} from "./authStore";
 
 export const ARCHIVE_KEY = "pa_archived_users_v1";
 export const ARCHIVE_UPDATED_EVENT = "pa-archive-updated";
@@ -57,16 +64,56 @@ function saveArchivedUsers(
   window.dispatchEvent(new Event(ARCHIVE_UPDATED_EVENT));
 }
 
-export function isEmployeeArchived(employeeIdOrEmail: string): ArchivedUserRecord | undefined {
+export function isEmployeeArchived(
+  employeeIdOrEmail: string,
+  company?: string,
+  regNo?: string,
+): ArchivedUserRecord | undefined {
   const q = employeeIdOrEmail.trim().toLowerCase();
   if (!q) return undefined;
   return loadArchivedUsers().find(
-    (a) =>
+    (a) => {
+      if (company && !isSameCompanyUnit(a.user.company ?? "", company)) return false;
+      if (regNo && String(a.user.regNo ?? "").trim().toLowerCase() !== regNo.trim().toLowerCase()) return false;
+      return (
       a.user.employeeId.toLowerCase() === q ||
       normId(a.user.employeeId).toLowerCase() === normId(q).toLowerCase() ||
       Boolean(a.user.email && a.user.email.trim().toLowerCase() === q) ||
-      Boolean(a.user.name && a.user.name.trim().toLowerCase() === q),
+      Boolean(a.user.name && a.user.name.trim().toLowerCase() === q)
+      );
+    },
   );
+}
+
+function isSameUserIdentity(a: ManagedUser, b: ManagedUser): boolean {
+  if (a.id && b.id && a.id === b.id && isSameCompanyUnit(a.company ?? "", b.company ?? "")) return true;
+  const unitA = canonicalizeCompanyUnitName(a.company ?? "").trim().toLowerCase();
+  const unitB = canonicalizeCompanyUnitName(b.company ?? "").trim().toLowerCase();
+  const regA = String(a.regNo ?? "").trim().toLowerCase();
+  const regB = String(b.regNo ?? "").trim().toLowerCase();
+  if (unitA && unitB && unitA === unitB && regA && regB) {
+    return regA === regB;
+  }
+  if (unitA && unitB && unitA === unitB && !regA && !regB) {
+    return a.employeeId.trim().toLowerCase() === b.employeeId.trim().toLowerCase();
+  }
+  return false;
+}
+
+/** Menghapus data arsip khusus untuk suatu Unit Usaha (atau seluruh unit bila unitName === "ALL"). */
+export function clearArchivedUsersForCompanyUnit(unitName: string): void {
+  const existing = loadArchivedUsers();
+  if (existing.length === 0) return;
+  const kept =
+    unitName === "ALL"
+      ? []
+      : existing.filter((a) => !isSameCompanyUnit(a.user?.company ?? "", unitName));
+  if (kept.length === existing.length) return;
+  saveArchivedUsers(kept, {
+    action: "Delete",
+    subModule: "Data Sync Replace Clean Archive",
+    description: `Cleaned archived employee records for ${unitName === "ALL" ? "All Company Units" : unitName}`,
+  });
 }
 
 /** Arsipkan user: dikeluarkan dari User Management aktif (tidak bisa login) tanpa menghapus data PA. */
@@ -81,7 +128,7 @@ export function archiveUsers(users: ManagedUser[], reason: string, source: Archi
   const namesLower = new Set(users.map((u) => (u.name ?? "").trim().toLowerCase()).filter(Boolean));
   const cleanReason = reason.trim() || (source === "eoy" ? EOY_ARCHIVE_REASON : "-");
   const next = [
-    ...existing.filter((a) => !ids.has(a.user.employeeId.toLowerCase())),
+    ...existing.filter((a) => !users.some((target) => isSameUserIdentity(a.user, target))),
     ...users.map((u) => ({
       id: `arc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       user: { ...u, status: "Inactive" as const },
@@ -96,9 +143,7 @@ export function archiveUsers(users: ManagedUser[], reason: string, source: Archi
     subModule: source === "verification" ? "Calibration Verification Inactive" : source === "eoy" ? "EOY Headcount Elimination" : "User Management Archive",
     description: `Archived ${users.length} employee(s): ${users.map((u) => `${u.name} (${u.employeeId})`).join(", ")} — Reason: ${cleanReason}`,
   });
-  const remaining = loadManagedUsers().filter(
-    (u) => !ids.has(u.employeeId.toLowerCase()) && !normIds.has(normId(u.employeeId).toLowerCase()),
-  );
+  const remaining = loadManagedUsers().filter((u) => !users.some((target) => isSameUserIdentity(u, target)));
   // Sinkronkan penghapusan user aktif ke backend (data PA tetap tersimpan untuk restore)
   users.forEach((u) => saveManagedUsers(remaining, undefined, u.employeeId));
 

@@ -954,7 +954,7 @@ export function FeedbackApprovalDrawer({
                         <p className="mt-1 text-xs text-gray-500">
                           Disubmit {row.name}
                           {submission.ownerResultSubmittedAt
-                            ? ` · ${new Date(submission.ownerResultSubmittedAt).toLocaleDateString("id-ID")}`
+                            ? ` · ${normalizeDateDDMMYYYY(submission.ownerResultSubmittedAt)}`
                             : ""}
                         </p>
                       </div>
@@ -1175,3 +1175,4 @@ export function FeedbackApprovalDrawer({
     </Dialog.Root>
   )
 }
+import { normalizeDateDDMMYYYY } from "../utils/dateFormat";

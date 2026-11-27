@@ -20,7 +20,7 @@ import { useAppraisalRevision } from "../shared/useAppraisalRevision";
 import { getApproverNotesHistory, normalizeEmployeeId } from "../shared/appraisalWorkflowStore";
 import { loadAllIcfProjectsByEmployee } from "../../store/projectStore";
 import { loadRCASubmissions, type StoredRCASubmission } from "../shared/rcaStore";
-import { UnifiedRCADetailTable, isStoredRcaSubmissionClosed } from "../../components/UnifiedRCADetailTable";
+import { UnifiedRCADetailTable, computeRcaMasalahFactorSummary, isStoredRcaSubmissionClosed } from "../../components/UnifiedRCADetailTable";
 import { loadPersistedState, safeSetLocalJson, savePersistedState, uploadEvidenceFileToSupabase } from "../../services/supabaseClient";
 import { isExcludedFromAppraisalCalibration, loadManagedUsers, resolveEffectiveUserGrouping, resolveUserAllowedModules, useAuthStore } from "../../store/authStore";
 import { getLiveTransactionalEmployees } from "../../data/mockEmployees";
@@ -1447,6 +1447,35 @@ function AppraisalDetailCard({
                       </div>
                     </div>
                   </div>
+                  {/* Summary Masalah Utama (A): Eksternal & Internal (Open | Closed) */}
+                  {(() => {
+                    const factorSum = computeRcaMasalahFactorSummary(rcaSubmissions);
+                    return (
+                      <div className="rounded-xl border border-indigo-100 bg-white px-3.5 py-3 flex flex-col gap-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-[#1A284F]">
+                          Summary Masalah Utama (A)
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="flex items-center justify-between gap-2 rounded-lg border border-orange-200 bg-orange-50/60 px-3 py-1.5">
+                            <span className="text-[11px] font-bold text-orange-800">Eksternal:</span>
+                            <span className="text-[11px] font-bold text-slate-700 tabular-nums">
+                              <span className="text-amber-700">{factorSum.eksternalOpen} Open</span>
+                              <span className="mx-1.5 text-orange-300">|</span>
+                              <span className="text-emerald-700">{factorSum.eksternalClosed} Closed</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-1.5">
+                            <span className="text-[11px] font-bold text-blue-800">Internal:</span>
+                            <span className="text-[11px] font-bold text-slate-700 tabular-nums">
+                              <span className="text-amber-700">{factorSum.internalOpen} Open</span>
+                              <span className="mx-1.5 text-blue-300">|</span>
+                              <span className="text-emerald-700">{factorSum.internalClosed} Closed</span>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </>

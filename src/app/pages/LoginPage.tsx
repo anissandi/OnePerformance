@@ -24,6 +24,7 @@ import {
   COMPANY_UNIT_LOCATIONS,
   SESSION_EXPIRED_NOTICE_KEY,
   evaluateAndSyncSession,
+  getLoginCandidatesInCompanyUnit,
   isSameCompanyUnit,
   loadManagedUsers,
   loginWithCompanyAndEmployeeId,
@@ -98,6 +99,7 @@ export function LoginPage() {
     };
   }, []);
   const [employeeId, setEmployeeId] = useState("");
+  const [selectedAccountRegNo, setSelectedAccountRegNo] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [sending, setSending] = useState(false);
@@ -134,6 +136,7 @@ export function LoginPage() {
     setOtpSent(false);
     setOtpCode("");
     setPasswordInput("");
+    setSelectedAccountRegNo("");
     setMustChangeStep(false);
     setError("");
   }, [selectedLoc.company, unitLoginCfg.enabledMethods.join(",")]);
@@ -177,7 +180,20 @@ export function LoginPage() {
 
   const allManaged = loadManagedUsers();
   const qLower = employeeId.trim().toLowerCase();
+  const sameUnitCandidates = getLoginCandidatesInCompanyUnit(selectedLoc.company, employeeId);
+  const effectiveSelectedRegNo =
+    sameUnitCandidates.length > 1
+      ? sameUnitCandidates.some((c) => (c.regNo ?? "").trim().toLowerCase() === selectedAccountRegNo.trim().toLowerCase())
+        ? selectedAccountRegNo
+        : (sameUnitCandidates[0]?.regNo ?? "")
+      : (sameUnitCandidates[0]?.regNo ?? "");
   const matchedEmployee =
+    (effectiveSelectedRegNo
+      ? sameUnitCandidates.find(
+          (u) => (u.regNo ?? "").trim().toLowerCase() === effectiveSelectedRegNo.trim().toLowerCase(),
+        )
+      : undefined) ??
+    sameUnitCandidates[0] ??
     allManaged.find(
       (u) =>
         isSameCompanyUnit(u.company, selectedLoc.company) &&
@@ -226,15 +242,25 @@ export function LoginPage() {
       ]);
 
       // Validasi Company Unit terlebih dahulu (gagal walaupun Employee ID & password benar)
-      const unitCheck = validateLoginCompanyUnit(selectedLoc.company, employeeId);
+      const unitCheck = validateLoginCompanyUnit(
+        selectedLoc.company,
+        employeeId,
+        effectiveSelectedRegNo || undefined,
+      );
       if (!unitCheck.ok) {
         setError(unitCheck.error);
         return;
       }
       const targetEmpId = unitCheck.user.employeeId;
+      const targetRegNo = unitCheck.user.regNo;
 
       if (isPasswordMode) {
-        const pwdVerify = verifyEmployeePasswordLogin(targetEmpId, passwordInput, unitCheck.user.regNo);
+        const pwdVerify = verifyEmployeePasswordLogin(
+          targetEmpId,
+          passwordInput,
+          targetRegNo,
+          unitCheck.user.company,
+        );
         if (!pwdVerify.ok) {
           setError(pwdVerify.error);
           return;
@@ -249,7 +275,11 @@ export function LoginPage() {
         void saveUserSecurityRecordAsync(pwdVerify.record);
       }
 
-      const res = loginWithCompanyAndEmployeeId(selectedLoc.company, targetEmpId);
+      const res = loginWithCompanyAndEmployeeId(
+        selectedLoc.company,
+        targetEmpId,
+        targetRegNo || undefined,
+      );
       if (!res.ok) {
         setError(res.error);
         return;
@@ -278,7 +308,12 @@ export function LoginPage() {
     setSavingNewPwd(true);
     try {
       const saved = await Promise.race([
-        updateEmployeeNewPasswordAsync(targetEmpId, newPassword),
+        updateEmployeeNewPasswordAsync(
+          targetEmpId,
+          newPassword,
+          matchedEmployee?.company ?? selectedLoc.company,
+          matchedEmployee?.regNo,
+        ),
         new Promise<{ ok: true }>((resolve) => setTimeout(() => resolve({ ok: true }), 6000)),
       ]);
       if (!saved.ok) {
@@ -569,12 +604,34 @@ export function LoginPage() {
             <input
               type="text"
               value={employeeId}
-              onChange={e => { setEmployeeId(e.target.value); setError(""); }}
+              onChange={e => { setEmployeeId(e.target.value); setSelectedAccountRegNo(""); setError(""); }}
               disabled={otpSent}
               placeholder="Enter Employee ID"
               className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm text-gray-800 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]/40 transition-colors disabled:bg-gray-50 disabled:text-gray-500"
             />
           </div>
+
+          {sameUnitCandidates.length > 1 && !otpSent && (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-3.5 py-3">
+              <label className="block text-xs font-semibold text-amber-900 mb-1.5">
+                Pilih Akun / Reg No pada {selectedLoc.company}
+              </label>
+              <select
+                value={effectiveSelectedRegNo}
+                onChange={(e) => {
+                  setSelectedAccountRegNo(e.target.value);
+                  setError("");
+                }}
+                className="w-full border border-amber-300 rounded-lg px-3 py-2 text-xs font-semibold text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20"
+              >
+                {sameUnitCandidates.map((cand) => (
+                  <option key={cand.id} value={cand.regNo || cand.id}>
+                    {cand.regNo || cand.employeeId} — {cand.name} ({cand.position || cand.role || "Employee"})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 flex items-start gap-2">

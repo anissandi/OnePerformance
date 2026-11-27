@@ -952,7 +952,7 @@ export function MasterKPIPage() {
                     <button
                       type="button"
                       onClick={() => setShowAddModalFor("kpi-personal")}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border border-[#1A284F] text-[#1A284F] hover:bg-[#1A284F]/5 transition-colors"
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white border border-blue-600 hover:bg-blue-700 shadow-2xs transition-colors"
                     >
                       <Plus className="w-3.5 h-3.5" /> Add KPI
                     </button>
@@ -962,7 +962,7 @@ export function MasterKPIPage() {
                     onClick={() => setPersonalPreviewMode((p) => !p)}
                     className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                       personalPreviewMode
-                        ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        ? "bg-slate-700 text-white border border-slate-700 hover:bg-slate-800"
                         : "bg-amber-50 border border-amber-300 text-amber-700 hover:bg-amber-100"
                     }`}
                   >

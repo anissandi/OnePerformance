@@ -5,6 +5,10 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { LangProvider } from "../context/LangContext";
 import { AppFrame } from "./AppFrame";
+import { ApproverLoginReminderModal } from "./ApproverLoginReminderModal";
+import { evaluateRecurringThreeDayApproverReminders } from "../store/approverReminderStore";
+import { syncNotificationsFromBackendRealtime } from "../store/notificationStore";
+import { syncRecentWorkflowDocumentsRealtime } from "../services/supabaseClient";
 import {
   AUTH_SESSION_KEY,
   SESSION_TIMEOUT_MS,
@@ -150,6 +154,43 @@ export function AppLayout() {
     }
   }, [location.pathname, sessionSnapshot.valid]);
 
+  // Sinkronisasi realtime notifikasi & antrean task approval + evaluasi reminder berulang 3 hari bagi Approver
+  useEffect(() => {
+    if (!sessionSnapshot.valid || !activeUser.employeeId) return;
+    let cancelled = false;
+    const runRealtimeSync = () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      void Promise.all([
+        syncNotificationsFromBackendRealtime(),
+        syncRecentWorkflowDocumentsRealtime(60),
+      ]).then(() => {
+        if (!cancelled) {
+          evaluateRecurringThreeDayApproverReminders();
+        }
+      });
+    };
+    runRealtimeSync();
+    const intervalId = window.setInterval(runRealtimeSync, 8000);
+    const onFocusOrVis = () => {
+      if (document.visibilityState === "visible") runRealtimeSync();
+    };
+    const onAppraisalUpdated = () => {
+      evaluateRecurringThreeDayApproverReminders();
+    };
+    window.addEventListener("focus", onFocusOrVis);
+    document.addEventListener("visibilitychange", onFocusOrVis);
+    window.addEventListener("appraisal-updated", onAppraisalUpdated);
+    window.addEventListener("pa-db-hydrated", onAppraisalUpdated);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocusOrVis);
+      document.removeEventListener("visibilitychange", onFocusOrVis);
+      window.removeEventListener("appraisal-updated", onAppraisalUpdated);
+      window.removeEventListener("pa-db-hydrated", onAppraisalUpdated);
+    };
+  }, [sessionSnapshot.valid, activeUser.employeeId]);
+
   if (!sessionSnapshot.valid) {
     return (
       <Navigate
@@ -175,6 +216,7 @@ export function AppLayout() {
         <div key={activeUser.employeeId} className="contents">
           <Outlet />
         </div>
+        <ApproverLoginReminderModal />
       </AppFrame>
     </LangProvider>
   );
