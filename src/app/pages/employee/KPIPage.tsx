@@ -11,6 +11,7 @@ import {
   getActiveMonthIndicesForPeriod,
   isKnownKpiColorBandValue,
   isMonthBlockedForKpi,
+  isPercentSatuan,
   isPeriodicTrackingType,
   normalizeBlockedMonths,
   normalizeKpiColorBandValue,
@@ -532,6 +533,7 @@ export function computeTotal2026(
 ): string {
   const sub = kpi.subRows[subIdx];
   const activeMonths = months.filter((m) => !isMonthBlockedForKpi(kpi, m.label));
+  const blockedTrackedCount = months.length - activeMonths.length;
 
   if (sub.compute) {
     // For computed rows, aggregate the source actual/target across months then recompute
@@ -556,6 +558,7 @@ export function computeTotal2026(
       if (monthData.some((v) => !v.hasActual)) return "0%";
 
       const actuals = monthData.map((v) => v.actual as number);
+      const totalPeriods = monthData.length + blockedTrackedCount;
 
       if (!kpi.subRowTargets && kpi.polaritas === "Stabilize" && monthData.every((v) => v.range !== null)) {
         let ytdAct: number;
@@ -566,12 +569,14 @@ export function computeTotal2026(
           const sumHi = monthData.reduce((s, v) => s + v.range!.hi, 0);
           ytdRangeRaw = `${sumLo}-${sumHi}`;
         } else if (kpi.formula === "Nilai Akhir") {
-          ytdAct = actuals[actuals.length - 1];
-          ytdRangeRaw = monthData[monthData.length - 1].rawTarget;
+          const lastMonthEntry = months[months.length - 1];
+          const isLastBlocked = Boolean(lastMonthEntry && isMonthBlockedForKpi(kpi, lastMonthEntry.label));
+          ytdAct = isLastBlocked ? 0 : actuals[actuals.length - 1];
+          ytdRangeRaw = isLastBlocked ? "0-0" : monthData[monthData.length - 1].rawTarget;
         } else {
-          ytdAct = actuals.reduce((s, v) => s + v, 0) / actuals.length;
-          const avgLo = monthData.reduce((s, v) => s + v.range!.lo, 0) / monthData.length;
-          const avgHi = monthData.reduce((s, v) => s + v.range!.hi, 0) / monthData.length;
+          ytdAct = actuals.reduce((s, v) => s + v, 0) / totalPeriods;
+          const avgLo = monthData.reduce((s, v) => s + v.range!.lo, 0) / totalPeriods;
+          const avgHi = monthData.reduce((s, v) => s + v.range!.hi, 0) / totalPeriods;
           ytdRangeRaw = `${avgLo}-${avgHi}`;
         }
         const pct = computePolaritasAchievementPct(ytdAct, ytdRangeRaw, 0, "Stabilize", spec.minimize);
@@ -580,6 +585,7 @@ export function computeTotal2026(
 
       if (!kpi.subRowTargets) {
         // Simple KPI: YTD actual / YTD target sesuai Formula Setahun (Jumlah / Nilai Akhir / Rata-Rata)
+        // Bulan Inactive tetap dihitung bernilai 0 pada pembilang maupun pembagi
         let ytdActual: number;
         let ytdTarget: number;
         let ytdTargetRaw: string;
@@ -588,14 +594,16 @@ export function computeTotal2026(
           ytdTarget = monthData.reduce((s, v) => s + v.target, 0);
           ytdTargetRaw = String(ytdTarget);
         } else if (kpi.formula === "Nilai Akhir") {
-          ytdActual = actuals[actuals.length - 1];
-          ytdTarget = monthData[monthData.length - 1].target;
-          ytdTargetRaw = monthData[monthData.length - 1].rawTarget || String(ytdTarget);
+          const lastMonthEntry = months[months.length - 1];
+          const isLastBlocked = Boolean(lastMonthEntry && isMonthBlockedForKpi(kpi, lastMonthEntry.label));
+          ytdActual = isLastBlocked ? 0 : actuals[actuals.length - 1];
+          ytdTarget = isLastBlocked ? 0 : monthData[monthData.length - 1].target;
+          ytdTargetRaw = isLastBlocked ? "0" : (monthData[monthData.length - 1].rawTarget || String(ytdTarget));
         } else {
-          ytdActual = actuals.reduce((s, v) => s + v, 0) / actuals.length;
-          ytdTarget = monthData.reduce((s, v) => s + v.target, 0) / monthData.length;
+          ytdActual = actuals.reduce((s, v) => s + v, 0) / totalPeriods;
+          ytdTarget = monthData.reduce((s, v) => s + v.target, 0) / totalPeriods;
           const allSameRaw = monthData.every((v) => v.rawTarget.trim() === monthData[0].rawTarget.trim());
-          ytdTargetRaw = allSameRaw && monthData[0].rawTarget ? monthData[0].rawTarget : String(ytdTarget);
+          ytdTargetRaw = blockedTrackedCount === 0 && allSameRaw && monthData[0].rawTarget ? monthData[0].rawTarget : String(ytdTarget);
         }
         const pct = computePolaritasAchievementPct(ytdActual, ytdTargetRaw, ytdTarget, kpi.polaritas, spec.minimize);
         return formatPct(pct);
@@ -702,6 +710,9 @@ export function computeTotal2026(
   }
 
   const vals = rawVals.filter((v): v is number => v !== null);
+  if (!vals.length && blockedTrackedCount > 0) {
+    return isPercentSatuan(kpi.satuan) ? "0%" : "0";
+  }
   if (!vals.length) return "—";
 
   const fmtSamples = kpi.target2026 ? [...rawSamples, kpi.target2026] : rawSamples;
@@ -709,13 +720,18 @@ export function computeTotal2026(
     return formatComputedKpiNumber(vals.reduce((a, b) => a + b, 0), fmtSamples);
   }
   if (kpi.formula === "Nilai Akhir") {
+    const lastMonthEntry = months[months.length - 1];
+    if (lastMonthEntry && isMonthBlockedForKpi(kpi, lastMonthEntry.label)) {
+      return isPercentSatuan(kpi.satuan) ? "0%" : "0";
+    }
     // Nilai Akhir → nilai bulan terakhir yang terisi
     return rawSamples.length > 0
       ? rawSamples[rawSamples.length - 1]
       : formatComputedKpiNumber(vals[vals.length - 1], fmtSamples);
   }
-  // Rata-Rata → average
-  return formatComputedKpiNumber(vals.reduce((a, b) => a + b, 0) / vals.length, fmtSamples);
+  // Rata-Rata → bulan Inactive tetap dihitung sebagai pembagi dengan nilai 0
+  const totalCount = vals.length + blockedTrackedCount;
+  return formatComputedKpiNumber(vals.reduce((a, b) => a + b, 0) / totalCount, fmtSamples);
 }
 
 // Compute achievement % for a KPI based on its final % Pencapaian sub-row.
@@ -1782,7 +1798,7 @@ function AddMonthModal({
                         <div className="rounded-xl border border-slate-200 bg-slate-100/70 px-3.5 py-2.5 text-xs text-slate-500 flex items-center gap-2">
                           <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                           <span>
-                            Field <strong>Aktual</strong> dan <strong>RCA</strong> pada bulan <strong>{displayMonth(label)}</strong> tidak aktif karena bulan ini ditandai <strong>Inactive</strong> (diblok) oleh owner KPI pada KPI Setting (Periode Tracking: <strong>{normKpiPeriod}</strong>).
+                            Bulan <strong>{displayMonth(label)}</strong> berstatus <strong>Inactive</strong> (bernilai <strong>0</strong>, bersifat <strong>read-only</strong>, dan tidak memicu <strong>RCA</strong>).
                           </span>
                         </div>
                       ) : rowGroups.map((grp, gi) => {
@@ -3167,19 +3183,19 @@ function KPITable({
                     key={m.id}
                     className="border border-slate-200 bg-slate-100/85 text-center text-xs py-1 px-1 select-none"
                     style={{ minWidth: 120 }}
-                    title={`Bulan ${displayMonth(m.label)} ditandai Inactive (diblok) pada KPI Setting (${normKpiPeriod}) — field Aktual & RCA tidak aktif`}
+                    title={`Bulan ${displayMonth(m.label)} berstatus Inactive (nilai 0 · read-only · tidak memicu RCA)`}
                   >
                     {isComputed ? (
-                      <span className="text-slate-400 text-[11px] font-medium" title="RCA tidak aktif pada bulan yang diblok">—</span>
+                      <span className="text-slate-400 text-[11px] font-medium" title="Bulan Inactive tidak memicu RCA">—</span>
                     ) : isTargetRowBlocked ? (
                       <div className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-slate-200/75 text-slate-500 text-[10px] font-semibold">
                         <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                        <span>Block</span>
+                        <span>0 · Inactive</span>
                       </div>
                     ) : (
                       <div className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-rose-50/80 border border-rose-200/80 text-rose-600/80 text-[10px] font-semibold cursor-not-allowed">
                         <Lock className="w-2.5 h-2.5 shrink-0" />
-                        <span>Inactive</span>
+                        <span>0 · Inactive</span>
                       </div>
                     )}
                   </td>

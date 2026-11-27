@@ -1,4 +1,5 @@
 import React from "react";
+import { Lock } from "lucide-react";
 import {
   computeKPIAchievement,
   computePolaritasAchievementPct,
@@ -11,7 +12,7 @@ import {
 import type { MonthEntry } from "../pages/employee/KPIPage";
 import type { StoredRCASubmission } from "../pages/shared/rcaStore";
 import type { EditedKpiCellDiff } from "../pages/shared/appraisalWorkflowStore";
-import { computeKpiColorBandAchievementPct, parseStabilizeRange } from "../utils/kpiNumberAndPeriod";
+import { computeKpiColorBandAchievementPct, isMonthBlockedForKpi, parseStabilizeRange } from "../utils/kpiNumberAndPeriod";
 import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -293,6 +294,29 @@ export function KPITableView({
                   {/* Monthly cells */}
                   {months.length > 0 ? (
                     months.map((m) => {
+                      if (isMonthBlockedForKpi(kpi, m.label)) {
+                        return (
+                          <td
+                            key={m.id}
+                            className="border border-slate-200 bg-slate-100/85 text-center py-1.5 px-1.5 select-none"
+                            title={`Bulan ${m.label} berstatus Inactive (nilai 0 · read-only · tidak memicu RCA)`}
+                          >
+                            {isComputed ? (
+                              <span className="text-slate-400 text-[11px] font-medium">—</span>
+                            ) : isTargetRow ? (
+                              <div className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-slate-200/75 text-slate-500 text-[10px] font-semibold">
+                                <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                                <span>0 · Inactive</span>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-rose-50/80 border border-rose-200/80 text-rose-600/80 text-[10px] font-semibold">
+                                <Lock className="w-2.5 h-2.5 shrink-0" />
+                                <span>0 · Inactive</span>
+                              </div>
+                            )}
+                          </td>
+                        );
+                      }
                       const val = getCellValue(kpi, m.id, subIdx);
                       const diffEntry = !isComputed && !isTargetRow
                         ? editedCellsDiff?.[`${m.id}::${kpi.no}__${subIdx}`]

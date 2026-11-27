@@ -483,12 +483,14 @@ export function formatComputedKpiNumber(
 ): string {
   if (!Number.isFinite(value)) return "";
   const { style, useThousands, minDecimals, appendPercent } = detectPreferredStyle(sampleInputs);
-  const rounded = Math.round(value * 10000) / 10000;
+  const maxPrecision = Math.max(2, minDecimals);
+  const precisionFactor = Math.pow(10, maxPrecision);
+  const rounded = Math.round(value * precisionFactor) / precisionFactor;
   const isNeg = rounded < 0;
   const abs = Math.abs(rounded);
 
   // Tentukan jumlah digit desimal efektif
-  const rawFixed = abs.toFixed(4).replace(/\.?0+$/, "");
+  const rawFixed = abs.toFixed(maxPrecision).replace(/\.?0+$/, "");
   const naturalDecimals = rawFixed.includes(".") ? rawFixed.split(".")[1].length : 0;
   const effectiveDecimals = Math.max(naturalDecimals, naturalDecimals > 0 ? minDecimals : 0);
   const fixedStr = effectiveDecimals > 0 ? abs.toFixed(effectiveDecimals) : String(Math.round(abs));

@@ -152,14 +152,22 @@ function computeTarget2026(
   },
 ): string {
   const forcePct = isPercentSatuan(opts?.satuan);
-  const activeIndices = getActiveMonthIndicesForKpi({
+  const blockedSet = resolveEffectiveBlockedMonthSet({
     trackingPeriod: opts?.trackingPeriod,
     periodicTargetBlock: opts?.periodicTargetBlock,
     blockedMonths: opts?.blockedMonths,
     monthlyTargets: mt,
   });
+  const blockedCount = blockedSet.size;
+  const activeIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((i) => !blockedSet.has(i));
   const activeKeys = activeIndices.map((idx) => MONTHS_LIST[idx]).filter(Boolean);
   if (formula === "Nilai Akhir") {
+    if (blockedSet.has(11)) {
+      const anyActiveRaw = activeKeys.map((m) => String(mt[m] ?? "").trim()).filter(Boolean);
+      if (anyActiveRaw.length === 0) return "";
+      const wantPct = forcePct || anyActiveRaw.some((s) => s.endsWith("%"));
+      return wantPct ? "0%" : "0";
+    }
     const lastKey = activeKeys[activeKeys.length - 1] ?? "Dec-26";
     const rawLast = String(mt[lastKey] ?? "").trim();
     if (!rawLast) return "";
@@ -169,13 +177,14 @@ function computeTarget2026(
   if (rawInputs.length === 0) return "";
 
   // Penanganan khusus rentang bawah-atas (min-max) untuk Polaritas Stabilize (contoh: "15-25", "85-90", "1.5%-2.5%")
+  // Bulan Inactive tetap dihitung sebagai penjumlah (0) dan pembagi (+1 dengan nilai 0)
   const parsedRanges = rawInputs.map((s) => parseStabilizeRange(s));
   if (parsedRanges.every((r): r is NonNullable<typeof r> => r !== null)) {
     const anyPct = forcePct || parsedRanges.some((r) => r.hasPercent);
-    // Jika seluruh bulan aktif memiliki rentang yang persis sama, pertahankan untuk Rata-Rata
+    // Jika tidak ada bulan Inactive dan seluruh bulan memiliki rentang yang persis sama, pertahankan untuk Rata-Rata
     const firstNorm = syncPercentSuffixOnValue(rawInputs[0], anyPct);
     const allIdentical = rawInputs.every((s) => syncPercentSuffixOnValue(s, anyPct) === firstNorm);
-    if (formula === "Rata-Rata" && allIdentical) {
+    if (formula === "Rata-Rata" && blockedCount === 0 && allIdentical) {
       return firstNorm;
     }
     const loSamples = parsedRanges.map((r) => r.rawLo);
@@ -188,8 +197,9 @@ function computeTarget2026(
       return fmtLo && fmtHi ? `${fmtLo}-${fmtHi}` : "";
     }
     if (formula === "Rata-Rata") {
-      const avgLo = sumLo / parsedRanges.length;
-      const avgHi = sumHi / parsedRanges.length;
+      const totalMonths = parsedRanges.length + blockedCount;
+      const avgLo = sumLo / totalMonths;
+      const avgHi = sumHi / totalMonths;
       const fmtLo = formatComputedKpiNumber(avgLo, loSamples, { forcePercent: anyPct });
       const fmtHi = formatComputedKpiNumber(avgHi, hiSamples, { forcePercent: anyPct });
       return fmtLo && fmtHi ? `${fmtLo}-${fmtHi}` : "";
@@ -200,12 +210,14 @@ function computeTarget2026(
     .map((s) => parseFlexibleKpiNumber(s))
     .filter((v): v is number => v !== null);
   if (vals.length === 0) return "";
+  // Bulan yang di-set Inactive dihitung bernilai 0 baik pada penjumlahan (Jumlah) maupun pembagi (Rata-Rata)
   const sum = vals.reduce((s, v) => s + v, 0);
   const anyInputHasPct = forcePct || rawInputs.some((s) => s.endsWith("%"));
   const samples = opts?.baselineSample ? [...rawInputs, opts.baselineSample] : rawInputs;
   if (formula === "Jumlah") return formatComputedKpiNumber(sum, samples, { forcePercent: anyInputHasPct });
   if (formula === "Rata-Rata") {
-    const avg = sum / vals.length;
+    const totalCount = vals.length + blockedCount;
+    const avg = sum / totalCount;
     return formatComputedKpiNumber(avg, samples, { forcePercent: anyInputHasPct });
   }
   return "";
@@ -2193,7 +2205,7 @@ function MonthlyTargetEditModal({ items, selectedKpiIds, phase1Category, phase1R
                                 {isPeriodicBlocked ? (
                                   <div className="flex items-center justify-center gap-1 text-slate-400">
                                     <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                                    <span className="text-[10px] font-medium">Block</span>
+                                    <span className="text-[10px] font-medium">0 · Inactive</span>
                                   </div>
                                 ) : isPast || targetSubmitted ? (
                                   <div className="flex items-center justify-center gap-1">
@@ -2860,9 +2872,9 @@ function MonthlyTargetTable({
     ? `Pilih ${firstActiveShort} → auto isi bulan aktif`
     : colorMode
     ? `Pilih ${firstActiveShort} → auto isi bulan aktif`
-    : formula === "Jumlah"      ? `Target ${KPI_CYCLE_YEAR} = Sum (${hasAnyBlockedMonth ? `${activeIndices.length} Bulan Aktif` : "Jan–Dec"})`
-    : formula === "Rata-Rata"   ? `Target ${KPI_CYCLE_YEAR} = Average (${hasAnyBlockedMonth ? `${activeIndices.length} Bulan Aktif` : "Jan–Dec"})`
-    : formula === "Nilai Akhir" ? `Target ${KPI_CYCLE_YEAR} = ${lastActiveShort} value`
+    : formula === "Jumlah"      ? `Target ${KPI_CYCLE_YEAR} = Sum (${hasAnyBlockedMonth ? "Jan–Dec · Inactive = 0" : "Jan–Dec"})`
+    : formula === "Rata-Rata"   ? `Target ${KPI_CYCLE_YEAR} = Average (${hasAnyBlockedMonth ? "12 Bulan · Inactive = 0" : "Jan–Dec"})`
+    : formula === "Nilai Akhir" ? `Target ${KPI_CYCLE_YEAR} = ${blockedIdxSet.has(11) ? "0 (Des Inactive)" : `${lastActiveShort} value`}`
     : "";
   const hasAnyEmptyMonth = activeIndices.some((idx) => !(monthlyTargets[MONTHS_LIST[idx]] ?? "").trim());
 
@@ -2893,7 +2905,7 @@ function MonthlyTargetTable({
               </button>
           )}
           <span className="text-[11px] text-slate-600 font-medium">
-            Klik tag <strong className="text-emerald-700">Active</strong> / <strong className="text-rose-700">Inactive</strong> di atas kolom bulan untuk mengatur bulan aktif tracking (bulan Inactive otomatis read-only &amp; RCA nonaktif)
+            Klik tag <strong className="text-emerald-700">Active</strong> / <strong className="text-rose-700">Inactive</strong> di atas kolom bulan untuk mengatur bulan aktif (bulan Inactive bernilai 0 pada rumus Target, read-only &amp; tidak memicu RCA saat tracking)
           </span>
           {softYellowHighlight && hasAnyEmptyMonth && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-100 text-amber-800 border border-yellow-300">
@@ -2924,8 +2936,8 @@ function MonthlyTargetTable({
                         onClick={() => handleToggleSingleMonthInactive(i)}
                         title={
                           isBlockedMonth
-                            ? `Bulan ${m} Inactive (Aktual & RCA nonaktif saat tracking) — Klik untuk mengubah menjadi Active`
-                            : `Bulan ${m} Active — Klik untuk mengubah menjadi Inactive (read-only & RCA nonaktif saat tracking)`
+                            ? `Bulan ${m} Inactive (dihitung bernilai 0 · read-only & tidak memicu RCA saat tracking) — Klik untuk mengubah menjadi Active`
+                            : `Bulan ${m} Active — Klik untuk mengubah menjadi Inactive (bernilai 0 · read-only & tidak memicu RCA saat tracking)`
                         }
                         className={`inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all cursor-pointer select-none ${
                           isBlockedMonth
@@ -2977,10 +2989,10 @@ function MonthlyTargetTable({
                 const isBlockedMonth = blockedIdxSet.has(i);
                 if (isBlockedMonth) {
                   return (
-                    <td key={key} className="border border-gray-200 p-1 bg-slate-100/85 text-center select-none" title={`Bulan ${MONTHS_SHORT[i]} diblok (Inactive) — Aktual & RCA tidak aktif saat tracking`}>
-                      <div className="w-full text-[10px] font-medium text-slate-400 border border-slate-200/80 bg-slate-100 rounded-md px-1 py-1.5 flex items-center justify-center gap-0.5 cursor-not-allowed">
+                    <td key={key} className="border border-gray-200 p-1 bg-slate-100/85 text-center select-none" title={`Bulan ${MONTHS_SHORT[i]} Inactive (dihitung bernilai 0 dalam Target · read-only & tidak memicu RCA saat tracking)`}>
+                      <div className="w-full text-[10px] font-semibold text-slate-500 border border-slate-200/80 bg-slate-100 rounded-md px-1 py-1.5 flex items-center justify-center gap-0.5 cursor-not-allowed">
                         <Lock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                        <span>Block</span>
+                        <span>0 · Inactive</span>
                       </div>
                     </td>
                   );
@@ -4924,8 +4936,19 @@ export function AddKPIModal({
             const resolvedTarget2026 =
               picked.target2026 ||
               (resolvedMode === "ratio"
-                ? computeRatioTarget2026(normalizedMonthly)
-                : computeTarget2026(normalizedMonthly, resolvedFormula));
+                ? computeRatioTarget2026(normalizedMonthly, {
+                    trackingPeriod: picked.trackingPeriod,
+                    periodicTargetBlock: picked.periodicTargetBlock,
+                    blockedMonths: picked.blockedMonths,
+                  })
+                : computeTarget2026(normalizedMonthly, resolvedFormula, {
+                    trackingPeriod: picked.trackingPeriod,
+                    periodicTargetBlock: picked.periodicTargetBlock,
+                    blockedMonths: picked.blockedMonths,
+                    baselineSample: picked.baseline2025,
+                    satuan: picked.satuan || form.satuan,
+                    polaritas: picked.polaritas || form.polaritas,
+                  }));
             const nextSeqNo = existingItems.some((x) => x.no === picked.no)
               ? String(existingItems.length + 1)
               : picked.no || String(existingItems.length + 1);
