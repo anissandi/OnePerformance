@@ -48,6 +48,81 @@ async function callVercelSyncApi(init?: RequestInit, query = ""): Promise<Record
     return null;
   }
 }
+
+/**
+ * Sinkronisasi ringan data KPI Setting (`pa_kpi_settings`) dan SMART Goals (`pa_smart_goals`) seluruh karyawan
+ * agar halaman `/summary` langsung menampilkan status `"Draft"` meskipun karyawan baru saja menyimpan draft di perangkat lain.
+ */
+export async function syncDraftSettingsLiveForSummary(): Promise<boolean> {
+  try {
+    const [kpiRows, sgRows] = await Promise.all([
+      restSelect<Record<string, unknown>>(
+        "pa_kpi_settings",
+        "select=employee_id,status,items&tab=eq.personal&order=updated_at.desc&limit=2000",
+      ),
+      restSelect<Record<string, unknown>>(
+        "pa_smart_goals",
+        "select=employee_id,status,goals&order=updated_at.desc&limit=2000",
+      ),
+    ]);
+    let changed = false;
+    if (kpiRows.length > 0) {
+      let byEmp: Record<string, unknown> = {};
+      try {
+        byEmp = JSON.parse(safeGetLocalRaw("pa_kpi_setting_by_emp_v2") ?? "{}") ?? {};
+      } catch {
+        byEmp = {};
+      }
+      const seenEmp = new Set<string>();
+      for (const r of kpiRows) {
+        const rawEmp = String(r.employee_id ?? "").trim();
+        if (!rawEmp || !Array.isArray(r.items) || r.items.length === 0) continue;
+        const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const canonKey = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp.toUpperCase();
+        if (seenEmp.has(canonKey)) continue;
+        seenEmp.add(canonKey);
+        if (!byEmp[canonKey]) {
+          byEmp[canonKey] = r.items;
+          byEmp[rawEmp] = r.items;
+          changed = true;
+        }
+      }
+      if (changed) {
+        safeSetLocalJson("pa_kpi_setting_by_emp_v2", byEmp);
+      }
+    }
+    if (sgRows.length > 0) {
+      let sgByEmp: Record<string, unknown> = {};
+      try {
+        sgByEmp = JSON.parse(safeGetLocalRaw("sg_goals_by_emp_v2") ?? "{}") ?? {};
+      } catch {
+        sgByEmp = {};
+      }
+      let sgChanged = false;
+      const seenEmp = new Set<string>();
+      for (const r of sgRows) {
+        const rawEmp = String(r.employee_id ?? "").trim();
+        if (!rawEmp || !Array.isArray(r.goals) || r.goals.length === 0) continue;
+        const numMatch = rawEmp.replace(/^emp-mi-/i, "").match(/^(?:EMP-?|E)(\d+)$/i)?.[1];
+        const canonKey = numMatch ? `EMP-${numMatch.padStart(3, "0")}` : rawEmp.toUpperCase();
+        if (seenEmp.has(canonKey)) continue;
+        seenEmp.add(canonKey);
+        if (!sgByEmp[canonKey]) {
+          sgByEmp[canonKey] = r.goals;
+          sgByEmp[rawEmp] = r.goals;
+          sgChanged = true;
+        }
+      }
+      if (sgChanged) {
+        safeSetLocalJson("sg_goals_by_emp_v2", sgByEmp);
+        changed = true;
+      }
+    }
+    return changed;
+  } catch {
+    return false;
+  }
+}
 export const SUPABASE_REST_BASE = `${SUPABASE_URL}/rest/v1`;
 export const SUPABASE_STORAGE_BASE = `${SUPABASE_URL}/storage/v1`;
 

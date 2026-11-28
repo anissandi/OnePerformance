@@ -8,7 +8,7 @@ import {
   TrendingUp, Lightbulb, ClipboardList, FolderKanban,
   ChevronRight, Award,
   BarChart2, Star, Activity, MessageSquare, Clock, CheckCircle2, ChevronDown, Users,
-  StickyNote, UserCheck, Target, ClipboardCheck, Sparkles, Camera, Trash2, IdCard, Layers, GitBranch, ShieldCheck,
+  StickyNote, UserCheck, Target, ClipboardCheck, Sparkles, Trash2, IdCard, Layers, GitBranch, ShieldCheck,
   Pencil, X, Save, Upload,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -399,12 +399,10 @@ export function ViewProfile() {
   const [yearOpen, setYearOpen] = useState(false);
   const [tick, setTick] = useState(0);
   const [summaryNoteOpen, setSummaryNoteOpen] = useState(false);
-  const photoInputRef = useRef<HTMLInputElement>(null);
   const modalPhotoInputRef = useRef<HTMLInputElement>(null);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | undefined>(() =>
     getUserProfilePhoto(activeUser.employeeId),
   );
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
   const [editPhone, setEditPhone] = useState("");
   const [editEmail, setEditEmail] = useState("");
@@ -1050,7 +1048,7 @@ export function ViewProfile() {
         </div>
         <div className="px-8 pb-6">
           <div className="flex items-end gap-5 -mt-10 mb-4 flex-wrap">
-            <div className="relative group/avatar shrink-0">
+            <div className="relative shrink-0">
               <div
                 className={`w-20 h-20 rounded-2xl border-4 border-white flex items-center justify-center shadow-md overflow-hidden ${
                   profilePhotoUrl ? "bg-gray-100" : profileAvatarBg
@@ -1066,55 +1064,6 @@ export function ViewProfile() {
                   <span className="text-2xl font-bold text-white tracking-wider">{profileInitials}</span>
                 )}
               </div>
-              <input
-                ref={photoInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (!file) return;
-                  if (!file.type.startsWith("image/")) {
-                    toast.error("Pilih file gambar (JPG, PNG, atau WEBP).");
-                    return;
-                  }
-                  setUploadingPhoto(true);
-                  void uploadAndSaveUserProfilePhoto(file, activeUser)
-                    .then((url) => {
-                      if (url) {
-                        setProfilePhotoUrl(url);
-                        toast.success("Foto profil berhasil diperbarui dan tersimpan ke database.");
-                      } else {
-                        toast.error("Gagal mengunggah foto profil.");
-                      }
-                    })
-                    .finally(() => setUploadingPhoto(false));
-                }}
-              />
-              <button
-                type="button"
-                disabled={uploadingPhoto}
-                onClick={() => photoInputRef.current?.click()}
-                title="Ubah Foto Profil"
-                className="absolute -bottom-1.5 -right-1.5 w-8 h-8 rounded-xl bg-white border border-gray-200 shadow-md flex items-center justify-center text-[#1A284F] hover:bg-[#1A284F] hover:text-white transition-colors disabled:opacity-50"
-              >
-                <Camera className="w-4 h-4" />
-              </button>
-              {profilePhotoUrl && !uploadingPhoto && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    removeUserProfilePhoto(activeUser.employeeId);
-                    setProfilePhotoUrl(undefined);
-                    toast.success("Foto profil dihapus.");
-                  }}
-                  title="Hapus Foto Profil"
-                  className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-red-600 hover:border-red-200 opacity-0 group-hover/avatar:opacity-100 transition-opacity"
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
-              )}
             </div>
             <div className="flex-1 min-w-0 pt-12">
               <div className="flex items-center justify-between gap-4 flex-wrap">

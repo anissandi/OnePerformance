@@ -22,6 +22,12 @@ import {
 } from "../../store/authStore";
 import { loadWorkflowRecords, normalizeEmployeeId } from "./appraisalWorkflowStore";
 import { getMasterCompanyLocations } from "../hr/settings/masterCompanyStore";
+import {
+  buildEmployeeIdMatchSet,
+  readEmployeeKpiSettingSlice,
+  safeGetLocalRaw,
+  syncDraftSettingsLiveForSummary,
+} from "../../services/supabaseClient";
 
 type Role = "hr" | "supervisor";
 
@@ -380,12 +386,34 @@ function DistributionByGroup({ employees, calibrationTargets }: { employees: Emp
   );
 }
 
-function ModuleCell({ data, settingValidated, isYtd, hideWeighted }: { data: ScoreGrade | null; settingValidated?: boolean; isYtd?: boolean; hideWeighted?: boolean }) {
+function ModuleCell({
+  data,
+  settingValidated,
+  settingDraft,
+  isYtd,
+  hideWeighted,
+}: {
+  data: ScoreGrade | null;
+  settingValidated?: boolean;
+  settingDraft?: boolean;
+  isYtd?: boolean;
+  hideWeighted?: boolean;
+}) {
   if (!data || data.score <= 0) {
     if (settingValidated) {
       return (
         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
           Setting
+        </span>
+      );
+    }
+    if (settingDraft) {
+      return (
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200"
+          title="Sudah dibuat namun belum di-submit (Mode Draft)"
+        >
+          Draft
         </span>
       );
     }
@@ -464,6 +492,9 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     window.addEventListener("appraisal-updated", onRefresh);
     window.addEventListener("pa-db-hydrated", onRefresh);
     window.addEventListener("storage", onRefresh);
+    void syncDraftSettingsLiveForSummary().then((didChange) => {
+      if (didChange) setRefreshTick((t) => t + 1);
+    });
     return () => {
       window.removeEventListener("pa-auth-updated", onRefresh);
       window.removeEventListener("appraisal-updated", onRefresh);
@@ -518,14 +549,121 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     for (const w of loadWorkflowRecords()) {
       if (w.year !== year || w.phase !== "setting") continue;
       const a2 = w.decisions.approver2?.status ?? "";
-      if (a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed")) {
-        set.add(`${normalizeEmployeeId(w.employeeId)}::${w.module}`);
+      const val = w.decisions.validator?.status ?? "";
+      if (val === "Validated" || a2 === "Approved" || a2 === "Validated" || a2.startsWith("Assessed")) {
+        for (const cand of buildEmployeeIdMatchSet(w.employeeId)) {
+          set.add(`${cand.toLowerCase()}::${w.module}`);
+        }
+        set.add(`${normalizeEmployeeId(w.employeeId).toLowerCase()}::${w.module}`);
       }
     }
     return set;
   }, [year, refreshTick]);
+
+  const submittedSettingKeySet = useMemo(() => {
+    const set = new Set<string>();
+    for (const w of loadWorkflowRecords()) {
+      if (w.year !== year || w.phase !== "setting") continue;
+      for (const cand of buildEmployeeIdMatchSet(w.employeeId)) {
+        set.add(`${cand.toLowerCase()}::${w.module}`);
+      }
+      set.add(`${normalizeEmployeeId(w.employeeId).toLowerCase()}::${w.module}`);
+    }
+    return set;
+  }, [year, refreshTick]);
+
+  const draftPresenceMaps = useMemo(() => {
+    let kpiByEmp: Record<string, unknown[]> = {};
+    let sgByEmp: Record<string, Array<Record<string, unknown>>> = {};
+    try {
+      const rawKpi = safeGetLocalRaw("pa_kpi_setting_by_emp_v2");
+      if (rawKpi) {
+        const parsed = JSON.parse(rawKpi);
+        if (parsed && typeof parsed === "object") kpiByEmp = parsed as Record<string, unknown[]>;
+      }
+    } catch {
+      kpiByEmp = {};
+    }
+    try {
+      const rawSg = safeGetLocalRaw("sg_goals_by_emp_v2");
+      if (rawSg) {
+        const parsed = JSON.parse(rawSg);
+        if (parsed && typeof parsed === "object") sgByEmp = parsed as Record<string, Array<Record<string, unknown>>>;
+      }
+    } catch {
+      sgByEmp = {};
+    }
+    const kpiLowerMap = new Map<string, unknown[]>();
+    for (const [k, v] of Object.entries(kpiByEmp)) {
+      if (Array.isArray(v) && v.length > 0) kpiLowerMap.set(k.trim().toLowerCase(), v);
+    }
+    const sgLowerMap = new Map<string, Array<Record<string, unknown>>>();
+    for (const [k, v] of Object.entries(sgByEmp)) {
+      if (Array.isArray(v) && v.length > 0) sgLowerMap.set(k.trim().toLowerCase(), v);
+    }
+    return { kpiLowerMap, sgLowerMap };
+  }, [refreshTick]);
+
   const isSettingFullyApproved = (empId: string, modName: "KPI" | "SMART Goals"): boolean => {
-    return approvedSettingKeySet.has(`${normalizeEmployeeId(empId)}::${modName}`);
+    const normLow = normalizeEmployeeId(empId).toLowerCase();
+    if (approvedSettingKeySet.has(`${normLow}::${modName}`)) return true;
+    for (const cand of buildEmployeeIdMatchSet(empId)) {
+      if (approvedSettingKeySet.has(`${cand.toLowerCase()}::${modName}`)) return true;
+    }
+    return false;
+  };
+
+  const isSettingDraftUnsubmitted = (empId: string, modName: "KPI" | "SMART Goals"): boolean => {
+    if (year !== "2026") return false;
+    const candidates = buildEmployeeIdMatchSet(empId);
+    candidates.add(normalizeEmployeeId(empId));
+    for (const cand of candidates) {
+      if (submittedSettingKeySet.has(`${cand.toLowerCase()}::${modName}`)) {
+        return false;
+      }
+    }
+    if (modName === "KPI") {
+      const hasValidKpiRow = (items: unknown[]): boolean =>
+        items.some((it) => {
+          if (!it || typeof it !== "object") return false;
+          const rec = it as Record<string, unknown>;
+          return Boolean(
+            String(rec.kpi ?? "").trim() ||
+              String(rec.definisi ?? "").trim() ||
+              String(rec.target ?? "").trim(),
+          );
+        });
+      for (const cand of candidates) {
+        const list = draftPresenceMaps.kpiLowerMap.get(cand.toLowerCase());
+        if (list && hasValidKpiRow(list)) return true;
+      }
+      const slice = readEmployeeKpiSettingSlice(empId);
+      if (slice && Array.isArray(slice.items) && hasValidKpiRow(slice.items)) {
+        return true;
+      }
+      return false;
+    }
+    // SMART Goals
+    const hasValidSgContent = (goals: Array<Record<string, unknown>>): boolean =>
+      goals.some((g) => {
+        if (!g || typeof g !== "object") return false;
+        const plans = Array.isArray(g.actionPlans) ? (g.actionPlans as Array<{ description?: string }>) : [];
+        return Boolean(
+          String(g.specific ?? "").trim() ||
+            String(g.measurable ?? "").trim() ||
+            String(g.attainable ?? "").trim() ||
+            String(g.relevant ?? "").trim() ||
+            String(g.timely ?? "").trim() ||
+            String(g.bukti ?? "").trim() ||
+            String(g.target ?? "").trim() ||
+            plans.some((ap) => Boolean(String(ap?.description ?? "").trim())),
+        );
+      });
+    for (const cand of candidates) {
+      const goals = draftPresenceMaps.sgLowerMap.get(cand.toLowerCase());
+      if (goals && hasValidSgContent(goals)) return true;
+    }
+    return false;
   };
 
   const filtered = useMemo(
@@ -682,6 +820,12 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
 
     const modFmt = (m?: { score: number; grade: string } | null) =>
       m && m.score > 0 ? `${m.score.toFixed(1)}% (${m.grade})` : "—";
+    const settingModFmt = (empId: string, modName: "KPI" | "SMART Goals", m?: { score: number; grade: string } | null) => {
+      if (m && m.score > 0) return `${m.score.toFixed(1)}% (${m.grade})`;
+      if (isSettingFullyApproved(empId, modName)) return "Setting";
+      if (isSettingDraftUnsubmitted(empId, modName)) return "Draft";
+      return "—";
+    };
 
     const rowsOut: StyledExcelCell[][] = [row0, row1];
     const rowHeights: Record<number, number> = { 0: 26, 1: 22 };
@@ -701,8 +845,8 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
         emp.joined,
         emp.tenure,
         emp.approvalCompleteDate,
-        modFmt(emp.kpi),
-        modFmt(emp.smartGoals),
+        settingModFmt(emp.id, "KPI", emp.kpi),
+        settingModFmt(emp.id, "SMART Goals", emp.smartGoals),
         modFmt(emp.formA),
         modFmt(emp.formB),
         modFmt(emp.formC),
@@ -949,8 +1093,21 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.joined}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.tenure}</td>
                     <td className="px-4 py-2.5 border border-gray-100 text-gray-500 whitespace-nowrap">{emp.approvalCompleteDate}</td>
-                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.kpi} settingValidated={isSettingFullyApproved(emp.id, "KPI")} isYtd={emp.kpiIsYtd} /></td>
-                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.smartGoals} settingValidated={isSettingFullyApproved(emp.id, "SMART Goals")} /></td>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20">
+                      <ModuleCell
+                        data={emp.kpi}
+                        settingValidated={isSettingFullyApproved(emp.id, "KPI")}
+                        settingDraft={isSettingDraftUnsubmitted(emp.id, "KPI")}
+                        isYtd={emp.kpiIsYtd}
+                      />
+                    </td>
+                    <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20">
+                      <ModuleCell
+                        data={emp.smartGoals}
+                        settingValidated={isSettingFullyApproved(emp.id, "SMART Goals")}
+                        settingDraft={isSettingDraftUnsubmitted(emp.id, "SMART Goals")}
+                      />
+                    </td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formA} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formB} /></td>
                     <td className="px-3 py-2.5 border border-gray-100 text-center bg-blue-50/20"><ModuleCell data={emp.formC} /></td>
