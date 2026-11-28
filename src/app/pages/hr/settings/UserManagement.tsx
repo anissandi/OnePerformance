@@ -146,6 +146,14 @@ function ViewModal({ user, onClose }: { user: User; onClose: () => void }) {
             { label: "Multi-Departemen (Tambahan)", value: user.managedDepartments?.length ? user.managedDepartments.join(", ") : "—" },
             { label: "Multi-Bagian (Tambahan)", value: user.managedBagians?.length ? user.managedBagians.join(", ") : "—" },
             { label: "Role", value: <RoleBadge role={user.role} /> },
+            ...(user.role === "Division"
+              ? [
+                  {
+                    label: "Divisi Dibawahi (Role Division)",
+                    value: user.divisionRoleScopes?.length ? user.divisionRoleScopes.join(", ") : "—",
+                  },
+                ]
+              : []),
             { label: "Groupings", value: user.groupings },
             { label: "Status Karyawan", value: user.employeeStatus || "-" },
             ...(user.employeeStatus
@@ -344,6 +352,19 @@ function EditModal({
   });
 
   function f(key: keyof User, val: string) { setForm(p => ({ ...p, [key]: val })); }
+
+  const sameUnitDivisionOptions = useMemo(() => {
+    const unitClean = canonicalizeCompanyUnitName(form.company);
+    const calOpts = loadCalibrationOrgOptions([unitClean].filter(Boolean));
+    const unitUsers = loadManagedUsers().filter((u) => isSameCompanyUnit(u.company, unitClean));
+    return Array.from(
+      new Set([
+        ...unitUsers.map((u) => (u.division || "").trim()),
+        ...calOpts.divisions.map((d) => d.trim()),
+        ...(form.divisionRoleScopes ?? []).map((d) => d.trim()),
+      ].filter(Boolean)),
+    ).sort();
+  }, [form.company, form.divisionRoleScopes]);
 
   const multiScopeOrgOpts = useMemo(() => {
     const targetUnits =
@@ -625,12 +646,33 @@ function EditModal({
                         }
                       : {}),
                     ...(key === "role" && (v === "HR ICF" || v === "Administrator") ? { isHrIcfValidator: true } : {}),
+                    ...(key === "role" && v !== "Division" ? { divisionRoleScopes: [] } : {}),
                   }));
                 }}>
                 {options.map(o => <option key={o} value={o}>{(labels as Record<string,string>)[o] ?? o}</option>)}
               </select>
             </div>
           ))}
+
+          {form.role === "Division" && (
+            <div className="col-span-2 rounded-xl border border-sky-200 bg-sky-50/55 p-3.5 space-y-2">
+              <div>
+                <p className="text-xs font-semibold text-[#1A284F]">
+                  Ceklist Divisi yang Dibawahi (Khusus Role Division — Unit {form.company})
+                </p>
+                <p className="text-[11px] text-gray-600 mt-0.5 leading-relaxed">
+                  Solusi untuk Kepala Divisi yang tercatat di Divisi Management namun aktualnya membawahi divisi lain. Jika dipilih satu atau lebih divisi di bawah ini, user tersebut <strong>hanya dapat melihat tim pada divisi yang dicentang</strong> dan tidak dapat melihat tim di divisi lain.
+                </p>
+              </div>
+              <MultiCheckboxDropdown
+                label={`Pilih Divisi pada ${form.company}`}
+                options={sameUnitDivisionOptions}
+                selected={form.divisionRoleScopes ?? []}
+                onChange={(next) => setForm((p) => ({ ...p, divisionRoleScopes: next }))}
+                placeholder="— Pilih satu atau lebih Divisi yang dibawahi —"
+              />
+            </div>
+          )}
 
           {/* DS-6: Status Karyawan + Kondisional Keterangan Status Karyawan & Tgl Efektif */}
           <div>
@@ -1079,6 +1121,10 @@ function EditModal({
                 joinDate: String(form.joinDate ?? "").trim(),
                 regNoAp1: ap.regNoAp1,
                 regNoAp2: ap.regNoAp2,
+                divisionRoleScopes:
+                  form.role === "Division"
+                    ? Array.from(new Set((form.divisionRoleScopes ?? []).map((d) => d.trim()).filter(Boolean)))
+                    : [],
                 employeeStatus: cleanEmpStatus,
                 employeeStatusNote: cleanEmpStatus ? String(form.employeeStatusNote ?? "").trim() : "",
                 effectiveDate: cleanEmpStatus ? String(form.effectiveDate ?? "").trim() : "",
@@ -3037,6 +3083,14 @@ export function UserManagementPage() {
                   <td className="px-4 py-3">
                     <div className="flex flex-col items-start gap-1">
                       <RoleBadge role={user.role} />
+                      {user.role === "Division" && Boolean(user.divisionRoleScopes?.length) && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-200 font-medium max-w-[180px] truncate"
+                          title={`Membawahi Divisi: ${user.divisionRoleScopes!.join(", ")}`}
+                        >
+                          Divisi: {user.divisionRoleScopes!.join(", ")}
+                        </span>
+                      )}
                       {(user.role === "HR Unit" || user.isHrUnitChecker) && (
                         <span
                           className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 font-medium"

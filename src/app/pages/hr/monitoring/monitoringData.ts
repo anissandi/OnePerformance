@@ -60,7 +60,7 @@ export interface MonitoringEmployee {
 export function getMonitoringEmployees(): MonitoringEmployee[] {
   const users = loadManagedUsers();
   const activeUser = getActiveUser();
-  const extraSig = `${(activeUser.managedUnits ?? []).join(",")}|${(activeUser.managedDivisions ?? []).join(",")}|${(activeUser.managedDepartments ?? []).join(",")}|${(activeUser.managedBagians ?? []).join(",")}`;
+  const extraSig = `${(activeUser.divisionRoleScopes ?? []).join(",")}|${(activeUser.managedUnits ?? []).join(",")}|${(activeUser.managedDivisions ?? []).join(",")}|${(activeUser.managedDepartments ?? []).join(",")}|${(activeUser.managedBagians ?? []).join(",")}`;
   const sig = `${_monEpoch}|${users.length}|${activeUser.id ?? ""}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}|${extraSig}`;
   if (_cachedMonList && _cachedMonSig === sig) {
     return _cachedMonList;
@@ -112,7 +112,7 @@ export function getMonitoringEmployees(): MonitoringEmployee[] {
 export function getSupervisorScopedMonitoringEmployees(): MonitoringEmployee[] {
   const activeUser = getActiveUser();
   const users = loadManagedUsers();
-  const extraSig = `${(activeUser.managedUnits ?? []).join(",")}|${(activeUser.managedDivisions ?? []).join(",")}|${(activeUser.managedDepartments ?? []).join(",")}|${(activeUser.managedBagians ?? []).join(",")}`;
+  const extraSig = `${(activeUser.divisionRoleScopes ?? []).join(",")}|${(activeUser.managedUnits ?? []).join(",")}|${(activeUser.managedDivisions ?? []).join(",")}|${(activeUser.managedDepartments ?? []).join(",")}|${(activeUser.managedBagians ?? []).join(",")}`;
   const sig = `${_monEpoch}|${users.length}|${activeUser.id ?? ""}|${activeUser.employeeId}|${activeUser.regNo ?? ""}|${activeUser.role}|${activeUser.company}|${activeUser.position}|${extraSig}`;
   if (_cachedSupMonList && _cachedSupMonSig === sig) {
     return _cachedSupMonList;

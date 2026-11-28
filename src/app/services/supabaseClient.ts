@@ -2995,6 +2995,11 @@ function applyDbUsersToLocal(users: Array<Record<string, unknown>>): Array<Recor
           : Array.isArray(dbU?.managed_units)
             ? Array.from(new Set((dbU.managed_units as unknown[]).map((x) => canonicalizeDbCompanyUnit(x)).filter(Boolean)))
             : undefined,
+        divisionRoleScopes: Array.isArray(kvU.divisionRoleScopes)
+          ? Array.from(new Set((kvU.divisionRoleScopes as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+          : Array.isArray(dbU?.division_role_scopes)
+            ? Array.from(new Set((dbU.division_role_scopes as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
+            : undefined,
         managedDivisions: Array.isArray(kvU.managedDivisions)
           ? Array.from(new Set((kvU.managedDivisions as unknown[]).map((x) => String(x ?? "").trim()).filter(Boolean)))
           : Array.isArray(dbU?.managed_divisions)

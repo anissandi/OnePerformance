@@ -748,14 +748,39 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
     const extraManagedUnits = !isGlobalViewer
       ? (activeUser.managedUnits ?? []).map((u) => canonicalizeCompanyUnitName(u)).filter(Boolean)
       : [];
+    const exclusiveDivSet =
+      !isGlobalViewer && activeUser.role === "Division" && (activeUser.divisionRoleScopes ?? []).length > 0
+        ? new Set((activeUser.divisionRoleScopes ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean))
+        : null;
+    const divList = uniq(
+      poolByUnit
+        .filter((e) => {
+          if (!exclusiveDivSet) return true;
+          if (canonicalizeCompanyUnitName(e.companyUnit) === canonicalizeCompanyUnitName(activeUser.company)) {
+            return exclusiveDivSet.has(e.division.trim().toLowerCase());
+          }
+          return true;
+        })
+        .map((e) => e.division),
+    );
     const units = uniq([...visibleBaseEmployees.map((e) => e.companyUnit), ...extraManagedUnits]);
     return {
       companyUnit: units.length === 1 && !isGlobalViewer ? [units[0]] : ["All Units", ...units],
-      division: ["All Divisions", ...uniq(poolByUnit.map((e) => e.division))],
+      division: ["All Divisions", ...(exclusiveDivSet ? uniq([...(activeUser.divisionRoleScopes ?? []), ...divList]) : divList)],
       department: ["All Departments", ...uniq(poolByDiv.map((e) => e.department))],
       position: ["All Positions", ...uniq(poolByDept.map((e) => e.position))],
     };
-  }, [visibleBaseEmployees, companyUnit, division, department, isGlobalViewer, (activeUser.managedUnits ?? []).join(",")]);
+  }, [
+    visibleBaseEmployees,
+    companyUnit,
+    division,
+    department,
+    isGlobalViewer,
+    activeUser.role,
+    activeUser.company,
+    (activeUser.divisionRoleScopes ?? []).join(","),
+    (activeUser.managedUnits ?? []).join(","),
+  ]);
 
   useEffect(() => {
     if (!dynamicFilterOpts.companyUnit.includes(companyUnit)) {

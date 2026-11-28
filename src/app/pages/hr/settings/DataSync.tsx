@@ -505,6 +505,7 @@ export function DataSyncPage() {
                 ? true
                 : (importMode === "replace_all_trial" ? false : prev?.isHrIcfValidator),
             checkerUnits: importMode === "replace_all_trial" ? undefined : prev?.checkerUnits,
+            divisionRoleScopes: importMode === "replace_all_trial" ? undefined : prev?.divisionRoleScopes,
             managedUnits: importMode === "replace_all_trial" ? undefined : prev?.managedUnits,
             managedDivisions: importMode === "replace_all_trial" ? undefined : prev?.managedDivisions,
             managedDepartments: importMode === "replace_all_trial" ? undefined : prev?.managedDepartments,

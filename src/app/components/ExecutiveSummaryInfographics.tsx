@@ -281,17 +281,35 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
     [store.entities],
   );
 
+  const allRsupUnits = useMemo(
+    () => store.entities.filter((e) => e.kind === "unit" && e.groupName === "RSUP Group"),
+    [store.entities],
+  );
+
   const rsupUnitEntities = useMemo(() => {
-    const list = store.entities.filter((e) => e.kind === "unit" && e.groupName === "RSUP Group");
-    if (!lockedUnits || lockedUnits.length === 0) return list;
-    const matched = list.filter((u) => lockedUnits.some((lu) => isSameCompanyUnit(lu, u.name)));
-    return matched.length > 0 ? matched : list;
-  }, [store.entities, lockedUnits]);
+    if (!lockedUnits || lockedUnits.length === 0) return allRsupUnits;
+    return allRsupUnits.filter((u) => lockedUnits.some((lu) => isSameCompanyUnit(lu, u.name)));
+  }, [allRsupUnits, lockedUnits]);
+
+  const isGmOrVgmUnitRestricted = useMemo(() => {
+    const isGmOrVgm =
+      activeUser.role === "GM" || activeUser.role === "VGM" || activeUser.role === "vGM";
+    if (!isGmOrVgm) return false;
+    return rsupUnitEntities.length < allRsupUnits.length;
+  }, [activeUser.role, rsupUnitEntities.length, allRsupUnits.length]);
+
+  useEffect(() => {
+    if (isGmOrVgmUnitRestricted) {
+      setScopeFocus("UNITS");
+      setFokusChildBranch("UNITS");
+      setShowRsupGroupInUnits(false);
+    }
+  }, [isGmOrVgmUnitRestricted]);
 
   // Auto memunculkan semua 5 Unit Usaha; jika tag RSUP Group diklik maka RSUP Group ikut dimunculkan di kartu & grafik perbandingan
   const comparisonEntities = useMemo(
-    () => (showRsupGroupInUnits ? [groupEntity, ...rsupUnitEntities] : rsupUnitEntities),
-    [groupEntity, rsupUnitEntities, showRsupGroupInUnits],
+    () => (showRsupGroupInUnits && !isGmOrVgmUnitRestricted ? [groupEntity, ...rsupUnitEntities] : rsupUnitEntities),
+    [groupEntity, rsupUnitEntities, showRsupGroupInUnits, isGmOrVgmUnitRestricted],
   );
 
   const ytdReports = useMemo(
@@ -744,7 +762,7 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
           </div>
 
           <div className="flex items-center gap-2">
-            <RsupGroupToggleTag />
+            {!isGmOrVgmUnitRestricted && <RsupGroupToggleTag />}
             <button
               type="button"
               disabled
@@ -862,26 +880,30 @@ export function ExecutiveSummaryInfographics({ lockedUnits }: { lockedUnits?: st
                   </span>
                   {(
                     [
-                      {
-                        id: "ALL" as const,
-                        label: "RSUP Group & Unit Usaha",
-                        hasGrandchild: false,
-                        onSelect: () => {
-                          setFokusChildBranch("ALL");
-                          setScopeFocus("ALL");
-                          setSpotlightUnitId("ALL");
-                        },
-                      },
-                      {
-                        id: "GROUP" as const,
-                        label: "Khusus RSUP Group",
-                        hasGrandchild: false,
-                        onSelect: () => {
-                          setFokusChildBranch("GROUP");
-                          setScopeFocus("GROUP");
-                          setSpotlightUnitId("ALL");
-                        },
-                      },
+                      ...(!isGmOrVgmUnitRestricted
+                        ? [
+                            {
+                              id: "ALL" as const,
+                              label: "RSUP Group & Unit Usaha",
+                              hasGrandchild: false,
+                              onSelect: () => {
+                                setFokusChildBranch("ALL");
+                                setScopeFocus("ALL");
+                                setSpotlightUnitId("ALL");
+                              },
+                            },
+                            {
+                              id: "GROUP" as const,
+                              label: "Khusus RSUP Group",
+                              hasGrandchild: false,
+                              onSelect: () => {
+                                setFokusChildBranch("GROUP");
+                                setScopeFocus("GROUP");
+                                setSpotlightUnitId("ALL");
+                              },
+                            },
+                          ]
+                        : []),
                       {
                         id: "UNITS" as const,
                         label: "Perbandingan Unit Usaha",

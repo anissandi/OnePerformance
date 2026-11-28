@@ -1669,6 +1669,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
     isGlobalViewer,
     isCheckerRole,
     checkerAllowedUnits.join(","),
+    (scopeUser.divisionRoleScopes ?? []).join(","),
     (scopeUser.managedUnits ?? []).join(","),
     (scopeUser.managedDivisions ?? []).join(","),
     (scopeUser.managedDepartments ?? []).join(","),
@@ -1790,13 +1791,41 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
   const liveEmployees = useMemo(() => getLiveTransactionalEmployees(), [tick]);
 
   const divisionOptions = useMemo(() => {
+    const exclusiveDivSet =
+      scopeUser.role === "Division" && (scopeUser.divisionRoleScopes ?? []).length > 0
+        ? new Set((scopeUser.divisionRoleScopes ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean))
+        : null;
     const pool = companyUnit === "All Units"
       ? allManagedActiveUsers
       : allManagedActiveUsers.filter((u) => u.company === companyUnit);
-    const divs = Array.from(new Set(pool.map((u) => (u.division || "").trim()).filter(Boolean))).sort();
-    if (!isGlobalViewer && !isCheckerRole && divs.length === 1) return [divs[0]];
+    const rawDivs = pool
+      .filter((u) => {
+        if (!exclusiveDivSet) return true;
+        if (isSameCompanyUnit(u.company, scopeUser.company)) {
+          return exclusiveDivSet.has((u.division || "").trim().toLowerCase());
+        }
+        return true;
+      })
+      .map((u) => (u.division || "").trim())
+      .filter(Boolean);
+    const divs = Array.from(
+      new Set(
+        exclusiveDivSet && (companyUnit === "All Units" || isSameCompanyUnit(companyUnit, scopeUser.company))
+          ? [...(scopeUser.divisionRoleScopes ?? []).map((d) => d.trim()).filter(Boolean), ...rawDivs]
+          : rawDivs,
+      ),
+    ).sort();
+    if (!isGlobalViewer && !isCheckerRole && !exclusiveDivSet && divs.length === 1) return [divs[0]];
     return ["All Divisions", ...divs];
-  }, [allManagedActiveUsers, companyUnit, isGlobalViewer, isCheckerRole]);
+  }, [
+    allManagedActiveUsers,
+    companyUnit,
+    isGlobalViewer,
+    isCheckerRole,
+    scopeUser.role,
+    scopeUser.company,
+    (scopeUser.divisionRoleScopes ?? []).join(","),
+  ]);
 
   const departmentOptions = useMemo(() => {
     const pool = allManagedActiveUsers.filter(
@@ -2011,7 +2040,7 @@ export function AnalyticsDashboard({ lockedUnits }: { lockedUnits?: string[] } =
       </div>
 
       {activeAnalyticsTab === "executive" ? (
-        <ExecutiveSummaryInfographics lockedUnits={globalLockedUnits} />
+        <ExecutiveSummaryInfographics lockedUnits={isGlobalViewer ? globalLockedUnits : (lockedUnits ?? authLockedUnits)} />
       ) : (
         <>
       {/* ── Slim Sticky Filter Bar ─────────────────────────────────────────── */}

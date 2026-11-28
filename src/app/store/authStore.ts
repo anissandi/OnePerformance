@@ -106,6 +106,8 @@ export interface ManagedUser {
   calibrationRoleByUnit?: Record<string, CalibrationUnitRole>;
   /** Mapping Peran Approval Setting (SOY) per Company Unit ("approver" | "mengetahui" | "readonly" | "") */
   soyCalibrationRoleByUnit?: Record<string, CalibrationUnitRole>;
+  /** Khusus Role "Division": daftar Divisi pada Unit Usaha user yang dibawahi secara eksklusif (hanya melihat tim di divisi yang dicentang) */
+  divisionRoleScopes?: string[];
   /** Cakupan tambahan jika pejabat membawahi >1 Unit / Divisi / Departemen / Bagian */
   managedUnits?: string[];
   managedDivisions?: string[];
@@ -218,6 +220,9 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
   const managedBagians = Array.isArray(user.managedBagians)
     ? Array.from(new Set(user.managedBagians.map((x) => String(x ?? "").trim()).filter(Boolean)))
     : user.managedBagians;
+  const divisionRoleScopes = Array.isArray(user.divisionRoleScopes)
+    ? Array.from(new Set(user.divisionRoleScopes.map((x) => String(x ?? "").trim()).filter(Boolean)))
+    : user.divisionRoleScopes;
   const checkerUnits = Array.isArray(user.checkerUnits)
     ? Array.from(new Set(user.checkerUnits.map((x) => canonicalizeCompanyUnitName(x)).filter(Boolean)))
     : user.checkerUnits;
@@ -269,6 +274,7 @@ function normalizeManagedUserUnits(user: ManagedUser): ManagedUser {
     employeeStatus: cleanEmpStatus,
     employeeStatusNote: rawEmpStatusNote === "-" || rawEmpStatusNote === "—" ? "" : rawEmpStatusNote,
     effectiveDate: cleanEmpStatus ? normalizeStoredDate(user.effectiveDate) : (user.effectiveDate !== undefined ? "" : undefined),
+    divisionRoleScopes,
     managedUnits,
     managedDivisions,
     managedDepartments,
@@ -1098,7 +1104,7 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     perUsersMap = new Map();
     _authorizedSubsMemo.set(allUsers, perUsersMap);
   }
-  const extraScopeSig = `${(user.managedUnits ?? []).join(",")}|${(user.managedDivisions ?? []).join(",")}|${(user.managedDepartments ?? []).join(",")}|${(user.managedBagians ?? []).join(",")}`;
+  const extraScopeSig = `${(user.divisionRoleScopes ?? []).join(",")}|${(user.managedUnits ?? []).join(",")}|${(user.managedDivisions ?? []).join(",")}|${(user.managedDepartments ?? []).join(",")}|${(user.managedBagians ?? []).join(",")}`;
   const userMemoKey = `${user.id ?? ""}|${user.employeeId.toLowerCase()}|${user.regNo ?? ""}|${user.role}|${user.groupings ?? ""}|${user.position}|${user.company}|${user.division}|${user.department}|${user.bagian ?? ""}|${user.regNoAp1 ?? ""}|${user.regNoAp2 ?? ""}|${extraScopeSig}`;
   const cachedSubs = perUsersMap.get(userMemoKey);
   if (cachedSubs) return cachedSubs;
@@ -1109,6 +1115,12 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
   const myDeptNorm = normOrgName(user.department);
   const selfEmpLower = user.employeeId.trim().toLowerCase();
   const selfRegLower = String(user.regNo ?? "").trim().toLowerCase();
+  const isGmOrVgmRole = user.role === "GM" || user.role === "VGM" || user.role === "vGM";
+  const checkedDivisionRoleScopes =
+    user.role === "Division"
+      ? (user.divisionRoleScopes ?? []).map((d) => normOrgName(d)).filter(Boolean)
+      : [];
+  const checkedDivisionRoleSet = new Set(checkedDivisionRoleScopes);
   const isExactSelf = (target: ManagedUser): boolean => {
     if (user.id && target.id && user.id === target.id && isSameCompanyUnit(target.company, user.company)) return true;
     if (!isSameCompanyUnit(target.company, user.company)) return false;
@@ -1133,6 +1145,50 @@ export function getAuthorizedSubordinates(user: ManagedUser, allUsers = loadMana
     const targetKey = target.employeeId.trim().toLowerCase();
     if (isExactSelf(target)) return true;
     if (isMyApprover(target)) return false;
+
+    // 1. Aturan Ketat Role GM & VGM:
+    //    Hanya dapat melihat data sesuai Unit Usaha tempatnya berada, KECUALI di-allow eksplisit
+    //    pada Cakupan Wewenang Berjenjang Tambahan (`managedUnits` / multi-scope).
+    if (isGmOrVgmRole) {
+      const targetLevel = resolveUserAuthorityLevel(target);
+      if (targetLevel === "admin" || targetLevel === "bod" || targetLevel === "director_group") {
+        return false;
+      }
+      if (!isSameCompanyUnit(target.company, user.company)) {
+        const hasExplicitCrossUnitAllow = (user.managedUnits ?? []).some((mu) =>
+          isSameCompanyUnit(target.company, mu),
+        );
+        if (!hasExplicitCrossUnitAllow) return false;
+        return doesTargetMatchExtraManagedScope(user, target);
+      }
+      // Di dalam Unit Usaha sendiri: GM / VGM melihat seluruh karyawan di bawah levelnya (+ bawahan langsung hop === 1)
+      const targetRank = HIERARCHY_RANK[targetLevel];
+      if (targetRank > myRank) return false;
+      if (targetRank === myRank && chainDistances.get(targetKey) !== 1) return false;
+      return true;
+    }
+
+    // 2. Aturan Eksklusif Role "Division" dengan Ceklist Divisi (`divisionRoleScopes` terisi):
+    //    Solusi untuk Kepala Divisi yang tercatat di Divisi Management namun membawahi divisi lain:
+    //    hanya dapat melihat tim pada divisi yang dicentang dan TIDAK BISA melihat tim di divisi lain.
+    if (checkedDivisionRoleSet.size > 0) {
+      if (isSameCompanyUnit(target.company, user.company)) {
+        if (!checkedDivisionRoleSet.has(normOrgName(target.division))) {
+          return false;
+        }
+        const targetLevel = resolveUserAuthorityLevel(target);
+        const targetRank = HIERARCHY_RANK[targetLevel];
+        if (targetRank > myRank) return false;
+        if (targetRank === myRank && chainDistances.get(targetKey) !== 1) return false;
+        return true;
+      }
+      // Lintas unit usaha hanya terbuka bila di-allow eksplisit pada Cakupan Wewenang Berjenjang Tambahan
+      const hasCrossUnitManaged = (user.managedUnits ?? []).some((mu) => !isSameCompanyUnit(mu, user.company));
+      if (hasCrossUnitManaged && doesTargetMatchExtraManagedScope(user, target)) {
+        return true;
+      }
+      return false;
+    }
 
     // Cakupan Wewenang Berjenjang Tambahan (Multi-Scope: Unit / Divisi / Departemen / Bagian)
     if (doesTargetMatchExtraManagedScope(user, target)) {
@@ -1401,7 +1457,14 @@ export function getScopedFilterOptionsForUser(
     mergedMap.set(uk, u);
   }
   const mergedSubs = Array.from(mergedMap.values());
-  const pool = level === "admin" || level === "bod" ? allUsers : [user, ...mergedSubs];
+  const hasExclusiveDivScope =
+    user.role === "Division" && Array.isArray(user.divisionRoleScopes) && user.divisionRoleScopes.length > 0;
+  const pool =
+    level === "admin" || level === "bod"
+      ? allUsers
+      : hasExclusiveDivScope && mergedSubs.length > 0
+      ? mergedSubs
+      : [user, ...mergedSubs];
 
   const uniq = (arr: (string | undefined)[]) =>
     Array.from(new Set(arr.map((v) => (v ?? "").trim()).filter(Boolean))).sort();
@@ -1435,7 +1498,9 @@ export function getScopedFilterOptionsForUser(
     authorityLevel: level,
     authorityLabel: LABEL_BY_LEVEL[level],
     units: uniq([...pool.map((u) => canonicalizeCompanyUnitName(u.company)), ...extraManagedUnits]),
-    divisions: uniq(pool.map((u) => u.division)),
+    divisions: hasExclusiveDivScope
+      ? uniq([...(user.divisionRoleScopes ?? []), ...mergedSubs.map((u) => u.division)])
+      : uniq(pool.map((u) => u.division)),
     departments: uniq(pool.map((u) => u.department)),
     bagians: uniq(pool.map((u) => u.bagian)),
     positions: uniq(pool.map((u) => u.position)),
@@ -2373,12 +2438,24 @@ export function getEffectiveLockedUnitsForUser(user: ManagedUser, allUsers = loa
   const extraManaged = (user.managedUnits ?? []).filter(Boolean);
   const checkerUnits = getEffectiveCheckerUnits(user);
   const level = resolveUserAuthorityLevel(user);
+  const isGmOrVgmRole = user.role === "GM" || user.role === "VGM" || user.role === "vGM";
 
   if (level === "admin" || level === "bod") {
     if (roleAllowedUnits.length > 0) {
       return Array.from(new Set([...roleAllowedUnits, ...extraManaged]));
     }
     return undefined;
+  }
+
+  // Role GM & VGM terkunci ketat ke Unit Usahanya sendiri kecuali di-allow pada Cakupan Wewenang Berjenjang Tambahan (+ checkerUnits bila ditunjuk Checker)
+  if (isGmOrVgmRole) {
+    return Array.from(
+      new Set(
+        [user.company, ...extraManaged, ...checkerUnits]
+          .map((u) => canonicalizeCompanyUnitName(u))
+          .filter(Boolean),
+      ),
+    );
   }
 
   const authorizedUnits = getAuthorizedSubordinates(user, allUsers)
