@@ -9,8 +9,11 @@ import {
   ChevronRight, Award,
   BarChart2, Star, Activity, MessageSquare, Clock, CheckCircle2, ChevronDown, Users,
   StickyNote, UserCheck, Target, ClipboardCheck, Sparkles, Camera, Trash2, IdCard, Layers, GitBranch, ShieldCheck,
+  Pencil, X, Save, Upload,
 } from "lucide-react";
 import { toast } from "sonner";
+import { DatePickerID } from "../../components/DatePickerID";
+import { normalizeDateDDMMYYYY } from "../../utils/dateFormat";
 import {
   KPI_ITEMS, computeKPIAchievement, parseBobotDecimal, loadKPITracking,
 } from "../employee/KPIPage";
@@ -23,10 +26,12 @@ import {
 } from "../../store/profileStore";
 import {
   getActiveUser,
+  isSameCompanyUnit,
   loadManagedUsers,
   resolveEffectiveUserGrouping,
   resolveUniqueUserByApproverRef,
   resolveUserAllowedModules,
+  saveManagedUsers,
   useAuthStore,
   type AppraisalModuleName,
 } from "../../store/authStore";
@@ -332,6 +337,54 @@ function getModuleResults(year: number) {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
+const PROFILE_AVATAR_COLORS = [
+  "bg-purple-500",
+  "bg-blue-500",
+  "bg-emerald-500",
+  "bg-orange-500",
+  "bg-pink-500",
+  "bg-teal-500",
+  "bg-indigo-500",
+  "bg-cyan-600",
+  "bg-fuchsia-500",
+  "bg-sky-600",
+];
+
+function profileAvatarColor(seed: string, fallbackName = ""): string {
+  const str = String(seed || fallbackName || "user").trim();
+  if (/^\d+$/.test(str)) {
+    return PROFILE_AVATAR_COLORS[Math.abs(parseInt(str, 10)) % PROFILE_AVATAR_COLORS.length] || "bg-indigo-500";
+  }
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return PROFILE_AVATAR_COLORS[hash % PROFILE_AVATAR_COLORS.length] || "bg-indigo-500";
+}
+
+function computeTenureFromJoinDate(rawJoinDate?: string | null): string {
+  const raw = String(rawJoinDate ?? "").trim();
+  if (!raw || raw === "-" || raw === "—") return "-";
+  let parsed: Date | null = null;
+  const norm = normalizeDateDDMMYYYY(raw);
+  const dmy = (norm !== "—" ? norm : raw).match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmy) {
+    parsed = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+  } else {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) parsed = d;
+  }
+  if (!parsed || Number.isNaN(parsed.getTime())) return "-";
+  const now = new Date();
+  let totalMonths = (now.getFullYear() - parsed.getFullYear()) * 12 + (now.getMonth() - parsed.getMonth());
+  if (now.getDate() < parsed.getDate()) totalMonths -= 1;
+  if (totalMonths < 0) return "0 Bulan";
+  const yrs = Math.floor(totalMonths / 12);
+  const mos = totalMonths % 12;
+  if (yrs > 0 && mos > 0) return `${yrs} Tahun ${mos} Bulan`;
+  if (yrs > 0) return `${yrs} Tahun`;
+  return `${mos} Bulan`;
+}
 
 
 type Tab = "overview" | "results";
@@ -347,10 +400,95 @@ export function ViewProfile() {
   const [tick, setTick] = useState(0);
   const [summaryNoteOpen, setSummaryNoteOpen] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const modalPhotoInputRef = useRef<HTMLInputElement>(null);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | undefined>(() =>
     getUserProfilePhoto(activeUser.employeeId),
   );
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [editPhone, setEditPhone] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editJoinDate, setEditJoinDate] = useState("");
+  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
+  const [pendingPhotoPreview, setPendingPhotoPreview] = useState<string | undefined>(undefined);
+  const [removePhotoRequested, setRemovePhotoRequested] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  const openEditProfileModal = () => {
+    setEditPhone(String(activeUser.telegramNo ?? "").trim());
+    setEditEmail(String(activeUser.email ?? "").trim());
+    const normJd = activeUser.joinDate ? normalizeDateDDMMYYYY(activeUser.joinDate) : "";
+    setEditJoinDate(normJd === "—" ? "" : normJd);
+    setPendingPhotoFile(null);
+    setPendingPhotoPreview(profilePhotoUrl);
+    setRemovePhotoRequested(false);
+    setEditProfileOpen(true);
+  };
+
+  const handleSaveProfileEdits = async () => {
+    if (savingProfile) return;
+    const cleanPhone = editPhone.trim();
+    const cleanEmail = editEmail.trim();
+    const cleanJoinDateRaw = editJoinDate.trim();
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      toast.error("Format Email tidak valid.");
+      return;
+    }
+    const cleanJoinDate =
+      cleanJoinDateRaw && cleanJoinDateRaw !== "-" && cleanJoinDateRaw !== "—"
+        ? (() => {
+            const n = normalizeDateDDMMYYYY(cleanJoinDateRaw);
+            return n === "—" ? cleanJoinDateRaw : n;
+          })()
+        : "";
+
+    setSavingProfile(true);
+    try {
+      if (pendingPhotoFile) {
+        const uploadedUrl = await uploadAndSaveUserProfilePhoto(pendingPhotoFile, activeUser);
+        if (uploadedUrl) {
+          setProfilePhotoUrl(uploadedUrl);
+        } else {
+          toast.error("Gagal mengunggah foto profil.");
+          return;
+        }
+      } else if (removePhotoRequested && profilePhotoUrl) {
+        removeUserProfilePhoto(activeUser.employeeId);
+        setProfilePhotoUrl(undefined);
+      }
+
+      const currentList = loadManagedUsers();
+      const targetIdx = currentList.findIndex((u) => {
+        if (activeUser.id && u.id === activeUser.id && isSameCompanyUnit(u.company, activeUser.company)) {
+          return true;
+        }
+        if (!isSameCompanyUnit(u.company, activeUser.company)) return false;
+        const uReg = String(u.regNo ?? "").trim().toLowerCase();
+        const actReg = String(activeUser.regNo ?? "").trim().toLowerCase();
+        if (uReg && actReg) return uReg === actReg;
+        return u.employeeId.trim().toLowerCase() === activeUser.employeeId.trim().toLowerCase();
+      });
+
+      const baseTarget = targetIdx >= 0 ? currentList[targetIdx] : activeUser;
+      const updatedTarget = {
+        ...baseTarget,
+        telegramNo: cleanPhone,
+        email: cleanEmail,
+        joinDate: cleanJoinDate,
+      };
+      const nextList =
+        targetIdx >= 0
+          ? currentList.map((u, i) => (i === targetIdx ? updatedTarget : u))
+          : [...currentList, updatedTarget];
+
+      saveManagedUsers(nextList, updatedTarget, undefined, baseTarget);
+      setTick((v) => v + 1);
+      setEditProfileOpen(false);
+      toast.success("Profil berhasil diperbarui dan tersimpan ke database.");
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   useEffect(() => {
     setProfilePhotoUrl(getUserProfilePhoto(activeUser.employeeId));
@@ -479,28 +617,10 @@ export function ViewProfile() {
     () => resolveUniqueUserByApproverRef(allManagedUsersForProfile, activeUser.regNoAp2),
     [allManagedUsersForProfile, activeUser.regNoAp2],
   );
-  const computedLamaBekerja = useMemo(() => {
-    const raw = String(activeUser.joinDate ?? "").trim();
-    if (!raw || raw === "-" || raw === "—") return "-";
-    let parsed: Date | null = null;
-    const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-    if (dmy) {
-      parsed = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
-    } else {
-      const d = new Date(raw);
-      if (!Number.isNaN(d.getTime())) parsed = d;
-    }
-    if (!parsed || Number.isNaN(parsed.getTime())) return "-";
-    const now = new Date();
-    let totalMonths = (now.getFullYear() - parsed.getFullYear()) * 12 + (now.getMonth() - parsed.getMonth());
-    if (now.getDate() < parsed.getDate()) totalMonths -= 1;
-    if (totalMonths < 0) return "0 Bulan";
-    const yrs = Math.floor(totalMonths / 12);
-    const mos = totalMonths % 12;
-    if (yrs > 0 && mos > 0) return `${yrs} Tahun ${mos} Bulan`;
-    if (yrs > 0) return `${yrs} Tahun`;
-    return `${mos} Bulan`;
-  }, [activeUser.joinDate]);
+  const computedLamaBekerja = useMemo(
+    () => computeTenureFromJoinDate(activeUser.joinDate),
+    [activeUser.joinDate],
+  );
 
   const valOrDash = (v?: string | null): string => {
     const s = String(v ?? "").trim();
@@ -516,11 +636,16 @@ export function ViewProfile() {
   };
   const profileInitials =
     (activeUser.name || USER.name)
-      .split(" ")
-      .filter((w) => /^[A-Za-z]/.test(w))
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
       .slice(0, 2)
-      .map((w) => w[0].toUpperCase())
+      .map((w) => w.charAt(0).toUpperCase())
       .join("") || USER.initials;
+  const profileAvatarBg = profileAvatarColor(
+    activeUser.id || activeUser.regNo || activeUser.employeeId,
+    activeUser.name || USER.name,
+  );
   const totalWeighted = activeModules.reduce((s, m) => s + m.weightedScore, 0);
   const dynamicModulesTotal = activeModules.length;
   const dynamicModulesApproved = activeModules.filter((m) => m.status === "approved").length;
@@ -926,7 +1051,11 @@ export function ViewProfile() {
         <div className="px-8 pb-6">
           <div className="flex items-end gap-5 -mt-10 mb-4 flex-wrap">
             <div className="relative group/avatar shrink-0">
-              <div className="w-20 h-20 rounded-2xl bg-[#1A284F] border-4 border-white flex items-center justify-center shadow-md overflow-hidden">
+              <div
+                className={`w-20 h-20 rounded-2xl border-4 border-white flex items-center justify-center shadow-md overflow-hidden ${
+                  profilePhotoUrl ? "bg-gray-100" : profileAvatarBg
+                }`}
+              >
                 {profilePhotoUrl ? (
                   <img
                     src={profilePhotoUrl}
@@ -988,7 +1117,7 @@ export function ViewProfile() {
               )}
             </div>
             <div className="flex-1 min-w-0 pt-12">
-              <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div>
                   <h1 className="text-xl font-bold text-gray-900">{activeUser.name || USER.name}</h1>
                   <p className="text-sm text-gray-500">
@@ -1013,6 +1142,17 @@ export function ViewProfile() {
                     )}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={openEditProfileModal}
+                  title="Edit Foto Profile, No. Handphone, Email, dan Tanggal Masuk"
+                  className="ml-auto inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-amber-50/80 hover:bg-amber-100/90 border border-amber-200/90 shadow-xs hover:shadow transition-all cursor-pointer group/editbtn shrink-0"
+                >
+                  <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-xs transition-transform group-hover/editbtn:scale-105">
+                    <Pencil className="w-3.5 h-3.5" />
+                  </span>
+                  <span className="text-xs font-bold text-[#1A284F]">Edit Profile</span>
+                </button>
               </div>
             </div>
           </div>
@@ -1076,7 +1216,10 @@ export function ViewProfile() {
               {
                 icon: Calendar,
                 title: "Lama Bekerja",
-                value: computedLamaBekerja,
+                value:
+                  activeUser.joinDate && normalizeDateDDMMYYYY(activeUser.joinDate) !== "—"
+                    ? `${computedLamaBekerja} (${normalizeDateDDMMYYYY(activeUser.joinDate)})`
+                    : computedLamaBekerja,
                 iconCls: "bg-purple-50 text-purple-600 border-purple-100",
               },
             ].map(({ icon: Icon, title, value, iconCls }) => (
@@ -1579,6 +1722,189 @@ export function ViewProfile() {
               >
                 {displayGrade}
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Edit Profile (Foto Profile, No. Handphone, Email, Tanggal Masuk / Lama Bekerja) ── */}
+      {editProfileOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+          onClick={() => {
+            if (!savingProfile) setEditProfileOpen(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-[#1A284F] to-[#2a4580] text-white flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 text-white flex items-center justify-center shadow-sm shrink-0">
+                  <Pencil className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold leading-tight">Edit Profile</h3>
+                  <p className="text-[11px] text-blue-100 mt-0.5">
+                    {activeUser.name} · {activeUser.position || "—"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={savingProfile}
+                onClick={() => setEditProfileOpen(false)}
+                className="text-white/75 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              {/* 1. Foto Profile */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 flex items-center gap-4 flex-wrap">
+                <div
+                  className={`w-16 h-16 rounded-2xl border-2 border-white shadow flex items-center justify-center overflow-hidden shrink-0 ${
+                    pendingPhotoPreview && !removePhotoRequested ? "bg-gray-100" : profileAvatarBg
+                  }`}
+                >
+                  {pendingPhotoPreview && !removePhotoRequested ? (
+                    <img
+                      src={pendingPhotoPreview}
+                      alt={activeUser.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-xl font-bold text-white tracking-wide">{profileInitials}</span>
+                  )}
+                </div>
+                <div className="flex-1 min-w-[180px] space-y-2">
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">Foto Profile</p>
+                    <p className="text-[11px] text-slate-500">Format JPG, PNG, atau WEBP</p>
+                  </div>
+                  <input
+                    ref={modalPhotoInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!file) return;
+                      if (!file.type.startsWith("image/")) {
+                        toast.error("Pilih file gambar (JPG, PNG, atau WEBP).");
+                        return;
+                      }
+                      setPendingPhotoFile(file);
+                      setRemovePhotoRequested(false);
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        if (typeof reader.result === "string") {
+                          setPendingPhotoPreview(reader.result);
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                  />
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => modalPhotoInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      {pendingPhotoPreview && !removePhotoRequested ? "Ganti Foto" : "Upload Foto"}
+                    </button>
+                    {pendingPhotoPreview && !removePhotoRequested && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingPhotoFile(null);
+                          setPendingPhotoPreview(undefined);
+                          setRemovePhotoRequested(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 text-xs font-semibold transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Hapus Foto
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. No. Handphone */}
+              <div>
+                <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 mb-1.5">
+                  <Phone className="w-3.5 h-3.5 text-amber-600" />
+                  No. Handphone
+                </label>
+                <input
+                  type="text"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="Contoh: +6281234567890 atau 081234567890"
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]"
+                />
+              </div>
+
+              {/* 3. Email */}
+              <div>
+                <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 mb-1.5">
+                  <Mail className="w-3.5 h-3.5 text-rose-600" />
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  placeholder="nama@perusahaan.com"
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1A284F]/20 focus:border-[#1A284F]"
+                />
+              </div>
+
+              {/* 4. Lama Bekerja (Edit Tanggal Masuk) */}
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                    <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                    Tanggal Masuk (Lama Bekerja)
+                  </label>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-[11px] font-bold">
+                    Lama Bekerja: {computeTenureFromJoinDate(editJoinDate)}
+                  </span>
+                </div>
+                <DatePickerID
+                  value={editJoinDate}
+                  onChange={(val) => setEditJoinDate(val)}
+                  placeholder="DD/MM/YYYY"
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/70 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={savingProfile}
+                onClick={() => setEditProfileOpen(false)}
+                className="px-4 py-2 rounded-xl border border-gray-200 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingProfile}
+                onClick={() => void handleSaveProfileEdits()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1A284F] hover:bg-[#131d3b] text-white text-xs font-semibold disabled:opacity-50"
+              >
+                <Save className="w-3.5 h-3.5" />
+                {savingProfile ? "Menyimpan..." : "Simpan Perubahan"}
+              </button>
             </div>
           </div>
         </div>
