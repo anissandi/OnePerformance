@@ -92,6 +92,18 @@ import {
   resolveKpiTrackingEditChain,
   submitKpiTrackingEditRequest,
 } from "../../store/kpiTrackingEditStore";
+import {
+  canEditOrTrackRsupSectionA,
+  canViewerSeeConfidentialNetProfit,
+  enforceRsupPersonalSectionA,
+  findRsupOperationalDirector,
+  getRsupDirectorValidatedSectionATracking,
+  isRsupGroupCompanyUnit,
+  isRsupOperationalDirectorUser,
+  isSectionANetProfitRow,
+  syncRsupDirectorSectionAFromBackend,
+  type SectionAKpiLike,
+} from "../../store/rsupPersonalSectionAStore";
 
 const MOCK_DEADLINE = "2026-06-30";
 
@@ -1012,17 +1024,29 @@ function getCachedKpiSettingByEmpStore() {
 
 export function resolveEmployeeTrackingKpiItems(employeeId: string): KPIItem[] {
   try {
+    const normTarget = normalizeEmployeeId(employeeId);
+    const ownerUser = loadManagedUsers().find(
+      (u) =>
+        normalizeEmployeeId(u.employeeId) === normTarget ||
+        u.employeeId.trim().toLowerCase() === employeeId.trim().toLowerCase(),
+    );
+    const applySectionARule = (rawRows: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
+      if (!ownerUser || !isRsupGroupCompanyUnit(ownerUser.company)) return rawRows;
+      return enforceRsupPersonalSectionA(rawRows as unknown as SectionAKpiLike[], ownerUser) as unknown as Array<Record<string, unknown>>;
+    };
     const { setMap, byLower, mappedCache } = getCachedKpiSettingByEmpStore();
     if (byLower.size > 0) {
       const candidates = buildEmployeeIdMatchSet(employeeId);
-      candidates.add(normalizeEmployeeId(employeeId));
+      candidates.add(normTarget);
+      const dirId = ownerUser && isRsupGroupCompanyUnit(ownerUser.company) ? (findRsupOperationalDirector()?.employeeId ?? "") : "";
+      const dirKeySuffix = dirId ? `::dir:${normalizeEmployeeId(dirId)}` : "";
       for (const k of candidates) {
-        const kl = k.toLowerCase();
+        const kl = `${k.toLowerCase()}${dirKeySuffix}`;
         const cachedMapped = mappedCache.get(kl);
         if (cachedMapped) return cachedMapped;
-        const rows = setMap[k] ?? byLower.get(kl);
+        const rows = setMap[k] ?? byLower.get(k.toLowerCase());
         if (Array.isArray(rows) && rows.length > 0) {
-          const mapped = mapStoredSettingRowsToTrackingItems(rows);
+          const mapped = mapStoredSettingRowsToTrackingItems(applySectionARule(rows));
           mappedCache.set(kl, mapped);
           return mapped;
         }
@@ -1030,7 +1054,7 @@ export function resolveEmployeeTrackingKpiItems(employeeId: string): KPIItem[] {
     }
     const slice = readEmployeeKpiSettingSlice<Record<string, unknown>>(employeeId);
     if (slice && Array.isArray(slice.items) && slice.items.length > 0) {
-      return mapStoredSettingRowsToTrackingItems(slice.items);
+      return mapStoredSettingRowsToTrackingItems(applySectionARule(slice.items));
     }
   } catch {
     // ignore
@@ -1065,20 +1089,24 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
   const normId = normalizeEmployeeId(employeeId);
   const { rawSet, setMap, byLower } = getCachedKpiSettingByEmpStore();
   const byEmpRaw = safeGetLocalRaw(`${KPI_STORE_KEY}_${normId}`);
+  const ownerUser = loadManagedUsers().find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === normId ||
+      u.employeeId.trim().toLowerCase() === employeeId.trim().toLowerCase(),
+  );
+  const isNonDirRsupOwner = Boolean(
+    ownerUser && isRsupGroupCompanyUnit(ownerUser.company) && !isRsupOperationalDirectorUser(ownerUser),
+  );
+  const opDir = isNonDirRsupOwner ? findRsupOperationalDirector() : undefined;
+  const dirRawKey = opDir?.employeeId ? safeGetLocalRaw(`${KPI_STORE_KEY}_${normalizeEmployeeId(opDir.employeeId)}`) : null;
+  const combinedEmpCacheKey = isNonDirRsupOwner ? `${byEmpRaw ?? ""}||dir:${dirRawKey ?? ""}` : byEmpRaw;
   const cachedEval = _cachedEvalKpiByNorm.get(normId);
-  if (cachedEval && cachedEval.empRaw === byEmpRaw && cachedEval.setRaw === rawSet) {
+  if (cachedEval && cachedEval.empRaw === combinedEmpCacheKey && cachedEval.setRaw === rawSet) {
     return cachedEval.evalRes;
   }
 
   if (!byEmpRaw) {
-    const rawRows =
-      setMap[normId] ??
-      setMap[employeeId] ??
-      byLower.get(normId.toLowerCase()) ??
-      byLower.get(employeeId.toLowerCase());
-    const fastTotal = Array.isArray(rawRows) && rawRows.length > 0
-      ? rawRows.length
-      : resolveEmployeeTrackingKpiItems(employeeId).length;
+    const fastTotal = resolveEmployeeTrackingKpiItems(employeeId).length;
     const emptyRes: EmployeeKPITrackingEvaluation = {
       months: [],
       cellsMap: {},
@@ -1089,7 +1117,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
       totalKPI: fastTotal,
       trackedKpiCount: 0,
     };
-    _cachedEvalKpiByNorm.set(normId, { empRaw: byEmpRaw, setRaw: rawSet, evalRes: emptyRes });
+    _cachedEvalKpiByNorm.set(normId, { empRaw: combinedEmpCacheKey, setRaw: rawSet, evalRes: emptyRes });
     return emptyRes;
   }
 
@@ -1105,11 +1133,14 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
 
   // Hitung jumlah bulan unik (Jan-26 s/d Dec-26) yang sudah memiliki minimal 1 input aktual terisi
   const empKpiList = resolveEmployeeTrackingKpiItems(employeeId);
+  const selfFillableKpiList = isNonDirRsupOwner
+    ? empKpiList.filter((k) => (k.section || "A").toUpperCase() !== "A")
+    : empKpiList;
   const filledMonthLabels = new Set<string>();
   for (const m of months) {
     if (!FULL_YEAR_KPI_MONTHS.includes(m.label as typeof FULL_YEAR_KPI_MONTHS[number])) continue;
     const monthCells = cellsMap[m.id] ?? m.cells ?? {};
-    const activeKpisInMonth = empKpiList.filter((kpi) => !isMonthBlockedForKpi(kpi, m.label));
+    const activeKpisInMonth = selfFillableKpiList.filter((kpi) => !isMonthBlockedForKpi(kpi, m.label));
     const hasActualValue = activeKpisInMonth.some((kpi) =>
       kpi.subRows.some((sub, si) => {
         if (sub.compute) return false;
@@ -1118,7 +1149,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
         return val.length > 0 && val !== "—";
       }),
     );
-    if (hasActualValue || (empKpiList.length > 0 && activeKpisInMonth.length === 0)) {
+    if (hasActualValue || (selfFillableKpiList.length > 0 && activeKpisInMonth.length === 0)) {
       filledMonthLabels.add(m.label);
     }
   }
@@ -1128,20 +1159,25 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
   const hasAnyTrackingData = trackedMonthsCount > 0;
 
   let totalKPI = empKpiList.length;
-  try {
-    const empSetItems = setMap[normId] ?? setMap[employeeId] ?? byLower.get(normId.toLowerCase()) ?? byLower.get(employeeId.toLowerCase());
-    if (Array.isArray(empSetItems) && empSetItems.length > 0) {
-      totalKPI = empSetItems.length;
-    }
-  } catch {
-    // ignore
-  }
 
   let trackedKpiCount = 0;
   let weightedSum = 0;
   if (hasAnyTrackingData) {
+    const dirSecATracking = isNonDirRsupOwner ? getRsupDirectorValidatedSectionATracking() : null;
+    const dirMonthEntries: MonthEntry[] = dirSecATracking
+      ? dirSecATracking.validatedMonths.map((vm) => ({
+          id: vm.id,
+          label: vm.label,
+          cells: dirSecATracking.validatedCellsByMonthLabel[vm.label] ?? {},
+        }))
+      : [];
     for (const k of empKpiList) {
-      const ach = computeKPIAchievement(k, cellsMap, months);
+      const isAutoSecA = isNonDirRsupOwner && (k.section || "A").toUpperCase() === "A";
+      const ach = isAutoSecA
+        ? (dirMonthEntries.length > 0
+            ? computeKPIAchievement(k, dirSecATracking!.validatedCellsByMonthLabel, dirMonthEntries)
+            : null)
+        : computeKPIAchievement(k, cellsMap, months);
       if (ach !== null) {
         trackedKpiCount++;
         weightedSum += (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
@@ -1160,7 +1196,7 @@ export function evaluateEmployeeKPITracking(employeeId: string): EmployeeKPITrac
     totalKPI,
     trackedKpiCount,
   };
-  _cachedEvalKpiByNorm.set(normId, { empRaw: byEmpRaw, setRaw: rawSet, evalRes });
+  _cachedEvalKpiByNorm.set(normId, { empRaw: combinedEmpCacheKey, setRaw: rawSet, evalRes });
   return evalRes;
 }
 
@@ -1562,6 +1598,8 @@ function AddMonthModal({
   allowedLabels,
   lockedReasonByLabel: _lockedReasonByLabel,
   kpiItems = KPI_ITEMS,
+  readOnlySectionA = false,
+  maskConfidentialNetProfit = false,
   onAdd,
   onClose,
 }: {
@@ -1569,9 +1607,14 @@ function AddMonthModal({
   allowedLabels?: string[];
   lockedReasonByLabel?: Record<string, string>;
   kpiItems?: KPIItem[];
+  readOnlySectionA?: boolean;
+  maskConfidentialNetProfit?: boolean;
   onAdd: (entry: MonthEntry) => void;
   onClose: () => void;
 }) {
+  const fillableKpiItems = readOnlySectionA
+    ? kpiItems.filter((k) => (k.section || "A").toUpperCase() !== "A")
+    : kpiItems;
   const unadded = MONTH_OPTIONS.filter((m) => !existingLabels.includes(m));
   const available = allowedLabels ? unadded.filter((m) => allowedLabels.includes(m)) : unadded;
   const [label, setLabel] = useState(available[0] ?? "");
@@ -1605,7 +1648,7 @@ function AddMonthModal({
   // Collect required (actual) fields that are empty
   const getMissingFields = () => {
     const missing: { kpiNo: string; subIdx: number }[] = [];
-    kpiItems.forEach((kpi) => {
+    fillableKpiItems.forEach((kpi) => {
       if (label && isMonthBlockedForKpi(kpi, label)) return;
       kpi.subRows.forEach((sub, si) => {
         if (sub.compute) return;
@@ -1625,7 +1668,7 @@ function AddMonthModal({
     return (tIdx >= 0 ? cells[ck(kpi.no, tIdx)] : "") || resolveKpiMonthTarget(kpi, label) || kpi.target2026 || "";
   };
   const separatorErrors: Record<string, string> = {};
-  kpiItems.forEach((kpi) => {
+  fillableKpiItems.forEach((kpi) => {
     if (label && isMonthBlockedForKpi(kpi, label)) return;
     if (kpi.colorIndicator || kpi.indicatorMode === "color" || kpi.indicatorMode === "ratio") return;
     const target = targetFor(kpi);
@@ -1754,8 +1797,17 @@ function AddMonthModal({
         )}
 
         <div ref={scrollRef} className="px-6 py-4 max-h-[60vh] overflow-y-auto flex flex-col gap-5">
-          {Array.from(new Set(kpiItems.map((k) => k.section))).sort().map((sec, sIdx) => {
-            const firstInSec = kpiItems.find((k) => k.section === sec);
+          {readOnlySectionA && kpiItems.some((k) => (k.section || "A").toUpperCase() === "A") && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/75 px-4 py-3 flex items-start gap-2.5 text-xs text-blue-900">
+              <Lock className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div className="leading-relaxed">
+                <strong>A. Objective KPI (20%)</strong> dikunci dan otomatis mengambil nilai capaian yang sudah <strong>Validated</strong> dari KPI Tracking Personal <strong>Direktur Operasional RSUP Group</strong>
+                {maskConfidentialNetProfit ? <> (nilai <em>Net Profit</em> bersifat <span className="inline-block px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold">confidential</span>)</> : null}. Anda cukup mengisi realisasi <strong>Section B (Functional KPI)</strong> di bawah ini.
+              </div>
+            </div>
+          )}
+          {Array.from(new Set(fillableKpiItems.map((k) => k.section))).sort().map((sec, sIdx) => {
+            const firstInSec = fillableKpiItems.find((k) => k.section === sec);
             const secHeader = firstInSec?.sectionLabel
               ? `${sec}. ${firstInSec.sectionLabel}${firstInSec.sectionBobot ? ` (${firstInSec.sectionBobot})` : ""}`
               : sec === "A" ? "A. Objective KPI (20%)" : sec === "B" ? "B. Functional KPI (80%)" : `Section ${sec}`;
@@ -1764,7 +1816,7 @@ function AddMonthModal({
               <p className={`text-xs font-bold text-white px-3 py-1.5 rounded-md mb-3 ${sIdx % 2 === 0 ? "bg-[#1565C0]" : "bg-[#1976D2]"}`}>
                 {secHeader}
               </p>
-              {kpiItems.filter((k) => k.section === sec).map((kpi) => {
+              {fillableKpiItems.filter((k) => k.section === sec).map((kpi) => {
                 const isBlockedInSelectedMonth = Boolean(label && isMonthBlockedForKpi(kpi, label));
                 const normKpiPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
                 const kpiMissing = attempted ? (missingByKpi[kpi.no] ?? 0) : 0;
@@ -2867,11 +2919,17 @@ function EditRequestModal({
   };
 
   const sections = Array.from(new Set(kpiItems.map((k) => k.section || "A"))).sort();
+  void sections;
+  const lockSectionAEditRequest = !isBusinessWorkspace && isRsupGroupCompanyUnit(ownerUser.company) && !isRsupOperationalDirectorUser(ownerUser);
+  const selectableKpiItems = lockSectionAEditRequest
+    ? kpiItems.filter((k) => (k.section || "A").toUpperCase() !== "A")
+    : kpiItems;
+  const selectableSections = Array.from(new Set(selectableKpiItems.map((k) => k.section || "A"))).sort();
   const secHeaderTones = [
     "bg-blue-50 text-blue-700",
     "bg-indigo-50 text-indigo-700",
     "bg-teal-50 text-teal-700",
-    "bg-violet-50 text-violet-700",
+    "bg-slate-100 text-slate-700",
   ];
 
   return (
@@ -2937,13 +2995,13 @@ function EditRequestModal({
               <span className="text-red-500 normal-case font-normal">* wajib pilih</span>
             </p>
             <div className="rounded-xl border border-gray-200 overflow-hidden">
-              {kpiItems.length === 0 ? (
+              {selectableKpiItems.length === 0 ? (
                 <div className="px-4 py-6 text-center text-xs text-gray-400">
                   Belum ada data KPI pada akun ini.
                 </div>
               ) : (
-                sections.map((sec, si) => {
-                  const secRows = kpiItems.filter((k) => (k.section || "A") === sec);
+                selectableSections.map((sec, si) => {
+                  const secRows = selectableKpiItems.filter((k) => (k.section || "A") === sec);
                   const first = secRows[0];
                   const secName = first?.sectionLabel || (sec === "A" ? "Objective KPI" : sec === "B" ? "Functional KPI" : `Section ${sec}`);
                   const toneCls = secHeaderTones[si % secHeaderTones.length];
@@ -3119,6 +3177,10 @@ function KPITable({
   approvedEditCells,
   highlightMissingRca,
   kpiItems = KPI_ITEMS,
+  readOnlySectionA = false,
+  maskConfidentialNetProfit = false,
+  suppressSectionARca = false,
+  directorSectionATracking,
 }: {
   months: MonthEntry[];
   editable: boolean;
@@ -3138,16 +3200,89 @@ function KPITable({
   highlightMissingRca?: boolean;
   /** Daftar KPI yang ditampilkan (DEMO: kosong untuk non-Administrator yang belum bertransaksi) */
   kpiItems?: KPIItem[];
+  /** Jika true, Section A dikunci read-only & otomatis mengambil data Validated Direktur Operasional RSUP Group */
+  readOnlySectionA?: boolean;
+  /** Jika true, sembunyikan Baseline, Target, kolom bulanan, & Total pada baris Net Profit (dalam miliar) dengan tag "confidential" */
+  maskConfidentialNetProfit?: boolean;
+  /** Jika true, hilangkan seluruh tag & kewajiban RCA pada Section A bagi karyawan non-Direktur */
+  suppressSectionARca?: boolean;
+  /** Snapshot bulan & sel Section A yang sudah Validated dari KPI Tracking Personal Direktur Operasional RSUP Group */
+  directorSectionATracking?: {
+    validatedMonths: Array<{ id: string; label: string }>;
+    validatedCellsByMonthLabel: Record<string, Record<string, string>>;
+  };
 }) {
   const sectionItems = (sec: string) => kpiItems.filter((k) => k.section === sec);
 
   const totalCols = 15 + months.length + 2 + (editable ? 1 : 0); // +1 for Total, +1 for Achievement
 
+  // Gabungkan nilai sel Section A yang sudah Validated dari Direktur Operasional RSUP Group untuk user non-Direktur
+  const effectiveCells = React.useMemo(() => {
+    if (!readOnlySectionA) return cells;
+    const merged: Record<string, Record<CellKey, string>> = {};
+    const secANos = new Set(
+      kpiItems.filter((k) => (k.section || "A").toUpperCase() === "A").map((k) => k.no),
+    );
+    for (const m of months) {
+      const baseMonth = { ...(cells[m.id] ?? {}) };
+      const dirValidatedForLabel = directorSectionATracking?.validatedCellsByMonthLabel?.[m.label];
+      for (const no of secANos) {
+        const kpiObj = kpiItems.find((x) => x.no === no);
+        if (!kpiObj) continue;
+        kpiObj.subRows.forEach((sub, si) => {
+          if (sub.compute) return;
+          const key = ck(no, si);
+          if (dirValidatedForLabel) {
+            if (dirValidatedForLabel[key] !== undefined) {
+              baseMonth[key] = dirValidatedForLabel[key];
+            } else if (sub.label.toLowerCase().startsWith("target")) {
+              baseMonth[key] = resolveKpiMonthTarget(kpiObj, m.label);
+            } else {
+              delete baseMonth[key];
+            }
+          } else {
+            // Bulan belum Validated pada KPI Tracking Direktur -> kosongkan aktual Section A
+            if (sub.label.toLowerCase().startsWith("target")) {
+              baseMonth[key] = resolveKpiMonthTarget(kpiObj, m.label);
+            } else {
+              delete baseMonth[key];
+            }
+          }
+        });
+      }
+      merged[m.id] = baseMonth;
+    }
+    return merged;
+  }, [cells, readOnlySectionA, months, kpiItems, directorSectionATracking]);
+
+  const directorValidatedMonthEntries: MonthEntry[] = React.useMemo(() => {
+    if (!readOnlySectionA || !directorSectionATracking) return [];
+    return directorSectionATracking.validatedMonths.map((vm) => ({
+      id: vm.id,
+      label: vm.label,
+      cells: directorSectionATracking.validatedCellsByMonthLabel[vm.label] ?? {},
+    }));
+  }, [readOnlySectionA, directorSectionATracking]);
+
+  const computeEffectiveKpiAchievement = (kpi: KPIItem): number | null => {
+    if (readOnlySectionA && (kpi.section || "A").toUpperCase() === "A") {
+      if (!directorSectionATracking || directorValidatedMonthEntries.length === 0) return null;
+      return computeKPIAchievement(kpi, directorSectionATracking.validatedCellsByMonthLabel, directorValidatedMonthEntries);
+    }
+    return computeKPIAchievement(kpi, effectiveCells, months);
+  };
+
+  const ConfidentialBadge = () => (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 lowercase tracking-wide select-none">
+      confidential
+    </span>
+  );
+
   const getCellDisplay = (kpi: KPIItem, monthId: string, subIdx: number): string => {
     const sub = kpi.subRows[subIdx];
     const monthObj = months.find((m) => m.id === monthId);
     const getRawWithTargetFallback = (idx: number) => {
-      const storedVal = cells[monthId]?.[ck(kpi.no, idx)] ?? "";
+      const storedVal = effectiveCells[monthId]?.[ck(kpi.no, idx)] ?? "";
       const sRow = kpi.subRows[idx];
       if (sRow && !sRow.compute && sRow.label.toLowerCase().startsWith("target") && !storedVal && monthObj) {
         return resolveKpiMonthTarget(kpi, monthObj.label);
@@ -3161,8 +3296,10 @@ function KPITable({
   };
 
   const renderSectionRows = (sec: string) =>
-    sectionItems(sec).map((kpi) =>
-      kpi.subRows.map((sub, si) => {
+    sectionItems(sec).map((kpi) => {
+      const isSecARow = (kpi.section || "A").toUpperCase() === "A";
+      const isMaskedConfidentialRow = Boolean(maskConfidentialNetProfit && isSectionANetProfitRow(kpi));
+      return kpi.subRows.map((sub, si) => {
         const isFirst = si === 0;
         const rs = kpi.subRows.length;
         const isComputed = !!sub.compute;
@@ -3191,7 +3328,9 @@ function KPITable({
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-600 leading-relaxed" style={{ minWidth: 220 }}>{kpi.definisi}</td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-600" style={{ minWidth: 155 }}>{kpi.source}</td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs text-gray-700 font-medium text-center" style={{ minWidth: 88 }}>
-                  {kpi.indicatorMode === "ratio" ? (
+                  {isMaskedConfidentialRow ? (
+                    <ConfidentialBadge />
+                  ) : kpi.indicatorMode === "ratio" ? (
                     <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">{kpi.baseline2025}</span>
                   ) : (kpi.colorIndicator || isKnownKpiColorBandValue(kpi.baseline2025)) ? (
                     (() => { const m = kpiBaselineColorMeta(kpi.baseline2025); return m ? (
@@ -3202,7 +3341,9 @@ function KPITable({
                   ) : kpi.baseline2025}
                 </td>
                 <td rowSpan={rs} className="border border-gray-200 align-top py-2 px-3 text-xs font-bold text-[#1A284F] text-center" style={{ minWidth: 88 }}>
-                  {kpi.indicatorMode === "ratio" ? (
+                  {isMaskedConfidentialRow ? (
+                    <ConfidentialBadge />
+                  ) : kpi.indicatorMode === "ratio" ? (
                     <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">{kpi.target2026}</span>
                   ) : (kpi.colorIndicator || isKnownKpiColorBandValue(kpi.target2026)) ? (
                     (() => { const m = kpiColorBandMeta(kpi.target2026); return m ? (
@@ -3241,8 +3382,21 @@ function KPITable({
 
             {/* Monthly cells */}
             {months.map((m) => {
+              if (isMaskedConfidentialRow) {
+                if (!isFirst) return null;
+                return (
+                  <td
+                    key={m.id}
+                    rowSpan={rs}
+                    className="border border-amber-200/70 bg-amber-50/35 text-center align-middle py-2 px-2 select-none"
+                    style={{ minWidth: 120 }}
+                    title="Data realisasi bulanan Net Profit bersifat rahasia (confidential) untuk level GM ke bawah."
+                  >
+                    <ConfidentialBadge />
+                  </td>
+                );
+              }
               const isBlockedMonthCell = isMonthBlockedForKpi(kpi, m.label);
-              const normKpiPeriod = normalizeTrackingPeriod(kpi.trackingPeriod, kpi.satuan);
               if (isBlockedMonthCell) {
                 const isTargetRowBlocked = !sub.compute && sub.label.toLowerCase().startsWith("target");
                 return (
@@ -3269,19 +3423,20 @@ function KPITable({
                 );
               }
               const val = getCellDisplay(kpi, m.id, si);
-              const isMthEditable = editable && m.id === editableMonthId;
+              const isLockedAutoSecA = Boolean(readOnlySectionA && isSecARow);
+              const isMthEditable = !isLockedAutoSecA && editable && m.id === editableMonthId;
               const isTargetRow = !sub.compute && sub.label.toLowerCase().startsWith("target");
-              const isApproved = !isComputed && !isTargetRow && (approvedEditCells?.has(`${kpi.no}::${m.id}`) ?? false);
+              const isApproved = !isLockedAutoSecA && !isComputed && !isTargetRow && (approvedEditCells?.has(`${kpi.no}::${m.id}`) ?? false);
               const isCellEditable = (isMthEditable && !isTargetRow) || isApproved;
               // Red bg for fillable cells that are still empty
               const isActualRow = !isComputed && !isTargetRow;
-              const cellVal = cells[m.id]?.[ck(kpi.no, si)] ?? "";
-              const isEmptyActual = isActualRow && !cellVal.trim();
+              const cellVal = effectiveCells[m.id]?.[ck(kpi.no, si)] ?? "";
+              const isEmptyActual = !isLockedAutoSecA && isActualRow && !cellVal.trim();
               return (
                 <td key={m.id} className={`border text-center text-xs py-1 px-1 ${
                   isEmptyActual
                     ? "bg-red-50 border-red-200"
-                    : isComputed ? "bg-emerald-50/80 border-gray-200" : isTargetRow ? "bg-sky-50/70 border-gray-200" : sub.bold ? "bg-green-50/60 border-gray-200" : "bg-green-50 border-gray-200"
+                    : isComputed ? "bg-emerald-50/80 border-gray-200" : isTargetRow ? "bg-sky-50/70 border-gray-200" : isLockedAutoSecA ? "bg-slate-50 border-gray-200" : sub.bold ? "bg-green-50/60 border-gray-200" : "bg-green-50 border-gray-200"
                 } ${isCellEditable ? "ring-1 ring-inset ring-blue-300" : ""}`} style={{ minWidth: 120 }}>
                   {kpi.colorIndicator && !isComputed && isTargetRow ? (
                     /* Target sub-row for color-indicator KPI: read-only colored badge */
@@ -3297,7 +3452,7 @@ function KPITable({
                   ) : kpi.colorIndicator && !isComputed ? (
                     /* Realisasi sub-row for color-indicator KPI: color select (only editable for last month) */
                     (() => {
-                      const cellVal = normalizeKpiColorBandValue(cells[m.id]?.[ck(kpi.no, si)] ?? "");
+                      const cellVal = normalizeKpiColorBandValue(effectiveCells[m.id]?.[ck(kpi.no, si)] ?? "");
                       const cm = kpiColorBandMeta(cellVal);
                       return isCellEditable ? (
                         <select
@@ -3323,10 +3478,11 @@ function KPITable({
                     <div className="flex flex-col items-center gap-1">
                       <span className={`font-bold ${getPctColor(val)}`}>{val || "—"}</span>
                       {(() => {
+                        if (suppressSectionARca && isSecARow) return null;
                         // Hide RCA tag on "% Pencapaian Total" (avg of multiple sub-rows)
                         if (sub.compute?.type === "avg") return null;
                         const getRawForCell = (idx: number) => {
-                          const cellVal = cells[m.id]?.[ck(kpi.no, idx)] ?? "";
+                          const cellVal = effectiveCells[m.id]?.[ck(kpi.no, idx)] ?? "";
                           const sRow = kpi.subRows[idx];
                           if (sRow && !sRow.compute && sRow.label.toLowerCase().startsWith("target") && !cellVal) {
                             return resolveKpiMonthTarget(kpi, m.label);
@@ -3417,7 +3573,7 @@ function KPITable({
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={cells[m.id]?.[ck(kpi.no, si)] ?? ""}
+                      value={effectiveCells[m.id]?.[ck(kpi.no, si)] ?? ""}
                       onChange={(e) => onCellChange?.(m.id, ck(kpi.no, si), sanitizeKpiNumericInput(e.target.value))}
                       placeholder="—"
                       className={`w-full text-center text-xs bg-transparent outline-none ${
@@ -3443,25 +3599,41 @@ function KPITable({
             })}
 
             {/* Total cell */}
-            <td className={`border border-gray-200 text-center text-xs py-1 px-2 ${
-              isComputed ? "bg-blue-50/80" : sub.bold ? "bg-blue-50/40" : "bg-blue-50/20"
-            }`} style={{ minWidth: 120 }}>
-              {(() => {
-                const total = computeTotal2026(kpi, si, cells, months);
-                const colorCls = isComputed || sub.bold
-                  ? getPctColor(total)
-                  : (total === "—" ? "text-gray-300" : "text-blue-800");
-                return (
-                  <span className={`${sub.bold ? "font-bold" : ""} ${colorCls}`}>
-                    {total}
-                  </span>
-                );
-              })()}
-            </td>
+            {isMaskedConfidentialRow ? (
+              isFirst ? (
+                <td
+                  rowSpan={rs}
+                  className="border border-amber-200/70 bg-amber-50/35 text-center align-middle py-2 px-2 select-none"
+                  style={{ minWidth: 120 }}
+                  title="Total 2026 Net Profit bersifat rahasia (confidential) untuk level GM ke bawah."
+                >
+                  <ConfidentialBadge />
+                </td>
+              ) : null
+            ) : (
+              <td className={`border border-gray-200 text-center text-xs py-1 px-2 ${
+                isComputed ? "bg-blue-50/80" : sub.bold ? "bg-blue-50/40" : "bg-blue-50/20"
+              }`} style={{ minWidth: 120 }}>
+                {(() => {
+                  const total =
+                    readOnlySectionA && isSecARow && directorSectionATracking
+                      ? computeTotal2026(kpi, si, directorSectionATracking.validatedCellsByMonthLabel, directorValidatedMonthEntries)
+                      : computeTotal2026(kpi, si, effectiveCells, months);
+                  const colorCls = isComputed || sub.bold
+                    ? getPctColor(total)
+                    : (total === "—" ? "text-gray-300" : "text-blue-800");
+                  return (
+                    <span className={`${sub.bold ? "font-bold" : ""} ${colorCls}`}>
+                      {total}
+                    </span>
+                  );
+                })()}
+              </td>
+            )}
 
             {/* Achievement cell — per KPI (rowSpan) */}
             {isFirst && (() => {
-              const ach = computeKPIAchievement(kpi, cells, months);
+              const ach = computeEffectiveKpiAchievement(kpi);
               const bobotDec = parseBobotDecimal(kpi.bobot);
               const cappedAch = ach !== null ? Math.min(ach, 100) : null;
               const score = cappedAch !== null ? (cappedAch / 100) * bobotDec * 100 : null;
@@ -3498,8 +3670,8 @@ function KPITable({
             {editable && !isFirst && null}
           </tr>
         );
-      })
-    );
+      });
+    });
 
   return (
     <DualScrollTableContainer className="rounded-xl border border-gray-200 shadow-sm bg-white">
@@ -3566,7 +3738,7 @@ function KPITable({
             // Pre-compute section scores for header rows
             const sectionScore = (sec: string) =>
               kpiItems.filter((k) => k.section === sec).reduce((s, k) => {
-                const ach = computeKPIAchievement(k, cells, months);
+                const ach = computeEffectiveKpiAchievement(k);
                 if (ach === null) return s;
                 return s + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
               }, 0);
@@ -3590,7 +3762,7 @@ function KPITable({
                   </div>
                 </td>
                 <td className="py-2 px-2 text-center border text-white text-xs font-bold" style={{ background: bg, borderColor: bg }}>
-                  {kpiItems.some((k) => k.section === sec && computeKPIAchievement(k, cells, months) !== null)
+                  {kpiItems.some((k) => k.section === sec && computeEffectiveKpiAchievement(k) !== null)
                     ? score.toFixed(2) + "%"
                     : "—"}
                 </td>
@@ -4505,6 +4677,11 @@ function KPIWorkspace({
   const groupName = getGroupNameForUnit(activeUser.company);
   const groupUnits = getGroupCompaniesForUnit(activeUser.company, activeUser.managedUnits);
   const businessScopeKey = isDirectorMode ? `group:${groupName}` : `unit:${activeUser.company}`;
+  const isRsupPersonalWorkspace = !isBusinessWorkspace && isRsupGroupCompanyUnit(activeUser.company);
+  const canActorTrackRsupSectionA = isRsupPersonalWorkspace && canEditOrTrackRsupSectionA(activeUser, actorUser, "measurement");
+  const readOnlyPersonalSectionA = isRsupPersonalWorkspace && !canActorTrackRsupSectionA;
+  const maskConfidentialNetProfit = isRsupPersonalWorkspace && !canViewerSeeConfidentialNetProfit(actorUser, "measurement");
+  const suppressPersonalSectionARca = isRsupPersonalWorkspace && !isRsupOperationalDirectorUser(activeUser);
 
   const [view, setView] = useState<PageView>(() => (isViewOnly ? "preview" : "input"));
   const [months, setMonths] = useState<MonthEntry[]>(() => loadKPITracking(activeUser.employeeId).months);
@@ -4664,6 +4841,7 @@ function KPIWorkspace({
     void Promise.all([
       fetchEmployeeWorkflowRecordsLive(activeUser.employeeId),
       fetchEmployeeKpiSettingsLive(activeUser.employeeId),
+      ...(isRsupGroupCompanyUnit(activeUser.company) ? [syncRsupDirectorSectionAFromBackend()] : []),
     ]).then(([remoteWf, remoteRows]) => {
       if (!cancelled && (remoteWf.length > 0 || remoteRows.length > 0)) {
         setWfRefreshTick((t) => t + 1);
@@ -4955,6 +5133,7 @@ function KPIWorkspace({
   };
 
   const openRCA = (kpi: KPIItem, monthId: string, subIdx?: number) => {
+    if (suppressPersonalSectionARca && (kpi.section || "A").toUpperCase() === "A") return;
     const month = months.find((m) => m.id === monthId);
     if (month && isMonthBlockedForKpi(kpi, month.label)) return;
     const mCells = { ...(month?.cells ?? {}), ...(cellsMap[monthId] ?? {}) };
@@ -5061,6 +5240,49 @@ function KPIWorkspace({
   const handleExport = () => {
     const targetList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
     const activeMap = isBusinessWorkspace ? businessCellsMap : cellsMap;
+    const dirValidatedSecA = readOnlyPersonalSectionA ? getRsupDirectorValidatedSectionATracking() : null;
+    const dirExportMonthEntries: MonthEntry[] = dirValidatedSecA
+      ? dirValidatedSecA.validatedMonths.map((vm) => ({
+          id: vm.id,
+          label: vm.label,
+          cells: dirValidatedSecA.validatedCellsByMonthLabel[vm.label] ?? {},
+        }))
+      : [];
+    const effectiveExportMap: Record<string, Record<CellKey, string>> = (() => {
+      if (!readOnlyPersonalSectionA || !dirValidatedSecA) return activeMap;
+      const secANos = new Set(targetList.filter((k) => (k.section || "A").toUpperCase() === "A").map((k) => k.no));
+      const out: Record<string, Record<CellKey, string>> = {};
+      const exportMonthPool: MonthEntry[] =
+        months.length > 0 ? months : [{ id: "jan26", label: "Jan-26", cells: {} }];
+      for (const m of exportMonthPool) {
+        const base = { ...(activeMap[m.id] ?? {}) };
+        const dirForLabel = dirValidatedSecA.validatedCellsByMonthLabel[m.label];
+        for (const no of secANos) {
+          const kObj = targetList.find((x) => x.no === no);
+          if (!kObj) continue;
+          kObj.subRows.forEach((sub, si) => {
+            if (sub.compute) return;
+            const key = ck(no, si);
+            if (dirForLabel && dirForLabel[key] !== undefined) {
+              base[key] = dirForLabel[key];
+            } else if (sub.label.toLowerCase().startsWith("target")) {
+              base[key] = resolveKpiMonthTarget(kObj, m.label);
+            } else {
+              delete base[key];
+            }
+          });
+        }
+        out[m.id] = base;
+      }
+      return out;
+    })();
+    const computeExportAch = (k: KPIItem, mList: MonthEntry[]) => {
+      if (readOnlyPersonalSectionA && (k.section || "A").toUpperCase() === "A") {
+        if (!dirValidatedSecA || dirExportMonthEntries.length === 0) return null;
+        return computeKPIAchievement(k, dirValidatedSecA.validatedCellsByMonthLabel, dirExportMonthEntries);
+      }
+      return computeKPIAchievement(k, effectiveExportMap, mList);
+    };
     // Bila belum ada bulan tracking ditambahkan, sediakan kolom bulan awal Jan-26 sebagai template pengisian
     const exportMonths: MonthEntry[] =
       months.length > 0 ? months : [{ id: "jan26", label: "Jan-26", cells: {} }];
@@ -5115,11 +5337,11 @@ function KPIWorkspace({
       const secBg = secPalette[sIdx % secPalette.length];
 
       const secScore = secKpis.reduce((acc, k) => {
-        const ach = computeKPIAchievement(k, activeMap, exportMonths);
+        const ach = computeExportAch(k, exportMonths);
         if (ach === null) return acc;
         return acc + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
       }, 0);
-      const hasAnyAch = secKpis.some((k) => computeKPIAchievement(k, activeMap, exportMonths) !== null);
+      const hasAnyAch = secKpis.some((k) => computeExportAch(k, exportMonths) !== null);
 
       const bannerIdx = rowsOut.length;
       const bannerCells: StyledExcelCell[] = Array.from({ length: totalColCount }, (_, ci) => ({
@@ -5133,16 +5355,19 @@ function KPIWorkspace({
       secKpis.forEach((kpi, kIdx) => {
         const startRow = rowsOut.length;
         const rs = kpi.subRows.length;
-        const ach = computeKPIAchievement(kpi, activeMap, exportMonths);
+        const ach = computeExportAch(kpi, exportMonths);
         const achStr = ach !== null ? `${ach.toFixed(2)}%` : "—";
         const pTrack = deriveTrackingPeriodeLabel(kpi.satuan, kpi.trackingPeriod);
+        const maskRowExport = Boolean(maskConfidentialNetProfit && isSectionANetProfitRow(kpi));
 
         kpi.subRows.forEach((sub, si) => {
           const isComp = Boolean(sub.compute);
           const rowBg = isComp ? "F1F5F9" : kIdx % 2 === 0 ? EXCEL_THEME.zebraEven : EXCEL_THEME.zebraOdd;
           const fixedVals = [
             kpi.no, kpi.perspektif, kpi.kpi, kpi.satuan, kpi.formula, kpi.bobot,
-            kpi.definisi, kpi.source, kpi.baseline2025, kpi.target2026,
+            kpi.definisi, kpi.source,
+            maskRowExport ? "confidential" : kpi.baseline2025,
+            maskRowExport ? "confidential" : kpi.target2026,
             kpi.polaritas, kpi.detailFormula, kpi.keterangan || "—", pTrack,
           ];
           const fixedCells: StyledExcelCell[] = fixedVals.map((val, fIdx) => ({
@@ -5156,19 +5381,33 @@ function KPIWorkspace({
           };
 
           const mCells: StyledExcelCell[] = exportMonths.map((m) => {
+            if (maskRowExport) {
+              return {
+                value: si === 0 ? "confidential" : "",
+                style: { bg: "FEF3C7", fg: "B45309", bold: true, align: "center", vAlign: "center" },
+              };
+            }
             const val = isComp
-              ? computeCell(kpi.subRows, (idx) => activeMap[m.id]?.[ck(kpi.no, idx)] ?? "", si, kpi.polaritas)
-              : (activeMap[m.id]?.[ck(kpi.no, si)] ?? (sub.label.toLowerCase().startsWith("target") ? (kpi.monthlyTargets?.[m.label] ?? kpi.target2026 ?? "") : ""));
+              ? computeCell(kpi.subRows, (idx) => effectiveExportMap[m.id]?.[ck(kpi.no, idx)] ?? "", si, kpi.polaritas)
+              : (effectiveExportMap[m.id]?.[ck(kpi.no, si)] ?? (sub.label.toLowerCase().startsWith("target") ? (kpi.monthlyTargets?.[m.label] ?? kpi.target2026 ?? "") : ""));
             return {
               value: val,
               style: isComp ? inferSystemCellStyle("Achievement", val, kIdx) : { bg: rowBg, fg: EXCEL_THEME.textDark, align: "center" },
             };
           });
 
-          const totalVal = computeTotal2026(kpi, si, activeMap, exportMonths);
+          const totalVal = maskRowExport
+            ? (si === 0 ? "confidential" : "")
+            : readOnlyPersonalSectionA && (kpi.section || "A").toUpperCase() === "A" && dirValidatedSecA
+            ? computeTotal2026(kpi, si, dirValidatedSecA.validatedCellsByMonthLabel, dirExportMonthEntries)
+            : computeTotal2026(kpi, si, effectiveExportMap, exportMonths);
           const totalCell: StyledExcelCell = {
             value: totalVal,
-            style: isComp ? inferSystemCellStyle("Achievement", totalVal, kIdx) : { bg: rowBg, fg: EXCEL_THEME.headerNavyBg, bold: true, align: "center" },
+            style: maskRowExport
+              ? { bg: "FEF3C7", fg: "B45309", bold: true, align: "center", vAlign: "center" }
+              : isComp
+              ? inferSystemCellStyle("Achievement", totalVal, kIdx)
+              : { bg: rowBg, fg: EXCEL_THEME.headerNavyBg, bold: true, align: "center" },
           };
           const achCell: StyledExcelCell = {
             value: si === 0 ? achStr : "",
@@ -5183,6 +5422,12 @@ function KPIWorkspace({
         if (rs > 1) {
           for (let ci = 0; ci < 14; ci++) {
             merges.push({ sRow: startRow, sCol: ci, eRow: startRow + rs - 1, eCol: ci });
+          }
+          if (maskRowExport) {
+            for (let mIdx = 0; mIdx < exportMonths.length + 1; mIdx++) {
+              const colIdx = 15 + mIdx;
+              merges.push({ sRow: startRow, sCol: colIdx, eRow: startRow + rs - 1, eCol: colIdx });
+            }
           }
           merges.push({ sRow: startRow, sCol: totalColCount - 1, eRow: startRow + rs - 1, eCol: totalColCount - 1 });
         }
@@ -5280,6 +5525,7 @@ function KPIWorkspace({
 
         const subDef = kpiObj.subRows[si];
         if (!subDef || subDef.compute) continue; // baris % Pencapaian dihitung otomatis
+        if (readOnlyPersonalSectionA && (kpiObj.section || "A").toUpperCase() === "A") continue; // Section A hanya di-track oleh Direktur Operasional RSUP Group
 
         rawMonthCols.forEach((rawM, li) => {
           const normLbl = normalizeImportedMonthLabel(rawM);
@@ -5434,6 +5680,7 @@ function KPIWorkspace({
     for (const m of months) {
       if (validatedMonthLabels.has(m.label)) continue;
       for (const kpi of (isBusinessWorkspace ? businessTrackingItems : trackingKpiItems)) {
+        if (suppressPersonalSectionARca && (kpi.section || "A").toUpperCase() === "A") continue;
         if (isMonthBlockedForKpi(kpi, m.label)) continue;
         kpi.subRows.forEach((sub, si) => {
           if (!sub.compute || sub.compute.type === "avg") return;
@@ -5486,6 +5733,7 @@ function KPIWorkspace({
         const targetList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
         const activeMap = isBusinessWorkspace ? (businessCellsMap[m.id] ?? {}) : mCells;
         for (const kpi of targetList) {
+          if (readOnlyPersonalSectionA && (kpi.section || "A").toUpperCase() === "A") continue;
           if (isMonthBlockedForKpi(kpi, m.label)) continue;
           monthHasActiveKpi = true;
           for (let si = 0; si < kpi.subRows.length; si++) {
@@ -6054,6 +6302,9 @@ function KPIWorkspace({
 
       {(() => {
         const activeTrackingList = isBusinessWorkspace ? businessTrackingItems : trackingKpiItems;
+        const directorValidatedSectionA = readOnlyPersonalSectionA
+          ? getRsupDirectorValidatedSectionATracking()
+          : undefined;
         const totalTrackingBobot = activeTrackingList.reduce(
           (sum, k) => sum + (parseFloat(String(k.bobot ?? "").replace("%", "")) || 0),
           0,
@@ -6158,6 +6409,10 @@ function KPIWorkspace({
               storedRCAStatus={storedRCAStatus}
               approvedEditCells={approvedEditCells}
               highlightMissingRca={highlightRca}
+              readOnlySectionA={readOnlyPersonalSectionA}
+              maskConfidentialNetProfit={maskConfidentialNetProfit}
+              suppressSectionARca={suppressPersonalSectionARca}
+              directorSectionATracking={directorValidatedSectionA}
             />
           </div>
         );
@@ -6270,6 +6525,8 @@ function KPIWorkspace({
           allowedLabels={kpiModuleScheduleEval.allowedMonthLabels}
           lockedReasonByLabel={kpiModuleScheduleEval.lockedReasonByLabel}
           kpiItems={isBusinessWorkspace ? businessTrackingItems : trackingKpiItems}
+          readOnlySectionA={readOnlyPersonalSectionA}
+          maskConfidentialNetProfit={maskConfidentialNetProfit}
           onAdd={addMonth}
           onClose={() => setShowAddModal(false)}
         />
@@ -6684,17 +6941,28 @@ export function toIdShortPeriode(monthLabel: string): string {
  * yang memiliki tag RCA (nilai pencapaian < 100%).
  */
 export function getKpiTrackingRcaCandidates(employeeId?: string): KPITrackingRCACandidate[] {
-  const snap = loadKPITracking(employeeId);
+  const resolvedEmpId = employeeId ?? getActiveUser().employeeId;
+  const normEmp = normalizeEmployeeId(resolvedEmpId);
+  const ownerUser = loadManagedUsers().find(
+    (u) =>
+      normalizeEmployeeId(u.employeeId) === normEmp ||
+      u.employeeId.trim().toLowerCase() === resolvedEmpId.trim().toLowerCase(),
+  );
+  const skipSectionARcaForOwner = Boolean(
+    ownerUser && isRsupGroupCompanyUnit(ownerUser.company) && !isRsupOperationalDirectorUser(ownerUser),
+  );
+  const snap = loadKPITracking(resolvedEmpId);
   const monthsList = Array.isArray(snap.months) ? snap.months : [];
   if (monthsList.length === 0) return [];
   const map = snap.cellsMap ?? {};
   const results: KPITrackingRCACandidate[] = [];
   const seen = new Set<string>();
 
-  const candidateKpis = resolveEmployeeTrackingKpiItems(employeeId ?? getActiveUser().employeeId);
+  const candidateKpis = resolveEmployeeTrackingKpiItems(resolvedEmpId);
   for (const m of monthsList) {
     const mCells = { ...(m.cells ?? {}), ...(map[m.id] ?? {}) };
     for (const kpi of candidateKpis) {
+      if (skipSectionARcaForOwner && (kpi.section || "A").toUpperCase() === "A") continue;
       if (isMonthBlockedForKpi(kpi, m.label)) continue;
       for (let si = 0; si < kpi.subRows.length; si++) {
         const sub = kpi.subRows[si];

@@ -18,8 +18,14 @@ import {
 import { FORMS } from "../pages/employee/AppraisalForm";
 import { MS_ITEMS } from "../pages/supervisor/ManagerialSkillCheckIn";
 import { KPI_ITEMS as FULL_KPI_ITEMS } from "../pages/employee/KPIPage";
-import { loadManagedUsers, resolveEffectiveUserGrouping, type ManagedUser } from "../store/authStore";
+import { getActiveUser, loadManagedUsers, resolveEffectiveUserGrouping, type ManagedUser } from "../store/authStore";
 import { normalizeDateDDMMYYYY } from "../utils/dateFormat";
+import {
+  canViewerSeeConfidentialNetProfit,
+  enforceRsupPersonalSectionA,
+  isRsupGroupCompanyUnit,
+  isSectionANetProfitRow,
+} from "../store/rsupPersonalSectionAStore";
 
 // ── Extra sample goals for non-EMP002 employees ───────────────────────────────
 
@@ -746,6 +752,15 @@ function triggerAttachmentFileDownload(url: string, fileName: string) {
 }
 
 function KPIContent({ employeeId }: { employeeId: string }) {
+  const viewerUser = getActiveUser();
+  const ownerUserObj = loadManagedUsers().find(
+    (u) =>
+      u.employeeId.trim().toLowerCase() === employeeId.trim().toLowerCase() ||
+      normalizeEmployeeId(u.employeeId) === normalizeEmployeeId(employeeId),
+  );
+  const isOwnerRsup = Boolean(ownerUserObj && isRsupGroupCompanyUnit(ownerUserObj.company));
+  const maskConfNetProfit = isOwnerRsup && !canViewerSeeConfidentialNetProfit(viewerUser, "setting");
+
   const readLocalOwnerKpiItems = (): StoredOwnerKpiItem[] => {
     try {
       const candidates = buildEmployeeIdMatchSet(employeeId);
@@ -754,12 +769,14 @@ function KPIContent({ employeeId }: { employeeId: string }) {
       const map = raw ? (JSON.parse(raw) as Record<string, StoredOwnerKpiItem[]>) : {};
       for (const key of candidates) {
         const stored = map[key];
-        if (Array.isArray(stored) && stored.length > 0) return stored;
+        if (Array.isArray(stored) && stored.length > 0) {
+          return isOwnerRsup ? enforceRsupPersonalSectionA(stored, ownerUserObj) : stored;
+        }
       }
       const lowerCandidates = new Set(Array.from(candidates).map((c) => c.toLowerCase()));
       for (const [k, v] of Object.entries(map)) {
         if (lowerCandidates.has(k.toLowerCase()) && Array.isArray(v) && v.length > 0) {
-          return v;
+          return isOwnerRsup ? enforceRsupPersonalSectionA(v, ownerUserObj) : v;
         }
       }
     } catch {
@@ -978,10 +995,26 @@ function KPIContent({ employeeId }: { employeeId: string }) {
                         <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 leading-relaxed whitespace-pre-line">{kpi.definisi || "—"}</td>
                         <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600">{kpi.source || "—"}</td>
                         <td className="border border-gray-200 py-3 px-3 text-center text-xs font-medium text-gray-700">
-                          {(isColorMode || isKnownKpiColorBandValue(kpi.baseline2025)) ? <OwnerColorValueBadge value={kpi.baseline2025} isBaseline /> : (kpi.baseline2025 || "—")}
+                          {maskConfNetProfit && isSectionANetProfitRow(kpi) ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold select-none">
+                              confidential
+                            </span>
+                          ) : (isColorMode || isKnownKpiColorBandValue(kpi.baseline2025)) ? (
+                            <OwnerColorValueBadge value={kpi.baseline2025} isBaseline />
+                          ) : (
+                            kpi.baseline2025 || "—"
+                          )}
                         </td>
                         <td className="border border-gray-200 py-3 px-3 text-center text-xs font-bold text-[#1A284F]">
-                          {(isColorMode || isKnownKpiColorBandValue(kpi.target2026)) ? <OwnerColorValueBadge value={kpi.target2026} /> : (kpi.target2026 || "—")}
+                          {maskConfNetProfit && isSectionANetProfitRow(kpi) ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold select-none">
+                              confidential
+                            </span>
+                          ) : (isColorMode || isKnownKpiColorBandValue(kpi.target2026)) ? (
+                            <OwnerColorValueBadge value={kpi.target2026} />
+                          ) : (
+                            kpi.target2026 || "—"
+                          )}
                         </td>
                         <td className="border border-gray-200 py-3 px-2 text-center">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : kpi.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>

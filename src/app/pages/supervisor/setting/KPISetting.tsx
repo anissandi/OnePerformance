@@ -10,6 +10,15 @@ import {
   type MasterKpiStore,
 } from "../../hr/settings/masterKpiStore";
 import {
+  canEditOrTrackRsupSectionA,
+  canViewerSeeConfidentialNetProfit,
+  enforceRsupPersonalSectionA,
+  isRsupGroupCompanyUnit,
+  isRsupOperationalDirectorUser,
+  isSectionANetProfitRow,
+  syncRsupDirectorSectionAFromBackend,
+} from "../../../store/rsupPersonalSectionAStore";
+import {
   findAllKpiBusinessCheckerUsers,
   getActiveUser,
   getGroupCompaniesForUnit,
@@ -4106,15 +4115,33 @@ export function AddKPIModal({
     const code = SECTION_LABEL_TO_CODE[lbl] || String.fromCharCode("A".charCodeAt(0) + idx);
     return { value: code, label: `${code} — ${lbl}` };
   });
-  const firstPersonal = dynamicPersonalSections[0] ?? { value: "A", label: "A — Objective KPI", bobot: "20%" };
+  const isRsupPersonalLockA = !forDivision && isRsupGroupCompanyUnit(targetOwner.company);
+  const defaultPersonalSectionOpt = isRsupPersonalLockA
+    ? (dynamicPersonalSections.find((s) => s.value === "B") ?? {
+        value: "B",
+        label: "B — Functional KPI",
+        bobot: "80%",
+      })
+    : (dynamicPersonalSections[0] ?? { value: "A", label: "A — Objective KPI", bobot: "20%" });
   const firstDivision = dynamicDivisionSections[0] ?? { value: "A", label: "A — K3L Terintegrasi (SMK3/HSE)" };
+  const existingBSectionRow = !forDivision ? existingItems.find((i) => i.section === defaultPersonalSectionOpt.value) : undefined;
+  const initialPersonalBobot = (() => {
+    if (forDivision) return "";
+    if (existingBSectionRow) {
+      const lim = resolveEffectiveSectionBobotNum(existingItems, defaultPersonalSectionOpt.value, false);
+      return `${formatPctNum(lim)}%`;
+    }
+    const usedOthers = calcAllSectionsBobotSum(existingItems, false, undefined, defaultPersonalSectionOpt.value);
+    const rem = Math.max(0, Math.round((100 - usedOthers) * 100) / 100);
+    return rem > 0 ? `${formatPctNum(rem)}%` : defaultPersonalSectionOpt.bobot;
+  })();
   const [tab, setTab] = useState<"section" | "subsection">("section");
   const [form, setForm] = useState<Omit<KPISetting, "id">>({
     no: "",
-    sectionAlphabet: `${forDivision ? firstDivision.value : firstPersonal.value}.`,
-    section: forDivision ? firstDivision.value : firstPersonal.value,
-    sectionLabel: (forDivision ? firstDivision.label : firstPersonal.label).replace(/^[A-Z]+\s*—\s*/, ""),
-    sectionBobot: forDivision ? "" : firstPersonal.bobot,
+    sectionAlphabet: `${forDivision ? firstDivision.value : defaultPersonalSectionOpt.value}.`,
+    section: forDivision ? firstDivision.value : defaultPersonalSectionOpt.value,
+    sectionLabel: (forDivision ? firstDivision.label : defaultPersonalSectionOpt.label).replace(/^[A-Z]+\s*—\s*/, ""),
+    sectionBobot: forDivision ? "" : initialPersonalBobot,
     perspektif: "Proses", kpi: "", satuan: "", formula: "Jumlah",
     bobot: "", definisi: "", source: "", baseline2025: "", target2026: "", polaritas: "Maximize",
     detailFormula: "", keterangan: "", monthlyTargets: {}, colorIndicator: false, indicatorMode: "numeric",
@@ -4228,8 +4255,12 @@ export function AddKPIModal({
   };
 
   const setSection = (code: string) => {
+    if (isRsupPersonalLockA && code === "A") {
+      return;
+    }
     if (code === "__manual__") {
       const used = new Set(existingItems.map((i) => i.section));
+      if (isRsupPersonalLockA) used.add("A");
       const nextCode = SECTION_LETTERS.find((l) => !used.has(l)) ?? "Z";
       const st = computeSectionStateForCode(nextCode);
       setManualSection(true);
@@ -4418,7 +4449,13 @@ export function AddKPIModal({
   // Sinkronkan section awal saat modal dibuka agar status read-only & sisa kuota langsung akurat
   useEffect(() => {
     if (existingItems.length > 0) {
-      const sortedSecs = Array.from(new Set(existingItems.map((i) => i.section))).sort();
+      const sortedSecs = Array.from(new Set(existingItems.map((i) => i.section)))
+        .filter((sec) => !(isRsupPersonalLockA && sec === "A"))
+        .sort();
+      if (sortedSecs.length === 0) {
+        setSection(forDivision ? firstDivision.value : defaultPersonalSectionOpt.value);
+        return;
+      }
       // Utamakan section yang kuota sub-section-nya masih belum penuh, atau section pertama
       const openSec = sortedSecs.find((sec) => {
         const lim = resolveEffectiveSectionBobotNum(existingItems, sec, Boolean(forDivision));
@@ -4427,7 +4464,7 @@ export function AddKPIModal({
       });
       setSection(openSec ?? sortedSecs[0]);
     } else {
-      setSection(forDivision ? firstDivision.value : firstPersonal.value);
+      setSection(forDivision ? firstDivision.value : defaultPersonalSectionOpt.value);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -4523,9 +4560,14 @@ export function AddKPIModal({
             <>
               <Field label="Section">
                 <select value={manualSection ? "__manual__" : form.section} onChange={(e) => setSection(e.target.value)} className={inputCls}>
-                  {sectionOptions.map(({ value, label }) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
+                  {sectionOptions.map(({ value, label }) => {
+                    const disabledOpt = isRsupPersonalLockA && value === "A";
+                    return (
+                      <option key={value} value={value} disabled={disabledOpt}>
+                        {disabledOpt ? `${label} (20% · Default Terkunci)` : label}
+                      </option>
+                    );
+                  })}
                   <option value="__manual__">+ Tambah Section Manual…</option>
                 </select>
                 {manualSection && (
@@ -4546,7 +4588,11 @@ export function AddKPIModal({
                       className={inputCls}
                       aria-label="Kode Section"
                     >
-                      {SECTION_LETTERS.filter((l) => !existingItems.some((i) => i.section === l) || l === form.section).map((l) => (
+                      {SECTION_LETTERS.filter(
+                        (l) =>
+                          !(isRsupPersonalLockA && l === "A") &&
+                          (!existingItems.some((i) => i.section === l) || l === form.section),
+                      ).map((l) => (
                         <option key={l} value={l}>{l}</option>
                       ))}
                     </select>
@@ -6906,7 +6952,21 @@ function GlobalEditUnsavedModal({
   );
 }
 
-export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBatchUpdateItems, hideCascading = false, onRenameSection, onUpdateSectionMeta, displayControls, toolbarRightExtra }: {
+export function KPISettingTable({
+  items,
+  editable,
+  onDelete,
+  onUpdateItem,
+  onBatchUpdateItems,
+  hideCascading = false,
+  onRenameSection,
+  onUpdateSectionMeta,
+  displayControls,
+  toolbarRightExtra,
+  lockSectionADefault = false,
+  directorSectionATargetOnly = false,
+  maskConfidentialNetProfit = false,
+}: {
   items: KPISetting[]; editable: boolean;
   onRenameSection?: (oldSec: string, newSec: string) => void;
   onUpdateSectionMeta?: (sec: string, patch: { sectionLabel?: string; sectionBobot?: string }) => void;
@@ -6916,6 +6976,9 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
   hideCascading?: boolean;
   displayControls?: React.ReactNode;
   toolbarRightExtra?: React.ReactNode;
+  lockSectionADefault?: boolean;
+  directorSectionATargetOnly?: boolean;
+  maskConfidentialNetProfit?: boolean;
 }) {
   const master = useMasterKpi();
   const tablePerspektifOpts = master.perspektif?.length ? master.perspektif : PERSPEKTIF_OPTIONS;
@@ -7110,13 +7173,17 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
 
   const renderRows = (sec: string) =>
     secItems(sec).map((item, rowIdx) => {
-      const isEditing = globalEdit || editingId === item.id;
+      const isLockedDefaultSecA = lockSectionADefault && sec === "A";
+      const isDirectorSecATargetOnly = !isLockedDefaultSecA && directorSectionATargetOnly && sec === "A";
+      const isConfidentialNetProfit = maskConfidentialNetProfit && isSectionANetProfitRow(item);
+      const isEditing = !isLockedDefaultSecA && (globalEdit || editingId === item.id);
+      const isFullFieldEditing = isEditing && !isDirectorSecATargetOnly;
       const row = globalEdit ? (globalDrafts[item.id] ?? item) : (editingId === item.id && draft ? draft : item);
       const duplicateNoIds = findDuplicateKpiNoIds(activeDisplayItems);
       const isDuplicateNo = duplicateNoIds.has(item.id);
       const duplicateKpiIds = findDuplicateKpiTitleIds(activeDisplayItems);
       const isDuplicateKpi = duplicateKpiIds.has(item.id);
-      const formatIssues = validateKpiRowStandard(row, master);
+      const formatIssues = (isLockedDefaultSecA || isDirectorSecATargetOnly) ? [] : validateKpiRowStandard(row, master);
       const hasFormatIssue = formatIssues.length > 0;
       const hasRowRedAlert = hasFormatIssue || isDuplicateKpi || isDuplicateNo;
       const stickyBg = hasRowRedAlert ? "#fff1f2" : isEditing ? "#f0f7ff" : rowIdx % 2 === 0 ? "#ffffff" : "#f8fafc";
@@ -7133,8 +7200,10 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
       );
       const setD = (patch: Partial<KPISetting>) => setRowPatch(item.id, patch);
       const secIdx = sections.indexOf(sec);
-      const canMoveUp = rowIdx > 0 || secIdx > 0;
-      const canMoveDown = rowIdx < secItems(sec).length - 1 || secIdx < sections.length - 1;
+      const prevSecCode = secIdx > 0 ? sections[secIdx - 1] : null;
+      const prevSecLocked = Boolean(prevSecCode === "A" && (lockSectionADefault || directorSectionATargetOnly));
+      const canMoveUp = !isLockedDefaultSecA && !isDirectorSecATargetOnly && (rowIdx > 0 || (secIdx > 0 && !prevSecLocked));
+      const canMoveDown = !isLockedDefaultSecA && !isDirectorSecATargetOnly && (rowIdx < secItems(sec).length - 1 || secIdx < sections.length - 1);
       return (
         <tr
           key={item.id}
@@ -7155,9 +7224,17 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
               className="border border-gray-200 py-3 px-2 text-center"
               style={{ position: "sticky", left: 0, zIndex: 13, background: stickyBg, minWidth: W_AKSI, maxWidth: W_AKSI }}
             >
-              {globalEdit ? (
+              {isLockedDefaultSecA ? (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 text-[10px] font-semibold select-none"
+                  title="Section A Objective KPI merupakan template default RSUP Group (Read-only)"
+                >
+                  <Lock className="w-2.5 h-2.5 shrink-0" />
+                  Default
+                </span>
+              ) : globalEdit ? (
                 <div className="flex items-center justify-center">
-                  {onDelete && (
+                  {onDelete && !isDirectorSecATargetOnly && (
                     <button type="button" onClick={() => setDeleteConfirmItem(item)} className="p-1.5 rounded-lg hover:bg-rose-100 text-rose-500 hover:text-rose-700 transition-colors" title="Hapus KPI">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -7170,7 +7247,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                 </div>
               ) : (
                 <div className="flex items-center justify-center gap-0.5">
-                  {onBatchUpdateItems && (
+                  {onBatchUpdateItems && !isDirectorSecATargetOnly && (
                     <>
                       <button
                         type="button"
@@ -7215,7 +7292,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                       <Edit3 className="w-3.5 h-3.5" />
                     </button>
                   )}
-                  {onDelete && (
+                  {onDelete && !isDirectorSecATargetOnly && (
                     <button type="button" onClick={() => setDeleteConfirmItem(item)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600" title="Hapus KPI">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -7227,7 +7304,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           {/* No */}
           <td className={`border text-center text-xs font-semibold py-3 px-1.5 ${isDuplicateNo ? "border-rose-300 bg-rose-50/95 text-rose-800" : "border-gray-200 text-gray-600"}`}
             style={{ position: "sticky", left: leftActionOffset, zIndex: 12, background: isDuplicateNo ? "#ffe4e6" : stickyBg, minWidth: W_NO, maxWidth: W_NO }}>
-            {isEditing
+            {isFullFieldEditing
               ? <input value={row.no} onChange={(e) => setD({ no: e.target.value })} className={ci + " text-center font-bold"} />
               : item.no}
             {isDuplicateNo && (
@@ -7239,7 +7316,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           {/* Perspektif */}
           <td className="border border-gray-200 py-3 px-3"
             style={{ position: "sticky", left: leftActionOffset + W_NO, zIndex: 12, background: stickyBg, minWidth: W_PERSP, maxWidth: W_PERSP }}>
-            {isEditing
+            {isFullFieldEditing
               ? <select value={row.perspektif} onChange={(e) => setD({ perspektif: e.target.value })} className={ci}>
                   <option value="">— Pilih Perspektif —</option>
                   {tablePerspektifOpts.map((p) => <option key={p}>{p}</option>)}
@@ -7249,7 +7326,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           {/* KPI */}
           <td className={`border py-3 px-3 ${isDuplicateKpi ? "border-rose-300 bg-rose-50/95" : "border-gray-200"}`}
             style={{ position: "sticky", left: leftActionOffset + W_NO + W_PERSP, zIndex: 12, background: isDuplicateKpi ? "#ffe4e6" : stickyBg, minWidth: W_KPI, maxWidth: W_KPI, boxShadow: "2px 0 5px -2px rgba(15,23,42,0.12)" }}>
-            {isEditing
+            {isFullFieldEditing
               ? (item._cascadeType === "FC" || item._cascadeType === "PC")
                 ? <div className="flex flex-col gap-1">
                     <p className="text-xs font-medium text-gray-600 whitespace-pre-line leading-relaxed bg-gray-100 rounded px-2 py-1.5 select-none">{row.kpi}</p>
@@ -7270,7 +7347,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           </td>
           {/* Satuan */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600" style={{ minWidth: 180 }}>
-            {isEditing
+            {isFullFieldEditing
               ? (() => {
                   const sep = row.satuan.indexOf("/");
                   const unit = sep >= 0 ? row.satuan.slice(0, sep).trim() : row.satuan.trim();
@@ -7293,7 +7370,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           </td>
           {/* Formula Setahun */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 100 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <select value={row.formula} onChange={(e) => setD({ formula: e.target.value })} className={ci}>
                   <option value="">— Formula —</option>
                   {tableFormulaOpts.map((f) => <option key={f}>{f}</option>)}
@@ -7302,11 +7379,11 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           </td>
           {/* Bobot */}
           <td className={`border py-3 px-2 text-center ${isBobotOverflow ? "border-rose-400 bg-rose-50/95" : "border-gray-200"}`} style={{ minWidth: 96 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <select value={row.bobot} onChange={(e) => setD({ bobot: e.target.value })} className={`${ci} ${isBobotOverflow ? "border-rose-500 bg-rose-50 text-rose-700 font-bold" : ""}`}>
                   {rowSubBobotOpts.map((b) => <option key={b} value={b}>{b}</option>)}
                 </select>
-              : editable && onUpdateItem && item._cascadeType !== "FC"
+              : editable && onUpdateItem && item._cascadeType !== "FC" && !isLockedDefaultSecA && !isDirectorSecATargetOnly
               ? <select
                   value={item.bobot}
                   title={`Pilih bobot Sub Section (Maks. sisa Section ${sec}: ${formatPctNum(maxAllowedSubBobot)}%)`}
@@ -7330,19 +7407,23 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           </td>
           {/* Definisi */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 leading-relaxed" style={{ minWidth: 240 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <textarea rows={3} value={row.definisi} onChange={(e) => setD({ definisi: e.target.value })} className={ci} />
               : item.definisi}
           </td>
           {/* Source */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600" style={{ minWidth: 160 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <input value={row.source} onChange={(e) => setD({ source: e.target.value })} className={ci} />
               : item.source}
           </td>
           {/* Baseline 2025 */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-700 font-medium text-center" style={{ minWidth: 96 }}>
-            {isEditing
+            {isConfidentialNetProfit ? (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold select-none">
+                confidential
+              </span>
+            ) : isEditing
               ? (row.colorIndicator || row.indicatorMode === "color")
                 ? (
                   <select
@@ -7364,13 +7445,17 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           {/* Target 2026 */}
           <td
             className={`border py-3 px-2 text-xs font-bold text-[#1A284F] text-center ${
-              !String((isEditing ? row.target2026 : item.target2026) ?? "").trim()
+              !isConfidentialNetProfit && !String((isEditing ? row.target2026 : item.target2026) ?? "").trim()
                 ? "border-yellow-300 bg-yellow-50/85"
                 : "border-gray-200"
             }`}
             style={{ minWidth: 96 }}
           >
-            {isEditing
+            {isConfidentialNetProfit ? (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold select-none">
+                confidential
+              </span>
+            ) : isEditing
               ? <button
                   onClick={() => setTargetEditItem({ ...row })}
                   className={`w-full flex items-center justify-between gap-1 px-2 py-1.5 rounded border transition-colors ${
@@ -7390,7 +7475,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           </td>
           {/* Polaritas */}
           <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 96 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <select value={row.polaritas} onChange={(e) => setD({ polaritas: e.target.value as Polaritas })} className={ci}>
                   <option value="">— Polaritas —</option>
                   {tablePolaritasOpts.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
@@ -7401,19 +7486,19 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           </td>
           {/* Detail Formula */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed" style={{ minWidth: 260 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <textarea rows={3} value={row.detailFormula} onChange={(e) => setD({ detailFormula: e.target.value })} className={ci} />
               : item.detailFormula}
           </td>
           {/* Keterangan */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 whitespace-pre-line leading-relaxed" style={{ minWidth: 180 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <textarea rows={3} value={row.keterangan ?? ""} onChange={(e) => setD({ keterangan: e.target.value })} className={ci} />
               : item.keterangan || "—"}
           </td>
           {/* Periode Tracking (otomatis dari Satuan / Periode) */}
           <td className="border border-gray-200 py-3 px-3 text-xs text-gray-600 text-center" style={{ minWidth: 120 }}>
-            {isEditing ? (
+            {isFullFieldEditing ? (
               <select
                 value={normalizeTrackingPeriod(row.trackingPeriod, row.satuan)}
                 onChange={(e) => {
@@ -7447,7 +7532,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
           {/* CASCADING */}
           {!hideCascading && (
           <td className="border border-gray-200 py-3 px-2 text-center" style={{ minWidth: 100 }}>
-            {isEditing
+            {isFullFieldEditing
               ? <select value={row.cascading ?? ""} onChange={(e) => setD({ cascading: e.target.value })} className={ci}>
                   <option value="">—</option>
                   <option value="FC">FC</option>
@@ -7565,6 +7650,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
               currentSubSum === 0,
             );
             const isEditingThisSection = editingSection === sec;
+            const isSecHeaderLocked = (lockSectionADefault || directorSectionATargetOnly) && sec === "A";
             const commitRenameSectionLabel = () => {
               const nextName = editingSectionDraftName.trim();
               if (nextName) {
@@ -7581,14 +7667,16 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                       className="px-4 py-2 inline-flex items-center gap-2.5 flex-wrap"
                       style={{ position: "sticky", left: 0, zIndex: 15, background: bg }}
                     >
-                      {editable && onRenameSection ? (
+                      {editable && onRenameSection && !isSecHeaderLocked ? (
                         <select
                           value={sec}
                           onChange={(e) => onRenameSection(sec, e.target.value)}
                           title="Ubah urutan kode section (mis. Section C menjadi Section D)"
                           className="text-[11px] font-bold bg-white/20 text-white border border-white/30 rounded px-1.5 py-0.5 outline-none cursor-pointer"
                         >
-                          {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2)).map((l) => (
+                          {SECTION_LETTERS.slice(0, Math.max(10, sections.length + 2))
+                            .filter((l) => !((lockSectionADefault || directorSectionATargetOnly) && l === "A"))
+                            .map((l) => (
                             <option key={l} value={l} style={{ color: "#1A284F", background: "#fff" }}>{l}.</option>
                           ))}
                         </select>
@@ -7596,7 +7684,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                         <span className="text-white text-xs font-bold uppercase tracking-wider">{sec}.</span>
                       )}
 
-                      {editable && isEditingThisSection ? (
+                      {editable && isEditingThisSection && !isSecHeaderLocked ? (
                         <span className="inline-flex items-center gap-1.5">
                           <input
                             autoFocus
@@ -7627,7 +7715,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                       ) : (
                         <span className="inline-flex items-center gap-1.5">
                           <span className="text-white text-xs font-bold uppercase tracking-wider">{pureSecName}</span>
-                          {editable && (onUpdateSectionMeta || onUpdateItem) && (
+                          {editable && !isSecHeaderLocked && (onUpdateSectionMeta || onUpdateItem) && (
                             <button
                               type="button"
                               onClick={() => {
@@ -7645,7 +7733,7 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
 
                       <span className="inline-flex items-center gap-1.5 text-white/90 text-[11px] font-semibold">
                         <span>— Bobot</span>
-                        {editable && onUpdateSectionMeta ? (
+                        {editable && onUpdateSectionMeta && !isSecHeaderLocked ? (
                           <select
                             value={secBobotStr}
                             title={`Pilih bobot Section ${sec} (Min. isi Sub Section ${formatPctNum(currentSubSum)}% · Maks. sisa gabungan Section ${formatPctNum(maxSecAllowed)}%)`}
@@ -7664,6 +7752,11 @@ export function KPISettingTable({ items, editable, onDelete, onUpdateItem, onBat
                         <span className="text-[10px] text-white/75 font-normal">
                           (Terisi {formatPctNum(currentSubSum)}%)
                         </span>
+                        {isSecHeaderLocked && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 text-white text-[10px] font-semibold">
+                            <Lock className="w-2.5 h-2.5" /> Default RSUP Group
+                          </span>
+                        )}
                       </span>
                     </div>
                   </td>
@@ -9395,9 +9488,19 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
 
   const [view, setView]               = useState<PageView>(() => (isViewOnly ? "preview" : "input"));
+  const isRsupPersonalWorkspace = !isCorporate && isRsupGroupCompanyUnit(effectiveOwner.company);
+  const canActorEditRsupSectionA =
+    isRsupPersonalWorkspace && canEditOrTrackRsupSectionA(effectiveOwner, actorUser, "setting");
+  const maskConfidentialNetProfit =
+    isRsupPersonalWorkspace && !canViewerSeeConfidentialNetProfit(actorUser, "setting");
+
   const [items, setItems_]            = useState<KPISetting[]>(() => {
     if (isCorporate) {
       return readStoredBusinessKpiItems(effectiveScopeKey) ?? initialItems;
+    }
+    if (isRsupGroupCompanyUnit(effectiveOwner.company)) {
+      const stored = readStoredPersonalKpiItems(effectiveOwner.employeeId);
+      return enforceRsupPersonalSectionA(stored ?? initialItems, effectiveOwner, PERSONAL_KPI);
     }
     if (
       (effectiveOwner.role === "BOD" || isDirectorRoleOrGrouping(effectiveOwner)) &&
@@ -9501,8 +9604,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       toast.error("judul KPI sama, pastikan tidak ada judul KPI yang sama");
     }
     setItems_((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
+      const rawNext = typeof updater === "function" ? updater(prev) : updater;
+      const next = !isCorporate && isRsupGroupCompanyUnit(effectiveOwner.company)
+        ? enforceRsupPersonalSectionA(rawNext, effectiveOwner, PERSONAL_KPI)
+        : rawNext;
       persistKpiItemsToBackend(next, "Draft");
+      if (!isCorporate && isRsupOperationalDirectorUser(effectiveOwner)) {
+        window.dispatchEvent(new Event("appraisal-updated"));
+      }
       return next;
     });
   };
@@ -9620,6 +9729,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
   useEffect(() => {
     if (
       !isCorporate &&
+      !isRsupGroupCompanyUnit(effectiveOwner.company) &&
       (effectiveOwner.role === "BOD" || isDirectorRoleOrGrouping(effectiveOwner)) &&
       safeGetLocalRaw("pa_bod_personal_kpi_cleared_v1") !== "true"
     ) {
@@ -9659,12 +9769,17 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       });
     }
     const init = readPersonalWorkflowState();
-    setItems_(init.storedItems ?? initialItems);
+    setItems_(
+      !isCorporate && isRsupGroupCompanyUnit(effectiveOwner.company)
+        ? enforceRsupPersonalSectionA(init.storedItems ?? initialItems, effectiveOwner, PERSONAL_KPI)
+        : (init.storedItems ?? initialItems),
+    );
     setKpiAttachments(readAttachmentsForCurrentScope());
     if (!isCorporate && effectiveOwner.employeeId) {
       void Promise.all([
         fetchEmployeeWorkflowRecordsLive(effectiveOwner.employeeId),
         fetchEmployeeKpiSettingsLive<KPISetting>(effectiveOwner.employeeId),
+        ...(isRsupGroupCompanyUnit(effectiveOwner.company) ? [syncRsupDirectorSectionAFromBackend()] : []),
       ]);
     }
     const onSync = () => {
@@ -9679,7 +9794,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       setSelectedTargetKpis(te.selectedIds);
       setTargetEditCategory(te.cat);
       setTargetEditReason(te.reason);
-      setItems_(st.storedItems ?? initialItems);
+      setItems_(
+        !isCorporate && isRsupGroupCompanyUnit(effectiveOwner.company)
+          ? enforceRsupPersonalSectionA(st.storedItems ?? initialItems, effectiveOwner, PERSONAL_KPI)
+          : (st.storedItems ?? initialItems),
+      );
       setKpiAttachments(readAttachmentsForCurrentScope());
       if (st.rec && !st.isSub && !isViewOnly) {
         setView("input");
@@ -9691,12 +9810,14 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     window.addEventListener("pa-auth-updated", onSync);
     window.addEventListener("appraisal-updated", onSync);
     window.addEventListener(KPI_TARGET_EDIT_EVENT, onSync);
+    window.addEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, onSync);
     window.addEventListener("pa-db-hydrated", onSync);
     window.addEventListener("storage", onSync);
     return () => {
       window.removeEventListener("pa-auth-updated", onSync);
       window.removeEventListener("appraisal-updated", onSync);
       window.removeEventListener(KPI_TARGET_EDIT_EVENT, onSync);
+      window.removeEventListener(MASTER_KPI_FORMATS_UPDATED_EVENT, onSync);
       window.removeEventListener("pa-db-hydrated", onSync);
       window.removeEventListener("storage", onSync);
     };
@@ -9725,7 +9846,7 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
     !kpiApproved &&
     !isViewOnly &&
     items.length > 0 &&
-    (draftDirtyInSession || initialItems.length === 0);
+    draftDirtyInSession;
 
   const draftBlocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
@@ -9940,9 +10061,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
 
       secRows.forEach((it, rIdx) => {
         const pTrack = derivePeriodeTrackingFromSatuan(it.satuan, it.trackingPeriod);
+        const maskedBase = maskConfidentialNetProfit && isSectionANetProfitRow(it) ? "confidential" : it.baseline2025;
+        const maskedTgt = maskConfidentialNetProfit && isSectionANetProfitRow(it) ? "confidential" : it.target2026;
         const vals = isGroupTable
           ? [it.no, it.perspektif, it.kpi, it.satuan, it.formula, it.scope ?? "", it.bobot, it.definisi, it.source, it.baseline2025, it.target2026, it.polaritas, it.detailFormula, it.keterangan ?? "", pTrack]
-          : [it.no, it.perspektif, it.kpi, it.satuan, it.formula, it.bobot, it.definisi, it.source, it.baseline2025, it.target2026, it.polaritas, it.detailFormula, it.keterangan ?? "", pTrack];
+          : [it.no, it.perspektif, it.kpi, it.satuan, it.formula, it.bobot, it.definisi, it.source, maskedBase, maskedTgt, it.polaritas, it.detailFormula, it.keterangan ?? "", pTrack];
 
         const styledCells: StyledExcelCell[] = vals.map((v, ci) => ({
           value: v ?? "",
@@ -10491,12 +10614,22 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
         <KPISettingTable
           items={items}
           editable={view === "input" && !submitted && !isViewOnly && (canEdit || canDelete)}
-          onDelete={canDelete ? (id) => setItems((prev) => prev.filter((i) => i.id !== id)) : undefined}
+          onDelete={
+            canDelete
+              ? (id) =>
+                  setItems((prev) =>
+                    prev.filter((i) => !(isRsupPersonalWorkspace && i.section === "A") && i.id !== id),
+                  )
+              : undefined
+          }
           onUpdateItem={canEdit ? (id, updates) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...updates } : i)) : undefined}
           onBatchUpdateItems={canEdit ? (next) => setItems(next) : undefined}
           hideCascading={hideCascading}
           onRenameSection={canEdit && !isViewOnly ? handleRenameSection : undefined}
           onUpdateSectionMeta={canEdit && !isViewOnly ? handleUpdateSectionMeta : undefined}
+          lockSectionADefault={isRsupPersonalWorkspace && !canActorEditRsupSectionA}
+          directorSectionATargetOnly={isRsupPersonalWorkspace && canActorEditRsupSectionA}
+          maskConfidentialNetProfit={maskConfidentialNetProfit}
           displayControls={
             <KpiTableDisplayControls
               isFullscreen={isTableFullscreen}
@@ -10806,7 +10939,11 @@ function KPISection({ initialItems, isPersonal, isCorporate, hideCascading, divi
       )}
       {showTargetEditRequest && (
         <EditTargetRequestModal owner={effectiveOwner}
-          items={items}
+          items={
+            isRsupPersonalWorkspace && !canActorEditRsupSectionA
+              ? items.filter((i) => (i.section || "A").toUpperCase() !== "A")
+              : items
+          }
           onCancel={() => setShowTargetEditRequest(false)}
           onConfirm={async (cat, reason, files, kpis) => {
             const phase1Attachments: TargetEditAttachment[] = [];

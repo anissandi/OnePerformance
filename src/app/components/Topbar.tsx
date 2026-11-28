@@ -316,28 +316,28 @@ function formatNotifTime(iso: string): string {
 }
 
 const TOPBAR_AVATAR_COLORS = [
-  "bg-purple-500",
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-orange-500",
-  "bg-pink-500",
-  "bg-teal-500",
-  "bg-indigo-500",
-  "bg-cyan-600",
-  "bg-fuchsia-500",
-  "bg-sky-600",
+  "bg-[#1A284F]",
+  "bg-[#244B8A]",
+  "bg-sky-700",
+  "bg-teal-700",
+  "bg-emerald-700",
+  "bg-slate-700",
+  "bg-cyan-700",
+  "bg-amber-700",
+  "bg-blue-700",
+  "bg-[#1E5668]",
 ];
 
 function topbarAvatarColor(seed: string, fallbackName = ""): string {
   const str = String(seed || fallbackName || "user").trim();
   if (/^\d+$/.test(str)) {
-    return TOPBAR_AVATAR_COLORS[Math.abs(parseInt(str, 10)) % TOPBAR_AVATAR_COLORS.length] || "bg-indigo-500";
+    return TOPBAR_AVATAR_COLORS[Math.abs(parseInt(str, 10)) % TOPBAR_AVATAR_COLORS.length] || "bg-[#1A284F]";
   }
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
   }
-  return TOPBAR_AVATAR_COLORS[hash % TOPBAR_AVATAR_COLORS.length] || "bg-indigo-500";
+  return TOPBAR_AVATAR_COLORS[hash % TOPBAR_AVATAR_COLORS.length] || "bg-[#1A284F]";
 }
 
 // ─── Topbar ───────────────────────────────────────────────────────────────────

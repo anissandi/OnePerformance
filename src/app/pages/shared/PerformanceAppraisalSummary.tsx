@@ -28,6 +28,7 @@ import {
   safeGetLocalRaw,
   syncDraftSettingsLiveForSummary,
 } from "../../services/supabaseClient";
+import { isRsupGroupCompanyUnit, isRsupOperationalDirectorUser } from "../../store/rsupPersonalSectionAStore";
 
 type Role = "hr" | "supervisor";
 
@@ -623,10 +624,17 @@ export function PerformanceAppraisalSummary({ role, lockedUnits }: { role: Role;
       }
     }
     if (modName === "KPI") {
+      const ownerObj = managedUsersById.get(empId.toLowerCase());
+      const ignoreDefaultSecA = Boolean(
+        ownerObj && isRsupGroupCompanyUnit(ownerObj.company) && !isRsupOperationalDirectorUser(ownerObj),
+      );
       const hasValidKpiRow = (items: unknown[]): boolean =>
         items.some((it) => {
           if (!it || typeof it !== "object") return false;
           const rec = it as Record<string, unknown>;
+          if (ignoreDefaultSecA && String(rec.section ?? "A").trim().toUpperCase() === "A") {
+            return false;
+          }
           return Boolean(
             String(rec.kpi ?? "").trim() ||
               String(rec.definisi ?? "").trim() ||

@@ -16,6 +16,15 @@ import { computeKpiColorBandAchievementPct, isMonthBlockedForKpi, parseKpiRatioP
 import { isStoredRcaSubmissionClosed } from "./UnifiedRCADetailTable";
 import { DualScrollTableContainer } from "./DualScrollTableContainer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { getActiveUser, loadManagedUsers } from "../store/authStore";
+import { normalizeEmployeeId } from "../pages/shared/appraisalWorkflowStore";
+import {
+  canViewerSeeConfidentialNetProfit,
+  getRsupDirectorValidatedSectionATracking,
+  isRsupGroupCompanyUnit,
+  isRsupOperationalDirectorUser,
+  isSectionANetProfitRow,
+} from "../store/rsupPersonalSectionAStore";
 
 interface KPITableViewProps {
   kpiItems: KPIItem[];
@@ -25,6 +34,7 @@ interface KPITableViewProps {
   onPreviewRCA?: (sub: StoredRCASubmission) => void;
   onClickUnmatchedRCA?: () => void;
   editedCellsDiff?: Record<string, EditedKpiCellDiff>;
+  ownerEmployeeId?: string;
 }
 
 // Helper to get percentage color
@@ -60,7 +70,36 @@ export function KPITableView({
   onPreviewRCA,
   onClickUnmatchedRCA,
   editedCellsDiff,
+  ownerEmployeeId,
 }: KPITableViewProps) {
+  const viewer = getActiveUser();
+  const resolvedOwnerId = ownerEmployeeId ?? viewer.employeeId;
+  const normOwner = normalizeEmployeeId(resolvedOwnerId);
+  const ownerUser =
+    loadManagedUsers().find(
+      (u) =>
+        normalizeEmployeeId(u.employeeId) === normOwner ||
+        u.employeeId.trim().toLowerCase() === resolvedOwnerId.trim().toLowerCase(),
+    ) ?? (normOwner === normalizeEmployeeId(viewer.employeeId) ? viewer : undefined);
+
+  const isRsupPersonalOwner = Boolean(ownerUser && isRsupGroupCompanyUnit(ownerUser.company));
+  const isNonDirRsupOwner = Boolean(isRsupPersonalOwner && !isRsupOperationalDirectorUser(ownerUser));
+  const maskConfidentialNetProfit = Boolean(
+    isRsupPersonalOwner && !canViewerSeeConfidentialNetProfit(viewer, "measurement"),
+  );
+  const directorSectionATracking = React.useMemo(
+    () => (isNonDirRsupOwner ? getRsupDirectorValidatedSectionATracking() : null),
+    [isNonDirRsupOwner, cells, months],
+  );
+  const directorValidatedMonthEntries: MonthEntry[] = React.useMemo(() => {
+    if (!directorSectionATracking) return [];
+    return directorSectionATracking.validatedMonths.map((vm) => ({
+      id: vm.id,
+      label: vm.label,
+      cells: directorSectionATracking.validatedCellsByMonthLabel[vm.label] ?? {},
+    }));
+  }, [directorSectionATracking]);
+
   const monthLabelById = new Map(months.map((m) => [m.id, m.label] as const));
 
   const resolveFallbackTarget = (kpi: KPIItem, monthId: string): string => {
@@ -68,12 +107,53 @@ export function KPITableView({
     return kpi.monthlyTargets?.[mLabel] || kpi.target2026 || "";
   };
 
+  const effectiveCells = React.useMemo(() => {
+    if (!isNonDirRsupOwner) return cells;
+    const secANos = new Set(kpiItems.filter((k) => (k.section || "A").toUpperCase() === "A").map((k) => k.no));
+    const merged: Record<string, Record<string, string>> = {};
+    for (const m of months) {
+      const base = { ...(cells[m.id] ?? {}) };
+      const dirForLabel = directorSectionATracking?.validatedCellsByMonthLabel?.[m.label];
+      for (const no of secANos) {
+        const kObj = kpiItems.find((x) => x.no === no);
+        if (!kObj) continue;
+        kObj.subRows.forEach((sub, si) => {
+          if (sub.compute) return;
+          const key = `${no}__${si}`;
+          if (dirForLabel && dirForLabel[key] !== undefined) {
+            base[key] = dirForLabel[key];
+          } else if (sub.label.toLowerCase().startsWith("target")) {
+            base[key] = kObj.monthlyTargets?.[m.label] || kObj.target2026 || "";
+          } else {
+            delete base[key];
+          }
+        });
+      }
+      merged[m.id] = base;
+    }
+    return merged;
+  }, [cells, isNonDirRsupOwner, kpiItems, months, directorSectionATracking]);
+
+  const computeEffectiveKpiAchievement = (kpi: KPIItem): number | null => {
+    if (isNonDirRsupOwner && (kpi.section || "A").toUpperCase() === "A") {
+      if (!directorSectionATracking || directorValidatedMonthEntries.length === 0) return null;
+      return computeKPIAchievement(kpi, directorSectionATracking.validatedCellsByMonthLabel, directorValidatedMonthEntries);
+    }
+    return computeKPIAchievement(kpi, effectiveCells, months);
+  };
+
+  const ConfidentialBadge = () => (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 lowercase tracking-wide select-none">
+      confidential
+    </span>
+  );
+
   // Compute cell value for a given sub-row
   const getCellValue = (kpi: KPIItem, monthId: string, subIdx: number): string => {
     const cellKey = `${kpi.no}__${subIdx}`;
     const sub = kpi.subRows[subIdx];
     if (!sub) return "—";
-    const rawVal = cells[monthId]?.[cellKey] ?? "";
+    const rawVal = effectiveCells[monthId]?.[cellKey] ?? "";
     const isTargetSub = !sub.compute && sub.label.toLowerCase().startsWith("target");
     
     if (!sub.compute) {
@@ -87,8 +167,8 @@ export function KPITableView({
     const spec = sub.compute;
 
     if (spec.type === "color_band") {
-      const actBand = (cells[monthId]?.[`${kpi.no}__${spec.actualIdx}`] ?? "").trim();
-      const tgtBand = (cells[monthId]?.[`${kpi.no}__${spec.targetIdx}`] || resolveFallbackTarget(kpi, monthId)).trim();
+      const actBand = (effectiveCells[monthId]?.[`${kpi.no}__${spec.actualIdx}`] ?? "").trim();
+      const tgtBand = (effectiveCells[monthId]?.[`${kpi.no}__${spec.targetIdx}`] || resolveFallbackTarget(kpi, monthId)).trim();
       if (!actBand) return "—";
       const pct = computeKpiColorBandAchievementPct(actBand, tgtBand);
       return pct !== null ? `${pct.toFixed(1)}%` : "—";
@@ -97,11 +177,11 @@ export function KPITableView({
     if (spec.type === "ratio") {
       const actualKey = `${kpi.no}__${spec.actualIdx}`;
       const targetKey = `${kpi.no}__${spec.targetIdx}`;
-      const rawTarget = (cells[monthId]?.[targetKey] || resolveFallbackTarget(kpi, monthId)).trim();
+      const rawTarget = (effectiveCells[monthId]?.[targetKey] || resolveFallbackTarget(kpi, monthId)).trim();
       const target = parseNum(rawTarget);
       const isRangeStabilize = kpi.polaritas === "Stabilize" && parseStabilizeRange(rawTarget) !== null;
       if (target === null && !isRangeStabilize) return "—";
-      const actual = parseNum(cells[monthId]?.[actualKey] ?? "");
+      const actual = parseNum(effectiveCells[monthId]?.[actualKey] ?? "");
       if (actual === null) return "0%";
       const pct = computePolaritasAchievementPct(actual, rawTarget, target ?? 0, kpi.polaritas, spec.minimize);
       return pct.toFixed(1) + "%";
@@ -109,7 +189,7 @@ export function KPITableView({
     
     if (spec.type === "ref") {
       const sourceKey = `${kpi.no}__${spec.sourceIdx}`;
-      return cells[monthId]?.[sourceKey] ?? "—";
+      return effectiveCells[monthId]?.[sourceKey] ?? "—";
     }
     
     if (spec.type === "avg") {
@@ -121,13 +201,13 @@ export function KPITableView({
     }
 
     if (spec.type === "ratio_score") {
-      const negRaw = cells[monthId]?.[`${kpi.no}__${spec.negIdx}`] ?? "";
+      const negRaw = effectiveCells[monthId]?.[`${kpi.no}__${spec.negIdx}`] ?? "";
       if (!negRaw) return "—";
       const neg = parseNum(negRaw) ?? 0;
-      const pos = parseNum(cells[monthId]?.[`${kpi.no}__${spec.posIdx}`] ?? "") ?? 0;
+      const pos = parseNum(effectiveCells[monthId]?.[`${kpi.no}__${spec.posIdx}`] ?? "") ?? 0;
       if (neg === 0) return "100%";
       const tgtIdx = kpi.subRows.findIndex((s) => !s.compute && s.label.toLowerCase().startsWith("target"));
-      const rawTgtRatio = (tgtIdx >= 0 ? cells[monthId]?.[`${kpi.no}__${tgtIdx}`] : "") || resolveFallbackTarget(kpi, monthId);
+      const rawTgtRatio = (tgtIdx >= 0 ? effectiveCells[monthId]?.[`${kpi.no}__${tgtIdx}`] : "") || resolveFallbackTarget(kpi, monthId);
       const parsedRatio = parseKpiRatioParts(rawTgtRatio);
       const mult = parsedRatio ? parsedRatio.multiplier : spec.multiplier;
       return pos + 1e-9 >= neg * mult ? "100%" : "0%";
@@ -139,7 +219,7 @@ export function KPITableView({
   const isRcaClosed = (sub: StoredRCASubmission): boolean => isStoredRcaSubmissionClosed(sub);
 
   const totalNilai = kpiItems.reduce((sum, k) => {
-    const ach = computeKPIAchievement(k, cells, months);
+    const ach = computeEffectiveKpiAchievement(k);
     if (ach === null) return sum;
     return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
   }, 0);
@@ -147,7 +227,7 @@ export function KPITableView({
     kpiItems
       .filter((k) => (k.section || "A") === sec)
       .reduce((sum, k) => {
-        const ach = computeKPIAchievement(k, cells, months);
+        const ach = computeEffectiveKpiAchievement(k);
         if (ach === null) return sum;
         return sum + (Math.min(ach, 100) / 100) * parseBobotDecimal(k.bobot) * 100;
       }, 0);
@@ -202,7 +282,7 @@ export function KPITableView({
               : `${sec}. ${defTitle}`;
             const bg = secPalette[sIdx % secPalette.length];
             const secScore = computeSectionScore(sec);
-            const hasSecScore = secKpis.some((k) => computeKPIAchievement(k, cells, months) !== null);
+            const hasSecScore = secKpis.some((k) => computeEffectiveKpiAchievement(k) !== null);
             return (
               <React.Fragment key={sec}>
                 <tr>
@@ -217,10 +297,12 @@ export function KPITableView({
                 </tr>
                 {secKpis.map((kpi, kpiIdx) => {
             const rs = kpi.subRows.length;
-            const ach = computeKPIAchievement(kpi, cells, months);
+            const ach = computeEffectiveKpiAchievement(kpi);
             const cappedAch = ach !== null ? Math.min(ach, 100) : null;
             const weightedScore = cappedAch !== null ? (cappedAch / 100) * parseBobotDecimal(kpi.bobot) * 100 : null;
             const stickyBg = kpiIdx % 2 === 0 ? "#ffffff" : "#f9fafb";
+            const isSecARow = (kpi.section || "A").toUpperCase() === "A";
+            const isMaskedConfidentialRow = Boolean(maskConfidentialNetProfit && isSectionANetProfitRow(kpi));
             
             return kpi.subRows.map((sub, subIdx) => {
               const isFirst = subIdx === 0;
@@ -229,7 +311,10 @@ export function KPITableView({
               const isItemComputed = Boolean(sub.compute && sub.compute.type !== "avg");
               const isTargetRow = !sub.compute && sub.label.toLowerCase().startsWith("target");
               
-              const totalVal = computeTotal2026(kpi, subIdx, cells, months);
+              const totalVal =
+                isNonDirRsupOwner && isSecARow && directorSectionATracking
+                  ? computeTotal2026(kpi, subIdx, directorSectionATracking.validatedCellsByMonthLabel, directorValidatedMonthEntries)
+                  : computeTotal2026(kpi, subIdx, effectiveCells, months);
               const totalColorCls = isComputed || sub.bold ? getPctColor(totalVal) : (totalVal === "—" ? "text-gray-300" : "text-blue-800");
               
               return (
@@ -264,10 +349,10 @@ export function KPITableView({
                         {kpi.source}
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-center text-gray-700">
-                        {kpi.baseline2025}
+                        {isMaskedConfidentialRow ? <ConfidentialBadge /> : kpi.baseline2025}
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-center font-bold text-[#1A284F]">
-                        {kpi.target2026}
+                        {isMaskedConfidentialRow ? <ConfidentialBadge /> : kpi.target2026}
                       </td>
                       <td rowSpan={rs} className="border border-gray-200 py-2 px-3 text-center text-gray-700">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${kpi.polaritas === "Maximize" ? "bg-blue-50 text-blue-700" : kpi.polaritas === "Minimize" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>
@@ -298,6 +383,19 @@ export function KPITableView({
                   {/* Monthly cells */}
                   {months.length > 0 ? (
                     months.map((m) => {
+                      if (isMaskedConfidentialRow) {
+                        if (!isFirst) return null;
+                        return (
+                          <td
+                            key={m.id}
+                            rowSpan={rs}
+                            className="border border-amber-200/70 bg-amber-50/35 text-center align-middle py-1.5 px-1.5 select-none"
+                            title="Data realisasi bulanan Net Profit bersifat rahasia (confidential) untuk level GM ke bawah."
+                          >
+                            <ConfidentialBadge />
+                          </td>
+                        );
+                      }
                       if (isMonthBlockedForKpi(kpi, m.label)) {
                         const monthFullMap: Record<string, string> = {
                           Jan: "Januari", Feb: "Februari", Mar: "Maret", Apr: "April",
@@ -334,22 +432,25 @@ export function KPITableView({
                         : undefined;
                       const cellColorCls = isComputed ? getPctColor(val) : "";
                       const getRawForMonth = (idx: number) => {
-                        const raw = cells[m.id]?.[`${kpi.no}__${idx}`] ?? "";
+                        const raw = effectiveCells[m.id]?.[`${kpi.no}__${idx}`] ?? "";
                         const sr = kpi.subRows[idx];
                         if (sr && !sr.compute && sr.label.toLowerCase().startsWith("target") && !raw) {
                           return resolveFallbackTarget(kpi, m.id);
                         }
                         return raw;
                       };
-                      const needsRca = isItemComputed && doesKpiSubRowRequireRca(kpi, subIdx, getRawForMonth, val);
+                      const suppressRowRca = Boolean(isNonDirRsupOwner && isSecARow);
+                      const needsRca = !suppressRowRca && isItemComputed && doesKpiSubRowRequireRca(kpi, subIdx, getRawForMonth, val);
                       const matchedRCA =
-                        needsRca
+                        suppressRowRca
+                          ? undefined
+                          : needsRca
                           ? findMatchingRcaForSubItem(rcaSubmissions, kpi, subIdx, m)
                           : isItemComputed
                           ? findMatchingRcaForSubItem(rcaSubmissions, kpi, subIdx, m)
                           : undefined;
                       const showRcaTrigger =
-                        isItemComputed && (needsRca || Boolean(matchedRCA));
+                        !suppressRowRca && isItemComputed && (needsRca || Boolean(matchedRCA));
 
                       return (
                         <td key={m.id} className={`border border-gray-200 text-center py-1.5 px-1.5 ${
@@ -423,19 +524,35 @@ export function KPITableView({
                       );
                     })
                   ) : (
-                    <td className="border border-gray-200 text-center py-1.5 px-2 text-gray-300 italic">
-                      —
-                    </td>
+                    isMaskedConfidentialRow ? (
+                      isFirst ? (
+                        <td rowSpan={rs} className="border border-amber-200/70 bg-amber-50/35 text-center align-middle py-1.5 px-2 select-none">
+                          <ConfidentialBadge />
+                        </td>
+                      ) : null
+                    ) : (
+                      <td className="border border-gray-200 text-center py-1.5 px-2 text-gray-300 italic">
+                        —
+                      </td>
+                    )
                   )}
                   
                   {/* Total 2026 cell */}
-                  <td className={`border border-gray-200 text-center py-1 px-2 ${
-                    isComputed ? "bg-blue-50/80" : sub.bold ? "bg-blue-50/40" : "bg-blue-50/20"
-                  }`}>
-                    <span className={`${sub.bold ? "font-bold" : ""} ${totalColorCls}`}>
-                      {totalVal}
-                    </span>
-                  </td>
+                  {isMaskedConfidentialRow ? (
+                    isFirst ? (
+                      <td rowSpan={rs} className="border border-amber-200/70 bg-amber-50/35 text-center align-middle py-1 px-2 select-none">
+                        <ConfidentialBadge />
+                      </td>
+                    ) : null
+                  ) : (
+                    <td className={`border border-gray-200 text-center py-1 px-2 ${
+                      isComputed ? "bg-blue-50/80" : sub.bold ? "bg-blue-50/40" : "bg-blue-50/20"
+                    }`}>
+                      <span className={`${sub.bold ? "font-bold" : ""} ${totalColorCls}`}>
+                        {totalVal}
+                      </span>
+                    </td>
+                  )}
 
                   {isFirst && (
                     <td rowSpan={rs} className="border border-gray-200 text-center py-2 px-2 bg-[#0a2a4a]/5 align-middle">
@@ -466,7 +583,7 @@ export function KPITableView({
               Total Nilai KPI (YTD)
             </td>
             <td className="border border-gray-200 py-2.5 px-2 text-center text-sm font-black text-[#1A284F]">
-              {months.length > 0 ? `${totalNilai.toFixed(2)}%` : "—"}
+              {months.length > 0 || directorValidatedMonthEntries.length > 0 ? `${totalNilai.toFixed(2)}%` : "—"}
             </td>
           </tr>
         </tbody>

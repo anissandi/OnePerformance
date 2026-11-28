@@ -521,6 +521,7 @@ function KPIReview({ row }: { row: ApprovalRow }) {
           rcaSubmissions={rcaSubmissions}
           onPreviewRCA={handleClickRcaTag}
           editedCellsDiff={editedCellsDiff}
+          ownerEmployeeId={row.employeeId}
         />
       )}
 

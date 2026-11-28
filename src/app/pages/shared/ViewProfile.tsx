@@ -338,28 +338,28 @@ function getModuleResults(year: number) {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 const PROFILE_AVATAR_COLORS = [
-  "bg-purple-500",
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-orange-500",
-  "bg-pink-500",
-  "bg-teal-500",
-  "bg-indigo-500",
-  "bg-cyan-600",
-  "bg-fuchsia-500",
-  "bg-sky-600",
+  "bg-[#1A284F]",
+  "bg-[#244B8A]",
+  "bg-sky-700",
+  "bg-teal-700",
+  "bg-emerald-700",
+  "bg-slate-700",
+  "bg-cyan-700",
+  "bg-amber-700",
+  "bg-blue-700",
+  "bg-[#1E5668]",
 ];
 
 function profileAvatarColor(seed: string, fallbackName = ""): string {
   const str = String(seed || fallbackName || "user").trim();
   if (/^\d+$/.test(str)) {
-    return PROFILE_AVATAR_COLORS[Math.abs(parseInt(str, 10)) % PROFILE_AVATAR_COLORS.length] || "bg-indigo-500";
+    return PROFILE_AVATAR_COLORS[Math.abs(parseInt(str, 10)) % PROFILE_AVATAR_COLORS.length] || "bg-[#1A284F]";
   }
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
   }
-  return PROFILE_AVATAR_COLORS[hash % PROFILE_AVATAR_COLORS.length] || "bg-indigo-500";
+  return PROFILE_AVATAR_COLORS[hash % PROFILE_AVATAR_COLORS.length] || "bg-[#1A284F]";
 }
 
 function computeTenureFromJoinDate(rawJoinDate?: string | null): string {
@@ -1124,7 +1124,7 @@ export function ViewProfile() {
                 icon: Layers,
                 title: "Divisi",
                 value: valOrDash(activeUser.division),
-                iconCls: "bg-violet-50 text-violet-600 border-violet-100",
+                iconCls: "bg-slate-100 text-slate-700 border-slate-200",
               },
               {
                 icon: Briefcase,
@@ -1169,7 +1169,7 @@ export function ViewProfile() {
                   activeUser.joinDate && normalizeDateDDMMYYYY(activeUser.joinDate) !== "—"
                     ? `${computedLamaBekerja} (${normalizeDateDDMMYYYY(activeUser.joinDate)})`
                     : computedLamaBekerja,
-                iconCls: "bg-purple-50 text-purple-600 border-purple-100",
+                iconCls: "bg-emerald-50 text-emerald-700 border-emerald-200",
               },
             ].map(({ icon: Icon, title, value, iconCls }) => (
               <div
@@ -1820,10 +1820,10 @@ export function ViewProfile() {
               <div>
                 <div className="flex items-center justify-between gap-2 mb-1.5">
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
-                    <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                    <Calendar className="w-3.5 h-3.5 text-emerald-700" />
                     Tanggal Masuk (Lama Bekerja)
                   </label>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-[11px] font-bold">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold">
                     Lama Bekerja: {computeTenureFromJoinDate(editJoinDate)}
                   </span>
                 </div>

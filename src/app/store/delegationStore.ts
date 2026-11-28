@@ -1,5 +1,5 @@
 import { loadPersistedState, mergeKvMapRecord, safeGetLocalRaw, safeSetLocalJson, syncToSupabase } from "../services/supabaseClient";
-import type { ManagedUser } from "./authStore";
+import { loadManagedUsers, type ManagedUser } from "./authStore";
 
 /**
  * Delegasi approval (Approval Management → Delegation & Approvals → Delegation).
@@ -467,6 +467,31 @@ export function getReceivedWorkspaceDelegations(
     });
   }
   return list;
+}
+
+/**
+ * Daftar delegasi aktif yang diterima oleh `viewer` berdasarkan nama modul (`"KPI"` / `"SMART Goals"`) dan fase (`"setting"` / `"measurement"`).
+ */
+export function getReceivedDelegationsForModule(
+  viewer: Pick<ManagedUser, "employeeId"> | null | undefined,
+  moduleType: string,
+  phase?: "setting" | "measurement",
+  allUsers: ManagedUser[] = loadManagedUsers(),
+): ReceivedWorkspaceDelegation[] {
+  if (!viewer?.employeeId) return [];
+  const modKeys = delegationModuleKeyFor(moduleType, phase);
+  if (modKeys.length === 0) return [];
+  const seen = new Set<string>();
+  const out: ReceivedWorkspaceDelegation[] = [];
+  for (const key of modKeys) {
+    for (const item of getReceivedWorkspaceDelegations(viewer.employeeId, key, allUsers)) {
+      const dedupKey = `${item.record.id}::${key}`;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 /** Ringkasan hak modul yang diterima user via delegasi aktif (untuk menu Sidebar & allowedModules). */
